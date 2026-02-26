@@ -1,3 +1,6 @@
+export BRAIN_MODEL_DIR := env("BRAIN_MODEL_DIR", "./models/bge-small-en-v1.5")
+export BRAIN_DB := env("BRAIN_DB", "./brain_lancedb")
+
 default:
     @just --list
 
@@ -35,7 +38,8 @@ index notes_path=".":
 
 [group('app')]
 query query_text top_k="5":
-    cargo run --bin brain -- query {{query_text}} -k {{top_k}}
+    @test -f ./target/debug/brain || cargo build --bin brain
+    ./target/debug/brain query "{{query_text}}" -k {{top_k}}
 
 [group('maintenance')]
 clean:
