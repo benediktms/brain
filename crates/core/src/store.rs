@@ -14,6 +14,7 @@ use crate::error::BrainCoreError;
 const EMBEDDING_DIM: i32 = 384;
 
 pub struct Store {
+    #[allow(dead_code)] // future API: db needed for table management operations
     db: lancedb::Connection,
     table: lancedb::Table,
 }
