@@ -1,0 +1,29 @@
+[package]
+name = "core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+# ML inference
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+tokenizers = "0.22"
+
+# Vector storage (drives arrow version — lancedb 0.26 uses arrow 57)
+lancedb = "0.26"
+arrow-schema = "57"
+arrow-array = "57"
+futures = "0.3"
+serde_json = { workspace = true }
+
+# Model download
+hf-hub = { version = "0.5", features = ["ureq", "rustls-tls"] }
+
+# Directory traversal
+walkdir = "2"

@@ -1,0 +1,17 @@
+[package]
+name = "cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "brain"
+path = "src/main.rs"
+
+[dependencies]
+core = { path = "../core" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+clap = { version = "4", features = ["derive", "env"] }
+tracing-subscriber = { workspace = true }
