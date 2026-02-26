@@ -485,11 +485,13 @@ sequenceDiagram
     Pool-->>Norm: cls_embeddings [B, 384]
 
     Norm->>Norm: v / ||v||_2 per row
-    Note over Norm: sqr → sum_keepdim(1) → sqrt → broadcast_div
+    Note over Norm: sqr → sum_keepdim(1) → sqrt<br/>→ clamp(1e-12) → broadcast_div
 
     Norm-->>Out: normalized [B, 384]
     Note over Out: L2 norm = 1.0 (within 1e-5)<br/>Pairs with LanceDB dot product
 ```
+
+**Numerical stability**: The L2 normalization must clamp the magnitude to `max(||v||_2, 1e-12)` before dividing. Degenerate all-padding inputs can produce zero-magnitude vectors, and dividing by zero silently produces NaN that poisons the LanceDB index with no runtime error. Add a debug assertion that all output vectors satisfy `|1.0 - ||v||_2| < 1e-5`.
 
 ## Memory Architecture
 
@@ -552,6 +554,13 @@ The `intent` parameter on `memory.search_minimal` selects a weight profile that 
 | `auto` | Default, no adjustment | Equal weights (1/6 each) | — |
 
 Weight profiles are stored as a lookup table and are configurable via `brain.toml`.
+
+**Invariant**: All weight profiles MUST sum to 1.0. Validate at load time; normalize by dividing each weight by the sum if needed. Hand-tuned profiles can silently drift, biasing retrieval without runtime errors.
+
+**Edge cases in signal computation**:
+- `bm25` normalization: divide by `max(max_bm25_in_result_set, 1e-12)` — zero FTS matches means all BM25 scores should be 0.0, not NaN.
+- `tag_match` (Jaccard coefficient): `J(∅, ∅) = 0.0` by convention, not division-by-zero.
+- `g(links)`: `log(1 + 0) / log(1 + max_L)` is well-defined (= 0.0), but guard `max_L = 0` with a denominator of 1.0.
 
 ### Candidate Sources
 
@@ -673,3 +682,31 @@ Assumes a "medium" vault: 2k–10k Markdown files, 20k–200k chunks, 384-dim em
 | BGE-small model weights | ~130MB | Loaded in RAM via mmap |
 | **Total disk** | **~400MB–800MB** | Comfortable for laptop |
 | **Daemon RSS (baseline)** | **~300–400MB** | Embedder + stores, no optional models |
+
+## Mathematical Foundations
+
+The system relies on concepts from several mathematical and computer science domains. This section summarizes the key foundations; see RESEARCH.md § Mathematical Foundations for detailed formulas, numerical verification, and implementation guidance.
+
+### Linear Algebra & Embeddings
+
+Every chunk is a point in R^384. The embedding pipeline transforms text through a BERT forward pass (`[B, T] → [B, T, 384]`), CLS pooling (`[:, 0, :]`), and L2 normalization onto the unit hypersphere S^383. Dot product on unit vectors equals cosine similarity — this is why LanceDB uses `dot` metric after normalization, saving ~2x compute vs explicit cosine.
+
+### Information Retrieval & Scoring
+
+The hybrid scoring formula is a weighted linear combination of 6 orthogonal signals. BM25 (from SQLite FTS5) provides term-frequency scoring with document-length normalization. Min-max normalization maps BM25 to [0,1]. The Jaccard coefficient measures tag overlap as `|A∩B| / |A∪B|`. All signals are combined with intent-driven weight profiles that must sum to 1.0.
+
+### Exponential Decay & Recency
+
+The recency signal uses exponential decay: `f(dt) = exp(-dt/τ)` with τ=30 days (configurable). The half-life is `τ × ln(2) ≈ 20.8 days`. The backlink signal uses logarithmic scaling: `g(L) = log(1+L) / log(1+max_L)`, which compresses the dynamic range of link counts.
+
+### Graph Theory
+
+The links table is a directed graph (adjacency list). Graph expansion performs 1-hop BFS from seed nodes. The task dependency graph is a DAG — cycle detection (DFS-based, O(V+E)) is required when adding edges. In-degree counting provides the backlink score; future work may upgrade to iterative PageRank for importance propagation.
+
+### Probability & Hashing
+
+BLAKE3 (256-bit) provides collision probability `< 10^(-70)` for 10k files. UUID v7 provides time-ordered identity with a birthday-problem safe threshold of ~2^64 IDs. ULID provides monotonic event ordering with same-millisecond disambiguation via incrementing counter. IVF-PQ indexing (Product Quantization in Voronoi cells) enables sub-5ms ANN search at 100x vector compression with >95% recall.
+
+### Concurrency & Async
+
+The daemon uses tokio for async concurrency: file watcher events, MCP request handling, and indexing run as concurrent tasks multiplexed via `tokio::select!`. SQLite WAL mode enables concurrent readers with a single writer. The bounded work queue with file_id coalescing provides backpressure against watcher storms.
