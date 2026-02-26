@@ -5,14 +5,14 @@ use core::prelude::*;
 use tracing::info;
 
 /// Index the given notes directory into the LanceDB database.
-pub async fn run(notes_path: PathBuf, model_dir: Option<PathBuf>, db_path: PathBuf) -> Result<()> {
+pub async fn run(notes_path: PathBuf, model_dir: PathBuf, db_path: PathBuf) -> Result<()> {
     let start = std::time::Instant::now();
 
     info!("scanning {}", notes_path.display());
     let files = scan_brain(&[notes_path]);
     info!(file_count = files.len(), "files found");
 
-    let embedder = Embedder::load(model_dir.as_deref())?;
+    let embedder = Embedder::load(&model_dir)?;
 
     info!("opening store at {}", db_path.display());
     let store = Store::open_or_create(&db_path).await?;

@@ -9,9 +9,9 @@ mod commands;
 #[derive(Parser)]
 #[command(name = "brain", about = "Semantic search over your Markdown notes")]
 struct Cli {
-    /// Path to a local BGE model directory (auto-downloads from HuggingFace Hub if omitted)
-    #[arg(long, global = true, env = "BRAIN_MODEL_DIR")]
-    model_dir: Option<PathBuf>,
+    /// Path to a local BGE model directory (run scripts/setup-model.sh to download)
+    #[arg(long, global = true, env = "BRAIN_MODEL_DIR", default_value = "./models/bge-small-en-v1.5")]
+    model_dir: PathBuf,
 
     /// Path to the LanceDB database directory
     #[arg(long, global = true, env = "BRAIN_DB", default_value = "./brain_lancedb")]

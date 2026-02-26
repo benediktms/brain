@@ -7,10 +7,10 @@ use core::prelude::*;
 pub async fn run(
     query: String,
     top_k: usize,
-    model_dir: Option<PathBuf>,
+    model_dir: PathBuf,
     db_path: PathBuf,
 ) -> Result<()> {
-    let embedder = Embedder::load(model_dir.as_deref())?;
+    let embedder = Embedder::load(&model_dir)?;
     let store = Store::open_or_create(&db_path).await?;
 
     let query_embedding = embedder.embed_batch(&[query.as_str()])?;

@@ -22,8 +22,5 @@ arrow-array = "57"
 futures = "0.3"
 serde_json = { workspace = true }
 
-# Model download
-hf-hub = { version = "0.5", features = ["ureq", "rustls-tls"] }
-
 # Directory traversal
 walkdir = "2"

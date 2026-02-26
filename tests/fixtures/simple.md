@@ -1,0 +1,5 @@
+Local-first software keeps your data on your own machine. Instead of uploading notes, documents, and personal knowledge to a remote server, a local-first tool indexes everything on-device and never makes a network call. This matters because your thinking is private, your latency is zero, and your tool keeps working whether you are on a plane or your cloud provider has an outage.
+
+The tradeoff is that you give up cross-device sync and collaborative editing. For a personal knowledge base those tradeoffs are acceptable. You are the only writer, and if you need access from another machine you can sync the underlying files with git or Syncthing. The derived indexes, embeddings, and search tables are all rebuildable from the source Markdown files, so they never need to leave your laptop.
+
+Building local-first also simplifies the trust model. There is no API key to rotate, no billing surprise when a batch job re-indexes your vault, and no terms-of-service change that locks you out of your own data. Your second brain belongs to you, runs when you need it, and costs nothing after the initial setup.

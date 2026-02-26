@@ -1,2 +1,5 @@
 [env]
 RUST_LOG = "info"
+
+[tools]
+just = "1.46"

@@ -1,15 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config};
-use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
 use tracing::info;
 
 use crate::error::BrainCoreError;
-
-const HF_REPO_ID: &str = "BAAI/bge-small-en-v1.5";
 
 pub struct Embedder {
     model: BertModel,
@@ -19,60 +16,29 @@ pub struct Embedder {
 }
 
 impl Embedder {
-    /// Resolve model file paths — use a local directory if provided, otherwise
-    /// download from HuggingFace Hub (cached at `~/.cache/huggingface/hub/`).
-    fn resolve_paths(
-        model_dir: Option<&Path>,
-    ) -> crate::error::Result<(PathBuf, PathBuf, PathBuf)> {
-        if let Some(dir) = model_dir {
-            let config = dir.join("config.json");
-            let tokenizer = dir.join("tokenizer.json");
-            let weights = dir.join("model.safetensors");
-
-            for (name, path) in [
-                ("config.json", &config),
-                ("tokenizer.json", &tokenizer),
-                ("model.safetensors", &weights),
-            ] {
-                if !path.exists() {
-                    return Err(BrainCoreError::Embedding(format!(
-                        "missing {name} in {}",
-                        dir.display(),
-                    )));
-                }
-            }
-
-            Ok((config, tokenizer, weights))
-        } else {
-            info!("downloading model {HF_REPO_ID} from HuggingFace Hub (cached after first run)");
-
-            let api = Api::new().map_err(|e| {
-                BrainCoreError::Embedding(format!("failed to create HF Hub client: {e}"))
-            })?;
-            let repo = api.model(HF_REPO_ID.to_string());
-
-            let config = repo.get("config.json").map_err(|e| {
-                BrainCoreError::Embedding(format!("failed to fetch config.json: {e}"))
-            })?;
-            let tokenizer = repo.get("tokenizer.json").map_err(|e| {
-                BrainCoreError::Embedding(format!("failed to fetch tokenizer.json: {e}"))
-            })?;
-            let weights = repo.get("model.safetensors").map_err(|e| {
-                BrainCoreError::Embedding(format!("failed to fetch model.safetensors: {e}"))
-            })?;
-
-            info!("model files ready");
-            Ok((config, tokenizer, weights))
-        }
-    }
-
-    /// Load BGE-small-en-v1.5.
+    /// Load BGE-small-en-v1.5 from a local directory.
     ///
-    /// If `model_dir` is `Some`, reads from that local directory.
-    /// If `None`, downloads from HuggingFace Hub (cached for subsequent runs).
-    pub fn load(model_dir: Option<&Path>) -> crate::error::Result<Self> {
+    /// The directory must contain `config.json`, `tokenizer.json`, and
+    /// `model.safetensors`. Use `scripts/setup-model.sh` to download them.
+    pub fn load(model_dir: &Path) -> crate::error::Result<Self> {
         let device = Device::Cpu;
-        let (config_path, tokenizer_path, weights_path) = Self::resolve_paths(model_dir)?;
+
+        let config_path = model_dir.join("config.json");
+        let tokenizer_path = model_dir.join("tokenizer.json");
+        let weights_path = model_dir.join("model.safetensors");
+
+        for (name, path) in [
+            ("config.json", &config_path),
+            ("tokenizer.json", &tokenizer_path),
+            ("model.safetensors", &weights_path),
+        ] {
+            if !path.exists() {
+                return Err(BrainCoreError::Embedding(format!(
+                    "missing {name} in {} — run scripts/setup-model.sh to download",
+                    model_dir.display(),
+                )));
+            }
+        }
 
         let config_str = std::fs::read_to_string(&config_path)
             .map_err(|e| BrainCoreError::Embedding(format!("failed to read config.json: {e}")))?;
@@ -86,8 +52,16 @@ impl Embedder {
             )));
         }
 
-        let tokenizer = Tokenizer::from_file(&tokenizer_path)
+        let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| BrainCoreError::Embedding(format!("failed to load tokenizer: {e}")))?;
+
+        // Enable padding so encode_batch produces equal-length sequences for batched inference.
+        let pad_id = tokenizer.token_to_id("[PAD]").unwrap_or(0);
+        tokenizer.with_padding(Some(tokenizers::PaddingParams {
+            pad_id,
+            pad_token: "[PAD]".to_string(),
+            ..Default::default()
+        }));
 
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_path], candle_core::DType::F32, &device)
@@ -107,12 +81,26 @@ impl Embedder {
         })
     }
 
+    const MAX_BATCH_SIZE: usize = 32;
+
     /// Embed a batch of text strings, returning 384-dim L2-normalized vectors.
+    /// Internally processes in sub-batches of [`Self::MAX_BATCH_SIZE`] to bound
+    /// memory usage and keep debug-build latency manageable.
     pub fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
 
+        let mut all_embeddings = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(Self::MAX_BATCH_SIZE) {
+            let batch_result = self.embed_batch_inner(chunk)?;
+            all_embeddings.extend(batch_result);
+        }
+        Ok(all_embeddings)
+    }
+
+    /// Run a single sub-batch through the model.
+    fn embed_batch_inner(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
         let encodings = self
             .tokenizer
             .encode_batch(texts.to_vec(), true)

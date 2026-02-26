@@ -13,3 +13,14 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_json = "1"
+
+# Optimize candle crates in dev builds for usable embedding speed.
+# opt-level 1 enables SIMD vectorization with minimal compile-time cost.
+[profile.dev.package.candle-core]
+opt-level = 1
+
+[profile.dev.package.candle-nn]
+opt-level = 1
+
+[profile.dev.package.candle-transformers]
+opt-level = 1
