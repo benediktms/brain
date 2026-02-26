@@ -37,6 +37,10 @@ Implementation-wise, the recommended embedding baseline is **BAAI/bge-small-en-v
 - **LanceDB** = "data plane" (embedding-heavy retrieval with Arrow-native vector columns)
 - This separation is strategic: SQLite excels at transactional joins and deterministic bookkeeping while LanceDB is built for vector similarity search with database-like indexing/optimisation cycles
 
+### Notes vs Tasks: Separate Sources of Truth
+
+Notes and tasks are intentionally treated as different kinds of entities. Notes behave like durable memories: they are editable source documents that can reference external state but do not depend on it. Tasks, by contrast, are state machines with lifecycle transitions, dependencies, and graph relationships that must remain consistent over time. This is why notes are derived from Markdown as the source of truth, while tasks are sourced from an append-only event log and projected into SQLite. The systems can cross-reference each other, but their mutation patterns and consistency requirements are fundamentally different.
+
 ---
 
 ## Data Model and Storage Roles
