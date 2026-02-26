@@ -388,6 +388,145 @@ Run a long-lived Rust daemon that:
 
 ---
 
+## Performance Analysis and Optimisation Strategy
+
+### Core Principle
+
+**Indexing is the expensive part; querying is cheap once warm.** All performance decisions flow from this asymmetry. The design does expensive work incrementally and sparingly, keeping the daemon responsive for interactive queries at all times.
+
+### What Feels Fast vs Slow
+
+| Operation | Typical Latency | Category |
+|-----------|----------------|----------|
+| SQLite FTS5 queries | 5–30ms | Interactive |
+| LanceDB vector search (warm) | 10–50ms | Interactive |
+| Hybrid fusion + scoring | 1–10ms | Interactive |
+| Daemon with warm models | Instant (no load cost) | Interactive |
+| Initial full vault indexing | Minutes (one-time) | Background |
+| Embedding large chunk sets | CPU-heavy | Background |
+| Cross-encoder reranking | 200ms–1s+ | Optional |
+| ML summarization | Expensive | Deferred |
+
+### The Three Biggest Laptop Killers
+
+#### 1. Eager Summarization
+
+If you summarize every chunk on ingestion, you burn CPU constantly. Even for small vaults this creates noticeable lag on file saves.
+
+**Mitigation — Capsule generation strategy:**
+- Always generate tiny **deterministic capsules** (rule-based) on ingest: title from heading hierarchy + first meaningful sentence + heading outline
+- ML summarization only in **consolidation jobs** (idle, scheduled, or on-demand)
+- Deterministic capsules are ~0ms overhead; ML summaries are seconds-to-minutes
+
+#### 2. Reranking Everything
+
+Cross-encoders are compute-heavy. A cross-encoder on top-20 candidates with ONNX Runtime on CPU is realistically 200–500ms.
+
+**Mitigation:**
+- Make rerank **opt-in per query** OR triggered only when fusion confidence is low
+- Rerank only **top 10–30 fused candidates**, never the full pool
+- Rerank **capsules/snippets**, not full chunks
+- Load reranker **lazily** (not at daemon startup)
+
+#### 3. Watcher Storms / Too Many Writes
+
+The OS file watcher can emit hundreds of events during git pulls, branch switches, or mass edits.
+
+**Mitigation:**
+- **Debounce/coalesce** (250ms window, required first line of defense)
+- **Bounded work queue** with "last write wins per file" coalescing
+- **Batch SQLite writes** via single writer lane
+- **Batch LanceDB upserts** to amortize merge_insert overhead
+- Queue overflow policy: drop oldest entries (caught on next periodic scan)
+
+### Memory Footprint
+
+#### Storage
+
+| Component | Size (100k chunks, 384-dim) | Notes |
+|-----------|---------------------------|-------|
+| LanceDB embeddings (raw) | ~147MB | N × dim × 4 bytes (float32) |
+| LanceDB with indexes/overhead | ~200–400MB | Indexes, metadata, compaction fragments |
+| SQLite (metadata + FTS) | ~50–150MB | Depends on content volume |
+| **Total on-disk** | **~400–800MB** | Comfortable for modern laptop |
+
+#### RAM
+
+The biggest RAM consumer is models, not data:
+
+| Component | RAM | Loading strategy |
+|-----------|-----|-----------------|
+| BGE-small embedder | ~130MB | **Always hot** (needed for ingest + query) |
+| Cross-encoder reranker | Variable | **Lazy** (load on first use, idle-unload) |
+| Summarizer model | Variable (can be large) | **Lazy** (consolidation only) |
+| SQLite connection pool | ~10–30MB | Always open |
+| LanceDB table handles | ~20–50MB | Always open |
+| **Daemon baseline RSS** | **~300–400MB** | Without optional models |
+
+**Key rule:** Keep embeddings always hot. Load reranker/summarizer lazily. Allow quantized weights (int8/fp16) where possible.
+
+### LanceDB Compaction Strategy
+
+Without periodic `optimize()`, queries fall back to brute-force scan on unindexed fragments. This is the primary source of query latency degradation over time.
+
+**Dual-trigger strategy:**
+- Compact after **~100–500 upserts** since last optimize, OR
+- Compact after **5–10 minutes** elapsed since last optimize
+- Whichever fires first triggers compaction
+- Run on a background tokio task to avoid blocking indexer or query paths
+
+### Practical Performance Expectations
+
+For a "medium" vault (2k–10k Markdown files, 20k–200k chunks):
+
+**Initial indexing:**
+- ~5–15ms per embedding on CPU (BGE-small, no acceleration)
+- 100k chunks × ~10ms = ~1000s ≈ **~17 minutes**
+- With batching (batch size 32): ~10–15 minutes
+- Metal acceleration could halve this, but Candle's Metal support for BERT-class is still maturing
+- One-time or rare operation (full rebuild)
+
+**Incremental updates (day-to-day):**
+- Editing a note typically touches 1–10 chunks
+- HashGate ensures only changed chunks are re-embedded
+- Near-instant: sub-second to a couple seconds worst case (with debounce)
+
+**Query latency (daemon warm):**
+- `search_minimal` end-to-end: **20–80ms** (FTS + vector + fusion + stub packing)
+- `expand` (chunk fetch by ID): **5–20ms**
+- Optional rerank (top 20): adds **200–500ms**
+- The "always-on" UX goal is realistic if rerank and summarization are optional
+
+### Performant Daemon Profile
+
+The target operational profile:
+
+```
+Daemon (always running):
+  ├── Embedder: BGE-small loaded, warm
+  ├── SQLite: connection pool open, WAL mode
+  ├── LanceDB: table handles open, indexes warm
+  └── Models: reranker/summarizer NOT loaded (lazy)
+
+Indexer (event-driven):
+  ├── Runs quickly on small changes (1-10 chunks)
+  ├── Batches writes (SQLite + LanceDB)
+  ├── Does NOT do heavy ML on hot path
+  └── Backpressure: bounded queue, last-write-wins
+
+Consolidation (scheduled/idle):
+  ├── ML summarization runs here
+  ├── Heavier processing, respects CPU budget
+  └── Yields to indexer if file events arrive
+
+Query (on-demand):
+  ├── Uses cheap retrieval first (FTS + vector)
+  ├── Rerank only if requested or confidence low
+  └── Returns capsules by default, expand on demand
+```
+
+---
+
 ## References and Prior Art
 
 - **MemGPT**: Virtual context management with hierarchical memory tiers for long-running agents

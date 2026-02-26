@@ -582,3 +582,94 @@ Graph expansion captures transitively relevant content in interlinked vaults: a 
 | Distance metric | Dot product | Optimal for L2-normalized embeddings |
 | Pooling | CLS (first token) | BGE-recommended, fastest |
 | Reranker (post-v1) | ONNX Runtime via `ort` crate | Cross-encoder reranking on top-N fused candidates |
+
+## Performance Design
+
+The system is designed around one core insight: **indexing is the expensive part; querying is cheap once warm**. All performance decisions flow from keeping the daemon responsive during normal use while deferring heavy computation to idle or scheduled windows.
+
+### Design Decisions
+
+#### 1. Capsule Generation Strategy
+
+Every chunk gets a **deterministic capsule** at ingest time — zero ML cost:
+
+| Capsule field | Source | Cost |
+|---------------|--------|------|
+| `title` | Heading hierarchy from Markdown AST | Negligible |
+| `summary_2sent` | First meaningful sentence + heading outline | Negligible |
+| `tags` | Frontmatter + auto-extracted | Negligible |
+
+ML-quality summarization runs only during **consolidation** (idle/scheduled), never on the hot ingest path. This prevents the biggest laptop killer: eager summarization burning CPU on every file save.
+
+#### 2. Reranker Policy
+
+Cross-encoder reranking is **opt-in**, not default:
+
+- Triggered per-query when the caller requests it, OR when fusion confidence is below threshold
+- Applied to the **top 10–30 fused candidates** only, never the full candidate pool
+- Operates on **capsules/snippets**, not full chunks, to minimize compute
+- Latency budget: 200–500ms on CPU for top-20 candidates
+- The reranker model is **loaded lazily** (not at startup) and unloaded after idle timeout
+
+#### 3. Work Queue and Backpressure
+
+The indexing pipeline is protected against watcher storms (git pulls, branch switches, mass edits):
+
+```
+File events → Debounce (250ms) → Bounded work queue → Indexer
+                                      ↓
+                              Overflow policy:
+                              • Last-write-wins per file_id
+                              • Drop oldest if queue full
+                              • Batch SQLite writes (single writer lane)
+                              • Batch LanceDB upserts
+```
+
+Key invariant: the queue is bounded. If it fills up, dropped files are caught on the next periodic scan.
+
+#### 4. LanceDB Compaction Strategy
+
+Without compaction, queries fall back to brute-force scan on unindexed fragments. The `optimize()` schedule uses a **dual trigger**:
+
+| Trigger | Threshold | Rationale |
+|---------|-----------|-----------|
+| Upsert count | ~100–500 upserts since last optimize | Keeps unindexed fragment count bounded |
+| Elapsed time | 5–10 minutes since last optimize | Catches quiet periods after bursts |
+
+Whichever fires first triggers compaction. Runs on a background task to avoid blocking indexer or query paths.
+
+#### 5. Model Loading Strategy
+
+| Model | Loading | Memory | Rationale |
+|-------|---------|--------|-----------|
+| BGE-small embedder | **Always hot** | ~130MB | Needed for every ingest and query |
+| Cross-encoder reranker | **Lazy** (on first use) | Variable | Rarely needed; idle-unloaded |
+| Summarizer | **Lazy** (consolidation only) | Variable | Only runs during idle/scheduled jobs |
+
+Target daemon baseline RSS: **300–400MB** (embedder + SQLite + LanceDB structures).
+
+### Performance Expectations
+
+Assumes a "medium" vault: 2k–10k Markdown files, 20k–200k chunks, 384-dim embeddings.
+
+| Operation | Expected Latency | Notes |
+|-----------|-----------------|-------|
+| SQLite FTS5 query | 5–30ms | Scales with vault size |
+| LanceDB vector search | 10–50ms | After compaction; warm indexes |
+| Hybrid fusion + scoring | 1–10ms | Lightweight arithmetic |
+| `search_minimal` end-to-end | 20–80ms | FTS + vector + fusion + stub packing |
+| `expand` (fetch chunks) | 5–20ms | Direct ID lookup |
+| Optional rerank (top 20) | 200–500ms | Cross-encoder on CPU |
+| Incremental index (1 file) | Sub-second | Hash gate + embed 1–10 chunks |
+| Initial full index (100k chunks) | ~10–17 min | CPU, batch size 32, no acceleration |
+
+### Storage Footprint
+
+| Component | Size (100k chunks) | Notes |
+|-----------|-------------------|-------|
+| Embeddings (raw float32) | ~147MB | 100k × 384 × 4 bytes |
+| LanceDB with indexes | ~200–400MB | Overhead from indexes + metadata |
+| SQLite (metadata + FTS) | ~50–150MB | Depends on content length |
+| BGE-small model weights | ~130MB | Loaded in RAM via mmap |
+| **Total disk** | **~400MB–800MB** | Comfortable for laptop |
+| **Daemon RSS (baseline)** | **~300–400MB** | Embedder + stores, no optional models |
