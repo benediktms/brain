@@ -18,7 +18,7 @@ pub fn get_or_create_file_id(conn: &Connection, path: &str) -> Result<(String, b
         if deleted_at.is_some() {
             // Resurrect soft-deleted file
             conn.execute(
-                "UPDATE files SET deleted_at = NULL, indexing_state = 'idle' WHERE file_id = ?1",
+                "UPDATE files SET deleted_at = NULL, indexing_state = 'idle', content_hash = NULL WHERE file_id = ?1",
                 [&file_id],
             )?;
         }
