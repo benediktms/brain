@@ -3,14 +3,13 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 use walkdir::WalkDir;
 
-/// A scanned note file: its path and full text content.
+/// A scanned note file path.
 pub struct ScannedFile {
     pub path: PathBuf,
-    pub content: String,
 }
 
-/// Walk `dirs`, collect all `*.md` files, read their content.
-/// Skips hidden directories and unreadable files with a warning.
+/// Walk `dirs`, collect all `*.md` file paths.
+/// Skips hidden directories and unreadable entries with a warning.
 pub fn scan_brain(dirs: &[PathBuf]) -> Vec<ScannedFile> {
     let mut files = Vec::new();
 
@@ -36,10 +35,7 @@ pub fn scan_brain(dirs: &[PathBuf]) -> Vec<ScannedFile> {
                 continue;
             }
 
-            match std::fs::read_to_string(&path) {
-                Ok(content) => files.push(ScannedFile { path, content }),
-                Err(err) => warn!("skipping unreadable file {}: {err}", path.display()),
-            }
+            files.push(ScannedFile { path });
         }
     }
 
