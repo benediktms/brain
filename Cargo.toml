@@ -4,7 +4,7 @@ members = ["crates/brain_lib", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
