@@ -121,7 +121,10 @@ impl Store {
         builder
             .when_matched_update_all(None)
             .when_not_matched_insert_all()
-            .when_not_matched_by_source_delete(Some(format!("file_id = '{file_id}'")));
+            .when_not_matched_by_source_delete(Some(format!(
+                "file_id = '{}'",
+                validate_file_id(file_id)?
+            )));
         builder
             .execute(Box::new(batches))
             .await
@@ -139,7 +142,7 @@ impl Store {
     /// Delete all chunks for a given file_id.
     pub async fn delete_file_chunks(&self, file_id: &str) -> crate::error::Result<()> {
         self.table
-            .delete(&format!("file_id = '{file_id}'"))
+            .delete(&format!("file_id = '{}'", validate_file_id(file_id)?))
             .await
             .map_err(|e| BrainCoreError::VectorDb(format!("delete failed: {e}")))?;
 
@@ -250,6 +253,18 @@ fn empty_record_batch(schema: &Schema) -> RecordBatch {
         ],
     )
     .expect("empty batch should be valid")
+}
+
+/// Validate that a file_id is a well-formed UUID (hex digits and hyphens only)
+/// before interpolating it into a LanceDB filter expression.
+fn validate_file_id(file_id: &str) -> crate::error::Result<&str> {
+    if !file_id.is_empty() && file_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        Ok(file_id)
+    } else {
+        Err(BrainCoreError::VectorDb(format!(
+            "invalid file_id for filter: {file_id}"
+        )))
+    }
 }
 
 fn make_record_batch(
