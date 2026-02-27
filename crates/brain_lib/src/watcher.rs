@@ -135,9 +135,7 @@ mod tests {
     use super::*;
     use notify_debouncer_full::DebouncedEvent;
     use notify_debouncer_full::notify::Event;
-    use notify_debouncer_full::notify::event::{
-        CreateKind, ModifyKind, RemoveKind, RenameMode,
-    };
+    use notify_debouncer_full::notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
     use std::time::Instant;
 
     fn debounced(event: Event) -> DebouncedEvent {
@@ -191,7 +189,9 @@ mod tests {
         });
         let results = map_event(&event);
         assert_eq!(results.len(), 1);
-        assert!(matches!(&results[0], FileEvent::Changed(p) if p.to_str() == Some("/notes/moved.md")));
+        assert!(
+            matches!(&results[0], FileEvent::Changed(p) if p.to_str() == Some("/notes/moved.md"))
+        );
     }
 
     #[test]
@@ -205,7 +205,9 @@ mod tests {
         });
         let results = map_event(&event);
         assert_eq!(results.len(), 1);
-        assert!(matches!(&results[0], FileEvent::Changed(p) if p.to_str() == Some("/notes/edited.md")));
+        assert!(
+            matches!(&results[0], FileEvent::Changed(p) if p.to_str() == Some("/notes/edited.md"))
+        );
     }
 
     #[test]
