@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::chunker::chunk_text;
-use crate::db::chunks::{replace_chunk_metadata, ChunkMeta};
-use crate::db::files;
 use crate::db::Db;
+use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
+use crate::db::files;
 use crate::embedder::{Embed, Embedder};
 use crate::hash_gate::{self, HashGate};
 use crate::scanner::scan_brain;

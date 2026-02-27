@@ -286,10 +286,7 @@ async fn test_roundtrip_index_then_query() {
     );
 
     // With identical embedding, distance should be near zero
-    assert!(
-        top.score.is_some(),
-        "expected distance score from LanceDB"
-    );
+    assert!(top.score.is_some(), "expected distance score from LanceDB");
     let score = top.score.unwrap();
     assert!(
         score < 0.01,
@@ -346,10 +343,7 @@ async fn test_roundtrip_with_fixtures() {
         top.file_path
     );
     // Exact match → near-zero distance
-    assert!(
-        top.score.is_some(),
-        "expected distance score from LanceDB"
-    );
+    assert!(top.score.is_some(), "expected distance score from LanceDB");
     let score = top.score.unwrap();
     assert!(
         score < 0.01,

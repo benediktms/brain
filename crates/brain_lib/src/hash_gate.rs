@@ -1,5 +1,5 @@
-use crate::db::files;
 use crate::db::Db;
+use crate::db::files;
 
 /// Result of a hash gate check: should this file be (re-)indexed?
 pub struct GateVerdict {

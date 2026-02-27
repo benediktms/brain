@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::db::files;
 use crate::db::Db;
+use crate::db::files;
 use crate::embedder::MockEmbedder;
 use crate::hash_gate::content_hash;
 use crate::pipeline::IndexPipeline;

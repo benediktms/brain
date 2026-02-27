@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::{
-    types::Float32Type, FixedSizeListArray, Float32Array, Int32Array, RecordBatch,
-    RecordBatchIterator, StringArray,
+    FixedSizeListArray, Float32Array, Int32Array, RecordBatch, RecordBatchIterator, StringArray,
+    types::Float32Type,
 };
 use arrow_schema::{DataType, Field, Schema};
 use lancedb::query::{ExecutableQuery, QueryBase};

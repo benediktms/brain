@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 pub struct Daemon {
     pid_path: PathBuf,
