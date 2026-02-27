@@ -8,10 +8,11 @@ name = "brain"
 path = "src/main.rs"
 
 [dependencies]
-core = { path = "../core" }
-tokio = { workspace = true }
+brain-lib = { path = "../brain_lib" }
+tokio = { workspace = true, features = ["signal"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-
 clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { workspace = true }
+libc = "0.2"
+dirs = "6"

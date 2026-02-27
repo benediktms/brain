@@ -1,50 +1,27 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use core::prelude::*;
+use brain_lib::prelude::*;
 use tracing::info;
 
 /// Index the given notes directory into the LanceDB database.
-pub async fn run(notes_path: PathBuf, model_dir: PathBuf, db_path: PathBuf) -> Result<()> {
-    let start = std::time::Instant::now();
+///
+/// This will be rewritten in Step 5 to use IndexPipeline with SQLite-backed
+/// incremental indexing. For now it uses the pipeline stub.
+pub async fn run(
+    notes_path: PathBuf,
+    model_dir: PathBuf,
+    db_path: PathBuf,
+    sqlite_path: PathBuf,
+) -> Result<()> {
+    let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let stats = pipeline.full_scan(&[notes_path]).await?;
 
-    info!("scanning {}", notes_path.display());
-    let files = scan_brain(&[notes_path]);
-    info!(file_count = files.len(), "files found");
-
-    let embedder = Embedder::load(&model_dir)?;
-
-    info!("opening store at {}", db_path.display());
-    let store = Store::open_or_create(&db_path).await?;
-
-    let mut total_chunks = 0;
-    for file in &files {
-        let chunks = chunk_text(&file.content);
-        if chunks.is_empty() {
-            continue;
-        }
-
-        let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
-        let embeddings = embedder.embed_batch(&texts)?;
-
-        let chunk_pairs: Vec<(usize, &str)> =
-            chunks.iter().map(|c| (c.ord, c.content.as_str())).collect();
-
-        store
-            .insert_chunks(
-                file.path.to_str().unwrap_or("unknown"),
-                &chunk_pairs,
-                &embeddings,
-            )
-            .await?;
-
-        total_chunks += chunks.len();
-    }
-
-    let elapsed = start.elapsed();
     info!(
-        total_chunks,
-        elapsed_ms = elapsed.as_millis(),
+        indexed = stats.indexed,
+        skipped = stats.skipped,
+        deleted = stats.deleted,
+        errors = stats.errors,
         "indexing complete"
     );
 

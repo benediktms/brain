@@ -8,6 +8,12 @@ use tracing::info;
 
 use crate::error::BrainCoreError;
 
+/// Trait for embedding text into vectors.
+pub trait Embed: Send + Sync {
+    fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>>;
+    fn hidden_size(&self) -> usize;
+}
+
 pub struct Embedder {
     model: BertModel,
     tokenizer: Tokenizer,
@@ -63,6 +69,9 @@ impl Embedder {
             ..Default::default()
         }));
 
+        // NOTE: memory-maps the file directly into the process's address space. Returned pointers
+        // are backed by raw pointers rather than owned Rust memory. Edits occuring to the file at
+        // the same time will produce undefined behavior.
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_path], candle_core::DType::F32, &device)
                 .map_err(|e| BrainCoreError::Embedding(format!("failed to load model weights: {e}")))?
@@ -179,4 +188,51 @@ impl Embedder {
     pub fn hidden_size(&self) -> usize {
         self.hidden_size
     }
+}
+
+impl Embed for Embedder {
+    fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+        self.embed_batch(texts)
+    }
+
+    fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+}
+
+/// A mock embedder that produces deterministic hash-based 384-dim vectors.
+/// Avoids requiring model weights in CI/tests.
+pub struct MockEmbedder;
+
+impl Embed for MockEmbedder {
+    fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|text| mock_embedding(text)).collect())
+    }
+
+    fn hidden_size(&self) -> usize {
+        384
+    }
+}
+
+/// Generate a deterministic 384-dim unit vector from text content using BLAKE3.
+fn mock_embedding(text: &str) -> Vec<f32> {
+    let hash = blake3::hash(text.as_bytes());
+    let bytes = hash.as_bytes();
+
+    let mut embedding = Vec::with_capacity(384);
+    for i in 0..384 {
+        // Use hash bytes cyclically to fill 384 dimensions
+        let byte = bytes[i % 32];
+        embedding.push((byte as f32 / 255.0) - 0.5);
+    }
+
+    // L2 normalize
+    let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut embedding {
+            *v /= norm;
+        }
+    }
+
+    embedding
 }

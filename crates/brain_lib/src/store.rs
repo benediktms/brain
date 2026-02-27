@@ -14,7 +14,6 @@ use crate::error::BrainCoreError;
 const EMBEDDING_DIM: i32 = 384;
 
 pub struct Store {
-    #[allow(dead_code)] // future API: db needed for table management operations
     db: lancedb::Connection,
     table: lancedb::Table,
 }
@@ -22,7 +21,7 @@ pub struct Store {
 impl Store {
     /// Open or create a LanceDB store at the given directory.
     pub async fn open_or_create(db_path: &Path) -> crate::error::Result<Self> {
-        let db = lancedb::connect(db_path.to_str().unwrap_or("brain_lancedb"))
+        let db = lancedb::connect(db_path.to_str().unwrap_or(".brain/lancedb"))
             .execute()
             .await
             .map_err(|e| BrainCoreError::VectorDb(format!("failed to connect: {e}")))?;
@@ -34,10 +33,28 @@ impl Store {
             .map_err(|e| BrainCoreError::VectorDb(format!("failed to list tables: {e}")))?;
 
         let table = if table_names.iter().any(|n| n == "chunks") {
-            db.open_table("chunks")
+            let t = db
+                .open_table("chunks")
                 .execute()
                 .await
-                .map_err(|e| BrainCoreError::VectorDb(format!("failed to open table: {e}")))?
+                .map_err(|e| BrainCoreError::VectorDb(format!("failed to open table: {e}")))?;
+
+            // POC migration: detect old schema (no file_id column) and recreate
+            if Self::needs_migration(&t).await {
+                info!("detected old POC schema without file_id column — recreating table");
+                db.drop_table("chunks", &[]).await.map_err(|e| {
+                    BrainCoreError::VectorDb(format!("failed to drop old table: {e}"))
+                })?;
+                let schema = chunks_schema();
+                let empty_batch = empty_record_batch(&schema);
+                let batches = RecordBatchIterator::new(vec![Ok(empty_batch)], Arc::new(schema));
+                db.create_table("chunks", Box::new(batches))
+                    .execute()
+                    .await
+                    .map_err(|e| BrainCoreError::VectorDb(format!("failed to create table: {e}")))?
+            } else {
+                t
+            }
         } else {
             let schema = chunks_schema();
             let empty_batch = empty_record_batch(&schema);
@@ -52,29 +69,81 @@ impl Store {
         Ok(Self { db, table })
     }
 
-    /// Insert chunks with their embeddings for a given file.
-    pub async fn insert_chunks(
+    /// Check if the table uses the old POC schema (no file_id column).
+    async fn needs_migration(table: &lancedb::Table) -> bool {
+        // Try to query file_id column — if it doesn't exist, we need migration
+        let schema_result = table.query().limit(0).execute().await;
+
+        match schema_result {
+            Ok(stream) => {
+                use futures::TryStreamExt;
+                let batches: std::result::Result<Vec<RecordBatch>, _> = stream.try_collect().await;
+                match batches {
+                    Ok(batches) => {
+                        if let Some(batch) = batches.first() {
+                            batch.column_by_name("file_id").is_none()
+                        } else {
+                            // Empty table — check schema directly
+                            false
+                        }
+                    }
+                    Err(_) => false,
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Upsert chunks for a file using merge_insert.
+    ///
+    /// - Matched chunks (by chunk_id) are updated
+    /// - New chunks are inserted
+    /// - Orphaned chunks for this file_id are deleted
+    pub async fn upsert_chunks(
         &self,
+        file_id: &str,
         file_path: &str,
-        chunks: &[(usize, &str)], // (ord, content)
+        chunks: &[(usize, &str)],
         embeddings: &[Vec<f32>],
     ) -> crate::error::Result<()> {
         assert_eq!(chunks.len(), embeddings.len());
         if chunks.is_empty() {
+            // No chunks — just delete any existing chunks for this file
+            self.delete_file_chunks(file_id).await?;
             return Ok(());
         }
 
         let schema = chunks_schema();
-        let batch = make_record_batch(&schema, file_path, chunks, embeddings)?;
+        let batch = make_record_batch(&schema, file_id, file_path, chunks, embeddings)?;
         let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
 
-        self.table
-            .add(Box::new(batches))
-            .execute()
+        let mut builder = self.table.merge_insert(&["chunk_id"]);
+        builder
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all()
+            .when_not_matched_by_source_delete(Some(format!("file_id = '{file_id}'")));
+        builder
+            .execute(Box::new(batches))
             .await
-            .map_err(|e| BrainCoreError::VectorDb(format!("insert failed: {e}")))?;
+            .map_err(|e| BrainCoreError::VectorDb(format!("upsert failed: {e}")))?;
 
-        info!(file_path, chunk_count = chunks.len(), "chunks inserted");
+        info!(
+            file_path,
+            file_id,
+            chunk_count = chunks.len(),
+            "chunks upserted"
+        );
+        Ok(())
+    }
+
+    /// Delete all chunks for a given file_id.
+    pub async fn delete_file_chunks(&self, file_id: &str) -> crate::error::Result<()> {
+        self.table
+            .delete(&format!("file_id = '{file_id}'"))
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("delete failed: {e}")))?;
+
+        info!(file_id, "file chunks deleted from LanceDB");
         Ok(())
     }
 
@@ -95,7 +164,6 @@ impl Store {
             .map_err(|e| BrainCoreError::VectorDb(format!("search failed: {e}")))?;
 
         let mut output = Vec::new();
-        // Collect record batches from the stream
         use futures::TryStreamExt;
         let batches: Vec<RecordBatch> = results
             .try_collect()
@@ -131,6 +199,11 @@ impl Store {
 
         Ok(output)
     }
+
+    /// Get a reference to the underlying LanceDB connection.
+    pub fn connection(&self) -> &lancedb::Connection {
+        &self.db
+    }
 }
 
 #[derive(Debug)]
@@ -144,6 +217,7 @@ pub struct QueryResult {
 fn chunks_schema() -> Schema {
     Schema::new(vec![
         Field::new("chunk_id", DataType::Utf8, false),
+        Field::new("file_id", DataType::Utf8, false),
         Field::new("file_path", DataType::Utf8, false),
         Field::new("chunk_ord", DataType::Int32, false),
         Field::new("content", DataType::Utf8, false),
@@ -164,6 +238,7 @@ fn empty_record_batch(schema: &Schema) -> RecordBatch {
         vec![
             Arc::new(StringArray::from(Vec::<&str>::new())),
             Arc::new(StringArray::from(Vec::<&str>::new())),
+            Arc::new(StringArray::from(Vec::<&str>::new())),
             Arc::new(Int32Array::from(Vec::<i32>::new())),
             Arc::new(StringArray::from(Vec::<&str>::new())),
             Arc::new(
@@ -179,14 +254,16 @@ fn empty_record_batch(schema: &Schema) -> RecordBatch {
 
 fn make_record_batch(
     schema: &Schema,
+    file_id: &str,
     file_path: &str,
     chunks: &[(usize, &str)],
     embeddings: &[Vec<f32>],
 ) -> crate::error::Result<RecordBatch> {
     let chunk_ids: Vec<String> = chunks
         .iter()
-        .map(|(ord, _)| format!("{file_path}:{ord}"))
+        .map(|(ord, _)| format!("{file_id}:{ord}"))
         .collect();
+    let file_ids: Vec<&str> = vec![file_id; chunks.len()];
     let file_paths: Vec<&str> = vec![file_path; chunks.len()];
     let ords: Vec<i32> = chunks.iter().map(|(ord, _)| *ord as i32).collect();
     let contents: Vec<&str> = chunks.iter().map(|(_, content)| *content).collect();
@@ -200,6 +277,7 @@ fn make_record_batch(
         Arc::new(schema.clone()),
         vec![
             Arc::new(StringArray::from(chunk_ids)),
+            Arc::new(StringArray::from(file_ids)),
             Arc::new(StringArray::from(file_paths)),
             Arc::new(Int32Array::from(ords)),
             Arc::new(StringArray::from(contents)),

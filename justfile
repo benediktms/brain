@@ -1,5 +1,6 @@
-export BRAIN_MODEL_DIR := env("BRAIN_MODEL_DIR", "./models/bge-small-en-v1.5")
-export BRAIN_DB := env("BRAIN_DB", "./brain_lancedb")
+export BRAIN_MODEL_DIR := env("BRAIN_MODEL_DIR", "./.brain/models/bge-small-en-v1.5")
+export BRAIN_DB := env("BRAIN_DB", "./.brain/lancedb")
+export BRAIN_SQLITE_DB := env("BRAIN_SQLITE_DB", "./.brain/brain.db")
 
 default:
     @just --list
@@ -45,6 +46,15 @@ query query_text top_k="5":
 clean:
     cargo clean
 
+[group('app')]
+watch notes_path=".":
+    cargo run --bin brain -- watch {{notes_path}}
+
+# Available actions: start, stop, status. e.g. "just daemon start ./notes"
+[group('app')]
+daemon +args:
+    cargo run --bin brain -- daemon {{args}}
+
 [group('maintenance')]
 clean-db:
-    rm -rf brain_lancedb
+    rm -rf .brain/lancedb .brain/brain.db

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MODEL_REPO="BAAI/bge-small-en-v1.5"
-MODEL_DIR="$(cd "$(dirname "$0")/.." && pwd)/models/bge-small-en-v1.5"
+MODEL_DIR="$(cd "$(dirname "$0")/.." && pwd)/.brain/models/bge-small-en-v1.5"
 
 echo "==> Setting up BGE-small-en-v1.5 model"
 

@@ -11,11 +11,20 @@ pub enum BrainCoreError {
     #[error("vector DB error: {0}")]
     VectorDb(String),
 
+    #[error("database error: {0}")]
+    Database(String),
+
     #[error("parse error: {0}")]
     Parse(String),
 
     #[error("config error: {0}")]
     Config(String),
+}
+
+impl From<rusqlite::Error> for BrainCoreError {
+    fn from(e: rusqlite::Error) -> Self {
+        BrainCoreError::Database(e.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, BrainCoreError>;

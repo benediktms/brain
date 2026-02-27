@@ -1,15 +1,10 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use core::prelude::*;
+use brain_lib::prelude::*;
 
 /// Query the LanceDB database for top-k results for the given input.
-pub async fn run(
-    query: String,
-    top_k: usize,
-    model_dir: PathBuf,
-    db_path: PathBuf,
-) -> Result<()> {
+pub async fn run(query: String, top_k: usize, model_dir: PathBuf, db_path: PathBuf) -> Result<()> {
     let embedder = Embedder::load(&model_dir)?;
     let store = Store::open_or_create(&db_path).await?;
 

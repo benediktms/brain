@@ -1,5 +1,6 @@
 /target
 .omc
 .claude
-models/
-brain_lancedb/
+.brain/
+
+.DS_Store
