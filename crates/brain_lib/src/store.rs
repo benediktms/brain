@@ -106,7 +106,13 @@ impl Store {
         chunks: &[(usize, &str)],
         embeddings: &[Vec<f32>],
     ) -> crate::error::Result<()> {
-        assert_eq!(chunks.len(), embeddings.len());
+        if chunks.len() != embeddings.len() {
+            return Err(BrainCoreError::VectorDb(format!(
+                "chunk/embedding count mismatch: {} vs {}",
+                chunks.len(),
+                embeddings.len()
+            )));
+        }
         if chunks.is_empty() {
             // No chunks — just delete any existing chunks for this file
             self.delete_file_chunks(file_id).await?;
