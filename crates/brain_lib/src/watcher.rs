@@ -91,8 +91,7 @@ fn map_event(event: &notify_debouncer_full::DebouncedEvent) -> Vec<FileEvent> {
                 }
             }
         }
-        EventKind::Modify(_) => {
-            // Check for rename (2 paths: from, to)
+        EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Name(_)) => {
             if event.paths.len() == 2 {
                 let from = &event.paths[0];
                 let to = &event.paths[1];
@@ -102,11 +101,19 @@ fn map_event(event: &notify_debouncer_full::DebouncedEvent) -> Vec<FileEvent> {
                         to: to.clone(),
                     });
                 }
-            } else {
-                for path in &event.paths {
-                    if is_markdown(path) {
-                        result.push(FileEvent::Changed(path.clone()));
-                    }
+            }
+            // Single-path Name events (From/To without Both) — treat as change
+            // so the file gets re-indexed at its current path
+            for path in &event.paths {
+                if event.paths.len() != 2 && is_markdown(path) {
+                    result.push(FileEvent::Changed(path.clone()));
+                }
+            }
+        }
+        EventKind::Modify(_) => {
+            for path in &event.paths {
+                if is_markdown(path) {
+                    result.push(FileEvent::Changed(path.clone()));
                 }
             }
         }
@@ -121,4 +128,117 @@ fn map_event(event: &notify_debouncer_full::DebouncedEvent) -> Vec<FileEvent> {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify_debouncer_full::DebouncedEvent;
+    use notify_debouncer_full::notify::Event;
+    use notify_debouncer_full::notify::event::{
+        CreateKind, ModifyKind, RemoveKind, RenameMode,
+    };
+    use std::time::Instant;
+
+    fn debounced(event: Event) -> DebouncedEvent {
+        DebouncedEvent::new(event, Instant::now())
+    }
+
+    #[test]
+    fn modify_name_both_two_paths_emits_renamed() {
+        let event = debounced(Event {
+            kind: EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            paths: vec!["/notes/old.md".into(), "/notes/new.md".into()],
+            attrs: Default::default(),
+        });
+        let results = map_event(&event);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(&results[0], FileEvent::Renamed { from, to }
+            if from.to_str() == Some("/notes/old.md")
+            && to.to_str() == Some("/notes/new.md")
+        ));
+    }
+
+    #[test]
+    fn modify_data_two_paths_emits_changed_not_renamed() {
+        // This was the original bug: ModifyKind::Data with 2 paths was
+        // misclassified as a rename.
+        let event = debounced(Event {
+            kind: EventKind::Modify(ModifyKind::Data(
+                notify_debouncer_full::notify::event::DataChange::Any,
+            )),
+            paths: vec!["/notes/a.md".into(), "/notes/a.md".into()],
+            attrs: Default::default(),
+        });
+        let results = map_event(&event);
+        assert!(!results.is_empty());
+        for r in &results {
+            assert!(
+                matches!(r, FileEvent::Changed(_)),
+                "expected Changed, got {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn modify_name_single_path_emits_changed() {
+        // A From or To event without its pair — treat as Changed so the
+        // file gets re-indexed at its current path.
+        let event = debounced(Event {
+            kind: EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            paths: vec!["/notes/moved.md".into()],
+            attrs: Default::default(),
+        });
+        let results = map_event(&event);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(&results[0], FileEvent::Changed(p) if p.to_str() == Some("/notes/moved.md")));
+    }
+
+    #[test]
+    fn modify_data_single_path_emits_changed() {
+        let event = debounced(Event {
+            kind: EventKind::Modify(ModifyKind::Data(
+                notify_debouncer_full::notify::event::DataChange::Content,
+            )),
+            paths: vec!["/notes/edited.md".into()],
+            attrs: Default::default(),
+        });
+        let results = map_event(&event);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(&results[0], FileEvent::Changed(p) if p.to_str() == Some("/notes/edited.md")));
+    }
+
+    #[test]
+    fn non_markdown_files_are_filtered() {
+        let event = debounced(Event {
+            kind: EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            paths: vec!["/notes/old.txt".into(), "/notes/new.txt".into()],
+            attrs: Default::default(),
+        });
+        assert!(map_event(&event).is_empty());
+    }
+
+    #[test]
+    fn create_emits_created() {
+        let event = debounced(Event {
+            kind: EventKind::Create(CreateKind::File),
+            paths: vec!["/notes/new.md".into()],
+            attrs: Default::default(),
+        });
+        let results = map_event(&event);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(&results[0], FileEvent::Created(_)));
+    }
+
+    #[test]
+    fn remove_emits_deleted() {
+        let event = debounced(Event {
+            kind: EventKind::Remove(RemoveKind::File),
+            paths: vec!["/notes/gone.md".into()],
+            attrs: Default::default(),
+        });
+        let results = map_event(&event);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(&results[0], FileEvent::Deleted(_)));
+    }
 }
