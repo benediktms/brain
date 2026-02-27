@@ -71,25 +71,8 @@ impl Store {
 
     /// Check if the table uses the old POC schema (no file_id column).
     async fn needs_migration(table: &lancedb::Table) -> bool {
-        // Try to query file_id column — if it doesn't exist, we need migration
-        let schema_result = table.query().limit(0).execute().await;
-
-        match schema_result {
-            Ok(stream) => {
-                use futures::TryStreamExt;
-                let batches: std::result::Result<Vec<RecordBatch>, _> = stream.try_collect().await;
-                match batches {
-                    Ok(batches) => {
-                        if let Some(batch) = batches.first() {
-                            batch.column_by_name("file_id").is_none()
-                        } else {
-                            // Empty table — check schema directly
-                            false
-                        }
-                    }
-                    Err(_) => false,
-                }
-            }
+        match table.schema().await {
+            Ok(schema) => schema.field_with_name("file_id").is_err(),
             Err(_) => false,
         }
     }
