@@ -2,6 +2,8 @@ export BRAIN_MODEL_DIR := env("BRAIN_MODEL_DIR", "./.brain/models/bge-small-en-v
 export BRAIN_DB := env("BRAIN_DB", "./.brain/lancedb")
 export BRAIN_SQLITE_DB := env("BRAIN_SQLITE_DB", "./.brain/brain.db")
 
+bin := "./target/debug/brain"
+
 default:
     @just --list
 
@@ -33,27 +35,30 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-[group('app')]
-index notes_path=".":
-    cargo run --bin brain -- index {{notes_path}}
+[private]
+ensure-binary:
+    @test -f {{bin}} || cargo build --bin brain
 
 [group('app')]
-query query_text top_k="5":
-    @test -f ./target/debug/brain || cargo build --bin brain
-    ./target/debug/brain query "{{query_text}}" -k {{top_k}}
+index notes_path=".": ensure-binary
+    {{bin}} index {{notes_path}}
+
+[group('app')]
+query query_text top_k="5": ensure-binary
+    {{bin}} query "{{query_text}}" -k {{top_k}}
 
 [group('maintenance')]
 clean:
     cargo clean
 
 [group('app')]
-watch notes_path=".":
-    cargo run --bin brain -- watch {{notes_path}}
+watch notes_path=".": ensure-binary
+    {{bin}} watch {{notes_path}}
 
 # Available actions: start, stop, status. e.g. "just daemon start ./notes"
 [group('app')]
-daemon +args:
-    cargo run --bin brain -- daemon {{args}}
+daemon +args: ensure-binary
+    {{bin}} daemon {{args}}
 
 [group('maintenance')]
 clean-db:
