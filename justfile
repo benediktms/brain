@@ -25,6 +25,7 @@ test *args:
 
 [group('dev')]
 lint:
+    cargo fmt --all -- --check
     cargo clippy --workspace -- -D warnings
 
 [group('dev')]
