@@ -286,7 +286,7 @@ async fn test_file_rename_preserves_identity() {
     // Rename on disk and in the pipeline
     let new_path = notes_dir.join("b.md");
     std::fs::rename(&old_path, &new_path).unwrap();
-    pipeline.rename_file(&old_path, &new_path).unwrap();
+    pipeline.rename_file(&old_path, &new_path).await.unwrap();
 
     // Verify: same file_id, updated path
     let active = pipeline

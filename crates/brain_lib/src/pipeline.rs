@@ -152,12 +152,12 @@ impl IndexPipeline {
         }
     }
 
-    /// Handle a file rename (update path in SQLite, no re-embed needed).
-    pub fn rename_file(&self, from: &Path, to: &Path) -> crate::error::Result<bool> {
+    /// Handle a file rename (update path in SQLite and LanceDB).
+    pub async fn rename_file(&self, from: &Path, to: &Path) -> crate::error::Result<bool> {
         let from_str = from.to_string_lossy().to_string();
         let to_str = to.to_string_lossy().to_string();
 
-        let renamed = self.db.with_conn(|conn| {
+        let file_id = self.db.with_conn(|conn| {
             let file_id: Option<String> = conn
                 .query_row(
                     "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",
@@ -168,16 +168,17 @@ impl IndexPipeline {
 
             if let Some(ref fid) = file_id {
                 files::handle_rename(conn, fid, &to_str)?;
-                Ok(true)
-            } else {
-                Ok(false)
             }
+            Ok(file_id)
         })?;
 
-        if renamed {
+        if let Some(ref fid) = file_id {
+            self.store.update_file_path(fid, &to_str).await?;
             info!(from = %from_str, to = %to_str, "file renamed in index");
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(renamed)
     }
 
     /// Full scan: index all files, detect deletions, recover stuck states.
@@ -265,7 +266,7 @@ impl IndexPipeline {
                 self.delete_file(&path).await?;
             }
             crate::watcher::FileEvent::Renamed { from, to } => {
-                self.rename_file(&from, &to)?;
+                self.rename_file(&from, &to).await?;
             }
         }
         Ok(())

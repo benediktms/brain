@@ -145,6 +145,25 @@ impl Store {
         Ok(())
     }
 
+    /// Update the file_path column for all chunks belonging to a file_id.
+    pub async fn update_file_path(
+        &self,
+        file_id: &str,
+        new_path: &str,
+    ) -> crate::error::Result<()> {
+        let fid = validate_file_id(file_id)?;
+        self.table
+            .update()
+            .only_if(format!("file_id = '{fid}'"))
+            .column("file_path", format!("'{}'", new_path.replace('\'', "''")))
+            .execute()
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("update file_path failed: {e}")))?;
+
+        info!(file_id, new_path, "file_path updated in LanceDB");
+        Ok(())
+    }
+
     /// Delete all chunks for a given file_id.
     pub async fn delete_file_chunks(&self, file_id: &str) -> crate::error::Result<()> {
         self.table
