@@ -92,6 +92,10 @@ pub fn handle_delete(conn: &Connection, path: &str) -> Result<Option<String>> {
             "UPDATE files SET deleted_at = ?1 WHERE file_id = ?2",
             rusqlite::params![now, fid],
         )?;
+        conn.execute(
+            "DELETE FROM chunks WHERE file_id = ?1",
+            rusqlite::params![fid],
+        )?;
     }
 
     Ok(file_id)
@@ -207,6 +211,95 @@ mod tests {
         // Back in active paths
         let active = get_all_active_paths(&conn).unwrap();
         assert_eq!(active.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_delete_removes_orphan_chunks() {
+        use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
+
+        let conn = setup();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+
+        // Insert some chunks
+        let chunks = vec![
+            ChunkMeta {
+                chunk_id: format!("{file_id}:0"),
+                chunk_ord: 0,
+                chunk_hash: "h0".into(),
+            },
+            ChunkMeta {
+                chunk_id: format!("{file_id}:1"),
+                chunk_ord: 1,
+                chunk_hash: "h1".into(),
+            },
+        ];
+        replace_chunk_metadata(&conn, &file_id, &chunks).unwrap();
+
+        // Verify chunks exist
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
+                [&file_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // Soft-delete the file
+        handle_delete(&conn, "/notes/test.md").unwrap();
+
+        // Chunks must be gone
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
+                [&file_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "chunks should be deleted on soft-delete");
+    }
+
+    #[test]
+    fn test_handle_delete_chunks_does_not_affect_other_files() {
+        use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
+
+        let conn = setup();
+        let (file_a, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
+        let (file_b, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+
+        replace_chunk_metadata(
+            &conn,
+            &file_a,
+            &[ChunkMeta {
+                chunk_id: format!("{file_a}:0"),
+                chunk_ord: 0,
+                chunk_hash: "ha".into(),
+            }],
+        )
+        .unwrap();
+        replace_chunk_metadata(
+            &conn,
+            &file_b,
+            &[ChunkMeta {
+                chunk_id: format!("{file_b}:0"),
+                chunk_ord: 0,
+                chunk_hash: "hb".into(),
+            }],
+        )
+        .unwrap();
+
+        // Delete file A
+        handle_delete(&conn, "/notes/a.md").unwrap();
+
+        // File B's chunks are untouched
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
+                [&file_b],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "other file's chunks must not be affected");
     }
 
     #[test]
