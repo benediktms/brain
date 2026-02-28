@@ -7,6 +7,8 @@ pub mod hash_gate;
 pub mod links;
 pub mod parser;
 pub mod pipeline;
+pub mod ranking;
+pub mod retrieval;
 pub mod scanner;
 pub mod store;
 pub mod tokens;
