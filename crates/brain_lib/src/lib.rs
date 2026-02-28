@@ -5,6 +5,7 @@ pub mod embedder;
 pub mod error;
 pub mod hash_gate;
 pub mod links;
+pub mod mcp;
 pub mod parser;
 pub mod pipeline;
 pub mod ranking;
