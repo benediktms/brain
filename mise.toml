@@ -3,3 +3,6 @@ RUST_LOG = "info"
 
 [tools]
 just = "1.46"
+
+[settings]
+env_file = ".env"
