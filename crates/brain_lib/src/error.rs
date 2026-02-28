@@ -19,6 +19,9 @@ pub enum BrainCoreError {
 
     #[error("config error: {0}")]
     Config(String),
+
+    #[error("schema version error: {0}")]
+    SchemaVersion(String),
 }
 
 impl From<rusqlite::Error> for BrainCoreError {
