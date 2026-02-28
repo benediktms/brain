@@ -122,13 +122,11 @@ fn test_chunker_paragraph_splits() {
               Third paragraph about semantic search.";
 
     let chunks = chunk_text(md);
-    assert_eq!(chunks.len(), 3, "three paragraphs → three chunks");
-
-    // Chunks should be in order
-    for (i, chunk) in chunks.iter().enumerate() {
-        assert_eq!(chunk.ord, i);
-        assert!(!chunk.content.is_empty());
-    }
+    // Heading-aware chunker: no headings → single root section → one chunk
+    // (all 3 paragraphs fit within the 400-token limit)
+    assert_eq!(chunks.len(), 1, "no headings, small content → one chunk");
+    assert_eq!(chunks[0].ord, 0);
+    assert!(!chunks[0].content.is_empty());
 }
 
 #[test]
@@ -138,11 +136,11 @@ fn test_chunker_heading_splits() {
               ## Section B\n\nSection B content.";
 
     let chunks = chunk_text(md);
-    // Each heading and paragraph becomes its own chunk: 3 headings + 3 paragraphs = 6
+    // Heading-aware chunker: 3 heading sections → 3 chunks (one per section)
     assert_eq!(
         chunks.len(),
-        6,
-        "expected 6 chunks from heading-separated content, got {}",
+        3,
+        "expected 3 chunks from heading-separated content, got {}",
         chunks.len()
     );
 }
@@ -167,11 +165,12 @@ fn test_chunker_fixture_simple() {
     let content = include_str!("../../../tests/fixtures/simple.md");
     let chunks = chunk_text(content);
 
-    // simple.md has 3 paragraphs separated by double newlines
+    // simple.md has no headings — heading-aware chunker produces a single root section.
+    // All 3 paragraphs (~250 tokens) fit within the 400-token limit → 1 chunk.
     assert_eq!(
         chunks.len(),
-        3,
-        "simple.md should produce 3 chunks, got {}",
+        1,
+        "simple.md (no headings) should produce 1 chunk, got {}",
         chunks.len()
     );
 
@@ -185,12 +184,13 @@ fn test_chunker_fixture_headings() {
     let content = include_str!("../../../tests/fixtures/headings.md");
     let chunks = chunk_text(content);
 
-    // headings.md has 11 heading-separated sections, each producing a heading chunk
-    // and a content chunk (except "Practical Considerations" which has no body) = 21
+    // headings.md has 11 heading sections. The heading-aware chunker produces one
+    // chunk per section with non-empty content. "Practical Considerations" has no
+    // body text (only child headings) → skipped. Result: 10 chunks.
     assert_eq!(
         chunks.len(),
-        21,
-        "headings.md should produce 21 chunks, got {}",
+        10,
+        "headings.md should produce 10 chunks, got {}",
         chunks.len()
     );
 }
@@ -319,9 +319,9 @@ async fn test_roundtrip_with_fixtures() {
     assert_eq!(stats.errors, 0, "no errors during fixture indexing");
 
     // Identity-match test: query with exact chunk text (see module doc for
-    // semantic relevance limitation). Use the full first paragraph of simple.md
-    // which becomes one chunk after splitting on double newlines.
-    let query_text = "Local-first software keeps your data on your own machine. Instead of uploading notes, documents, and personal knowledge to a remote server, a local-first tool indexes everything on-device and never makes a network call. This matters because your thinking is private, your latency is zero, and your tool keeps working whether you are on a plane or your cloud provider has an outage.";
+    // semantic relevance limitation). Use the body of "### Cosine Similarity"
+    // from headings.md which becomes a single chunk under heading-aware splitting.
+    let query_text = "Cosine similarity measures the angle between two vectors, ignoring their magnitude. It ranges from -1 (opposite) to 1 (identical direction). For normalized vectors (unit length), cosine similarity equals the dot product, which is cheaper to compute.";
     let embedder = MockEmbedder;
     let query_vec = embedder.embed_batch(&[query_text]).unwrap();
 
@@ -335,11 +335,11 @@ async fn test_roundtrip_with_fixtures() {
         "query over fixtures should return results"
     );
 
-    // The top result should come from simple.md (exact chunk text → identical vector)
+    // The top result should come from headings.md (exact chunk text → identical vector)
     let top = &results[0];
     assert!(
-        top.file_path.ends_with("simple.md"),
-        "expected top result from simple.md, got: {}",
+        top.file_path.ends_with("headings.md"),
+        "expected top result from headings.md, got: {}",
         top.file_path
     );
     // Exact match → near-zero distance

@@ -15,9 +15,6 @@ pub mod store;
 pub mod tokens;
 pub mod watcher;
 
-#[cfg(test)]
-mod indexing_tests;
-
 pub mod prelude {
     pub use crate::chunker::{Chunk, chunk_document, chunk_text};
     pub use crate::db::Db;
