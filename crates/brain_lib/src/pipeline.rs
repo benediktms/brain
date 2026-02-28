@@ -3,12 +3,15 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use crate::chunker::chunk_text;
+use crate::chunker::{CHUNKER_VERSION, chunk_document};
 use crate::db::Db;
 use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
 use crate::db::files;
+use crate::db::links::replace_links;
 use crate::embedder::{Embed, Embedder};
-use crate::hash_gate::{self, HashGate};
+use crate::hash_gate::HashGate;
+use crate::links::extract_links;
+use crate::parser::parse_document;
 use crate::scanner::scan_brain;
 use crate::store::Store;
 
@@ -88,13 +91,17 @@ impl IndexPipeline {
 
         gate.mark_in_progress(&verdict.file_id)?;
 
-        // Chunk
-        let chunks = chunk_text(&content);
+        // Parse → Chunk → Extract links
+        let doc = parse_document(&content);
+        let chunks = chunk_document(&doc);
+        let links = extract_links(&content);
+
         if chunks.is_empty() {
-            // Empty file — clear any existing chunks
+            // Empty file — clear any existing chunks and links
             self.store.delete_file_chunks(&verdict.file_id).await?;
             self.db.with_conn(|conn| {
                 replace_chunk_metadata(conn, &verdict.file_id, &[])?;
+                replace_links(conn, &verdict.file_id, &[])?;
                 Ok(())
             })?;
             gate.mark_passed(&verdict.file_id, &verdict.hash)?;
@@ -111,17 +118,26 @@ impl IndexPipeline {
         .await
         .map_err(|e| crate::error::BrainCoreError::Embedding(format!("spawn_blocking: {e}")))??;
 
-        // SQLite: replace chunk metadata
+        // SQLite: replace chunk metadata + links
         let chunk_metas: Vec<ChunkMeta> = chunks
             .iter()
             .map(|c| ChunkMeta {
                 chunk_id: format!("{}:{}", verdict.file_id, c.ord),
                 chunk_ord: c.ord,
-                chunk_hash: hash_gate::content_hash(&c.content),
+                chunk_hash: c.chunk_hash.clone(),
+                chunker_version: CHUNKER_VERSION,
+                content: c.content.clone(),
+                heading_path: c.heading_path.clone(),
+                byte_start: c.byte_start,
+                byte_end: c.byte_end,
+                token_estimate: c.token_estimate,
             })
             .collect();
-        self.db
-            .with_conn(|conn| replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas))?;
+        self.db.with_conn(|conn| {
+            replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
+            replace_links(conn, &verdict.file_id, &links)?;
+            Ok(())
+        })?;
 
         // LanceDB: upsert
         let chunk_pairs: Vec<(usize, &str)> =

@@ -16,7 +16,7 @@ pub mod watcher;
 mod indexing_tests;
 
 pub mod prelude {
-    pub use crate::chunker::{Chunk, chunk_text};
+    pub use crate::chunker::{Chunk, chunk_document, chunk_text};
     pub use crate::db::Db;
     pub use crate::embedder::{Embed, Embedder, MockEmbedder};
     pub use crate::error::{BrainCoreError, Result};
