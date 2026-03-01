@@ -32,6 +32,7 @@ pub enum EventType {
     LabelAdded,
     LabelRemoved,
     CommentAdded,
+    ParentSet,
 }
 
 // -- Typed payloads --
@@ -51,6 +52,8 @@ pub struct TaskCreatedPayload {
     pub assignee: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub defer_until: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +99,11 @@ pub struct LabelPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommentPayload {
     pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParentSetPayload {
+    pub parent_task_id: Option<String>,
 }
 
 /// Generate a new UUID v7 event ID.

@@ -81,6 +81,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 "task_type": task.task_type,
                 "assignee": task.assignee,
                 "defer_until": task.defer_until,
+                "parent_task_id": task.parent_task_id,
                 "labels": labels,
                 "dependency_summary": {
                     "total_deps": dep_summary.total_deps,

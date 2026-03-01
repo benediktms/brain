@@ -76,6 +76,16 @@ enum Command {
 
     /// Start the MCP server (stdin/stdout JSON-RPC for agent integration)
     Mcp,
+
+    /// Import beads issues into the brain task system
+    ImportBeads {
+        /// Path to beads issues.jsonl (auto-discovers .beads/issues.jsonl if omitted)
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Preview without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -141,6 +151,9 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Mcp => {
             commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
+        }
+        Command::ImportBeads { path, dry_run } => {
+            commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
         }
     }
 

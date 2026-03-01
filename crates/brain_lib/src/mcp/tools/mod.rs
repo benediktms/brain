@@ -126,7 +126,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                         "enum": ["task_created", "task_updated", "status_changed",
                                  "dependency_added", "dependency_removed",
                                  "note_linked", "note_unlinked",
-                                 "label_added", "label_removed", "comment_added"],
+                                 "label_added", "label_removed", "comment_added",
+                                 "parent_set"],
                         "description": "The type of task event to apply"
                     },
                     "task_id": {
@@ -140,7 +141,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "payload": {
                         "type": "object",
-                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}."
+                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?, parent_task_id?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}. parent_set: {parent_task_id?} (null to clear)."
                     }
                 },
                 "required": ["event_type", "payload"]

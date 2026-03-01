@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    CommentPayload, DependencyPayload, EventType, LabelPayload, NoteLinkPayload,
+    CommentPayload, DependencyPayload, EventType, LabelPayload, NoteLinkPayload, ParentSetPayload,
     StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
 };
 
@@ -16,8 +16,8 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
 
             conn.execute(
                 "INSERT INTO tasks (task_id, title, description, status, priority, due_ts,
-                                    task_type, assignee, defer_until, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                    task_type, assignee, defer_until, parent_task_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 rusqlite::params![
                     event.task_id,
                     p.title,
@@ -28,6 +28,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                     p.task_type.as_deref().unwrap_or("task"),
                     p.assignee,
                     p.defer_until,
+                    p.parent_task_id,
                     event.timestamp,
                     event.timestamp,
                 ],
@@ -180,6 +181,16 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                 ],
             )?;
         }
+
+        EventType::ParentSet => {
+            let p: ParentSetPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}")))?;
+
+            conn.execute(
+                "UPDATE tasks SET parent_task_id = ?1, updated_at = ?2 WHERE task_id = ?3",
+                rusqlite::params![p.parent_task_id, event.timestamp, event.task_id],
+            )?;
+        }
     }
 
     // Record the event itself
@@ -252,6 +263,7 @@ mod tests {
                 task_type: None,
                 assignee: None,
                 defer_until: None,
+                parent_task_id: None,
             })
             .unwrap(),
         }

@@ -600,6 +600,7 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
+ "chrono",
  "futures",
  "lancedb",
  "notify-debouncer-full",

@@ -96,6 +96,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 "task_type": row.task_type,
                 "assignee": row.assignee,
                 "defer_until": row.defer_until,
+                "parent_task_id": row.parent_task_id,
                 "labels": labels,
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,

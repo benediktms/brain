@@ -9,3 +9,6 @@
 .DS_Store
 
 .env
+
+# bv (beads viewer) local config and caches
+.bv/

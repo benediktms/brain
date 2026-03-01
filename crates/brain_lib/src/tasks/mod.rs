@@ -1,5 +1,6 @@
 pub mod cycle;
 pub mod events;
+pub mod import_beads;
 pub mod projections;
 pub mod queries;
 
@@ -109,6 +110,12 @@ impl TaskStore {
             .with_conn(|conn| queries::get_task_comments(conn, task_id))
     }
 
+    /// Get child tasks of a parent.
+    pub fn get_children(&self, parent_task_id: &str) -> Result<Vec<queries::TaskRow>> {
+        self.db
+            .with_conn(|conn| queries::get_children(conn, parent_task_id))
+    }
+
     /// Count of ready and blocked tasks.
     pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
         self.db.with_conn(queries::count_ready_blocked)
@@ -123,6 +130,23 @@ impl TaskStore {
                         "task already exists: {}",
                         event.task_id
                     )));
+                }
+                // Validate parent_task_id if provided
+                let payload: events::TaskCreatedPayload =
+                    serde_json::from_value(event.payload.clone()).map_err(|e| {
+                        BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}"))
+                    })?;
+                if let Some(ref parent_id) = payload.parent_task_id {
+                    if parent_id == &event.task_id {
+                        return Err(BrainCoreError::TaskEvent(
+                            "task cannot be its own parent".to_string(),
+                        ));
+                    }
+                    if !queries::task_exists(conn, parent_id)? {
+                        return Err(BrainCoreError::TaskEvent(format!(
+                            "parent task not found: {parent_id}"
+                        )));
+                    }
                 }
             }
 
@@ -153,6 +177,31 @@ impl TaskStore {
                     )));
                 }
                 cycle::check_cycle(conn, &event.task_id, &payload.depends_on_task_id)?;
+            }
+
+            EventType::ParentSet => {
+                if !queries::task_exists(conn, &event.task_id)? {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "task not found: {}",
+                        event.task_id
+                    )));
+                }
+                let payload: events::ParentSetPayload =
+                    serde_json::from_value(event.payload.clone()).map_err(|e| {
+                        BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}"))
+                    })?;
+                if let Some(ref parent_id) = payload.parent_task_id {
+                    if parent_id == &event.task_id {
+                        return Err(BrainCoreError::TaskEvent(
+                            "task cannot be its own parent".to_string(),
+                        ));
+                    }
+                    if !queries::task_exists(conn, parent_id)? {
+                        return Err(BrainCoreError::TaskEvent(format!(
+                            "parent task not found: {parent_id}"
+                        )));
+                    }
+                }
             }
 
             EventType::DependencyRemoved
@@ -203,6 +252,7 @@ mod tests {
                 task_type: None,
                 assignee: None,
                 defer_until: None,
+                parent_task_id: None,
             })
             .unwrap(),
         }

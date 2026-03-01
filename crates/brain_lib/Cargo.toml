@@ -30,6 +30,7 @@ rusqlite = { workspace = true }
 blake3 = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
+chrono = "0.4"
 
 # File watching
 notify-debouncer-full = "0.7"

@@ -15,12 +15,13 @@ pub struct TaskRow {
     pub task_type: String,
     pub assignee: Option<String>,
     pub defer_until: Option<i64>,
+    pub parent_task_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 const TASK_COLUMNS: &str = "task_id, title, description, status, priority, blocked_reason, due_ts, \
-     task_type, assignee, defer_until, created_at, updated_at";
+     task_type, assignee, defer_until, parent_task_id, created_at, updated_at";
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
     Ok(TaskRow {
@@ -34,8 +35,9 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
         task_type: row.get(7)?,
         assignee: row.get(8)?,
         defer_until: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
+        parent_task_id: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
@@ -301,6 +303,21 @@ pub fn get_task_comments(conn: &Connection, task_id: &str) -> Result<Vec<TaskCom
     Ok(result)
 }
 
+/// Get child tasks of a parent.
+pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskRow>> {
+    let sql = format!(
+        "SELECT {TASK_COLUMNS} FROM tasks WHERE parent_task_id = ?1
+         ORDER BY priority ASC, created_at ASC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([parent_task_id], row_to_task)?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
 /// Check if a task exists in the projection.
 pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
     let count: i64 = conn.query_row(
@@ -340,6 +357,7 @@ mod tests {
                 task_type: None,
                 assignee: None,
                 defer_until: None,
+                parent_task_id: None,
             })
             .unwrap(),
         };
@@ -528,6 +546,7 @@ mod tests {
                 task_type: None,
                 assignee: None,
                 defer_until: None,
+                parent_task_id: None,
             })
             .unwrap(),
         };
@@ -546,6 +565,7 @@ mod tests {
                 task_type: None,
                 assignee: None,
                 defer_until: None,
+                parent_task_id: None,
             })
             .unwrap(),
         };
@@ -564,6 +584,7 @@ mod tests {
                 task_type: None,
                 assignee: None,
                 defer_until: None,
+                parent_task_id: None,
             })
             .unwrap(),
         };
