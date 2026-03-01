@@ -150,6 +150,8 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
     // Clear in FK-safe order
     tx.execute_batch(
         "DELETE FROM task_events;
+         DELETE FROM task_comments;
+         DELETE FROM task_labels;
          DELETE FROM task_note_links;
          DELETE FROM task_deps;
          DELETE FROM tasks;",
