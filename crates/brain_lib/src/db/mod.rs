@@ -2,6 +2,7 @@ pub mod chunks;
 pub mod files;
 pub mod fts;
 pub mod links;
+mod migrations;
 pub mod schema;
 pub mod summaries;
 
