@@ -109,25 +109,28 @@ fn parse_iso_ts(s: &str) -> i64 {
 fn build_description(issue: &BeadsIssue) -> Option<String> {
     let mut parts = Vec::new();
 
-    if let Some(desc) = &issue.description {
-        if !desc.is_empty() {
-            parts.push(desc.clone());
-        }
+    if let Some(desc) = &issue.description
+        && !desc.is_empty()
+    {
+        parts.push(desc.clone());
     }
-    if let Some(notes) = &issue.notes {
-        if !notes.is_empty() {
-            parts.push(format!("## Notes\n\n{notes}"));
-        }
+
+    if let Some(notes) = &issue.notes
+        && !notes.is_empty()
+    {
+        parts.push(format!("## Notes\n\n{notes}"));
     }
-    if let Some(design) = &issue.design {
-        if !design.is_empty() {
-            parts.push(format!("## Design\n\n{design}"));
-        }
+
+    if let Some(design) = &issue.design
+        && !design.is_empty()
+    {
+        parts.push(format!("## Design\n\n{design}"));
     }
-    if let Some(ac) = &issue.acceptance_criteria {
-        if !ac.is_empty() {
-            parts.push(format!("## Acceptance Criteria\n\n{ac}"));
-        }
+
+    if let Some(ac) = &issue.acceptance_criteria
+        && !ac.is_empty()
+    {
+        parts.push(format!("## Acceptance Criteria\n\n{ac}"));
     }
 
     if parts.is_empty() {
