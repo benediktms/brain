@@ -64,3 +64,18 @@ daemon +args: ensure-binary
 [group('maintenance')]
 clean-db:
     rm -rf .brain/lancedb .brain/brain.db .brain/brain.db-shm .brain/brain.db-wal
+
+# Preview changelog output (stdout only)
+[group('release')]
+changelog:
+    git-cliff
+
+# Update CHANGELOG.md in-place
+[group('release')]
+changelog-update:
+    git-cliff -o CHANGELOG.md
+
+# Bump version, update changelog, commit and tag (patch|minor|major)
+[group('release')]
+tag level:
+    ./scripts/tag-release.sh {{level}}

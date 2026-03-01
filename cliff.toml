@@ -1,0 +1,62 @@
+[changelog]
+header = """
+# Changelog\n
+All notable changes to this project will be documented in this file.\n
+"""
+body = """
+{% if version %}\
+    ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+    ## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | upper_first }}
+    {% for commit in commits %}
+        - {% if commit.breaking %}[**breaking**] {% endif %}\
+            {{ commit.message | upper_first }}\
+    {% endfor %}
+{% endfor %}\n
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+
+# Rewrite non-conventional commit messages before parsing
+commit_preprocessors = [
+  # Squash merges — extract type from branch name if conventional (feat/..., fix/..., etc.)
+  { pattern = "^Squash merge '?(feat|fix|refactor|perf|docs|test|ci|chore)[/-](.+?)'?\\s*(into.*)?$", replace = "${1}: ${2}" },
+  { pattern = "^Squash merge '?(.+?)'?\\s*(into.*)?$", replace = "feat: ${1}" },
+  # Merge PRs — extract type from branch, include PR number
+  { pattern = "^Merge pull request #(\\d+) from .+/(feat|fix|refactor|perf|docs|test)[/-](.+)", replace = "${2}: ${3} (#${1})" },
+  { pattern = "^Merge pull request #(\\d+) from .+/(.+)", replace = "feat: ${2} (#${1})" },
+  # Regular merges — extract type from branch name, skip plain merges
+  { pattern = "^Merge branch '?(feat|fix|refactor|perf|docs|test|ci|chore)[/-](.+?)'?.*", replace = "${1}: ${2}" },
+  { pattern = "^Merge branch '.+'.*", replace = "chore: merge" },
+  # Crate-scoped commits (e.g. "brain_lib: add chunker") → feat(crate):
+  { pattern = "^(brain_lib|cli|brain-lib): (.+)", replace = "feat(${1}): ${2}" },
+  # Beads bookkeeping
+  { pattern = "^beads: .+", replace = "chore: beads update" },
+  # WIP commits
+  { pattern = "^wip: (.+)", replace = "feat: ${1}" },
+  { pattern = "^wip$", replace = "chore: wip" },
+  # Bare descriptions (no type prefix) → feat:
+  { pattern = "^(Add|Wire|Scaffold|Fix|Implement) (.+)", replace = "feat: ${1} ${2}" },
+]
+
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^perf", group = "Performance" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Testing" },
+  { message = "^ci", skip = true },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^build", skip = true },
+]
+filter_commits = true
+tag_pattern = "v[0-9]*"
+sort_commits = "newest"
