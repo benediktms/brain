@@ -549,7 +549,8 @@ async fn test_mcp_search_minimal_returns_results() {
         db: Db::open(&sqlite_path).unwrap(),
         store: Store::open_or_create(&lance_path).await.unwrap(),
         embedder: Arc::new(MockEmbedder),
-        tasks: brain_lib::tasks::TaskStore::new(&tasks_dir2, Db::open(&sqlite_path).unwrap()).unwrap(),
+        tasks: brain_lib::tasks::TaskStore::new(&tasks_dir2, Db::open(&sqlite_path).unwrap())
+            .unwrap(),
     };
 
     // Search — MockEmbedder won't give semantic results, but pipeline should not error.
@@ -604,7 +605,8 @@ async fn test_mcp_expand_returns_full_content() {
         db: Db::open(&sqlite_path).unwrap(),
         store: Store::open_or_create(&lance_path).await.unwrap(),
         embedder: Arc::new(MockEmbedder),
-        tasks: brain_lib::tasks::TaskStore::new(&tasks_dir3, Db::open(&sqlite_path).unwrap()).unwrap(),
+        tasks: brain_lib::tasks::TaskStore::new(&tasks_dir3, Db::open(&sqlite_path).unwrap())
+            .unwrap(),
     };
 
     // Get the chunk_id

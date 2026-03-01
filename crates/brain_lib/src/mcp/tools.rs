@@ -130,7 +130,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                         "type": "string",
                         "enum": ["task_created", "task_updated", "status_changed",
                                  "dependency_added", "dependency_removed",
-                                 "note_linked", "note_unlinked"],
+                                 "note_linked", "note_unlinked",
+                                 "label_added", "label_removed", "comment_added"],
                         "description": "The type of task event to apply"
                     },
                     "task_id": {
@@ -144,7 +145,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "payload": {
                         "type": "object",
-                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}."
+                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}."
                     }
                 },
                 "required": ["event_type", "payload"]
@@ -667,20 +668,24 @@ fn handle_tasks_apply_event(params: &Value, ctx: &McpContext) -> ToolCallResult 
 
     // Fetch resulting task state
     let task_json = match ctx.tasks.get_task(&task_id) {
-        Ok(Some(row)) => json!({
-            "task_id": row.task_id,
-            "title": row.title,
-            "description": row.description,
-            "status": row.status,
-            "priority": row.priority,
-            "blocked_reason": row.blocked_reason,
-            "due_ts": row.due_ts,
-            "task_type": row.task_type,
-            "assignee": row.assignee,
-            "defer_until": row.defer_until,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }),
+        Ok(Some(row)) => {
+            let labels = ctx.tasks.get_task_labels(&task_id).unwrap_or_default();
+            json!({
+                "task_id": row.task_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "priority": row.priority,
+                "blocked_reason": row.blocked_reason,
+                "due_ts": row.due_ts,
+                "task_type": row.task_type,
+                "assignee": row.assignee,
+                "defer_until": row.defer_until,
+                "labels": labels,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            })
+        }
         Ok(None) => json!(null),
         Err(e) => {
             warn!(error = %e, "failed to fetch task after event");
@@ -769,6 +774,8 @@ fn handle_tasks_next(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 .get_task_note_links(&task.task_id)
                 .unwrap_or_default();
 
+            let labels = ctx.tasks.get_task_labels(&task.task_id).unwrap_or_default();
+
             let linked_notes: Vec<Value> = note_links
                 .iter()
                 .map(|nl| {
@@ -789,6 +796,7 @@ fn handle_tasks_next(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 "task_type": task.task_type,
                 "assignee": task.assignee,
                 "defer_until": task.defer_until,
+                "labels": labels,
                 "dependency_summary": {
                     "total_deps": dep_summary.total_deps,
                     "done_deps": dep_summary.done_deps,
@@ -1222,6 +1230,145 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[test]
+    fn test_tasks_apply_event_with_type_and_assignee() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": {
+                "title": "Bug fix",
+                "task_type": "bug",
+                "assignee": "alice",
+                "priority": 1
+            }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["task"]["task_type"], "bug");
+        assert_eq!(parsed["task"]["assignee"], "alice");
+    }
+
+    #[test]
+    fn test_tasks_apply_event_labels() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        // Create task
+        let create = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Labeled task" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+
+        // Add labels
+        let add1 = json!({
+            "event_type": "label_added",
+            "task_id": "t1",
+            "payload": { "label": "urgent" }
+        });
+        let add2 = json!({
+            "event_type": "label_added",
+            "task_id": "t1",
+            "payload": { "label": "backend" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &add1, &ctx));
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &add2, &ctx));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let labels = parsed["task"]["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&json!("backend")));
+        assert!(labels.contains(&json!("urgent")));
+
+        // Remove a label
+        let rm = json!({
+            "event_type": "label_removed",
+            "task_id": "t1",
+            "payload": { "label": "urgent" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &rm, &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let labels = parsed["task"]["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0], "backend");
+    }
+
+    #[test]
+    fn test_tasks_apply_event_comment() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let create = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Commented task" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+
+        let comment = json!({
+            "event_type": "comment_added",
+            "task_id": "t1",
+            "actor": "bob",
+            "payload": { "body": "This needs review" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &comment, &ctx));
+        assert!(result.is_error.is_none());
+
+        // Verify comment stored by fetching via TaskStore
+        let comments = ctx.tasks.get_task_comments("t1").unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body, "This needs review");
+        assert_eq!(comments[0].author, "bob");
+    }
+
+    #[test]
+    fn test_tasks_apply_event_default_task_type() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "No explicit type" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["task"]["task_type"], "task");
+    }
+
+    #[test]
+    fn test_tasks_next_includes_labels() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let create = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Labeled", "priority": 1 }
+        });
+        let label = json!({
+            "event_type": "label_added",
+            "task_id": "t1",
+            "payload": { "label": "critical" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &label, &ctx));
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let task = &parsed["results"][0];
+        let labels = task["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0], "critical");
     }
 
     async fn create_test_context() -> McpContext {

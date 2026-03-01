@@ -259,6 +259,48 @@ pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
     Ok((ready as usize, blocked as usize))
 }
 
+/// Get labels for a task.
+pub fn get_task_labels(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT label FROM task_labels WHERE task_id = ?1 ORDER BY label")?;
+    let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
+/// A comment on a task.
+#[derive(Debug, Clone)]
+pub struct TaskComment {
+    pub comment_id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
+/// Get comments for a task, ordered by creation time.
+pub fn get_task_comments(conn: &Connection, task_id: &str) -> Result<Vec<TaskComment>> {
+    let mut stmt = conn.prepare(
+        "SELECT comment_id, author, body, created_at
+         FROM task_comments WHERE task_id = ?1 ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map([task_id], |row| {
+        Ok(TaskComment {
+            comment_id: row.get(0)?,
+            author: row.get(1)?,
+            body: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    })?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
 /// Check if a task exists in the projection.
 pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
     let count: i64 = conn.query_row(

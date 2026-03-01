@@ -3,8 +3,8 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    DependencyPayload, EventType, NoteLinkPayload, StatusChangedPayload, TaskCreatedPayload,
-    TaskEvent, TaskUpdatedPayload,
+    CommentPayload, DependencyPayload, EventType, LabelPayload, NoteLinkPayload,
+    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
 };
 
 /// Apply a single event to the SQLite projection tables.
@@ -141,6 +141,43 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
             conn.execute(
                 "DELETE FROM task_note_links WHERE task_id = ?1 AND chunk_id = ?2",
                 rusqlite::params![event.task_id, p.chunk_id],
+            )?;
+        }
+
+        EventType::LabelAdded => {
+            let p: LabelPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::TaskEvent(format!("bad LabelAdded payload: {e}")))?;
+
+            conn.execute(
+                "INSERT OR IGNORE INTO task_labels (task_id, label) VALUES (?1, ?2)",
+                rusqlite::params![event.task_id, p.label],
+            )?;
+        }
+
+        EventType::LabelRemoved => {
+            let p: LabelPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::TaskEvent(format!("bad LabelRemoved payload: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM task_labels WHERE task_id = ?1 AND label = ?2",
+                rusqlite::params![event.task_id, p.label],
+            )?;
+        }
+
+        EventType::CommentAdded => {
+            let p: CommentPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::TaskEvent(format!("bad CommentAdded payload: {e}")))?;
+
+            conn.execute(
+                "INSERT INTO task_comments (comment_id, task_id, author, body, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    event.event_id,
+                    event.task_id,
+                    event.actor,
+                    p.body,
+                    event.timestamp,
+                ],
             )?;
         }
     }

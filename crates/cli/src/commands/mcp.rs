@@ -27,7 +27,10 @@ pub async fn run(model_dir: PathBuf, lance_db: PathBuf, sqlite_db: PathBuf) -> R
     let _pipeline = pipeline;
 
     // Task store: derive tasks_dir from sqlite_db parent (e.g. .brain/tasks/)
-    let tasks_dir = sqlite_db.parent().unwrap_or(std::path::Path::new(".")).join("tasks");
+    let tasks_dir = sqlite_db
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("tasks");
     let tasks_db = brain_lib::db::Db::open(&sqlite_db)?;
     let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db)?;
 

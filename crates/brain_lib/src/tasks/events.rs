@@ -29,6 +29,9 @@ pub enum EventType {
     DependencyRemoved,
     NoteLinked,
     NoteUnlinked,
+    LabelAdded,
+    LabelRemoved,
+    CommentAdded,
 }
 
 // -- Typed payloads --
@@ -83,6 +86,16 @@ pub struct DependencyPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteLinkPayload {
     pub chunk_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelPayload {
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentPayload {
+    pub body: String,
 }
 
 /// Generate a new UUID v7 event ID.

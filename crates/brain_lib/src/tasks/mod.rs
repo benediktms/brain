@@ -97,6 +97,18 @@ impl TaskStore {
             .with_conn(|conn| queries::get_task_note_links(conn, task_id))
     }
 
+    /// Get labels for a task.
+    pub fn get_task_labels(&self, task_id: &str) -> Result<Vec<String>> {
+        self.db
+            .with_conn(|conn| queries::get_task_labels(conn, task_id))
+    }
+
+    /// Get comments for a task.
+    pub fn get_task_comments(&self, task_id: &str) -> Result<Vec<queries::TaskComment>> {
+        self.db
+            .with_conn(|conn| queries::get_task_comments(conn, task_id))
+    }
+
     /// Count of ready and blocked tasks.
     pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
         self.db.with_conn(queries::count_ready_blocked)
@@ -143,7 +155,12 @@ impl TaskStore {
                 cycle::check_cycle(conn, &event.task_id, &payload.depends_on_task_id)?;
             }
 
-            EventType::DependencyRemoved | EventType::NoteLinked | EventType::NoteUnlinked => {
+            EventType::DependencyRemoved
+            | EventType::NoteLinked
+            | EventType::NoteUnlinked
+            | EventType::LabelAdded
+            | EventType::LabelRemoved
+            | EventType::CommentAdded => {
                 if !queries::task_exists(conn, &event.task_id)? {
                     return Err(BrainCoreError::TaskEvent(format!(
                         "task not found: {}",
