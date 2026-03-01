@@ -1,26 +1,64 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
-/// During pre-release development, stay at 1 and wipe the DB for breaking changes.
+/// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
 const SCHEMA_VERSION: i32 = 1;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
+///
+/// Uses a version-aware migration dispatch loop so that each migration
+/// stamps its own version inside a transaction. This prevents the bug
+/// where bumping `SCHEMA_VERSION` would silently stamp a new version
+/// without running any migration DDL.
 pub fn init_schema(conn: &Connection) -> Result<()> {
-    // Enable WAL mode for concurrent reads during writes
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
 
     let current: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
     if current > SCHEMA_VERSION {
-        return Err(crate::error::BrainCoreError::SchemaVersion(format!(
+        return Err(BrainCoreError::SchemaVersion(format!(
             "database schema version {current} is newer than supported version {SCHEMA_VERSION}"
         )));
     }
 
+    if current < SCHEMA_VERSION {
+        run_migrations(conn, current)?;
+    }
+
+    // Always ensure FTS5 + triggers exist (idempotent, handles partial init)
+    ensure_fts5(conn)?;
+
+    Ok(())
+}
+
+/// Run migrations sequentially from `from_version` up to `SCHEMA_VERSION`.
+fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
+    let mut version = from_version;
+    while version < SCHEMA_VERSION {
+        match version {
+            0 => migrate_v0_to_v1(conn)?,
+            // Future: 1 => migrate_v1_to_v2(conn)?,
+            other => {
+                return Err(BrainCoreError::SchemaVersion(format!(
+                    "no migration defined from version {other} to {}",
+                    other + 1
+                )));
+            }
+        }
+        version += 1;
+    }
+    Ok(())
+}
+
+/// Fresh database: create all tables and stamp version 1.
+fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
+        BEGIN;
+
         CREATE TABLE IF NOT EXISTS files (
             file_id         TEXT PRIMARY KEY,
             path            TEXT UNIQUE NOT NULL,
@@ -76,10 +114,20 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             source_id     TEXT NOT NULL,
             PRIMARY KEY (reflection_id, source_id)
         );
+
+        PRAGMA user_version = 1;
+
+        COMMIT;
         ",
     )?;
+    Ok(())
+}
 
-    // FTS5 and triggers use semicolons in bodies — create them individually.
+/// Ensure FTS5 virtual table and sync triggers exist (idempotent).
+///
+/// Called on every `init_schema` open, outside the migration transaction,
+/// because FTS5 DDL has SQLite transaction limitations.
+fn ensure_fts5(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
             content,
@@ -110,8 +158,6 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         END",
         [],
     )?;
-
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
 
     Ok(())
 }
@@ -260,5 +306,87 @@ mod tests {
             [],
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fresh_db_migrates_from_v0() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_already_current_is_noop() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        // Count objects before second init
+        let count_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        init_schema(&conn).unwrap();
+
+        let count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(count_before, count_after);
+
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_future_version_rejected() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+
+        let result = init_schema(&conn);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("newer"),
+            "error should mention 'newer', got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_version_not_stamped_without_migration() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Bootstrap a real v1 database first
+        init_schema(&conn).unwrap();
+
+        // Simulate a hypothetical SCHEMA_VERSION bump by setting a future
+        // version that no migration handles. If init_schema unconditionally
+        // stamped the version, it would silently overwrite this.
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 99)
+            .unwrap();
+
+        // Re-opening should reject the future version, NOT silently stamp it
+        let result = init_schema(&conn);
+        assert!(result.is_err());
+
+        // Version must remain untouched
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION + 99);
     }
 }
