@@ -1,0 +1,434 @@
+use serde_json::{Value, json};
+use tracing::warn;
+
+use crate::mcp::McpContext;
+use crate::mcp::protocol::ToolCallResult;
+use crate::tasks::events::{EventType, TaskEvent, new_event_id, now_ts};
+
+pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
+    // Parse event_type
+    let event_type_str = match params.get("event_type").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return ToolCallResult::error("Missing required parameter: event_type"),
+    };
+
+    let event_type: EventType = match serde_json::from_value(json!(event_type_str)) {
+        Ok(et) => et,
+        Err(_) => {
+            return ToolCallResult::error(format!(
+                "Invalid event_type: '{event_type_str}'. Must be one of: task_created, \
+                 task_updated, status_changed, dependency_added, dependency_removed, \
+                 note_linked, note_unlinked"
+            ));
+        }
+    };
+
+    // Parse payload
+    let payload = match params.get("payload") {
+        Some(p) if p.is_object() => p.clone(),
+        Some(_) => return ToolCallResult::error("Parameter 'payload' must be an object"),
+        None => return ToolCallResult::error("Missing required parameter: payload"),
+    };
+
+    // Parse task_id: auto-generate for task_created if not provided
+    let task_id = match params.get("task_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            if event_type == EventType::TaskCreated {
+                new_event_id() // UUID v7 as task ID
+            } else {
+                return ToolCallResult::error(
+                    "Missing required parameter: task_id (required for all event types except task_created)",
+                );
+            }
+        }
+    };
+
+    let actor = params
+        .get("actor")
+        .and_then(|v| v.as_str())
+        .unwrap_or("mcp")
+        .to_string();
+
+    // For task_created, inject defaults if not provided
+    let payload = if event_type == EventType::TaskCreated {
+        let mut p = payload;
+        if p.get("status").is_none() {
+            p["status"] = json!("open");
+        }
+        if p.get("priority").is_none() {
+            p["priority"] = json!(4);
+        }
+        if p.get("task_type").is_none() {
+            p["task_type"] = json!("task");
+        }
+        p
+    } else {
+        payload
+    };
+
+    let event = TaskEvent {
+        event_id: new_event_id(),
+        task_id: task_id.clone(),
+        timestamp: now_ts(),
+        actor,
+        event_type: event_type.clone(),
+        payload,
+    };
+
+    // Append (validates + writes JSONL + applies projection)
+    if let Err(e) = ctx.tasks.append(&event) {
+        return ToolCallResult::error(format!("Task event failed: {e}"));
+    }
+
+    // Fetch resulting task state
+    let task_json = match ctx.tasks.get_task(&task_id) {
+        Ok(Some(row)) => {
+            let labels = ctx.tasks.get_task_labels(&task_id).unwrap_or_default();
+            json!({
+                "task_id": row.task_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "priority": row.priority,
+                "blocked_reason": row.blocked_reason,
+                "due_ts": row.due_ts,
+                "task_type": row.task_type,
+                "assignee": row.assignee,
+                "defer_until": row.defer_until,
+                "labels": labels,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            })
+        }
+        Ok(None) => json!(null),
+        Err(e) => {
+            warn!(error = %e, "failed to fetch task after event");
+            json!(null)
+        }
+    };
+
+    // Detect newly unblocked tasks after status_changed to done/cancelled
+    let unblocked_task_ids = if event_type == EventType::StatusChanged {
+        let new_status = event
+            .payload
+            .get("new_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if new_status == "done" || new_status == "cancelled" {
+            ctx.tasks.list_newly_unblocked(&task_id).unwrap_or_default()
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+
+    let response = json!({
+        "event_id": event.event_id,
+        "task_id": task_id,
+        "task": task_json,
+        "unblocked_task_ids": unblocked_task_ids,
+    });
+
+    ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::super::dispatch_tool_call;
+    use super::super::tests::create_test_context;
+
+    #[test]
+    fn test_create() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "test-1",
+            "payload": { "title": "My first task", "priority": 2 }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert!(result.is_error.is_none(), "should succeed");
+
+        let text = &result.content[0].text;
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["task_id"], "test-1");
+        assert!(parsed["event_id"].is_string());
+        assert_eq!(parsed["task"]["title"], "My first task");
+        assert_eq!(parsed["task"]["status"], "open");
+        assert_eq!(parsed["task"]["priority"], 2);
+        assert_eq!(parsed["unblocked_task_ids"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_auto_id() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "payload": { "title": "Auto ID task" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert!(result.is_error.is_none());
+
+        let text = &result.content[0].text;
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert!(parsed["task_id"].is_string());
+        assert!(!parsed["task_id"].as_str().unwrap().is_empty());
+        assert_eq!(parsed["task"]["title"], "Auto ID task");
+        assert_eq!(parsed["task"]["priority"], 4); // default
+    }
+
+    #[test]
+    fn test_status_change() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        // Create task first
+        let create = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Task" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+
+        // Change status
+        let update = json!({
+            "event_type": "status_changed",
+            "task_id": "t1",
+            "payload": { "new_status": "in_progress" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &update, &ctx));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["task"]["status"], "in_progress");
+    }
+
+    #[test]
+    fn test_unblocked() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        // Create two tasks, t2 depends on t1
+        for (id, title) in &[("t1", "Blocker"), ("t2", "Blocked")] {
+            let p = json!({
+                "event_type": "task_created",
+                "task_id": id,
+                "payload": { "title": title }
+            });
+            rt.block_on(dispatch_tool_call("tasks.apply_event", &p, &ctx));
+        }
+
+        let dep = json!({
+            "event_type": "dependency_added",
+            "task_id": "t2",
+            "payload": { "depends_on_task_id": "t1" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &dep, &ctx));
+
+        // Complete t1 — t2 should be unblocked
+        let done = json!({
+            "event_type": "status_changed",
+            "task_id": "t1",
+            "payload": { "new_status": "done" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &done, &ctx));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let unblocked = parsed["unblocked_task_ids"].as_array().unwrap();
+        assert_eq!(unblocked.len(), 1);
+        assert_eq!(unblocked[0], "t2");
+    }
+
+    #[test]
+    fn test_cycle_rejected() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        // Create two tasks
+        for (id, title) in &[("t1", "Task 1"), ("t2", "Task 2")] {
+            let p = json!({
+                "event_type": "task_created",
+                "task_id": id,
+                "payload": { "title": title }
+            });
+            rt.block_on(dispatch_tool_call("tasks.apply_event", &p, &ctx));
+        }
+
+        // t1 depends on t2
+        let dep1 = json!({
+            "event_type": "dependency_added",
+            "task_id": "t1",
+            "payload": { "depends_on_task_id": "t2" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &dep1, &ctx));
+
+        // t2 depends on t1 — cycle!
+        let dep2 = json!({
+            "event_type": "dependency_added",
+            "task_id": "t2",
+            "payload": { "depends_on_task_id": "t1" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &dep2, &ctx));
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("cycle"));
+    }
+
+    #[test]
+    fn test_missing_event_type() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({ "payload": { "title": "No event type" } });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_invalid_event_type() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "bogus_event",
+            "payload": { "title": "Bad type" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("Invalid event_type"));
+    }
+
+    #[test]
+    fn test_missing_task_id_for_update() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "status_changed",
+            "payload": { "new_status": "done" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("task_id"));
+    }
+
+    #[test]
+    fn test_with_type_and_assignee() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": {
+                "title": "Bug fix",
+                "task_type": "bug",
+                "assignee": "alice",
+                "priority": 1
+            }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["task"]["task_type"], "bug");
+        assert_eq!(parsed["task"]["assignee"], "alice");
+    }
+
+    #[test]
+    fn test_labels() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        // Create task
+        let create = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Labeled task" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+
+        // Add labels
+        let add1 = json!({
+            "event_type": "label_added",
+            "task_id": "t1",
+            "payload": { "label": "urgent" }
+        });
+        let add2 = json!({
+            "event_type": "label_added",
+            "task_id": "t1",
+            "payload": { "label": "backend" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &add1, &ctx));
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &add2, &ctx));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let labels = parsed["task"]["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&json!("backend")));
+        assert!(labels.contains(&json!("urgent")));
+
+        // Remove a label
+        let rm = json!({
+            "event_type": "label_removed",
+            "task_id": "t1",
+            "payload": { "label": "urgent" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &rm, &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let labels = parsed["task"]["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0], "backend");
+    }
+
+    #[test]
+    fn test_comment() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let create = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Commented task" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+
+        let comment = json!({
+            "event_type": "comment_added",
+            "task_id": "t1",
+            "actor": "bob",
+            "payload": { "body": "This needs review" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &comment, &ctx));
+        assert!(result.is_error.is_none());
+
+        // Verify comment stored by fetching via TaskStore
+        let comments = ctx.tasks.get_task_comments("t1").unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body, "This needs review");
+        assert_eq!(comments[0].author, "bob");
+    }
+
+    #[test]
+    fn test_default_task_type() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "No explicit type" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["task"]["task_type"], "task");
+    }
+}
