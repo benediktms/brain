@@ -4,4 +4,5 @@ pub mod index;
 pub mod mcp;
 pub mod query;
 pub mod sync_beads;
+pub mod tasks;
 pub mod watch;

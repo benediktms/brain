@@ -318,6 +318,40 @@ pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskR
     Ok(result)
 }
 
+/// A dependency edge between two tasks.
+#[derive(Debug, Clone)]
+pub struct TaskDep {
+    pub task_id: String,
+    pub depends_on: String,
+}
+
+/// List all dependency edges (bulk load for export).
+pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
+    let mut stmt = conn.prepare("SELECT task_id, depends_on FROM task_deps")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(TaskDep {
+            task_id: row.get(0)?,
+            depends_on: row.get(1)?,
+        })
+    })?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
+/// List all (task_id, label) pairs (bulk load for export).
+pub fn list_all_labels(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT task_id, label FROM task_labels ORDER BY task_id, label")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
 /// Check if a task exists in the projection.
 pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
     let count: i64 = conn.query_row(

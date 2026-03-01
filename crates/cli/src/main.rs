@@ -96,6 +96,26 @@ enum Command {
         #[arg(long)]
         watch: bool,
     },
+
+    /// Manage brain tasks
+    Tasks {
+        #[command(subcommand)]
+        action: TasksAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TasksAction {
+    /// Export tasks to a file format (defaults to markdown)
+    Export {
+        /// Output format (currently only "markdown" is supported)
+        #[arg(default_value = "markdown")]
+        format: String,
+
+        /// Output directory
+        #[arg(long, default_value = ".brain/_tasks")]
+        dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -168,6 +188,16 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::SyncBeads { path, watch } => {
             commands::sync_beads::run(path, cli.sqlite_db, watch)?;
         }
+        Command::Tasks { action } => match action {
+            TasksAction::Export { format, dir } => match format.as_str() {
+                "markdown" | "md" => {
+                    commands::tasks::export_markdown::run(dir, cli.sqlite_db)?;
+                }
+                other => {
+                    anyhow::bail!("Unknown export format: {other}. Supported: markdown");
+                }
+            },
+        },
     }
 
     Ok(())

@@ -845,6 +845,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "brain-lib",
+ "chrono",
  "clap",
  "dirs",
  "libc",

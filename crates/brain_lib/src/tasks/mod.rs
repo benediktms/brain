@@ -121,6 +121,16 @@ impl TaskStore {
         self.db.with_conn(queries::count_ready_blocked)
     }
 
+    /// List all dependency edges (bulk load for export).
+    pub fn list_all_deps(&self) -> Result<Vec<queries::TaskDep>> {
+        self.db.with_conn(queries::list_all_deps)
+    }
+
+    /// List all (task_id, label) pairs (bulk load for export).
+    pub fn list_all_labels(&self) -> Result<Vec<(String, String)>> {
+        self.db.with_conn(queries::list_all_labels)
+    }
+
     /// Sync the SQLite projection from beads JSONL.
     ///
     /// Merges native brain events (from `events.jsonl`) with beads events so
