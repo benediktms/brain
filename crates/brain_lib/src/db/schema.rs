@@ -1,11 +1,11 @@
 use rusqlite::Connection;
 
-use super::migrations::migrate_v0_to_v1;
+use super::migrations::{migrate_v0_to_v1, migrate_v1_to_v2};
 use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -41,7 +41,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
     while version < SCHEMA_VERSION {
         match version {
             0 => migrate_v0_to_v1(conn)?,
-            // Future: 1 => migrate_v1_to_v2(conn)?,
+            1 => migrate_v1_to_v2(conn)?,
             other => {
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",

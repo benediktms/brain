@@ -9,7 +9,7 @@ A **brain** is a named knowledge container with its own notes, tasks, indexes, a
 **Core invariant**: Each domain has exactly one source of truth, and sync is always unidirectional:
 
 - **Notes**: Markdown files are the source of truth. SQLite metadata, LanceDB embeddings, and FTS indexes are derived projections, rebuildable from source.
-- **Tasks**: The append-only event log (`~/.brain/brains/<name>/tasks/events.jsonl`) is the source of truth. SQLite task tables are derived projections, rebuildable by replaying the log.
+- **Tasks**: The append-only event log (`.brain/tasks/events.jsonl`, git-tracked) is the source of truth. SQLite task tables are derived projections, rebuildable by replaying the log.
 
 Notes and tasks are parallel subsystems that can cross-reference each other (tasks link to note chunks, notes can mention task IDs) but have decoupled lifecycles and mutation patterns.
 
@@ -23,12 +23,11 @@ Notes and tasks are parallel subsystems that can cross-reference each other (tas
       config.toml                          # Per-brain config (overrides global)
       brain.db                             # SQLite projections (notes + tasks)
       lancedb/                             # Vector indexes
-      tasks/
-        events.jsonl                       # Task event log (source of truth)
-
 ~/code/my-project/                         # A project with brain notes
   .brain/
     brain.toml                             # Brain marker: name + note paths
+    tasks/
+      events.jsonl                         # Task event log (source of truth, git-tracked)
   docs/
     architecture.md                        # Indexed as notes
   notes/
@@ -55,10 +54,12 @@ notes = ["~/notes"]
 **Key design decisions:**
 - `brain init` in a project creates `.brain/brain.toml` and registers the brain centrally
 - All derived data (SQLite, LanceDB) lives in `~/.brain/brains/<name>/`, not in the project
-- The task event log lives centrally (tasks are not tied to specific note directories)
+- The task event log lives in-repo at `.brain/tasks/events.jsonl` (git-tracked source of truth)
 - A brain can index multiple note directories (e.g., `docs/` and `notes/` from one project)
 - Moving a project just means updating the path in the registry
 - No symlinks — just paths in config files
+- Note links (`NoteLinked` events) are intentionally soft references — no chunk existence validation at write time. This enables future cross-brain chunk references without schema changes
+- Cross-brain references (Phase 4): separate `Option<String>` brain field on dependency/note-link payloads, not composite `brain:id` strings. NULL = local (zero-cost common case), non-NULL = cross-brain soft reference. Separate field enables efficient SQLite indexing, clean JOINs, and `WHERE brain IS NOT NULL` stale-ref queries
 
 ## System Architecture
 
@@ -110,7 +111,7 @@ graph TB
         end
 
         subgraph TaskLog["Task Event Log (Source of Truth)"]
-            EL["~/.brain/brains/&lt;name&gt;/tasks/events.jsonl<br/>append-only ULID-ordered"]
+            EL[".brain/tasks/events.jsonl<br/>append-only UUID v7-ordered"]
         end
     end
 
