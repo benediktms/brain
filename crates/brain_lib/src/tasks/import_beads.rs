@@ -458,6 +458,10 @@ pub fn import_beads_issues(
 mod tests {
     use super::*;
     use crate::db::Db;
+    use crate::tasks::events::{
+        DependencyPayload, EventType, StatusChangedPayload, TaskCreatedPayload, TaskEvent,
+        new_event_id, now_ts,
+    };
     use std::io::Write;
     use tempfile::TempDir;
 
@@ -841,5 +845,202 @@ mod tests {
         // The store should still be empty (generate doesn't touch it)
         let store_all = _store.list_all().unwrap();
         assert!(store_all.is_empty());
+    }
+
+    // -- hybrid sync tests (native brain tasks + beads coexist) --
+
+    #[test]
+    fn test_sync_preserves_native_tasks() {
+        let (dir, store) = setup();
+
+        // Create a native task via append (writes to events.jsonl)
+        let native_event = TaskEvent {
+            event_id: new_event_id(),
+            task_id: "native-001".to_string(),
+            timestamp: now_ts(),
+            actor: "user".to_string(),
+            event_type: EventType::TaskCreated,
+            payload: serde_json::to_value(TaskCreatedPayload {
+                title: "Native task".to_string(),
+                description: Some("Created via brain".to_string()),
+                priority: 1,
+                status: "open".to_string(),
+                due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: None,
+            })
+            .unwrap(),
+        };
+        store.append(&native_event).unwrap();
+        assert_eq!(store.list_all().unwrap().len(), 1);
+
+        // Sync beads issues
+        let issues = vec![
+            make_issue("beads-001", "Beads Task 1", "open", 2),
+            make_issue("beads-002", "Beads Task 2", "closed", 1),
+        ];
+        let path = write_jsonl(dir.path(), &issues);
+        store.sync_from_beads(&path).unwrap();
+
+        // Native task must still exist alongside beads tasks
+        let all = store.list_all().unwrap();
+        assert_eq!(all.len(), 3);
+
+        let native = store.get_task("native-001").unwrap().unwrap();
+        assert_eq!(native.title, "Native task");
+        assert_eq!(native.status, "open");
+
+        let b1 = store.get_task("beads-001").unwrap().unwrap();
+        assert_eq!(b1.title, "Beads Task 1");
+
+        let b2 = store.get_task("beads-002").unwrap().unwrap();
+        assert_eq!(b2.status, "done");
+    }
+
+    #[test]
+    fn test_sync_preserves_native_deps() {
+        let (dir, store) = setup();
+
+        // Create two native tasks with a dependency
+        let ev1 = TaskEvent {
+            event_id: new_event_id(),
+            task_id: "n1".to_string(),
+            timestamp: now_ts(),
+            actor: "user".to_string(),
+            event_type: EventType::TaskCreated,
+            payload: serde_json::to_value(TaskCreatedPayload {
+                title: "Native blocker".to_string(),
+                description: None,
+                priority: 1,
+                status: "open".to_string(),
+                due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: None,
+            })
+            .unwrap(),
+        };
+        let ev2 = TaskEvent {
+            event_id: new_event_id(),
+            task_id: "n2".to_string(),
+            timestamp: now_ts(),
+            actor: "user".to_string(),
+            event_type: EventType::TaskCreated,
+            payload: serde_json::to_value(TaskCreatedPayload {
+                title: "Native blocked".to_string(),
+                description: None,
+                priority: 2,
+                status: "open".to_string(),
+                due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: None,
+            })
+            .unwrap(),
+        };
+        let dep = TaskEvent {
+            event_id: new_event_id(),
+            task_id: "n2".to_string(),
+            timestamp: now_ts(),
+            actor: "user".to_string(),
+            event_type: EventType::DependencyAdded,
+            payload: serde_json::to_value(DependencyPayload {
+                depends_on_task_id: "n1".to_string(),
+            })
+            .unwrap(),
+        };
+        store.append(&ev1).unwrap();
+        store.append(&ev2).unwrap();
+        store.append(&dep).unwrap();
+
+        // n2 should be blocked
+        assert_eq!(store.list_blocked().unwrap().len(), 1);
+
+        // Sync beads
+        let issues = vec![make_issue("beads-100", "Beads task", "open", 2)];
+        let path = write_jsonl(dir.path(), &issues);
+        store.sync_from_beads(&path).unwrap();
+
+        // Native dependency must be intact
+        let blocked = store.list_blocked().unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].task_id, "n2");
+
+        let ready = store.list_ready().unwrap();
+        let ready_ids: Vec<&str> = ready.iter().map(|r| r.task_id.as_str()).collect();
+        assert!(ready_ids.contains(&"n1"));
+        assert!(ready_ids.contains(&"beads-100"));
+        assert!(!ready_ids.contains(&"n2"));
+    }
+
+    #[test]
+    fn test_sync_native_and_beads_independent() {
+        let (dir, store) = setup();
+
+        // Create native task
+        let native_ev = TaskEvent {
+            event_id: new_event_id(),
+            task_id: "native-x".to_string(),
+            timestamp: now_ts(),
+            actor: "user".to_string(),
+            event_type: EventType::TaskCreated,
+            payload: serde_json::to_value(TaskCreatedPayload {
+                title: "Native X".to_string(),
+                description: None,
+                priority: 0,
+                status: "open".to_string(),
+                due_ts: None,
+                task_type: Some("feature".to_string()),
+                assignee: Some("alice".to_string()),
+                defer_until: None,
+                parent_task_id: None,
+            })
+            .unwrap(),
+        };
+        store.append(&native_ev).unwrap();
+
+        // Mark native task in_progress
+        let status_ev = TaskEvent {
+            event_id: new_event_id(),
+            task_id: "native-x".to_string(),
+            timestamp: now_ts(),
+            actor: "user".to_string(),
+            event_type: EventType::StatusChanged,
+            payload: serde_json::to_value(StatusChangedPayload {
+                new_status: "in_progress".to_string(),
+            })
+            .unwrap(),
+        };
+        store.append(&status_ev).unwrap();
+
+        // Sync beads with a closed task that has labels
+        let mut beads_issue = make_issue("beads-y", "Beads Y", "closed", 3);
+        beads_issue["closed_at"] = serde_json::json!("2026-02-26T10:00:00Z");
+        beads_issue["labels"] = serde_json::json!(["backend"]);
+        let path = write_jsonl(dir.path(), &[beads_issue]);
+        store.sync_from_beads(&path).unwrap();
+
+        // Native task retains its status and fields
+        let native = store.get_task("native-x").unwrap().unwrap();
+        assert_eq!(native.status, "in_progress");
+        assert_eq!(native.priority, 0);
+        assert_eq!(native.task_type, "feature");
+        assert_eq!(native.assignee.as_deref(), Some("alice"));
+
+        // Beads task has its own independent state
+        let beads = store.get_task("beads-y").unwrap().unwrap();
+        assert_eq!(beads.status, "done");
+        assert_eq!(beads.priority, 3);
+
+        let labels = store.get_task_labels("beads-y").unwrap();
+        assert!(labels.contains(&"backend".to_string()));
+
+        // Native task should have no labels
+        let native_labels = store.get_task_labels("native-x").unwrap();
+        assert!(native_labels.is_empty());
     }
 }
