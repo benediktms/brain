@@ -63,4 +63,4 @@ daemon +args: ensure-binary
 
 [group('maintenance')]
 clean-db:
-    rm -rf .brain/lancedb .brain/brain.db
+    rm -rf .brain/lancedb .brain/brain.db .brain/brain.db-shm .brain/brain.db-wal

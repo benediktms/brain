@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::db::Db;
-use crate::db::files;
-use crate::embedder::MockEmbedder;
-use crate::hash_gate::content_hash;
-use crate::pipeline::IndexPipeline;
-use crate::store::Store;
-use crate::watcher::FileEvent;
+use brain_lib::db::Db;
+use brain_lib::db::files;
+use brain_lib::embedder::MockEmbedder;
+use brain_lib::hash_gate::content_hash;
+use brain_lib::pipeline::IndexPipeline;
+use brain_lib::store::Store;
+use brain_lib::watcher::FileEvent;
 
 use tempfile::TempDir;
 
@@ -489,9 +489,13 @@ async fn test_upsert_add_paragraph_adds_chunk() {
     let notes_dir = tmp.path().join("notes");
     std::fs::create_dir_all(&notes_dir).unwrap();
 
-    let path = write_md(&notes_dir, "growing.md", "Para one.\n\nPara two.");
+    let path = write_md(
+        &notes_dir,
+        "growing.md",
+        "## One\n\nPara one.\n\n## Two\n\nPara two.",
+    );
 
-    // Index — should produce 2 chunks
+    // Index — should produce 2 chunks (one per heading)
     pipeline
         .full_scan(std::slice::from_ref(&notes_dir))
         .await
@@ -514,8 +518,12 @@ async fn test_upsert_add_paragraph_adds_chunk() {
         .unwrap();
     assert_eq!(count, 2);
 
-    // Add a 3rd paragraph
-    std::fs::write(&path, "Para one.\n\nPara two.\n\nPara three.").unwrap();
+    // Add a 3rd section
+    std::fs::write(
+        &path,
+        "## One\n\nPara one.\n\n## Two\n\nPara two.\n\n## Three\n\nPara three.",
+    )
+    .unwrap();
 
     // Re-index
     pipeline
@@ -548,10 +556,10 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
     let path = write_md(
         &notes_dir,
         "shrinking.md",
-        "Para one.\n\nPara two.\n\nPara three.",
+        "## One\n\nPara one.\n\n## Two\n\nPara two.\n\n## Three\n\nPara three.",
     );
 
-    // Index — 3 chunks
+    // Index — 3 chunks (one per heading)
     pipeline
         .full_scan(std::slice::from_ref(&notes_dir))
         .await
@@ -574,8 +582,8 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
         .unwrap();
     assert_eq!(count, 3);
 
-    // Remove middle paragraph
-    std::fs::write(&path, "Para one.\n\nPara three.").unwrap();
+    // Remove middle section
+    std::fs::write(&path, "## One\n\nPara one.\n\n## Three\n\nPara three.").unwrap();
 
     // Re-index
     pipeline.full_scan(&[notes_dir]).await.unwrap();

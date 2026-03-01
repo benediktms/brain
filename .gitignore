@@ -4,3 +4,5 @@
 .brain/
 
 .DS_Store
+
+.env

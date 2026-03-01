@@ -73,6 +73,9 @@ enum Command {
         #[command(subcommand)]
         action: DaemonAction,
     },
+
+    /// Start the MCP server (stdin/stdout JSON-RPC for agent integration)
+    Mcp,
 }
 
 #[derive(Subcommand)]
@@ -119,7 +122,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
         Command::Query { query, k } => {
-            commands::query::run(query, k, cli.model_dir, cli.lance_db).await?
+            commands::query::run(query, k, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
         Command::Watch { notes_path } => {
             commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
@@ -135,6 +138,9 @@ async fn async_main(cli: Cli) -> Result<()> {
                 DaemonAction::Stop => daemon.stop()?,
                 DaemonAction::Status => daemon.status()?,
             }
+        }
+        Command::Mcp => {
+            commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
         }
     }
 

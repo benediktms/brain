@@ -1,6 +1,10 @@
 pub mod chunks;
 pub mod files;
+pub mod fts;
+pub mod links;
+mod migrations;
 pub mod schema;
+pub mod summaries;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -29,7 +33,6 @@ impl Db {
     }
 
     /// Open an in-memory database (for testing).
-    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         schema::init_schema(&conn)?;
@@ -66,16 +69,23 @@ mod tests {
 
         // First open: creates the database
         {
-            let db = Db::open(path).unwrap();
-            let version = db.with_conn(schema::schema_version).unwrap();
-            assert_eq!(version, Some(1));
+            let _db = Db::open(path).unwrap();
         }
 
-        // Second open: reuses the database
+        // Second open: reuses the database without error
         {
             let db = Db::open(path).unwrap();
-            let version = db.with_conn(schema::schema_version).unwrap();
-            assert_eq!(version, Some(1));
+            // Verify tables exist by querying one
+            db.with_conn(|conn| {
+                let count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='files'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(count, 1);
+                Ok(())
+            })
+            .unwrap();
         }
     }
 }

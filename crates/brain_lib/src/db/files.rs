@@ -220,18 +220,9 @@ mod tests {
         let conn = setup();
         let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
 
-        // Insert some chunks
         let chunks = vec![
-            ChunkMeta {
-                chunk_id: format!("{file_id}:0"),
-                chunk_ord: 0,
-                chunk_hash: "h0".into(),
-            },
-            ChunkMeta {
-                chunk_id: format!("{file_id}:1"),
-                chunk_ord: 1,
-                chunk_hash: "h1".into(),
-            },
+            ChunkMeta::test(&format!("{file_id}:0"), 0, "h0"),
+            ChunkMeta::test(&format!("{file_id}:1"), 1, "h1"),
         ];
         replace_chunk_metadata(&conn, &file_id, &chunks).unwrap();
 
@@ -270,21 +261,13 @@ mod tests {
         replace_chunk_metadata(
             &conn,
             &file_a,
-            &[ChunkMeta {
-                chunk_id: format!("{file_a}:0"),
-                chunk_ord: 0,
-                chunk_hash: "ha".into(),
-            }],
+            &[ChunkMeta::test(&format!("{file_a}:0"), 0, "ha")],
         )
         .unwrap();
         replace_chunk_metadata(
             &conn,
             &file_b,
-            &[ChunkMeta {
-                chunk_id: format!("{file_b}:0"),
-                chunk_ord: 0,
-                chunk_hash: "hb".into(),
-            }],
+            &[ChunkMeta::test(&format!("{file_b}:0"), 0, "hb")],
         )
         .unwrap();
 

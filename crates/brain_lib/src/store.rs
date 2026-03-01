@@ -182,6 +182,14 @@ impl Store {
             .map_err(|e| BrainCoreError::VectorDb(format!("result collection failed: {e}")))?;
 
         for batch in &batches {
+            let chunk_ids = batch
+                .column_by_name("chunk_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .ok_or_else(|| BrainCoreError::VectorDb("missing chunk_id column".into()))?;
+            let file_ids = batch
+                .column_by_name("file_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .ok_or_else(|| BrainCoreError::VectorDb("missing file_id column".into()))?;
             let file_paths = batch
                 .column_by_name("file_path")
                 .and_then(|c| c.as_any().downcast_ref::<StringArray>())
@@ -200,6 +208,8 @@ impl Store {
 
             for i in 0..batch.num_rows() {
                 output.push(QueryResult {
+                    chunk_id: chunk_ids.value(i).to_string(),
+                    file_id: file_ids.value(i).to_string(),
                     file_path: file_paths.value(i).to_string(),
                     chunk_ord: chunk_ords.value(i) as usize,
                     content: contents.value(i).to_string(),
@@ -219,6 +229,8 @@ impl Store {
 
 #[derive(Debug)]
 pub struct QueryResult {
+    pub chunk_id: String,
+    pub file_id: String,
     pub file_path: String,
     pub chunk_ord: usize,
     pub content: String,
