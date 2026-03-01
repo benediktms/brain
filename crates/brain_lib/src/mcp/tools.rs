@@ -636,12 +636,15 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let sqlite_path = tmp.path().join("test.db");
         let lance_path = tmp.path().join("test_lance");
+        let tasks_dir = tmp.path().join("tasks");
 
         let db = crate::db::Db::open(&sqlite_path).unwrap();
         let store = crate::store::Store::open_or_create(&lance_path)
             .await
             .unwrap();
         let embedder = Arc::new(crate::embedder::MockEmbedder);
+        let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
+        let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
 
         // Leak the TempDir so it lives for the test duration
         std::mem::forget(tmp);
@@ -650,6 +653,7 @@ mod tests {
             db,
             store,
             embedder,
+            tasks,
         }
     }
 }

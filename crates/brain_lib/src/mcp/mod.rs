@@ -14,6 +14,7 @@ use tracing::{debug, error, info};
 use crate::db::Db;
 use crate::embedder::Embed;
 use crate::store::Store;
+use crate::tasks::TaskStore;
 
 use protocol::{
     InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ServerCapabilities,
@@ -26,6 +27,7 @@ pub struct McpContext {
     pub db: Db,
     pub store: Store,
     pub embedder: Arc<dyn Embed>,
+    pub tasks: TaskStore,
 }
 
 /// Run the MCP server, reading JSON-RPC from stdin and writing to stdout.

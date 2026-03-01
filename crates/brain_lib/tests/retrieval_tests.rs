@@ -46,15 +46,19 @@ async fn setup_mcp() -> (McpContext, TempDir) {
     let tmp = TempDir::new().unwrap();
     let sqlite_path = tmp.path().join("brain.db");
     let lance_path = tmp.path().join("brain_lancedb");
+    let tasks_dir = tmp.path().join("tasks");
 
     let db = Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder = Arc::new(MockEmbedder);
+    let tasks_db = Db::open(&sqlite_path).unwrap();
+    let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
 
     let ctx = McpContext {
         db,
         store,
         embedder,
+        tasks,
     };
     (ctx, tmp)
 }
@@ -540,10 +544,12 @@ async fn test_mcp_search_minimal_returns_results() {
     drop(pipeline);
 
     // Create fresh McpContext that sees the indexed data
+    let tasks_dir2 = tmp.path().join("tasks2");
     let ctx = McpContext {
         db: Db::open(&sqlite_path).unwrap(),
         store: Store::open_or_create(&lance_path).await.unwrap(),
         embedder: Arc::new(MockEmbedder),
+        tasks: brain_lib::tasks::TaskStore::new(&tasks_dir2, Db::open(&sqlite_path).unwrap()).unwrap(),
     };
 
     // Search — MockEmbedder won't give semantic results, but pipeline should not error.
@@ -593,10 +599,12 @@ async fn test_mcp_expand_returns_full_content() {
     drop(pipeline);
 
     // Create fresh McpContext that sees the indexed data
+    let tasks_dir3 = tmp.path().join("tasks3");
     let ctx = McpContext {
         db: Db::open(&sqlite_path).unwrap(),
         store: Store::open_or_create(&lance_path).await.unwrap(),
         embedder: Arc::new(MockEmbedder),
+        tasks: brain_lib::tasks::TaskStore::new(&tasks_dir3, Db::open(&sqlite_path).unwrap()).unwrap(),
     };
 
     // Get the chunk_id
