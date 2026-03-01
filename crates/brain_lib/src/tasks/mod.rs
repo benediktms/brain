@@ -4,7 +4,7 @@ pub mod import_beads;
 pub mod projections;
 pub mod queries;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::db::Db;
 use crate::error::{BrainCoreError, Result};
@@ -129,21 +129,6 @@ impl TaskStore {
     /// List all (task_id, label) pairs (bulk load for export).
     pub fn list_all_labels(&self) -> Result<Vec<(String, String)>> {
         self.db.with_conn(queries::list_all_labels)
-    }
-
-    /// Sync the SQLite projection from beads JSONL.
-    ///
-    /// Merges native brain events (from `events.jsonl`) with beads events so
-    /// both native and synced tasks coexist in the projection.
-    /// Does NOT write to brain's events.jsonl.
-    pub fn sync_from_beads(&self, jsonl_path: &Path) -> Result<import_beads::ImportReport> {
-        let native_events = events::read_all_events(&self.events_path)?;
-        let (beads_events, report) = import_beads::generate_events_from_beads(jsonl_path)?;
-        let mut merged = native_events;
-        merged.extend(beads_events);
-        self.db
-            .with_conn(|conn| projections::rebuild(conn, &merged))?;
-        Ok(report)
     }
 
     /// Validate an event before writing it to the log.

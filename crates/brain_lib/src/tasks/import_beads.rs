@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
@@ -9,13 +9,15 @@ use crate::error::{BrainCoreError, Result};
 use super::TaskStore;
 use super::events::{
     CommentPayload, DependencyPayload, EventType, LabelPayload, ParentSetPayload,
-    StatusChangedPayload, TaskCreatedPayload, TaskEvent, new_event_id,
+    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload, new_event_id, now_ts,
 };
 
 /// Summary of an import run.
 #[derive(Debug, Default)]
 pub struct ImportReport {
     pub issues_imported: usize,
+    pub issues_updated: usize,
+    pub issues_skipped: usize,
     pub events_generated: usize,
     pub deps_imported: usize,
     pub deps_skipped: usize,
@@ -28,6 +30,8 @@ impl std::fmt::Display for ImportReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Import report:")?;
         writeln!(f, "  Issues imported:      {}", self.issues_imported)?;
+        writeln!(f, "  Issues updated:       {}", self.issues_updated)?;
+        writeln!(f, "  Issues skipped:       {}", self.issues_skipped)?;
         writeln!(f, "  Events generated:     {}", self.events_generated)?;
         writeln!(f, "  Block deps imported:  {}", self.deps_imported)?;
         writeln!(f, "  Parent links:         {}", self.parent_links_imported)?;
@@ -427,22 +431,451 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
     Ok((all_events, report))
 }
 
-/// Import beads issues into the brain task system (one-time import).
+/// Import beads issues into the brain task system (idempotent).
 ///
-/// Generates events from beads JSONL and appends them to brain's event log.
+/// - New issues: generates creation events and appends to brain's event log.
+/// - Existing issues: detects field changes and generates delta events.
+/// - Unchanged issues: skipped.
 pub fn import_beads_issues(
     jsonl_path: &Path,
     task_store: &TaskStore,
     dry_run: bool,
 ) -> Result<ImportReport> {
-    let (all_events, report) = generate_events_from_beads(jsonl_path)?;
+    let issues = read_beads_issues(jsonl_path)?;
+    let mut report = ImportReport::default();
+
+    if issues.is_empty() {
+        return Ok(report);
+    }
+
+    // Rebuild projections so SQLite matches events.jsonl
+    task_store.rebuild_projections()?;
+
+    // Load existing state for diffing
+    let existing_tasks: HashMap<String, super::queries::TaskRow> = task_store
+        .list_all()?
+        .into_iter()
+        .map(|t| (t.task_id.clone(), t))
+        .collect();
+
+    let existing_labels: HashMap<String, HashSet<String>> = {
+        let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+        for (task_id, label) in task_store.list_all_labels()? {
+            map.entry(task_id).or_default().insert(label);
+        }
+        map
+    };
+
+    let existing_deps: HashMap<String, HashSet<String>> = {
+        let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+        for dep in task_store.list_all_deps()? {
+            map.entry(dep.task_id).or_default().insert(dep.depends_on);
+        }
+        map
+    };
+
+    // Sets for relationship validation
+    let beads_ids: HashSet<&str> = issues.iter().map(|i| i.id.as_str()).collect();
+    let all_known_ids: HashSet<&str> = existing_tasks
+        .keys()
+        .map(|k| k.as_str())
+        .chain(beads_ids.iter().copied())
+        .collect();
+
+    // Build expected relationships from all beads issues
+    let mut expected_deps: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut expected_parents: HashMap<String, String> = HashMap::new();
+
+    for issue in &issues {
+        for dep in &issue.dependencies {
+            match dep.dep_type.as_str() {
+                "blocks" => {
+                    if all_known_ids.contains(dep.depends_on_id.as_str())
+                        && all_known_ids.contains(dep.issue_id.as_str())
+                    {
+                        expected_deps
+                            .entry(dep.depends_on_id.clone())
+                            .or_default()
+                            .insert(dep.issue_id.clone());
+                    } else {
+                        report.deps_skipped += 1;
+                    }
+                }
+                "parent-child" => {
+                    if all_known_ids.contains(dep.depends_on_id.as_str())
+                        && all_known_ids.contains(dep.issue_id.as_str())
+                    {
+                        expected_parents.insert(dep.issue_id.clone(), dep.depends_on_id.clone());
+                    } else {
+                        report.deps_skipped += 1;
+                    }
+                }
+                _ => {
+                    report.deps_skipped += 1;
+                }
+            }
+        }
+    }
+
+    // Collect events in 3 phases for correct ordering:
+    // Phase 1: TaskCreated + labels + comments (new issues)
+    // Phase 2: Field updates + status changes + label diffs (existing issues) + status for new
+    // Phase 3: Relationship changes — deps + parents (all issues, needs all tasks to exist)
+    let mut phase1: Vec<TaskEvent> = Vec::new();
+    let mut phase2: Vec<TaskEvent> = Vec::new();
+    let mut phase3: Vec<TaskEvent> = Vec::new();
+
+    let now = now_ts();
+
+    for issue in &issues {
+        if let Some(existing) = existing_tasks.get(&issue.id) {
+            // === EXISTING ISSUE — generate delta events ===
+            let mut changed = false;
+
+            // Field diffs → single TaskUpdated
+            let new_desc = build_description(issue);
+            let beads_task_type = issue.issue_type.as_deref().unwrap_or("task");
+            let mut upd = TaskUpdatedPayload {
+                title: None,
+                description: None,
+                priority: None,
+                due_ts: None,
+                blocked_reason: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+            };
+            let mut has_field = false;
+
+            if issue.title != existing.title {
+                upd.title = Some(issue.title.clone());
+                has_field = true;
+            }
+            if new_desc != existing.description {
+                upd.description = new_desc.or(Some(String::new()));
+                has_field = true;
+            }
+            if issue.priority != existing.priority {
+                upd.priority = Some(issue.priority);
+                has_field = true;
+            }
+            if beads_task_type != existing.task_type {
+                upd.task_type = Some(beads_task_type.to_string());
+                has_field = true;
+            }
+            if issue.owner != existing.assignee {
+                upd.assignee = Some(issue.owner.clone().unwrap_or_default());
+                has_field = true;
+            }
+
+            if has_field {
+                phase2.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: now,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::TaskUpdated,
+                    payload: serde_json::to_value(upd).unwrap(),
+                });
+                changed = true;
+            }
+
+            // Status diff
+            let brain_status = match issue.status.as_str() {
+                "closed" => "done",
+                "in_progress" => "in_progress",
+                _ => "open",
+            };
+            if brain_status != existing.status {
+                phase2.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: now,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::StatusChanged,
+                    payload: serde_json::to_value(StatusChangedPayload {
+                        new_status: brain_status.to_string(),
+                    })
+                    .unwrap(),
+                });
+                changed = true;
+            }
+
+            // Label diffs
+            let empty_labels = HashSet::new();
+            let cur_labels = existing_labels.get(&issue.id).unwrap_or(&empty_labels);
+            let beads_labels: HashSet<&str> = issue.labels.iter().map(|l| l.as_str()).collect();
+            let cur_labels_ref: HashSet<&str> = cur_labels.iter().map(|l| l.as_str()).collect();
+
+            for label in beads_labels.difference(&cur_labels_ref) {
+                phase2.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: now,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::LabelAdded,
+                    payload: serde_json::to_value(LabelPayload {
+                        label: label.to_string(),
+                    })
+                    .unwrap(),
+                });
+                changed = true;
+            }
+            for label in cur_labels_ref.difference(&beads_labels) {
+                phase2.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: now,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::LabelRemoved,
+                    payload: serde_json::to_value(LabelPayload {
+                        label: label.to_string(),
+                    })
+                    .unwrap(),
+                });
+                changed = true;
+            }
+
+            // Dep diffs (only beads-to-beads deps)
+            let empty_deps = HashSet::new();
+            let cur_deps = existing_deps.get(&issue.id).unwrap_or(&empty_deps);
+            let cur_beads_deps: HashSet<&str> = cur_deps
+                .iter()
+                .filter(|d| beads_ids.contains(d.as_str()))
+                .map(|d| d.as_str())
+                .collect();
+            let exp_beads_deps: HashSet<&str> = expected_deps
+                .get(&issue.id)
+                .map(|ds| ds.iter().map(|d| d.as_str()).collect())
+                .unwrap_or_default();
+
+            for dep in exp_beads_deps.difference(&cur_beads_deps) {
+                phase3.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: now,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::DependencyAdded,
+                    payload: serde_json::to_value(DependencyPayload {
+                        depends_on_task_id: dep.to_string(),
+                    })
+                    .unwrap(),
+                });
+                changed = true;
+            }
+            for dep in cur_beads_deps.difference(&exp_beads_deps) {
+                phase3.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: now,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::DependencyRemoved,
+                    payload: serde_json::to_value(DependencyPayload {
+                        depends_on_task_id: dep.to_string(),
+                    })
+                    .unwrap(),
+                });
+                changed = true;
+            }
+
+            // Parent diff (only when beads-related)
+            let exp_parent = expected_parents.get(&issue.id).map(|p| p.as_str());
+            let cur_parent = existing.parent_task_id.as_deref();
+            let exp_is_beads = exp_parent.is_some_and(|p| beads_ids.contains(p));
+            let cur_is_beads = cur_parent.is_some_and(|p| beads_ids.contains(p));
+
+            if (exp_is_beads || cur_is_beads) && exp_parent != cur_parent {
+                phase3.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: now,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::ParentSet,
+                    payload: serde_json::to_value(ParentSetPayload {
+                        parent_task_id: exp_parent.map(|p| p.to_string()),
+                    })
+                    .unwrap(),
+                });
+                changed = true;
+            }
+
+            if changed {
+                report.issues_updated += 1;
+            } else {
+                report.issues_skipped += 1;
+            }
+        } else {
+            // === NEW ISSUE — generate creation events ===
+            let created_ts = parse_iso_ts(&issue.created_at);
+            let description = build_description(issue);
+
+            phase1.push(TaskEvent {
+                event_id: new_event_id(),
+                task_id: issue.id.clone(),
+                timestamp: created_ts,
+                actor: issue
+                    .owner
+                    .clone()
+                    .unwrap_or_else(|| "beads-import".to_string()),
+                event_type: EventType::TaskCreated,
+                payload: serde_json::to_value(TaskCreatedPayload {
+                    title: issue.title.clone(),
+                    description,
+                    priority: issue.priority,
+                    status: "open".to_string(),
+                    due_ts: None,
+                    task_type: issue.issue_type.clone(),
+                    assignee: issue.owner.clone(),
+                    defer_until: None,
+                    parent_task_id: None,
+                })
+                .unwrap(),
+            });
+            report.issues_imported += 1;
+
+            // Labels
+            for label in &issue.labels {
+                phase1.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: created_ts,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::LabelAdded,
+                    payload: serde_json::to_value(LabelPayload {
+                        label: label.clone(),
+                    })
+                    .unwrap(),
+                });
+                report.labels_imported += 1;
+            }
+
+            // Comments
+            for comment in &issue.comments {
+                let comment_ts = comment
+                    .created_at
+                    .as_deref()
+                    .map(parse_iso_ts)
+                    .unwrap_or(created_ts);
+                phase1.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: comment_ts,
+                    actor: comment
+                        .author
+                        .clone()
+                        .unwrap_or_else(|| "beads-import".to_string()),
+                    event_type: EventType::CommentAdded,
+                    payload: serde_json::to_value(CommentPayload {
+                        body: comment.text.clone(),
+                    })
+                    .unwrap(),
+                });
+                report.comments_imported += 1;
+            }
+
+            // Status changes (phase 2 — after all creates)
+            match issue.status.as_str() {
+                "closed" => {
+                    let closed_ts = issue
+                        .closed_at
+                        .as_deref()
+                        .or(issue.updated_at.as_deref())
+                        .map(parse_iso_ts)
+                        .unwrap_or(created_ts);
+
+                    phase2.push(TaskEvent {
+                        event_id: new_event_id(),
+                        task_id: issue.id.clone(),
+                        timestamp: closed_ts,
+                        actor: "beads-import".to_string(),
+                        event_type: EventType::StatusChanged,
+                        payload: serde_json::to_value(StatusChangedPayload {
+                            new_status: "done".to_string(),
+                        })
+                        .unwrap(),
+                    });
+
+                    if let Some(reason) = &issue.close_reason
+                        && !reason.is_empty()
+                    {
+                        phase2.push(TaskEvent {
+                            event_id: new_event_id(),
+                            task_id: issue.id.clone(),
+                            timestamp: closed_ts,
+                            actor: "beads-import".to_string(),
+                            event_type: EventType::CommentAdded,
+                            payload: serde_json::to_value(CommentPayload {
+                                body: format!("[close_reason] {reason}"),
+                            })
+                            .unwrap(),
+                        });
+                    }
+                }
+                "in_progress" => {
+                    let updated_ts = issue
+                        .updated_at
+                        .as_deref()
+                        .map(parse_iso_ts)
+                        .unwrap_or(created_ts);
+
+                    phase2.push(TaskEvent {
+                        event_id: new_event_id(),
+                        task_id: issue.id.clone(),
+                        timestamp: updated_ts,
+                        actor: "beads-import".to_string(),
+                        event_type: EventType::StatusChanged,
+                        payload: serde_json::to_value(StatusChangedPayload {
+                            new_status: "in_progress".to_string(),
+                        })
+                        .unwrap(),
+                    });
+                }
+                _ => {}
+            }
+
+            // Relationships (phase 3 — after all tasks exist)
+            if let Some(deps) = expected_deps.get(&issue.id) {
+                for dep_on in deps {
+                    phase3.push(TaskEvent {
+                        event_id: new_event_id(),
+                        task_id: issue.id.clone(),
+                        timestamp: now,
+                        actor: "beads-import".to_string(),
+                        event_type: EventType::DependencyAdded,
+                        payload: serde_json::to_value(DependencyPayload {
+                            depends_on_task_id: dep_on.clone(),
+                        })
+                        .unwrap(),
+                    });
+                    report.deps_imported += 1;
+                }
+            }
+
+            if let Some(parent) = expected_parents.get(&issue.id) {
+                phase3.push(TaskEvent {
+                    event_id: new_event_id(),
+                    task_id: issue.id.clone(),
+                    timestamp: now,
+                    actor: "beads-import".to_string(),
+                    event_type: EventType::ParentSet,
+                    payload: serde_json::to_value(ParentSetPayload {
+                        parent_task_id: Some(parent.clone()),
+                    })
+                    .unwrap(),
+                });
+                report.parent_links_imported += 1;
+            }
+        }
+    }
+
+    report.events_generated = phase1.len() + phase2.len() + phase3.len();
 
     if dry_run {
         return Ok(report);
     }
 
-    // Apply all events via append (validates + writes to JSONL + updates projection)
-    for event in &all_events {
+    // Append events in order: creates → updates/status → relationships
+    for event in phase1.iter().chain(phase2.iter()).chain(phase3.iter()) {
         task_store.append(event).map_err(|e| {
             BrainCoreError::TaskEvent(format!(
                 "failed to apply event for task {}: {e}",
@@ -458,10 +891,6 @@ pub fn import_beads_issues(
 mod tests {
     use super::*;
     use crate::db::Db;
-    use crate::tasks::events::{
-        DependencyPayload, EventType, StatusChangedPayload, TaskCreatedPayload, TaskEvent,
-        new_event_id, now_ts,
-    };
     use std::io::Write;
     use tempfile::TempDir;
 
@@ -733,10 +1162,10 @@ mod tests {
         assert_eq!(t.task_type, "epic");
     }
 
-    // -- sync tests (projection-only rebuild from beads) --
+    // -- idempotent import tests --
 
     #[test]
-    fn test_sync_idempotent() {
+    fn test_import_idempotent() {
         let (dir, store) = setup();
         let issues = vec![
             make_issue("t1", "Task 1", "open", 2),
@@ -744,20 +1173,20 @@ mod tests {
         ];
         let path = write_jsonl(dir.path(), &issues);
 
-        let r1 = store.sync_from_beads(&path).unwrap();
+        let r1 = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(r1.issues_imported, 2);
+        assert_eq!(r1.issues_skipped, 0);
+        assert_eq!(r1.issues_updated, 0);
+        assert_eq!(store.list_all().unwrap().len(), 2);
 
-        let all1 = store.list_all().unwrap();
-        assert_eq!(all1.len(), 2);
+        // Import again with same data — all skipped
+        let r2 = import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(r2.issues_imported, 0);
+        assert_eq!(r2.issues_skipped, 2);
+        assert_eq!(r2.issues_updated, 0);
+        assert_eq!(r2.events_generated, 0);
 
-        // Sync again — same result
-        let r2 = store.sync_from_beads(&path).unwrap();
-        assert_eq!(r2.issues_imported, 2);
-
-        let all2 = store.list_all().unwrap();
-        assert_eq!(all2.len(), 2);
-
-        // Verify data integrity after double sync
+        // Data unchanged
         let t1 = store.get_task("t1").unwrap().unwrap();
         assert_eq!(t1.title, "Task 1");
         assert_eq!(t1.status, "open");
@@ -766,281 +1195,171 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_picks_up_new_issue() {
+    fn test_import_picks_up_new_issues() {
         let (dir, store) = setup();
-        let issues = vec![make_issue("t1", "Task 1", "open", 2)];
-        let path = write_jsonl(dir.path(), &issues);
-
-        store.sync_from_beads(&path).unwrap();
-        assert_eq!(store.list_all().unwrap().len(), 1);
-
-        // Add a second issue and re-sync
         let issues = vec![
             make_issue("t1", "Task 1", "open", 2),
             make_issue("t2", "Task 2", "open", 1),
         ];
+        let path = write_jsonl(dir.path(), &issues);
+
+        let r1 = import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(r1.issues_imported, 2);
+        assert_eq!(store.list_all().unwrap().len(), 2);
+
+        // Add a third issue, re-import
+        let issues = vec![
+            make_issue("t1", "Task 1", "open", 2),
+            make_issue("t2", "Task 2", "open", 1),
+            make_issue("t3", "Task 3", "open", 3),
+        ];
         write_jsonl(dir.path(), &issues);
 
-        store.sync_from_beads(&path).unwrap();
-        assert_eq!(store.list_all().unwrap().len(), 2);
-        assert!(store.get_task("t2").unwrap().is_some());
+        let r2 = import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(r2.issues_imported, 1);
+        assert_eq!(r2.issues_skipped, 2);
+        assert_eq!(r2.issues_updated, 0);
+        assert_eq!(store.list_all().unwrap().len(), 3);
+        assert!(store.get_task("t3").unwrap().is_some());
     }
 
     #[test]
-    fn test_sync_picks_up_status_change() {
+    fn test_import_detects_title_update() {
+        let (dir, store) = setup();
+        let issues = vec![make_issue("t1", "Original Title", "open", 2)];
+        let path = write_jsonl(dir.path(), &issues);
+        import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(
+            store.get_task("t1").unwrap().unwrap().title,
+            "Original Title"
+        );
+
+        // Change title in beads
+        let issues = vec![make_issue("t1", "Updated Title", "open", 2)];
+        write_jsonl(dir.path(), &issues);
+
+        let r = import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(r.issues_updated, 1);
+        assert_eq!(r.issues_imported, 0);
+        assert_eq!(r.issues_skipped, 0);
+
+        let t = store.get_task("t1").unwrap().unwrap();
+        assert_eq!(t.title, "Updated Title");
+    }
+
+    #[test]
+    fn test_import_detects_status_change() {
         let (dir, store) = setup();
         let issues = vec![make_issue("t1", "Task 1", "open", 2)];
         let path = write_jsonl(dir.path(), &issues);
-
-        store.sync_from_beads(&path).unwrap();
+        import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(store.get_task("t1").unwrap().unwrap().status, "open");
 
-        // Change status to closed and re-sync
+        // Close in beads
         let mut closed = make_issue("t1", "Task 1", "closed", 2);
         closed["closed_at"] = serde_json::json!("2026-02-26T10:00:00Z");
         write_jsonl(dir.path(), &[closed]);
 
-        store.sync_from_beads(&path).unwrap();
-        assert_eq!(store.get_task("t1").unwrap().unwrap().status, "done");
+        let r = import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(r.issues_updated, 1);
+
+        let t = store.get_task("t1").unwrap().unwrap();
+        assert_eq!(t.status, "done");
     }
 
     #[test]
-    fn test_sync_removes_deleted_issue() {
+    fn test_import_detects_label_changes() {
         let (dir, store) = setup();
-        let issues = vec![
-            make_issue("t1", "Task 1", "open", 2),
-            make_issue("t2", "Task 2", "open", 1),
-        ];
-        let path = write_jsonl(dir.path(), &issues);
+        let mut issue = make_issue("t1", "Labeled", "open", 2);
+        issue["labels"] = serde_json::json!(["urgent", "backend"]);
+        let path = write_jsonl(dir.path(), &[issue]);
+        import_beads_issues(&path, &store, false).unwrap();
 
-        store.sync_from_beads(&path).unwrap();
-        assert_eq!(store.list_all().unwrap().len(), 2);
+        let labels = store.get_task_labels("t1").unwrap();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&"urgent".to_string()));
+        assert!(labels.contains(&"backend".to_string()));
 
-        // Remove t2 from JSONL and re-sync
+        // Change labels: remove "urgent", add "frontend"
+        let mut issue = make_issue("t1", "Labeled", "open", 2);
+        issue["labels"] = serde_json::json!(["backend", "frontend"]);
+        write_jsonl(dir.path(), &[issue]);
+
+        let r = import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(r.issues_updated, 1);
+
+        let labels = store.get_task_labels("t1").unwrap();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&"backend".to_string()));
+        assert!(labels.contains(&"frontend".to_string()));
+        assert!(!labels.contains(&"urgent".to_string()));
+    }
+
+    #[test]
+    fn test_import_detects_priority_change() {
+        let (dir, store) = setup();
         let issues = vec![make_issue("t1", "Task 1", "open", 2)];
+        let path = write_jsonl(dir.path(), &issues);
+        import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(store.get_task("t1").unwrap().unwrap().priority, 2);
+
+        // Change priority
+        let issues = vec![make_issue("t1", "Task 1", "open", 0)];
         write_jsonl(dir.path(), &issues);
 
-        store.sync_from_beads(&path).unwrap();
-        let all = store.list_all().unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].task_id, "t1");
-        assert!(store.get_task("t2").unwrap().is_none());
+        let r = import_beads_issues(&path, &store, false).unwrap();
+        assert_eq!(r.issues_updated, 1);
+
+        let t = store.get_task("t1").unwrap().unwrap();
+        assert_eq!(t.priority, 0);
     }
 
     #[test]
-    fn test_generate_events_does_not_write() {
-        let (dir, _store) = setup();
-        let issues = vec![
-            make_issue("t1", "Task 1", "open", 2),
-            make_issue("t2", "Task 2", "closed", 1),
-        ];
-        let path = write_jsonl(dir.path(), &issues);
-
-        let (events, report) = generate_events_from_beads(&path).unwrap();
-
-        // Should have generated events without side effects
-        assert_eq!(report.issues_imported, 2);
-        assert!(!events.is_empty());
-
-        // The store should still be empty (generate doesn't touch it)
-        let store_all = _store.list_all().unwrap();
-        assert!(store_all.is_empty());
-    }
-
-    // -- hybrid sync tests (native brain tasks + beads coexist) --
-
-    #[test]
-    fn test_sync_preserves_native_tasks() {
+    fn test_import_detects_dep_changes() {
         let (dir, store) = setup();
+        // t1 blocks t2 initially
+        let mut t1 = make_issue("t1", "Blocker", "open", 1);
+        t1["dependencies"] = serde_json::json!([{
+            "issue_id": "t1",
+            "depends_on_id": "t2",
+            "type": "blocks",
+            "created_at": "2026-02-25T10:00:00Z"
+        }]);
+        let t2 = make_issue("t2", "Blocked", "open", 2);
+        let t3 = make_issue("t3", "Other", "open", 3);
+        let path = write_jsonl(dir.path(), &[t1, t2, t3]);
+        import_beads_issues(&path, &store, false).unwrap();
 
-        // Create a native task via append (writes to events.jsonl)
-        let native_event = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "native-001".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-            payload: serde_json::to_value(TaskCreatedPayload {
-                title: "Native task".to_string(),
-                description: Some("Created via brain".to_string()),
-                priority: 1,
-                status: "open".to_string(),
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-            })
-            .unwrap(),
-        };
-        store.append(&native_event).unwrap();
-        assert_eq!(store.list_all().unwrap().len(), 1);
-
-        // Sync beads issues
-        let issues = vec![
-            make_issue("beads-001", "Beads Task 1", "open", 2),
-            make_issue("beads-002", "Beads Task 2", "closed", 1),
-        ];
-        let path = write_jsonl(dir.path(), &issues);
-        store.sync_from_beads(&path).unwrap();
-
-        // Native task must still exist alongside beads tasks
-        let all = store.list_all().unwrap();
-        assert_eq!(all.len(), 3);
-
-        let native = store.get_task("native-001").unwrap().unwrap();
-        assert_eq!(native.title, "Native task");
-        assert_eq!(native.status, "open");
-
-        let b1 = store.get_task("beads-001").unwrap().unwrap();
-        assert_eq!(b1.title, "Beads Task 1");
-
-        let b2 = store.get_task("beads-002").unwrap().unwrap();
-        assert_eq!(b2.status, "done");
-    }
-
-    #[test]
-    fn test_sync_preserves_native_deps() {
-        let (dir, store) = setup();
-
-        // Create two native tasks with a dependency
-        let ev1 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "n1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-            payload: serde_json::to_value(TaskCreatedPayload {
-                title: "Native blocker".to_string(),
-                description: None,
-                priority: 1,
-                status: "open".to_string(),
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-            })
-            .unwrap(),
-        };
-        let ev2 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "n2".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-            payload: serde_json::to_value(TaskCreatedPayload {
-                title: "Native blocked".to_string(),
-                description: None,
-                priority: 2,
-                status: "open".to_string(),
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-            })
-            .unwrap(),
-        };
-        let dep = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "n2".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            payload: serde_json::to_value(DependencyPayload {
-                depends_on_task_id: "n1".to_string(),
-            })
-            .unwrap(),
-        };
-        store.append(&ev1).unwrap();
-        store.append(&ev2).unwrap();
-        store.append(&dep).unwrap();
-
-        // n2 should be blocked
-        assert_eq!(store.list_blocked().unwrap().len(), 1);
-
-        // Sync beads
-        let issues = vec![make_issue("beads-100", "Beads task", "open", 2)];
-        let path = write_jsonl(dir.path(), &issues);
-        store.sync_from_beads(&path).unwrap();
-
-        // Native dependency must be intact
+        // t2 should be blocked by t1
         let blocked = store.list_blocked().unwrap();
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].task_id, "n2");
+        assert_eq!(blocked[0].task_id, "t2");
+
+        // Change deps: t1 no longer blocks t2, now t3 blocks t2
+        let t1 = make_issue("t1", "Blocker", "open", 1); // no deps
+        let t2 = make_issue("t2", "Blocked", "open", 2);
+        let mut t3 = make_issue("t3", "New Blocker", "open", 3);
+        t3["dependencies"] = serde_json::json!([{
+            "issue_id": "t3",
+            "depends_on_id": "t2",
+            "type": "blocks",
+            "created_at": "2026-02-25T11:00:00Z"
+        }]);
+        write_jsonl(dir.path(), &[t1, t2, t3]);
+
+        let r = import_beads_issues(&path, &store, false).unwrap();
+        // t2 and t3 should be updated (dep changes), t1 skipped
+        assert!(r.issues_updated >= 1);
+
+        // t2 should now be blocked by t3, not t1
+        let blocked = store.list_blocked().unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].task_id, "t2");
 
         let ready = store.list_ready().unwrap();
         let ready_ids: Vec<&str> = ready.iter().map(|r| r.task_id.as_str()).collect();
-        assert!(ready_ids.contains(&"n1"));
-        assert!(ready_ids.contains(&"beads-100"));
-        assert!(!ready_ids.contains(&"n2"));
-    }
-
-    #[test]
-    fn test_sync_native_and_beads_independent() {
-        let (dir, store) = setup();
-
-        // Create native task
-        let native_ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "native-x".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-            payload: serde_json::to_value(TaskCreatedPayload {
-                title: "Native X".to_string(),
-                description: None,
-                priority: 0,
-                status: "open".to_string(),
-                due_ts: None,
-                task_type: Some("feature".to_string()),
-                assignee: Some("alice".to_string()),
-                defer_until: None,
-                parent_task_id: None,
-            })
-            .unwrap(),
-        };
-        store.append(&native_ev).unwrap();
-
-        // Mark native task in_progress
-        let status_ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "native-x".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::StatusChanged,
-            payload: serde_json::to_value(StatusChangedPayload {
-                new_status: "in_progress".to_string(),
-            })
-            .unwrap(),
-        };
-        store.append(&status_ev).unwrap();
-
-        // Sync beads with a closed task that has labels
-        let mut beads_issue = make_issue("beads-y", "Beads Y", "closed", 3);
-        beads_issue["closed_at"] = serde_json::json!("2026-02-26T10:00:00Z");
-        beads_issue["labels"] = serde_json::json!(["backend"]);
-        let path = write_jsonl(dir.path(), &[beads_issue]);
-        store.sync_from_beads(&path).unwrap();
-
-        // Native task retains its status and fields
-        let native = store.get_task("native-x").unwrap().unwrap();
-        assert_eq!(native.status, "in_progress");
-        assert_eq!(native.priority, 0);
-        assert_eq!(native.task_type, "feature");
-        assert_eq!(native.assignee.as_deref(), Some("alice"));
-
-        // Beads task has its own independent state
-        let beads = store.get_task("beads-y").unwrap().unwrap();
-        assert_eq!(beads.status, "done");
-        assert_eq!(beads.priority, 3);
-
-        let labels = store.get_task_labels("beads-y").unwrap();
-        assert!(labels.contains(&"backend".to_string()));
-
-        // Native task should have no labels
-        let native_labels = store.get_task_labels("native-x").unwrap();
-        assert!(native_labels.is_empty());
+        assert!(ready_ids.contains(&"t1"));
+        assert!(ready_ids.contains(&"t3"));
+        assert!(!ready_ids.contains(&"t2"));
     }
 }

@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
 use brain_lib::db::Db;
-use brain_lib::tasks::queries::TaskRow;
 use brain_lib::tasks::TaskStore;
+use brain_lib::tasks::queries::TaskRow;
 
 fn format_ts(ts: i64) -> String {
     DateTime::<Utc>::from_timestamp(ts, 0)
@@ -47,10 +47,10 @@ fn render_task_markdown(
     out.push_str(&format!("# {}\n", task.title));
 
     // Description
-    if let Some(desc) = &task.description {
-        if !desc.is_empty() {
-            out.push_str(&format!("\n## Description\n\n{desc}\n"));
-        }
+    if let Some(desc) = &task.description
+        && !desc.is_empty()
+    {
+        out.push_str(&format!("\n## Description\n\n{desc}\n"));
     }
 
     // Dependencies
@@ -124,7 +124,7 @@ pub fn run(dir: PathBuf, sqlite_db: PathBuf) -> Result<()> {
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
 
-        let md = render_task_markdown(&task, task_labels, task_blocks, task_blocked_by);
+        let md = render_task_markdown(task, task_labels, task_blocks, task_blocked_by);
 
         let file_path = dir.join(format!("{}.md", task.task_id));
         std::fs::write(&file_path, md)

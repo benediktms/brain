@@ -849,7 +849,6 @@ dependencies = [
  "clap",
  "dirs",
  "libc",
- "notify-debouncer-full",
  "tokio",
  "tracing",
  "tracing-subscriber",

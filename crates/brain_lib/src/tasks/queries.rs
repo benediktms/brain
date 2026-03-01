@@ -343,8 +343,11 @@ pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
 
 /// List all (task_id, label) pairs (bulk load for export).
 pub fn list_all_labels(conn: &Connection) -> Result<Vec<(String, String)>> {
-    let mut stmt = conn.prepare("SELECT task_id, label FROM task_labels ORDER BY task_id, label")?;
-    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mut stmt =
+        conn.prepare("SELECT task_id, label FROM task_labels ORDER BY task_id, label")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut result = Vec::new();
     for row in rows {
         result.push(row?);

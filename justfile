@@ -61,6 +61,20 @@ watch notes_path=".": ensure-binary
 daemon +args: ensure-binary
     {{bin}} daemon {{args}}
 
+[group('app')]
+import-beads *args: ensure-binary
+    {{bin}} import-beads {{args}}
+
+[group('app')]
+tasks-export *args: ensure-binary
+    {{bin}} tasks export {{args}}
+
+# Full pipeline: beads → brain (import) → markdown export
+[group('app')]
+import-all *args: ensure-binary
+    {{bin}} import-beads
+    {{bin}} tasks export
+
 [group('maintenance')]
 clean-db:
     rm -rf .brain/lancedb .brain/brain.db .brain/brain.db-shm .brain/brain.db-wal

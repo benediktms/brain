@@ -87,16 +87,6 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Sync SQLite projection from beads JSONL (beads as source of truth)
-    SyncBeads {
-        /// Path to beads issues.jsonl (auto-discovers .beads/issues.jsonl if omitted)
-        #[arg(long)]
-        path: Option<PathBuf>,
-        /// Watch for changes and re-sync automatically
-        #[arg(long)]
-        watch: bool,
-    },
-
     /// Manage brain tasks
     Tasks {
         #[command(subcommand)]
@@ -184,9 +174,6 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::ImportBeads { path, dry_run } => {
             commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
-        }
-        Command::SyncBeads { path, watch } => {
-            commands::sync_beads::run(path, cli.sqlite_db, watch)?;
         }
         Command::Tasks { action } => match action {
             TasksAction::Export { format, dir } => match format.as_str() {
