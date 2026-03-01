@@ -15,7 +15,7 @@ targets = [
 install-path = "CARGO_HOME"
 hosting = "github"
 install-updater = false
-pr-run-mode = "upload"
+pr-run-mode = "plan"
 
 [dist.dependencies.homebrew]
 protobuf = { stage = ["build"] }
