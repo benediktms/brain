@@ -15,8 +15,9 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                 .map_err(|e| BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}")))?;
 
             conn.execute(
-                "INSERT INTO tasks (task_id, title, description, status, priority, due_ts, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO tasks (task_id, title, description, status, priority, due_ts,
+                                    task_type, assignee, defer_until, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
                     event.task_id,
                     p.title,
@@ -24,6 +25,9 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                     p.status,
                     p.priority,
                     p.due_ts,
+                    p.task_type.as_deref().unwrap_or("task"),
+                    p.assignee,
+                    p.defer_until,
                     event.timestamp,
                     event.timestamp,
                 ],
@@ -62,6 +66,24 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                 conn.execute(
                     "UPDATE tasks SET blocked_reason = ?1, updated_at = ?2 WHERE task_id = ?3",
                     rusqlite::params![blocked_reason, event.timestamp, event.task_id],
+                )?;
+            }
+            if let Some(task_type) = &p.task_type {
+                conn.execute(
+                    "UPDATE tasks SET task_type = ?1, updated_at = ?2 WHERE task_id = ?3",
+                    rusqlite::params![task_type, event.timestamp, event.task_id],
+                )?;
+            }
+            if let Some(assignee) = &p.assignee {
+                conn.execute(
+                    "UPDATE tasks SET assignee = ?1, updated_at = ?2 WHERE task_id = ?3",
+                    rusqlite::params![assignee, event.timestamp, event.task_id],
+                )?;
+            }
+            if let Some(defer_until) = p.defer_until {
+                conn.execute(
+                    "UPDATE tasks SET defer_until = ?1, updated_at = ?2 WHERE task_id = ?3",
+                    rusqlite::params![defer_until, event.timestamp, event.task_id],
                 )?;
             }
         }
@@ -190,6 +212,9 @@ mod tests {
                 priority,
                 status: "open".to_string(),
                 due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
             })
             .unwrap(),
         }
@@ -236,6 +261,9 @@ mod tests {
                 priority: Some(1),
                 due_ts: None,
                 blocked_reason: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
             })
             .unwrap(),
         };

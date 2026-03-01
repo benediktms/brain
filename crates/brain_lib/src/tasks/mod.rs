@@ -86,10 +86,7 @@ impl TaskStore {
     }
 
     /// Get the dependency summary for a task.
-    pub fn get_dependency_summary(
-        &self,
-        task_id: &str,
-    ) -> Result<queries::DependencySummary> {
+    pub fn get_dependency_summary(&self, task_id: &str) -> Result<queries::DependencySummary> {
         self.db
             .with_conn(|conn| queries::get_dependency_summary(conn, task_id))
     }
@@ -186,6 +183,9 @@ mod tests {
                 priority,
                 status: "open".to_string(),
                 due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
             })
             .unwrap(),
         }

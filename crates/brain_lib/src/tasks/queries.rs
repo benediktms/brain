@@ -12,9 +12,15 @@ pub struct TaskRow {
     pub priority: i32,
     pub blocked_reason: Option<String>,
     pub due_ts: Option<i64>,
+    pub task_type: String,
+    pub assignee: Option<String>,
+    pub defer_until: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
+
+const TASK_COLUMNS: &str = "task_id, title, description, status, priority, blocked_reason, due_ts, \
+     task_type, assignee, defer_until, created_at, updated_at";
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
     Ok(TaskRow {
@@ -25,8 +31,11 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
         priority: row.get(4)?,
         blocked_reason: row.get(5)?,
         due_ts: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        task_type: row.get(7)?,
+        assignee: row.get(8)?,
+        defer_until: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
 }
 
@@ -35,20 +44,21 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
 ///
 /// Ordered by priority ASC, due_ts ASC NULLS LAST, updated_at DESC.
 pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT task_id, title, description, status, priority, blocked_reason,
-                due_ts, created_at, updated_at
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
          FROM tasks t
          WHERE t.status IN ('open', 'in_progress')
            AND t.blocked_reason IS NULL
+           AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
                SELECT 1 FROM task_deps d
                JOIN tasks dep ON dep.task_id = d.depends_on
                WHERE d.task_id = t.task_id
                  AND dep.status NOT IN ('done', 'cancelled')
            )
-         ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC",
-    )?;
+         ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
 
     let rows = stmt.query_map([], row_to_task)?;
     let mut result = Vec::new();
@@ -60,13 +70,13 @@ pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
 
 /// List tasks that are blocked: have unresolved deps or an explicit blocked_reason.
 pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT task_id, title, description, status, priority, blocked_reason,
-                due_ts, created_at, updated_at
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
          FROM tasks t
          WHERE t.status IN ('open', 'in_progress', 'blocked')
            AND (
                t.blocked_reason IS NOT NULL
+               OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
                OR EXISTS (
                    SELECT 1 FROM task_deps d
                    JOIN tasks dep ON dep.task_id = d.depends_on
@@ -74,8 +84,9 @@ pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
                      AND dep.status NOT IN ('done', 'cancelled')
                )
            )
-         ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC",
-    )?;
+         ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
 
     let rows = stmt.query_map([], row_to_task)?;
     let mut result = Vec::new();
@@ -87,12 +98,12 @@ pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
 
 /// List all tasks.
 pub fn list_all(conn: &Connection) -> Result<Vec<TaskRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT task_id, title, description, status, priority, blocked_reason,
-                due_ts, created_at, updated_at
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
          FROM tasks
-         ORDER BY priority ASC, due_ts ASC NULLS LAST, updated_at DESC, task_id ASC",
-    )?;
+         ORDER BY priority ASC, due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
 
     let rows = stmt.query_map([], row_to_task)?;
     let mut result = Vec::new();
@@ -104,16 +115,8 @@ pub fn list_all(conn: &Connection) -> Result<Vec<TaskRow>> {
 
 /// Get a single task by ID.
 pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
-    let result = conn
-        .query_row(
-            "SELECT task_id, title, description, status, priority, blocked_reason,
-                    due_ts, created_at, updated_at
-             FROM tasks WHERE task_id = ?1",
-            [task_id],
-            row_to_task,
-        )
-        .ok();
-
+    let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE task_id = ?1");
+    let result = conn.query_row(&sql, [task_id], row_to_task).ok();
     Ok(result)
 }
 
@@ -225,6 +228,7 @@ pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
         "SELECT COUNT(*) FROM tasks t
          WHERE t.status IN ('open', 'in_progress')
            AND t.blocked_reason IS NULL
+           AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
                SELECT 1 FROM task_deps d
                JOIN tasks dep ON dep.task_id = d.depends_on
@@ -240,6 +244,7 @@ pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
          WHERE t.status IN ('open', 'in_progress', 'blocked')
            AND (
                t.blocked_reason IS NOT NULL
+               OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
                OR EXISTS (
                    SELECT 1 FROM task_deps d
                    JOIN tasks dep ON dep.task_id = d.depends_on
@@ -290,6 +295,9 @@ mod tests {
                 priority,
                 status: "open".to_string(),
                 due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
             })
             .unwrap(),
         };
@@ -409,6 +417,9 @@ mod tests {
                 priority: None,
                 due_ts: None,
                 blocked_reason: Some("waiting on external API".to_string()),
+                task_type: None,
+                assignee: None,
+                defer_until: None,
             })
             .unwrap(),
         };
@@ -472,6 +483,9 @@ mod tests {
                 priority: 2,
                 status: "open".to_string(),
                 due_ts: Some(2000),
+                task_type: None,
+                assignee: None,
+                defer_until: None,
             })
             .unwrap(),
         };
@@ -487,6 +501,9 @@ mod tests {
                 priority: 2,
                 status: "open".to_string(),
                 due_ts: Some(1000),
+                task_type: None,
+                assignee: None,
+                defer_until: None,
             })
             .unwrap(),
         };
@@ -502,6 +519,9 @@ mod tests {
                 priority: 2,
                 status: "open".to_string(),
                 due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
             })
             .unwrap(),
         };

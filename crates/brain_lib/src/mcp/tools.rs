@@ -144,7 +144,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "payload": {
                         "type": "object",
-                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}."
+                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}."
                     }
                 },
                 "required": ["event_type", "payload"]
@@ -603,7 +603,7 @@ fn handle_tasks_apply_event(params: &Value, ctx: &McpContext) -> ToolCallResult 
                 "Invalid event_type: '{event_type_str}'. Must be one of: task_created, \
                  task_updated, status_changed, dependency_added, dependency_removed, \
                  note_linked, note_unlinked"
-            ))
+            ));
         }
     };
 
@@ -634,7 +634,7 @@ fn handle_tasks_apply_event(params: &Value, ctx: &McpContext) -> ToolCallResult 
         .unwrap_or("mcp")
         .to_string();
 
-    // For task_created, inject default status and priority if not provided
+    // For task_created, inject defaults if not provided
     let payload = if event_type == EventType::TaskCreated {
         let mut p = payload;
         if p.get("status").is_none() {
@@ -642,6 +642,9 @@ fn handle_tasks_apply_event(params: &Value, ctx: &McpContext) -> ToolCallResult 
         }
         if p.get("priority").is_none() {
             p["priority"] = json!(4);
+        }
+        if p.get("task_type").is_none() {
+            p["task_type"] = json!("task");
         }
         p
     } else {
@@ -672,6 +675,9 @@ fn handle_tasks_apply_event(params: &Value, ctx: &McpContext) -> ToolCallResult 
             "priority": row.priority,
             "blocked_reason": row.blocked_reason,
             "due_ts": row.due_ts,
+            "task_type": row.task_type,
+            "assignee": row.assignee,
+            "defer_until": row.defer_until,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }),
@@ -690,9 +696,7 @@ fn handle_tasks_apply_event(params: &Value, ctx: &McpContext) -> ToolCallResult 
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if new_status == "done" || new_status == "cancelled" {
-            ctx.tasks
-                .list_newly_unblocked(&task_id)
-                .unwrap_or_default()
+            ctx.tasks.list_newly_unblocked(&task_id).unwrap_or_default()
         } else {
             vec![]
         }
@@ -782,6 +786,9 @@ fn handle_tasks_next(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 "status": task.status,
                 "priority": task.priority,
                 "due_ts": task.due_ts,
+                "task_type": task.task_type,
+                "assignee": task.assignee,
+                "defer_until": task.defer_until,
                 "dependency_summary": {
                     "total_deps": dep_summary.total_deps,
                     "done_deps": dep_summary.done_deps,
@@ -1208,7 +1215,13 @@ mod tests {
         assert_eq!(task["task_id"], "t2");
         assert_eq!(task["dependency_summary"]["total_deps"], 1);
         assert_eq!(task["dependency_summary"]["done_deps"], 1);
-        assert_eq!(task["dependency_summary"]["blocking_tasks"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            task["dependency_summary"]["blocking_tasks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     async fn create_test_context() -> McpContext {

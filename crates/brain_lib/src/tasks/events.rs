@@ -42,6 +42,12 @@ pub struct TaskCreatedPayload {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due_ts: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defer_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +62,12 @@ pub struct TaskUpdatedPayload {
     pub due_ts: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defer_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
