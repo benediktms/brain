@@ -79,6 +79,12 @@ impl TaskStore {
         self.db.with_conn(|conn| queries::get_task(conn, task_id))
     }
 
+    /// List task IDs that became unblocked because `completed_task_id` was resolved.
+    pub fn list_newly_unblocked(&self, completed_task_id: &str) -> Result<Vec<String>> {
+        self.db
+            .with_conn(|conn| queries::list_newly_unblocked(conn, completed_task_id))
+    }
+
     /// Validate an event before writing it to the log.
     fn validate(&self, conn: &rusqlite::Connection, event: &TaskEvent) -> Result<()> {
         match event.event_type {

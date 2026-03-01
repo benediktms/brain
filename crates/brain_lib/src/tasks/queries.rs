@@ -117,6 +117,35 @@ pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
     Ok(result)
 }
 
+/// List task IDs that became unblocked because `completed_task_id` was just
+/// marked done or cancelled. Returns IDs of tasks that depended on the
+/// completed task and now have all dependencies resolved.
+pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Result<Vec<String>> {
+    // Find tasks that depend on the completed task, are open/in_progress,
+    // have no blocked_reason, and all of their deps are now done/cancelled.
+    let mut stmt = conn.prepare(
+        "SELECT d.task_id
+         FROM task_deps d
+         JOIN tasks t ON t.task_id = d.task_id
+         WHERE d.depends_on = ?1
+           AND t.status IN ('open', 'in_progress')
+           AND t.blocked_reason IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM task_deps d2
+               JOIN tasks dep ON dep.task_id = d2.depends_on
+               WHERE d2.task_id = d.task_id
+                 AND dep.status NOT IN ('done', 'cancelled')
+           )",
+    )?;
+
+    let rows = stmt.query_map([completed_task_id], |row| row.get::<_, String>(0))?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
 /// Check if a task exists in the projection.
 pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
     let count: i64 = conn.query_row(
@@ -379,5 +408,57 @@ mod tests {
         assert_eq!(ready[0].task_id, "t2");
         assert_eq!(ready[1].task_id, "t1");
         assert_eq!(ready[2].task_id, "t3");
+    }
+
+    #[test]
+    fn test_list_newly_unblocked_basic() {
+        let conn = setup();
+        create_task(&conn, "t1", "Blocker", 2);
+        create_task(&conn, "t2", "Blocked", 1);
+        add_dep(&conn, "t2", "t1");
+
+        // Before completing t1, nothing is unblocked
+        let unblocked = list_newly_unblocked(&conn, "t1").unwrap();
+        assert!(unblocked.is_empty());
+
+        // Complete t1
+        set_status(&conn, "t1", "done");
+
+        // Now t2 should be unblocked
+        let unblocked = list_newly_unblocked(&conn, "t1").unwrap();
+        assert_eq!(unblocked, vec!["t2"]);
+    }
+
+    #[test]
+    fn test_list_newly_unblocked_partial_deps() {
+        let conn = setup();
+        create_task(&conn, "t1", "Blocker 1", 2);
+        create_task(&conn, "t2", "Blocker 2", 2);
+        create_task(&conn, "t3", "Blocked by both", 1);
+        add_dep(&conn, "t3", "t1");
+        add_dep(&conn, "t3", "t2");
+
+        // Complete only t1 — t3 still blocked by t2
+        set_status(&conn, "t1", "done");
+        let unblocked = list_newly_unblocked(&conn, "t1").unwrap();
+        assert!(unblocked.is_empty());
+
+        // Complete t2 — t3 now fully unblocked
+        set_status(&conn, "t2", "done");
+        let unblocked = list_newly_unblocked(&conn, "t2").unwrap();
+        assert_eq!(unblocked, vec!["t3"]);
+    }
+
+    #[test]
+    fn test_list_newly_unblocked_cancelled_counts() {
+        let conn = setup();
+        create_task(&conn, "t1", "Blocker", 2);
+        create_task(&conn, "t2", "Blocked", 1);
+        add_dep(&conn, "t2", "t1");
+
+        // Cancel t1 — should also unblock t2
+        set_status(&conn, "t1", "cancelled");
+        let unblocked = list_newly_unblocked(&conn, "t1").unwrap();
+        assert_eq!(unblocked, vec!["t2"]);
     }
 }
