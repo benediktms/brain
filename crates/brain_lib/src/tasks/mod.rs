@@ -85,6 +85,26 @@ impl TaskStore {
             .with_conn(|conn| queries::list_newly_unblocked(conn, completed_task_id))
     }
 
+    /// Get the dependency summary for a task.
+    pub fn get_dependency_summary(
+        &self,
+        task_id: &str,
+    ) -> Result<queries::DependencySummary> {
+        self.db
+            .with_conn(|conn| queries::get_dependency_summary(conn, task_id))
+    }
+
+    /// Get note links for a task.
+    pub fn get_task_note_links(&self, task_id: &str) -> Result<Vec<queries::TaskNoteLink>> {
+        self.db
+            .with_conn(|conn| queries::get_task_note_links(conn, task_id))
+    }
+
+    /// Count of ready and blocked tasks.
+    pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
+        self.db.with_conn(queries::count_ready_blocked)
+    }
+
     /// Validate an event before writing it to the log.
     fn validate(&self, conn: &rusqlite::Connection, event: &TaskEvent) -> Result<()> {
         match event.event_type {

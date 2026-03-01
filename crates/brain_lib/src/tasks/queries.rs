@@ -146,6 +146,114 @@ pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Resul
     Ok(result)
 }
 
+/// Summary of a task's dependency state.
+#[derive(Debug, Clone)]
+pub struct DependencySummary {
+    pub total_deps: usize,
+    pub done_deps: usize,
+    pub blocking_task_ids: Vec<String>,
+}
+
+/// Get the dependency summary for a task.
+pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<DependencySummary> {
+    let mut stmt = conn.prepare(
+        "SELECT d.depends_on, t.status
+         FROM task_deps d
+         JOIN tasks t ON t.task_id = d.depends_on
+         WHERE d.task_id = ?1",
+    )?;
+
+    let mut total_deps = 0;
+    let mut done_deps = 0;
+    let mut blocking_task_ids = Vec::new();
+
+    let rows = stmt.query_map([task_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    for row in rows {
+        let (dep_id, status) = row?;
+        total_deps += 1;
+        if status == "done" || status == "cancelled" {
+            done_deps += 1;
+        } else {
+            blocking_task_ids.push(dep_id);
+        }
+    }
+
+    Ok(DependencySummary {
+        total_deps,
+        done_deps,
+        blocking_task_ids,
+    })
+}
+
+/// A linked note for a task.
+#[derive(Debug, Clone)]
+pub struct TaskNoteLink {
+    pub chunk_id: String,
+    pub file_path: String,
+}
+
+/// Get note links for a task, resolving chunk_id to file_path.
+pub fn get_task_note_links(conn: &Connection, task_id: &str) -> Result<Vec<TaskNoteLink>> {
+    let mut stmt = conn.prepare(
+        "SELECT l.chunk_id, COALESCE(f.path, '') as file_path
+         FROM task_note_links l
+         LEFT JOIN chunks c ON c.chunk_id = l.chunk_id
+         LEFT JOIN files f ON f.file_id = c.file_id
+         WHERE l.task_id = ?1",
+    )?;
+
+    let rows = stmt.query_map([task_id], |row| {
+        Ok(TaskNoteLink {
+            chunk_id: row.get(0)?,
+            file_path: row.get(1)?,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
+/// Count of ready and blocked tasks (for response metadata).
+pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
+    let ready: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tasks t
+         WHERE t.status IN ('open', 'in_progress')
+           AND t.blocked_reason IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM task_deps d
+               JOIN tasks dep ON dep.task_id = d.depends_on
+               WHERE d.task_id = t.task_id
+                 AND dep.status NOT IN ('done', 'cancelled')
+           )",
+        [],
+        |row| row.get(0),
+    )?;
+
+    let blocked: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tasks t
+         WHERE t.status IN ('open', 'in_progress', 'blocked')
+           AND (
+               t.blocked_reason IS NOT NULL
+               OR EXISTS (
+                   SELECT 1 FROM task_deps d
+                   JOIN tasks dep ON dep.task_id = d.depends_on
+                   WHERE d.task_id = t.task_id
+                     AND dep.status NOT IN ('done', 'cancelled')
+               )
+           )",
+        [],
+        |row| row.get(0),
+    )?;
+
+    Ok((ready as usize, blocked as usize))
+}
+
 /// Check if a task exists in the projection.
 pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
     let count: i64 = conn.query_row(
@@ -460,5 +568,40 @@ mod tests {
         set_status(&conn, "t1", "cancelled");
         let unblocked = list_newly_unblocked(&conn, "t1").unwrap();
         assert_eq!(unblocked, vec!["t2"]);
+    }
+
+    #[test]
+    fn test_get_dependency_summary() {
+        let conn = setup();
+        create_task(&conn, "t1", "Dep 1", 2);
+        create_task(&conn, "t2", "Dep 2", 2);
+        create_task(&conn, "t3", "Has deps", 1);
+        add_dep(&conn, "t3", "t1");
+        add_dep(&conn, "t3", "t2");
+
+        let summary = get_dependency_summary(&conn, "t3").unwrap();
+        assert_eq!(summary.total_deps, 2);
+        assert_eq!(summary.done_deps, 0);
+        assert_eq!(summary.blocking_task_ids.len(), 2);
+
+        // Complete one dep
+        set_status(&conn, "t1", "done");
+        let summary = get_dependency_summary(&conn, "t3").unwrap();
+        assert_eq!(summary.total_deps, 2);
+        assert_eq!(summary.done_deps, 1);
+        assert_eq!(summary.blocking_task_ids, vec!["t2"]);
+    }
+
+    #[test]
+    fn test_count_ready_blocked() {
+        let conn = setup();
+        create_task(&conn, "t1", "Ready 1", 2);
+        create_task(&conn, "t2", "Ready 2", 1);
+        create_task(&conn, "t3", "Blocked", 1);
+        add_dep(&conn, "t3", "t1");
+
+        let (ready, blocked) = count_ready_blocked(&conn).unwrap();
+        assert_eq!(ready, 2);
+        assert_eq!(blocked, 1);
     }
 }
