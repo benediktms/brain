@@ -22,6 +22,12 @@ pub enum BrainCoreError {
 
     #[error("schema version error: {0}")]
     SchemaVersion(String),
+
+    #[error("task event error: {0}")]
+    TaskEvent(String),
+
+    #[error("task dependency cycle: {0}")]
+    TaskCycle(String),
 }
 
 impl From<rusqlite::Error> for BrainCoreError {
