@@ -50,7 +50,7 @@ pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
          ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC",
     )?;
 
-    let rows = stmt.query_map([], |row| row_to_task(row))?;
+    let rows = stmt.query_map([], row_to_task)?;
     let mut result = Vec::new();
     for row in rows {
         result.push(row?);
@@ -77,7 +77,7 @@ pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
          ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC",
     )?;
 
-    let rows = stmt.query_map([], |row| row_to_task(row))?;
+    let rows = stmt.query_map([], row_to_task)?;
     let mut result = Vec::new();
     for row in rows {
         result.push(row?);
@@ -94,7 +94,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<TaskRow>> {
          ORDER BY priority ASC, due_ts ASC NULLS LAST, updated_at DESC, task_id ASC",
     )?;
 
-    let rows = stmt.query_map([], |row| row_to_task(row))?;
+    let rows = stmt.query_map([], row_to_task)?;
     let mut result = Vec::new();
     for row in rows {
         result.push(row?);
@@ -110,7 +110,7 @@ pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
                     due_ts, created_at, updated_at
              FROM tasks WHERE task_id = ?1",
             [task_id],
-            |row| row_to_task(row),
+            row_to_task,
         )
         .ok();
 

@@ -61,17 +61,17 @@ impl TaskStore {
 
     /// List tasks that are ready to work on (no unresolved deps, not blocked).
     pub fn list_ready(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_conn(|conn| queries::list_ready(conn))
+        self.db.with_conn(queries::list_ready)
     }
 
     /// List tasks that are blocked (unresolved deps or explicit blocked_reason).
     pub fn list_blocked(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_conn(|conn| queries::list_blocked(conn))
+        self.db.with_conn(queries::list_blocked)
     }
 
     /// List all tasks.
     pub fn list_all(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_conn(|conn| queries::list_all(conn))
+        self.db.with_conn(queries::list_all)
     }
 
     /// Get a single task by ID.
