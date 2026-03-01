@@ -10,6 +10,40 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  commit-lint:
+    name: Commit Lint
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate PR commit messages
+        run: |
+          pattern='^(feat|fix|refactor|perf|docs|test|chore|ci|build)(\([a-zA-Z0-9_/-]+\))?!?: .+'
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          failed=0
+          while IFS= read -r msg; do
+            # Skip merge commits, revert commits, fixup/squash commits
+            case "$msg" in
+              Merge\ *|Revert\ *|fixup\!*|squash\!*) continue ;;
+            esac
+            if ! echo "$msg" | grep -qE "$pattern"; then
+              echo "FAIL: $msg"
+              failed=1
+            else
+              echo "OK:   $msg"
+            fi
+          done < <(git log --format=%s "$base..$head")
+          if [ "$failed" -eq 1 ]; then
+            echo ""
+            echo "One or more commit messages do not follow Conventional Commits."
+            echo "Allowed types: feat, fix, refactor, perf, docs, test, chore, ci, build"
+            echo "Format: <type>[(scope)][!]: <description>"
+            exit 1
+          fi
+
   check:
     name: Check
     runs-on: ubuntu-latest

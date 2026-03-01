@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Delegate to project-level commit-msg hook
+exec "$(git rev-parse --show-toplevel)/.githooks/commit-msg" "$@"

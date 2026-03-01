@@ -20,6 +20,10 @@ uuid = { version = "1", features = ["v7"] }
 
 # Optimize candle crates in dev builds for usable embedding speed.
 # opt-level 1 enables SIMD vectorization with minimal compile-time cost.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
 [profile.dev.package.candle-core]
 opt-level = 1
 

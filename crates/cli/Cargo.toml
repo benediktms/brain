@@ -2,6 +2,9 @@
 name = "cli"
 version.workspace = true
 edition.workspace = true
+repository = "https://github.com/benediktms/brain"
+description = "A local-first personal second brain with token-budgeted retrieval for AI agents"
+homepage = "https://github.com/benediktms/brain"
 
 [[bin]]
 name = "brain"
