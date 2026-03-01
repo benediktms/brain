@@ -150,6 +150,26 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["event_type", "payload"]
             }),
         },
+        ToolDefinition {
+            name: "tasks.next".into(),
+            description: "Get the next highest-priority ready task(s). Returns tasks with no unresolved dependencies, sorted by configurable policy. Includes dependency summary and linked notes for each task.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "policy": {
+                        "type": "string",
+                        "enum": ["priority", "due_date"],
+                        "description": "Sorting policy. 'priority' (default): by priority then due date. 'due_date': by due date then priority.",
+                        "default": "priority"
+                    },
+                    "k": {
+                        "type": "integer",
+                        "description": "Number of tasks to return. Default: 1",
+                        "default": 1
+                    }
+                }
+            }),
+        },
     ]
 }
 
@@ -161,6 +181,7 @@ pub async fn dispatch_tool_call(name: &str, params: &Value, ctx: &McpContext) ->
         "memory.write_episode" => handle_write_episode(params, ctx),
         "memory.reflect" => handle_reflect(params, ctx).await,
         "tasks.apply_event" => handle_tasks_apply_event(params, ctx),
+        "tasks.next" => handle_tasks_next(params, ctx),
         _ => ToolCallResult::error(format!("Unknown tool: {name}")),
     }
 }
@@ -689,6 +710,100 @@ fn handle_tasks_apply_event(params: &Value, ctx: &McpContext) -> ToolCallResult 
     ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
 }
 
+fn handle_tasks_next(params: &Value, ctx: &McpContext) -> ToolCallResult {
+    let policy = params
+        .get("policy")
+        .and_then(|v| v.as_str())
+        .unwrap_or("priority");
+
+    let k = params.get("k").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+
+    // Get ready tasks (already sorted by priority policy)
+    let ready_tasks = match ctx.tasks.list_ready() {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            error!(error = %e, "failed to list ready tasks");
+            return ToolCallResult::error(format!("Failed to list ready tasks: {e}"));
+        }
+    };
+
+    // Re-sort if due_date policy requested
+    let mut tasks = ready_tasks;
+    if policy == "due_date" {
+        tasks.sort_by(|a, b| {
+            // due_ts ASC NULLS LAST, then priority ASC, then task_id ASC
+            let due_cmp = match (a.due_ts, b.due_ts) {
+                (Some(a_ts), Some(b_ts)) => a_ts.cmp(&b_ts),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            };
+            due_cmp
+                .then(a.priority.cmp(&b.priority))
+                .then(a.task_id.cmp(&b.task_id))
+        });
+    }
+
+    // Take top-k
+    let selected: Vec<_> = tasks.into_iter().take(k).collect();
+
+    // Build response with dependency summaries and note links
+    let results_json: Vec<Value> = selected
+        .iter()
+        .map(|task| {
+            let dep_summary = ctx
+                .tasks
+                .get_dependency_summary(&task.task_id)
+                .unwrap_or_else(|_| crate::tasks::queries::DependencySummary {
+                    total_deps: 0,
+                    done_deps: 0,
+                    blocking_task_ids: vec![],
+                });
+
+            let note_links = ctx
+                .tasks
+                .get_task_note_links(&task.task_id)
+                .unwrap_or_default();
+
+            let linked_notes: Vec<Value> = note_links
+                .iter()
+                .map(|nl| {
+                    json!({
+                        "chunk_id": nl.chunk_id,
+                        "file_path": nl.file_path,
+                    })
+                })
+                .collect();
+
+            json!({
+                "task_id": task.task_id,
+                "title": task.title,
+                "description": task.description,
+                "status": task.status,
+                "priority": task.priority,
+                "due_ts": task.due_ts,
+                "dependency_summary": {
+                    "total_deps": dep_summary.total_deps,
+                    "done_deps": dep_summary.done_deps,
+                    "blocking_tasks": dep_summary.blocking_task_ids,
+                },
+                "linked_notes": linked_notes,
+            })
+        })
+        .collect();
+
+    // Get aggregate counts
+    let (ready_count, blocked_count) = ctx.tasks.count_ready_blocked().unwrap_or((0, 0));
+
+    let response = json!({
+        "results": results_json,
+        "ready_count": ready_count,
+        "blocked_count": blocked_count,
+    });
+
+    ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,7 +811,7 @@ mod tests {
     #[test]
     fn test_tool_definitions_valid() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 5);
+        assert_eq!(defs.len(), 6);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
@@ -704,6 +819,7 @@ mod tests {
         assert!(names.contains(&"memory.write_episode"));
         assert!(names.contains(&"memory.reflect"));
         assert!(names.contains(&"tasks.apply_event"));
+        assert!(names.contains(&"tasks.next"));
 
         // All should have valid JSON schemas
         for def in &defs {
@@ -962,6 +1078,137 @@ mod tests {
         let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("task_id"));
+    }
+
+    #[test]
+    fn test_tasks_next_returns_highest_priority() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        // Create tasks with different priorities
+        for (id, title, priority) in &[("t1", "Low", 4), ("t2", "High", 1), ("t3", "Medium", 2)] {
+            let p = json!({
+                "event_type": "task_created",
+                "task_id": id,
+                "payload": { "title": title, "priority": priority }
+            });
+            rt.block_on(dispatch_tool_call("tasks.apply_event", &p, &ctx));
+        }
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let results = parsed["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["task_id"], "t2");
+        assert_eq!(results[0]["priority"], 1);
+        assert_eq!(parsed["ready_count"], 3);
+        assert_eq!(parsed["blocked_count"], 0);
+    }
+
+    #[test]
+    fn test_tasks_next_excludes_blocked() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        // t1 (P2), t2 (P1) depends on t1
+        let p1 = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Blocker", "priority": 2 }
+        });
+        let p2 = json!({
+            "event_type": "task_created",
+            "task_id": "t2",
+            "payload": { "title": "Blocked", "priority": 1 }
+        });
+        let dep = json!({
+            "event_type": "dependency_added",
+            "task_id": "t2",
+            "payload": { "depends_on_task_id": "t1" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &p1, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &p2, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &dep, &ctx));
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let results = parsed["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["task_id"], "t1"); // t2 is blocked
+        assert_eq!(parsed["ready_count"], 1);
+        assert_eq!(parsed["blocked_count"], 1);
+    }
+
+    #[test]
+    fn test_tasks_next_k_multiple() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        for (id, title) in &[("t1", "Task 1"), ("t2", "Task 2"), ("t3", "Task 3")] {
+            let p = json!({
+                "event_type": "task_created",
+                "task_id": id,
+                "payload": { "title": title, "priority": 2 }
+            });
+            rt.block_on(dispatch_tool_call("tasks.apply_event", &p, &ctx));
+        }
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({ "k": 2 }), &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["results"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_tasks_next_empty() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["results"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["ready_count"], 0);
+    }
+
+    #[test]
+    fn test_tasks_next_includes_dependency_summary() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        // Create t1 (done), t2 depends on t1 (now ready)
+        let p1 = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Done task", "priority": 2 }
+        });
+        let p2 = json!({
+            "event_type": "task_created",
+            "task_id": "t2",
+            "payload": { "title": "Ready task", "priority": 1 }
+        });
+        let dep = json!({
+            "event_type": "dependency_added",
+            "task_id": "t2",
+            "payload": { "depends_on_task_id": "t1" }
+        });
+        let done = json!({
+            "event_type": "status_changed",
+            "task_id": "t1",
+            "payload": { "new_status": "done" }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &p1, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &p2, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &dep, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &done, &ctx));
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let task = &parsed["results"][0];
+        assert_eq!(task["task_id"], "t2");
+        assert_eq!(task["dependency_summary"]["total_deps"], 1);
+        assert_eq!(task["dependency_summary"]["done_deps"], 1);
+        assert_eq!(task["dependency_summary"]["blocking_tasks"].as_array().unwrap().len(), 0);
     }
 
     async fn create_test_context() -> McpContext {
