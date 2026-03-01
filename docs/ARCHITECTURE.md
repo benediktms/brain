@@ -496,24 +496,19 @@ sequenceDiagram
 
 ## Memory Architecture
 
-```
-                    Token Cost
-                    High ──────────────────── Low
-                    │                          │
-    Tier 1          │  Raw Chunks              │
-    (Episodic)      │  Full markdown text       │
-                    │  384-dim embeddings       │
-                    │                          │
-    Tier 2          │         Structured Meta   │
-    (Semantic)      │         Tags, backlinks   │
-                    │         Tasks, timestamps  │
-                    │                          │
-    Tier 3          │              Summaries    │
-    (Procedural)    │              Reflections  │
-                    │              2-sent stubs │
-                    │                          │
-                    High ──────────────────── Low
-                    Recall
+```mermaid
+quadrantChart
+    title Memory Tiers
+    x-axis "High Token Cost" --> "Low Token Cost"
+    y-axis "Low Recall" --> "High Recall"
+    Tier 1 Episodic - Raw Chunks: [0.15, 0.85]
+    Tier 1 Episodic - Full Markdown: [0.2, 0.8]
+    Tier 1 Episodic - 384-dim Embeddings: [0.25, 0.75]
+    Tier 2 Semantic - Tags & Backlinks: [0.45, 0.55]
+    Tier 2 Semantic - Tasks & Timestamps: [0.55, 0.45]
+    Tier 3 Procedural - Summaries: [0.75, 0.25]
+    Tier 3 Procedural - Reflections: [0.8, 0.2]
+    Tier 3 Procedural - 2-sent Stubs: [0.85, 0.15]
 ```
 
 The retrieval policy is **progressive and budget-first**:
