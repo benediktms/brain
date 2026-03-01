@@ -58,6 +58,8 @@ notes = ["~/notes"]
 - A brain can index multiple note directories (e.g., `docs/` and `notes/` from one project)
 - Moving a project just means updating the path in the registry
 - No symlinks — just paths in config files
+- Note links (`NoteLinked` events) are intentionally soft references — no chunk existence validation at write time. This enables future cross-brain chunk references without schema changes
+- Cross-brain references (Phase 4): separate `Option<String>` brain field on dependency/note-link payloads, not composite `brain:id` strings. NULL = local (zero-cost common case), non-NULL = cross-brain soft reference. Separate field enables efficient SQLite indexing, clean JOINs, and `WHERE brain IS NOT NULL` stale-ref queries
 
 ## System Architecture
 
