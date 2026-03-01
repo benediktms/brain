@@ -4,7 +4,7 @@ pub mod import_beads;
 pub mod projections;
 pub mod queries;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::db::Db;
 use crate::error::{BrainCoreError, Result};
@@ -119,6 +119,17 @@ impl TaskStore {
     /// Count of ready and blocked tasks.
     pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
         self.db.with_conn(queries::count_ready_blocked)
+    }
+
+    /// Sync the SQLite projection from beads JSONL.
+    ///
+    /// Beads is the source of truth — the projection is rebuilt from scratch.
+    /// Does NOT write to brain's events.jsonl.
+    pub fn sync_from_beads(&self, jsonl_path: &Path) -> Result<import_beads::ImportReport> {
+        let (events, report) = import_beads::generate_events_from_beads(jsonl_path)?;
+        self.db
+            .with_conn(|conn| projections::rebuild(conn, &events))?;
+        Ok(report)
     }
 
     /// Validate an event before writing it to the log.

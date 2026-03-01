@@ -164,24 +164,22 @@ fn read_beads_issues(path: &Path) -> Result<Vec<BeadsIssue>> {
     Ok(issues)
 }
 
-/// Import beads issues into the brain task system.
+/// Generate events from beads JSONL without applying them.
 ///
 /// Uses a three-pass approach:
 /// 1. Create all tasks (+ labels + comments)
 /// 2. Wire up relationships (block deps + parent-child)
 /// 3. Apply status changes (closed/in_progress)
-pub fn import_beads_issues(
-    jsonl_path: &Path,
-    task_store: &TaskStore,
-    dry_run: bool,
-) -> Result<ImportReport> {
+///
+/// Returns (events, report). Has no side effects.
+pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, ImportReport)> {
     let issues = read_beads_issues(jsonl_path)?;
     let mut report = ImportReport::default();
 
     // Build a set of all issue IDs for relationship validation
     let issue_ids: HashMap<&str, &BeadsIssue> = issues.iter().map(|i| (i.id.as_str(), i)).collect();
 
-    // Collect all events so we can either apply or just count them
+    // Collect all events
     let mut all_events: Vec<TaskEvent> = Vec::new();
 
     // -- Pass 1: Create tasks + labels + comments --
@@ -381,21 +379,21 @@ pub fn import_beads_issues(
                 all_events.push(status_event);
 
                 // Add close_reason as a comment if present
-                if let Some(reason) = &issue.close_reason {
-                    if !reason.is_empty() {
-                        let comment_event = TaskEvent {
-                            event_id: new_event_id(),
-                            task_id: issue.id.clone(),
-                            timestamp: closed_ts,
-                            actor: "beads-import".to_string(),
-                            event_type: EventType::CommentAdded,
-                            payload: serde_json::to_value(CommentPayload {
-                                body: format!("[close_reason] {reason}"),
-                            })
-                            .unwrap(),
-                        };
-                        all_events.push(comment_event);
-                    }
+                if let Some(reason) = &issue.close_reason
+                    && !reason.is_empty()
+                {
+                    let comment_event = TaskEvent {
+                        event_id: new_event_id(),
+                        task_id: issue.id.clone(),
+                        timestamp: closed_ts,
+                        actor: "beads-import".to_string(),
+                        event_type: EventType::CommentAdded,
+                        payload: serde_json::to_value(CommentPayload {
+                            body: format!("[close_reason] {reason}"),
+                        })
+                        .unwrap(),
+                    };
+                    all_events.push(comment_event);
                 }
             }
             "in_progress" => {
@@ -423,12 +421,24 @@ pub fn import_beads_issues(
     }
 
     report.events_generated = all_events.len();
+    Ok((all_events, report))
+}
+
+/// Import beads issues into the brain task system (one-time import).
+///
+/// Generates events from beads JSONL and appends them to brain's event log.
+pub fn import_beads_issues(
+    jsonl_path: &Path,
+    task_store: &TaskStore,
+    dry_run: bool,
+) -> Result<ImportReport> {
+    let (all_events, report) = generate_events_from_beads(jsonl_path)?;
 
     if dry_run {
         return Ok(report);
     }
 
-    // Apply all events
+    // Apply all events via append (validates + writes to JSONL + updates projection)
     for event in &all_events {
         task_store.append(event).map_err(|e| {
             BrainCoreError::TaskEvent(format!(
@@ -714,5 +724,119 @@ mod tests {
 
         let t = store.get_task("t1").unwrap().unwrap();
         assert_eq!(t.task_type, "epic");
+    }
+
+    // -- sync tests (projection-only rebuild from beads) --
+
+    #[test]
+    fn test_sync_idempotent() {
+        let (dir, store) = setup();
+        let issues = vec![
+            make_issue("t1", "Task 1", "open", 2),
+            make_issue("t2", "Task 2", "closed", 1),
+        ];
+        let path = write_jsonl(dir.path(), &issues);
+
+        let r1 = store.sync_from_beads(&path).unwrap();
+        assert_eq!(r1.issues_imported, 2);
+
+        let all1 = store.list_all().unwrap();
+        assert_eq!(all1.len(), 2);
+
+        // Sync again — same result
+        let r2 = store.sync_from_beads(&path).unwrap();
+        assert_eq!(r2.issues_imported, 2);
+
+        let all2 = store.list_all().unwrap();
+        assert_eq!(all2.len(), 2);
+
+        // Verify data integrity after double sync
+        let t1 = store.get_task("t1").unwrap().unwrap();
+        assert_eq!(t1.title, "Task 1");
+        assert_eq!(t1.status, "open");
+        let t2 = store.get_task("t2").unwrap().unwrap();
+        assert_eq!(t2.status, "done");
+    }
+
+    #[test]
+    fn test_sync_picks_up_new_issue() {
+        let (dir, store) = setup();
+        let issues = vec![make_issue("t1", "Task 1", "open", 2)];
+        let path = write_jsonl(dir.path(), &issues);
+
+        store.sync_from_beads(&path).unwrap();
+        assert_eq!(store.list_all().unwrap().len(), 1);
+
+        // Add a second issue and re-sync
+        let issues = vec![
+            make_issue("t1", "Task 1", "open", 2),
+            make_issue("t2", "Task 2", "open", 1),
+        ];
+        write_jsonl(dir.path(), &issues);
+
+        store.sync_from_beads(&path).unwrap();
+        assert_eq!(store.list_all().unwrap().len(), 2);
+        assert!(store.get_task("t2").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_sync_picks_up_status_change() {
+        let (dir, store) = setup();
+        let issues = vec![make_issue("t1", "Task 1", "open", 2)];
+        let path = write_jsonl(dir.path(), &issues);
+
+        store.sync_from_beads(&path).unwrap();
+        assert_eq!(store.get_task("t1").unwrap().unwrap().status, "open");
+
+        // Change status to closed and re-sync
+        let mut closed = make_issue("t1", "Task 1", "closed", 2);
+        closed["closed_at"] = serde_json::json!("2026-02-26T10:00:00Z");
+        write_jsonl(dir.path(), &[closed]);
+
+        store.sync_from_beads(&path).unwrap();
+        assert_eq!(store.get_task("t1").unwrap().unwrap().status, "done");
+    }
+
+    #[test]
+    fn test_sync_removes_deleted_issue() {
+        let (dir, store) = setup();
+        let issues = vec![
+            make_issue("t1", "Task 1", "open", 2),
+            make_issue("t2", "Task 2", "open", 1),
+        ];
+        let path = write_jsonl(dir.path(), &issues);
+
+        store.sync_from_beads(&path).unwrap();
+        assert_eq!(store.list_all().unwrap().len(), 2);
+
+        // Remove t2 from JSONL and re-sync
+        let issues = vec![make_issue("t1", "Task 1", "open", 2)];
+        write_jsonl(dir.path(), &issues);
+
+        store.sync_from_beads(&path).unwrap();
+        let all = store.list_all().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].task_id, "t1");
+        assert!(store.get_task("t2").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_generate_events_does_not_write() {
+        let (dir, _store) = setup();
+        let issues = vec![
+            make_issue("t1", "Task 1", "open", 2),
+            make_issue("t2", "Task 2", "closed", 1),
+        ];
+        let path = write_jsonl(dir.path(), &issues);
+
+        let (events, report) = generate_events_from_beads(&path).unwrap();
+
+        // Should have generated events without side effects
+        assert_eq!(report.issues_imported, 2);
+        assert!(!events.is_empty());
+
+        // The store should still be empty (generate doesn't touch it)
+        let store_all = _store.list_all().unwrap();
+        assert!(store_all.is_empty());
     }
 }
