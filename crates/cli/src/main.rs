@@ -113,7 +113,7 @@ enum TasksAction {
         format: String,
 
         /// Output directory
-        #[arg(long, default_value = ".brain/_tasks")]
+        #[arg(long, default_value = ".brain/tasks/projections")]
         dir: PathBuf,
     },
 }
