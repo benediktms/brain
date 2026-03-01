@@ -16,3 +16,9 @@ install-path = "CARGO_HOME"
 hosting = "github"
 install-updater = false
 pr-run-mode = "upload"
+
+[dist.dependencies.homebrew]
+protobuf = { stage = ["build"] }
+
+[dist.dependencies.apt]
+protobuf-compiler = { stage = ["build"] }
