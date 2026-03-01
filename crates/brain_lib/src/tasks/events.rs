@@ -198,7 +198,7 @@ mod tests {
 
         let mut file = OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file, "{{not valid json").unwrap();
-        writeln!(file, "").unwrap(); // empty line
+        writeln!(file).unwrap(); // empty line
         drop(file);
 
         let ev2 = sample_event("t2", EventType::TaskCreated);
