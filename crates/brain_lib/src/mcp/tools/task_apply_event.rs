@@ -63,15 +63,13 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let payload = {
         let mut p = payload;
         for field in &["defer_until", "due_ts"] {
-            if let Some(val) = p.get(*field) {
-                if val.is_string() {
-                    match parse_timestamp(val) {
-                        Some(ts) => p[*field] = json!(ts),
-                        None => {
-                            return ToolCallResult::error(format!(
-                                "Invalid timestamp for '{field}': expected ISO 8601 string or integer"
-                            ));
-                        }
+            if let Some(val) = p.get(*field).filter(|v| v.is_string()) {
+                match parse_timestamp(val) {
+                    Some(ts) => p[*field] = json!(ts),
+                    None => {
+                        return ToolCallResult::error(format!(
+                            "Invalid timestamp for '{field}': expected ISO 8601 string or integer"
+                        ));
                     }
                 }
             }
