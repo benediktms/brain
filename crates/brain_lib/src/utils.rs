@@ -3,6 +3,14 @@ use tracing::warn;
 
 use crate::tasks::queries::TaskRow;
 
+/// Current time as Unix seconds.
+pub fn now_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 /// Convert a Unix-seconds timestamp to an ISO 8601 / RFC 3339 string.
 pub fn ts_to_iso(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)

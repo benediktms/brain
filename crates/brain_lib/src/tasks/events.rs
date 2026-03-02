@@ -276,10 +276,7 @@ pub fn new_event_id() -> String {
 
 /// Current time as unix seconds.
 pub fn now_ts() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+    crate::utils::now_ts()
 }
 
 /// Append a single event to the JSONL file.
