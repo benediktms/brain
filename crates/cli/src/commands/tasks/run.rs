@@ -148,25 +148,25 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
     let tasks: Vec<_> = tasks
         .into_iter()
         .filter(|t| {
-            if let Some(ref s) = params.status {
-                if t.status != *s {
-                    return false;
-                }
+            if let Some(ref s) = params.status
+                && t.status != *s
+            {
+                return false;
             }
-            if let Some(p) = params.priority {
-                if t.priority != p {
-                    return false;
-                }
+            if let Some(p) = params.priority
+                && t.priority != p
+            {
+                return false;
             }
-            if let Some(ref tt) = params.task_type {
-                if t.task_type != *tt {
-                    return false;
-                }
+            if let Some(ref tt) = params.task_type
+                && t.task_type != *tt
+            {
+                return false;
             }
-            if let Some(ref a) = params.assignee {
-                if t.assignee.as_deref() != Some(a.as_str()) {
-                    return false;
-                }
+            if let Some(ref a) = params.assignee
+                && t.assignee.as_deref() != Some(a.as_str())
+            {
+                return false;
             }
             true
         })
@@ -195,8 +195,8 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         }
 
         println!(
-            "{:<4} {:<12} {:<6} {:<10} {:<38} {}",
-            "PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"
+            "{:<4} {:<12} {:<6} {:<10} {:<38} TITLE",
+            "PRI", "STATUS", "TYPE", "ASSIGNEE", "ID"
         );
         println!("{}", "\u{2500}".repeat(100));
 
