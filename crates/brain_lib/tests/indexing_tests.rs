@@ -603,3 +603,108 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
         .unwrap();
     assert_eq!(new_count, 2);
 }
+
+// ─── Batch indexing tests ────────────────────────────────────────
+
+#[tokio::test]
+async fn test_batch_index_multiple_files() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    let paths: Vec<PathBuf> = (0..5)
+        .map(|i| {
+            write_md(
+                &notes_dir,
+                &format!("file_{i}.md"),
+                &format!("# File {i}\n\nContent {i}."),
+            )
+        })
+        .collect();
+
+    let stats = pipeline.index_files_batch(&paths).await.unwrap();
+    assert_eq!(stats.indexed, 5);
+    assert_eq!(stats.skipped, 0);
+    assert_eq!(stats.errors, 0);
+}
+
+#[tokio::test]
+async fn test_batch_index_skips_unchanged() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    let paths: Vec<PathBuf> = (0..3)
+        .map(|i| {
+            write_md(
+                &notes_dir,
+                &format!("file_{i}.md"),
+                &format!("# File {i}\n\nContent {i}."),
+            )
+        })
+        .collect();
+
+    let stats = pipeline.index_files_batch(&paths).await.unwrap();
+    assert_eq!(stats.indexed, 3);
+
+    let stats = pipeline.index_files_batch(&paths).await.unwrap();
+    assert_eq!(stats.indexed, 0);
+    assert_eq!(stats.skipped, 3);
+}
+
+#[tokio::test]
+async fn test_batch_index_mixed_changed_unchanged() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    let paths: Vec<PathBuf> = (0..3)
+        .map(|i| {
+            write_md(
+                &notes_dir,
+                &format!("file_{i}.md"),
+                &format!("# File {i}\n\nContent {i}."),
+            )
+        })
+        .collect();
+
+    pipeline.index_files_batch(&paths).await.unwrap();
+
+    // Modify only file_1
+    std::fs::write(&paths[1], "# File 1\n\nUpdated content.").unwrap();
+
+    let stats = pipeline.index_files_batch(&paths).await.unwrap();
+    assert_eq!(stats.indexed, 1);
+    assert_eq!(stats.skipped, 2);
+}
+
+#[tokio::test]
+async fn test_batch_index_nonexistent_file_continues() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    let good = write_md(&notes_dir, "good.md", "# Good\n\nValid file.");
+    let bad: PathBuf = notes_dir.join("nonexistent.md");
+
+    let stats = pipeline.index_files_batch(&[good, bad]).await.unwrap();
+    assert_eq!(stats.indexed, 1);
+    assert_eq!(stats.errors, 1);
+}
+
+#[tokio::test]
+async fn test_batch_index_empty_file() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    let empty_path = write_md(&notes_dir, "empty.md", "");
+    let normal_path = write_md(&notes_dir, "normal.md", "# Normal\n\nHas content.");
+
+    let stats = pipeline
+        .index_files_batch(&[empty_path, normal_path])
+        .await
+        .unwrap();
+    assert_eq!(stats.indexed, 2);
+    assert_eq!(stats.errors, 0);
+}

@@ -1,7 +1,9 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use brain_lib::prelude::*;
+use brain_lib::watcher::coalesce_events;
 use tracing::info;
 
 /// Watch a directory for changes and re-index incrementally.
@@ -32,14 +34,41 @@ pub async fn run(
 
     info!("watching for changes... (press Ctrl+C to stop)");
 
-    // Event loop: process file events or shutdown on signal
+    // Event loop: batch-drain, coalesce, and dispatch
     loop {
         tokio::select! {
             event = rx.recv() => {
                 match event {
-                    Some(evt) => {
-                        if let Err(e) = pipeline.handle_event(evt).await {
-                            tracing::warn!(error = %e, "error handling file event");
+                    Some(first) => {
+                        // 1. Drain: collect first + any ready events (50ms window)
+                        let mut raw = vec![first];
+                        let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
+                        while let Ok(Some(evt)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+                            raw.push(evt);
+                        }
+
+                        // 2. Coalesce
+                        let (renames, index_paths, delete_paths) = coalesce_events(raw);
+
+                        // 3. Process renames
+                        for (from, to) in &renames {
+                            if let Err(e) = pipeline.rename_file(from, to).await {
+                                tracing::warn!(error = %e, "error handling rename");
+                            }
+                        }
+
+                        // 4. Process deletes
+                        for p in &delete_paths {
+                            if let Err(e) = pipeline.delete_file(p).await {
+                                tracing::warn!(error = %e, "error handling delete");
+                            }
+                        }
+
+                        // 5. Batch-index all changed/created files
+                        if !index_paths.is_empty()
+                            && let Err(e) = pipeline.index_files_batch(&index_paths).await
+                        {
+                            tracing::warn!(error = %e, "error in batch index");
                         }
                     }
                     None => {
