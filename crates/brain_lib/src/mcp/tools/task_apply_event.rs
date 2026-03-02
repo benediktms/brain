@@ -5,6 +5,8 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 use crate::tasks::events::{EventType, TaskEvent, new_event_id, now_ts};
 
+use super::timestamp::{parse_timestamp, ts_to_json};
+
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     // Parse event_type
     let event_type_str = match params.get("event_type").and_then(|v| v.as_str()) {
@@ -50,6 +52,26 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         .unwrap_or("mcp")
         .to_string();
 
+    // Normalize timestamp fields from ISO 8601 strings to i64 Unix seconds
+    let payload = {
+        let mut p = payload;
+        for field in &["defer_until", "due_ts"] {
+            if let Some(val) = p.get(*field) {
+                if val.is_string() {
+                    match parse_timestamp(val) {
+                        Some(ts) => p[*field] = json!(ts),
+                        None => {
+                            return ToolCallResult::error(format!(
+                                "Invalid timestamp for '{field}': expected ISO 8601 string or integer"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        p
+    };
+
     // For task_created, inject defaults if not provided
     let payload = if event_type == EventType::TaskCreated {
         let mut p = payload;
@@ -92,14 +114,14 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 "status": row.status,
                 "priority": row.priority,
                 "blocked_reason": row.blocked_reason,
-                "due_ts": row.due_ts,
+                "due_ts": ts_to_json(row.due_ts),
                 "task_type": row.task_type,
                 "assignee": row.assignee,
-                "defer_until": row.defer_until,
+                "defer_until": ts_to_json(row.defer_until),
                 "parent_task_id": row.parent_task_id,
                 "labels": labels,
-                "created_at": row.created_at,
-                "updated_at": row.updated_at,
+                "created_at": ts_to_json(Some(row.created_at)),
+                "updated_at": ts_to_json(Some(row.updated_at)),
             })
         }
         Ok(None) => json!(null),
@@ -431,5 +453,116 @@ mod tests {
         let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["task"]["task_type"], "task");
+    }
+
+    #[test]
+    fn test_iso8601_defer_until() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": {
+                "title": "Deferred task",
+                "defer_until": "2026-12-01T00:00:00Z"
+            }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert!(result.is_error.is_none(), "should succeed");
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        // Response should be ISO 8601 string
+        assert_eq!(parsed["task"]["defer_until"], "2026-12-01T00:00:00+00:00");
+
+        // Verify stored as i64 internally
+        let row = ctx.tasks.get_task("t1").unwrap().unwrap();
+        assert_eq!(row.defer_until, Some(1796083200));
+    }
+
+    #[test]
+    fn test_integer_defer_until_backward_compat() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": {
+                "title": "Deferred task int",
+                "defer_until": 1796083200
+            }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert!(result.is_error.is_none(), "should succeed");
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        // Response should still be ISO 8601 string
+        assert_eq!(parsed["task"]["defer_until"], "2026-12-01T00:00:00+00:00");
+
+        let row = ctx.tasks.get_task("t1").unwrap().unwrap();
+        assert_eq!(row.defer_until, Some(1796083200));
+    }
+
+    #[test]
+    fn test_iso8601_due_ts() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": {
+                "title": "Due task",
+                "due_ts": "2026-06-15T12:00:00Z"
+            }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["task"]["due_ts"], "2026-06-15T12:00:00+00:00");
+    }
+
+    #[test]
+    fn test_timestamps_returned_as_iso_strings() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Timestamp check" }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+
+        // created_at and updated_at should be ISO strings, not integers
+        assert!(parsed["task"]["created_at"].is_string());
+        assert!(parsed["task"]["updated_at"].is_string());
+        // They should be parseable as RFC 3339
+        let created = parsed["task"]["created_at"].as_str().unwrap();
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(created).is_ok(),
+            "created_at should be valid RFC 3339"
+        );
+    }
+
+    #[test]
+    fn test_invalid_iso_timestamp_rejected() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = rt.block_on(async { create_test_context().await });
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": {
+                "title": "Bad timestamp",
+                "defer_until": "not-a-date"
+            }
+        });
+        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("Invalid timestamp"));
     }
 }

@@ -5,6 +5,7 @@ mod mem_search_minimal;
 mod mem_write_episode;
 mod task_apply_event;
 mod task_next;
+mod timestamp;
 
 use serde_json::{Value, json};
 
@@ -141,7 +142,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "payload": {
                         "type": "object",
-                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?, parent_task_id?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}. parent_set: {parent_task_id?} (null to clear)."
+                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?, parent_task_id?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}. parent_set: {parent_task_id?} (null to clear). Timestamps (due_ts, defer_until) accept ISO 8601 strings (preferred, e.g. \"2026-03-15T00:00:00Z\") or Unix-seconds integers. Responses always return timestamps as ISO 8601 strings."
                     }
                 },
                 "required": ["event_type", "payload"]
