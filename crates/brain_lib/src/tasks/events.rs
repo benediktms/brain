@@ -94,11 +94,13 @@ pub struct TaskCreatedPayload {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default = "default_priority")]
     pub priority: i32,
+    #[serde(default)]
     pub status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due_ts: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_task_type", skip_serializing_if = "Option::is_none")]
     pub task_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
@@ -106,6 +108,20 @@ pub struct TaskCreatedPayload {
     pub defer_until: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
+}
+
+fn default_priority() -> i32 {
+    4
+}
+
+fn default_task_type() -> Option<String> {
+    Some("task".to_string())
+}
+
+impl Default for TaskStatus {
+    fn default() -> Self {
+        TaskStatus::Open
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

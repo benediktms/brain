@@ -3,7 +3,7 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::tasks::events::{EventType, TaskEvent, TaskStatus, new_event_id};
+use crate::tasks::events::{EventType, TaskCreatedPayload, TaskEvent, TaskStatus, new_event_id};
 
 use crate::utils::{parse_timestamp, task_row_to_json};
 
@@ -77,19 +77,14 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         p
     };
 
-    // For task_created, inject defaults if not provided
+    // For task_created, apply domain defaults via serde round-trip through TaskCreatedPayload
     let payload = if event_type == EventType::TaskCreated {
-        let mut p = payload;
-        if p.get("status").is_none() {
-            p["status"] = json!("open");
+        match serde_json::from_value::<TaskCreatedPayload>(payload) {
+            Ok(typed) => serde_json::to_value(typed).unwrap(),
+            Err(e) => {
+                return ToolCallResult::error(format!("Invalid task_created payload: {e}"));
+            }
         }
-        if p.get("priority").is_none() {
-            p["priority"] = json!(4);
-        }
-        if p.get("task_type").is_none() {
-            p["task_type"] = json!("task");
-        }
-        p
     } else {
         payload
     };
