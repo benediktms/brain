@@ -3,9 +3,11 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::tasks::events::{EventType, TaskEvent, new_event_id, now_ts};
+use crate::tasks::events::{
+    EventType, TaskEvent, TaskStatus, CURRENT_EVENT_VERSION, new_event_id, now_ts,
+};
 
-use super::timestamp::{parse_timestamp, ts_to_json};
+use super::utils::{parse_timestamp, task_row_to_json};
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     // Parse event_type
@@ -20,7 +22,8 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
             return ToolCallResult::error(format!(
                 "Invalid event_type: '{event_type_str}'. Must be one of: task_created, \
                  task_updated, status_changed, dependency_added, dependency_removed, \
-                 note_linked, note_unlinked"
+                 note_linked, note_unlinked, label_added, label_removed, comment_added, \
+                 parent_set"
             ));
         }
     };
@@ -34,6 +37,9 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
 
     // Parse task_id: auto-generate for task_created if not provided
     let task_id = match params.get("task_id").and_then(|v| v.as_str()) {
+        Some(id) if id.len() > 256 => {
+            return ToolCallResult::error("task_id exceeds maximum length of 256 characters");
+        }
         Some(id) => id.to_string(),
         None => {
             if event_type == EventType::TaskCreated {
@@ -46,11 +52,14 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         }
     };
 
-    let actor = params
+    let actor_str = params
         .get("actor")
         .and_then(|v| v.as_str())
-        .unwrap_or("mcp")
-        .to_string();
+        .unwrap_or("mcp");
+    if actor_str.len() > 256 {
+        return ToolCallResult::error("actor exceeds maximum length of 256 characters");
+    }
+    let actor = actor_str.to_string();
 
     // Normalize timestamp fields from ISO 8601 strings to i64 Unix seconds
     let payload = {
@@ -95,6 +104,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         timestamp: now_ts(),
         actor,
         event_type: event_type.clone(),
+        event_version: CURRENT_EVENT_VERSION,
         payload,
     };
 
@@ -107,22 +117,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let task_json = match ctx.tasks.get_task(&task_id) {
         Ok(Some(row)) => {
             let labels = ctx.tasks.get_task_labels(&task_id).unwrap_or_default();
-            json!({
-                "task_id": row.task_id,
-                "title": row.title,
-                "description": row.description,
-                "status": row.status,
-                "priority": row.priority,
-                "blocked_reason": row.blocked_reason,
-                "due_ts": ts_to_json(row.due_ts),
-                "task_type": row.task_type,
-                "assignee": row.assignee,
-                "defer_until": ts_to_json(row.defer_until),
-                "parent_task_id": row.parent_task_id,
-                "labels": labels,
-                "created_at": ts_to_json(Some(row.created_at)),
-                "updated_at": ts_to_json(Some(row.updated_at)),
-            })
+            task_row_to_json(&row, labels)
         }
         Ok(None) => json!(null),
         Err(e) => {
@@ -138,7 +133,8 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
             .get("new_status")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if new_status == "done" || new_status == "cancelled" {
+        if new_status == TaskStatus::Done.as_ref() || new_status == TaskStatus::Cancelled.as_ref()
+        {
             ctx.tasks.list_newly_unblocked(&task_id).unwrap_or_default()
         } else {
             vec![]

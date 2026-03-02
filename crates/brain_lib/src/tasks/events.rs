@@ -15,7 +15,16 @@ pub struct TaskEvent {
     pub timestamp: i64,
     pub actor: String,
     pub event_type: EventType,
+    #[serde(default = "default_event_version")]
+    pub event_version: u32,
     pub payload: serde_json::Value,
+}
+
+/// The current event schema version. Bump when event payload format changes.
+pub const CURRENT_EVENT_VERSION: u32 = 1;
+
+fn default_event_version() -> u32 {
+    CURRENT_EVENT_VERSION
 }
 
 /// The set of event types for the task subsystem.
@@ -35,6 +44,49 @@ pub enum EventType {
     ParentSet,
 }
 
+/// Valid task statuses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Open,
+    InProgress,
+    Blocked,
+    Done,
+    Cancelled,
+}
+
+impl std::fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl AsRef<str> for TaskStatus {
+    fn as_ref(&self) -> &str {
+        match self {
+            TaskStatus::Open => "open",
+            TaskStatus::InProgress => "in_progress",
+            TaskStatus::Blocked => "blocked",
+            TaskStatus::Done => "done",
+            TaskStatus::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl std::str::FromStr for TaskStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "open" => Ok(TaskStatus::Open),
+            "in_progress" => Ok(TaskStatus::InProgress),
+            "blocked" => Ok(TaskStatus::Blocked),
+            "done" => Ok(TaskStatus::Done),
+            "cancelled" => Ok(TaskStatus::Cancelled),
+            _ => Err(format!("invalid task status: '{s}'")),
+        }
+    }
+}
+
 // -- Typed payloads --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +95,7 @@ pub struct TaskCreatedPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub priority: i32,
-    pub status: String,
+    pub status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due_ts: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,7 +130,7 @@ pub struct TaskUpdatedPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusChangedPayload {
-    pub new_status: String,
+    pub new_status: TaskStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +232,7 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type,
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::json!({"title": "Test task", "priority": 2, "status": "open"}),
         }
     }

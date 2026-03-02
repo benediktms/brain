@@ -4,7 +4,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 
-use super::timestamp::{ts_to_iso, ts_to_json};
+use super::utils::task_row_to_json;
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let policy = params
@@ -12,7 +12,11 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         .and_then(|v| v.as_str())
         .unwrap_or("priority");
 
-    let k = params.get("k").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+    let k = params
+        .get("k")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1)
+        .min(100) as usize;
 
     // Get ready tasks (already sorted by priority policy)
     let ready_tasks = match ctx.tasks.list_ready() {
@@ -73,27 +77,19 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 })
                 .collect();
 
-            json!({
-                "task_id": task.task_id,
-                "title": task.title,
-                "description": task.description,
-                "status": task.status,
-                "priority": task.priority,
-                "due_ts": ts_to_json(task.due_ts),
-                "task_type": task.task_type,
-                "assignee": task.assignee,
-                "defer_until": ts_to_json(task.defer_until),
-                "parent_task_id": task.parent_task_id,
-                "labels": labels,
-                "created_at": ts_to_iso(task.created_at),
-                "updated_at": ts_to_iso(task.updated_at),
-                "dependency_summary": {
-                    "total_deps": dep_summary.total_deps,
-                    "done_deps": dep_summary.done_deps,
-                    "blocking_tasks": dep_summary.blocking_task_ids,
-                },
-                "linked_notes": linked_notes,
-            })
+            let mut task_json = task_row_to_json(task, labels);
+            if let Some(obj) = task_json.as_object_mut() {
+                obj.insert(
+                    "dependency_summary".into(),
+                    json!({
+                        "total_deps": dep_summary.total_deps,
+                        "done_deps": dep_summary.done_deps,
+                        "blocking_tasks": dep_summary.blocking_task_ids,
+                    }),
+                );
+                obj.insert("linked_notes".into(), json!(linked_notes));
+            }
+            task_json
         })
         .collect();
 

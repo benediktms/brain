@@ -9,7 +9,8 @@ use crate::error::{BrainCoreError, Result};
 use super::TaskStore;
 use super::events::{
     CommentPayload, DependencyPayload, EventType, LabelPayload, ParentSetPayload,
-    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload, new_event_id, now_ts,
+    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskUpdatedPayload,
+    CURRENT_EVENT_VERSION, new_event_id, now_ts,
 };
 
 /// Summary of an import run.
@@ -204,11 +205,13 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                 .clone()
                 .unwrap_or_else(|| "beads-import".to_string()),
             event_type: EventType::TaskCreated,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskCreatedPayload {
                 title: issue.title.clone(),
                 description,
                 priority: issue.priority,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: None,
                 task_type: issue.issue_type.clone(),
                 assignee: issue.owner.clone(),
@@ -228,6 +231,8 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                 timestamp: created_ts,
                 actor: "beads-import".to_string(),
                 event_type: EventType::LabelAdded,
+
+                event_version: CURRENT_EVENT_VERSION,
                 payload: serde_json::to_value(LabelPayload {
                     label: label.clone(),
                 })
@@ -253,6 +258,8 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                     .clone()
                     .unwrap_or_else(|| "beads-import".to_string()),
                 event_type: EventType::CommentAdded,
+
+                event_version: CURRENT_EVENT_VERSION,
                 payload: serde_json::to_value(CommentPayload {
                     body: comment.text.clone(),
                 })
@@ -306,6 +313,8 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                         timestamp: dep_created_ts,
                         actor: "beads-import".to_string(),
                         event_type: EventType::DependencyAdded,
+
+                        event_version: CURRENT_EVENT_VERSION,
                         payload: serde_json::to_value(DependencyPayload {
                             depends_on_task_id: dep.issue_id.clone(),
                         })
@@ -340,6 +349,8 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                         timestamp: dep_created_ts,
                         actor: "beads-import".to_string(),
                         event_type: EventType::ParentSet,
+
+                        event_version: CURRENT_EVENT_VERSION,
                         payload: serde_json::to_value(ParentSetPayload {
                             parent_task_id: Some(dep.depends_on_id.clone()),
                         })
@@ -378,8 +389,10 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                     timestamp: closed_ts,
                     actor: "beads-import".to_string(),
                     event_type: EventType::StatusChanged,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(StatusChangedPayload {
-                        new_status: "done".to_string(),
+                        new_status: TaskStatus::Done,
                     })
                     .unwrap(),
                 };
@@ -395,6 +408,8 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                         timestamp: closed_ts,
                         actor: "beads-import".to_string(),
                         event_type: EventType::CommentAdded,
+
+                        event_version: CURRENT_EVENT_VERSION,
                         payload: serde_json::to_value(CommentPayload {
                             body: format!("[close_reason] {reason}"),
                         })
@@ -416,8 +431,10 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                     timestamp: updated_ts,
                     actor: "beads-import".to_string(),
                     event_type: EventType::StatusChanged,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(StatusChangedPayload {
-                        new_status: "in_progress".to_string(),
+                        new_status: TaskStatus::InProgress,
                     })
                     .unwrap(),
                 };
@@ -575,6 +592,8 @@ pub fn import_beads_issues(
                     timestamp: now,
                     actor: "beads-import".to_string(),
                     event_type: EventType::TaskUpdated,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(upd).unwrap(),
                 });
                 changed = true;
@@ -582,19 +601,21 @@ pub fn import_beads_issues(
 
             // Status diff
             let brain_status = match issue.status.as_str() {
-                "closed" => "done",
-                "in_progress" => "in_progress",
-                _ => "open",
+                "closed" => TaskStatus::Done,
+                "in_progress" => TaskStatus::InProgress,
+                _ => TaskStatus::Open,
             };
-            if brain_status != existing.status {
+            if brain_status.as_ref() != existing.status {
                 phase2.push(TaskEvent {
                     event_id: new_event_id(),
                     task_id: issue.id.clone(),
                     timestamp: now,
                     actor: "beads-import".to_string(),
                     event_type: EventType::StatusChanged,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(StatusChangedPayload {
-                        new_status: brain_status.to_string(),
+                        new_status: brain_status,
                     })
                     .unwrap(),
                 });
@@ -614,6 +635,8 @@ pub fn import_beads_issues(
                     timestamp: now,
                     actor: "beads-import".to_string(),
                     event_type: EventType::LabelAdded,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(LabelPayload {
                         label: label.to_string(),
                     })
@@ -628,6 +651,8 @@ pub fn import_beads_issues(
                     timestamp: now,
                     actor: "beads-import".to_string(),
                     event_type: EventType::LabelRemoved,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(LabelPayload {
                         label: label.to_string(),
                     })
@@ -656,6 +681,8 @@ pub fn import_beads_issues(
                     timestamp: now,
                     actor: "beads-import".to_string(),
                     event_type: EventType::DependencyAdded,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(DependencyPayload {
                         depends_on_task_id: dep.to_string(),
                     })
@@ -670,6 +697,8 @@ pub fn import_beads_issues(
                     timestamp: now,
                     actor: "beads-import".to_string(),
                     event_type: EventType::DependencyRemoved,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(DependencyPayload {
                         depends_on_task_id: dep.to_string(),
                     })
@@ -691,6 +720,8 @@ pub fn import_beads_issues(
                     timestamp: now,
                     actor: "beads-import".to_string(),
                     event_type: EventType::ParentSet,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(ParentSetPayload {
                         parent_task_id: exp_parent.map(|p| p.to_string()),
                     })
@@ -718,11 +749,13 @@ pub fn import_beads_issues(
                     .clone()
                     .unwrap_or_else(|| "beads-import".to_string()),
                 event_type: EventType::TaskCreated,
+
+                event_version: CURRENT_EVENT_VERSION,
                 payload: serde_json::to_value(TaskCreatedPayload {
                     title: issue.title.clone(),
                     description,
                     priority: issue.priority,
-                    status: "open".to_string(),
+                    status: TaskStatus::Open,
                     due_ts: None,
                     task_type: issue.issue_type.clone(),
                     assignee: issue.owner.clone(),
@@ -741,6 +774,8 @@ pub fn import_beads_issues(
                     timestamp: created_ts,
                     actor: "beads-import".to_string(),
                     event_type: EventType::LabelAdded,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(LabelPayload {
                         label: label.clone(),
                     })
@@ -765,6 +800,8 @@ pub fn import_beads_issues(
                         .clone()
                         .unwrap_or_else(|| "beads-import".to_string()),
                     event_type: EventType::CommentAdded,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(CommentPayload {
                         body: comment.text.clone(),
                     })
@@ -789,8 +826,10 @@ pub fn import_beads_issues(
                         timestamp: closed_ts,
                         actor: "beads-import".to_string(),
                         event_type: EventType::StatusChanged,
+
+                        event_version: CURRENT_EVENT_VERSION,
                         payload: serde_json::to_value(StatusChangedPayload {
-                            new_status: "done".to_string(),
+                            new_status: TaskStatus::Done,
                         })
                         .unwrap(),
                     });
@@ -804,6 +843,8 @@ pub fn import_beads_issues(
                             timestamp: closed_ts,
                             actor: "beads-import".to_string(),
                             event_type: EventType::CommentAdded,
+
+                            event_version: CURRENT_EVENT_VERSION,
                             payload: serde_json::to_value(CommentPayload {
                                 body: format!("[close_reason] {reason}"),
                             })
@@ -824,8 +865,10 @@ pub fn import_beads_issues(
                         timestamp: updated_ts,
                         actor: "beads-import".to_string(),
                         event_type: EventType::StatusChanged,
+
+                        event_version: CURRENT_EVENT_VERSION,
                         payload: serde_json::to_value(StatusChangedPayload {
-                            new_status: "in_progress".to_string(),
+                            new_status: TaskStatus::InProgress,
                         })
                         .unwrap(),
                     });
@@ -842,6 +885,8 @@ pub fn import_beads_issues(
                         timestamp: now,
                         actor: "beads-import".to_string(),
                         event_type: EventType::DependencyAdded,
+
+                        event_version: CURRENT_EVENT_VERSION,
                         payload: serde_json::to_value(DependencyPayload {
                             depends_on_task_id: dep_on.clone(),
                         })
@@ -858,6 +903,8 @@ pub fn import_beads_issues(
                     timestamp: now,
                     actor: "beads-import".to_string(),
                     event_type: EventType::ParentSet,
+
+                    event_version: CURRENT_EVENT_VERSION,
                     payload: serde_json::to_value(ParentSetPayload {
                         parent_task_id: Some(parent.clone()),
                     })

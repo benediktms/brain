@@ -253,11 +253,12 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::TaskCreated,
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskCreatedPayload {
                 title: title.to_string(),
                 description: None,
                 priority,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: None,
                 task_type: None,
                 assignee: None,
@@ -287,6 +288,7 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::DependencyAdded,
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(DependencyPayload {
                 depends_on_task_id: "t1".to_string(),
             })
@@ -311,8 +313,9 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::StatusChanged,
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(StatusChangedPayload {
-                new_status: "done".to_string(),
+                new_status: TaskStatus::Done,
             })
             .unwrap(),
         };
@@ -344,8 +347,9 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::StatusChanged,
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(StatusChangedPayload {
-                new_status: "done".to_string(),
+                new_status: TaskStatus::Done,
             })
             .unwrap(),
         };
@@ -367,6 +371,7 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::DependencyAdded,
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
             })
@@ -381,6 +386,7 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::DependencyAdded,
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(DependencyPayload {
                 depends_on_task_id: "t1".to_string(),
             })
@@ -402,6 +408,7 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::DependencyAdded,
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(DependencyPayload {
                 depends_on_task_id: "nonexistent".to_string(),
             })

@@ -22,7 +22,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                     event.task_id,
                     p.title,
                     p.description,
-                    p.status,
+                    p.status.as_ref(),
                     p.priority,
                     p.due_ts,
                     p.task_type.as_deref().unwrap_or("task"),
@@ -97,7 +97,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
 
             conn.execute(
                 "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE task_id = ?3",
-                rusqlite::params![p.new_status, event.timestamp, event.task_id],
+                rusqlite::params![p.new_status.as_ref(), event.timestamp, event.task_id],
             )?;
         }
 
@@ -239,7 +239,7 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::db::schema::init_schema;
-    use crate::tasks::events::{new_event_id, now_ts};
+    use crate::tasks::events::{CURRENT_EVENT_VERSION, TaskStatus, new_event_id, now_ts};
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -254,11 +254,13 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::TaskCreated,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskCreatedPayload {
                 title: title.to_string(),
                 description: None,
                 priority,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: None,
                 task_type: None,
                 assignee: None,
@@ -304,6 +306,8 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::TaskUpdated,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskUpdatedPayload {
                 title: Some("Updated".to_string()),
                 description: Some("A description".to_string()),
@@ -342,8 +346,10 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::StatusChanged,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(StatusChangedPayload {
-                new_status: "done".to_string(),
+                new_status: TaskStatus::Done,
             })
             .unwrap(),
         };
@@ -369,6 +375,8 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::DependencyAdded,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
             })
@@ -392,6 +400,8 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::DependencyRemoved,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
             })
@@ -420,6 +430,8 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::NoteLinked,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(NoteLinkPayload {
                 chunk_id: "c1".to_string(),
             })
@@ -442,6 +454,8 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::NoteUnlinked,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(NoteLinkPayload {
                 chunk_id: "c1".to_string(),
             })

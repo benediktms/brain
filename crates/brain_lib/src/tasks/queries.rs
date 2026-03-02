@@ -2,6 +2,8 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
+use super::events::TaskStatus;
+
 /// A row from the tasks projection table.
 #[derive(Debug, Clone)]
 pub struct TaskRow {
@@ -179,7 +181,7 @@ pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<Depend
     for row in rows {
         let (dep_id, status) = row?;
         total_deps += 1;
-        if status == "done" || status == "cancelled" {
+        if status == TaskStatus::Done.as_ref() || status == TaskStatus::Cancelled.as_ref() {
             done_deps += 1;
         } else {
             blocking_task_ids.push(dep_id);
@@ -385,11 +387,13 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::TaskCreated,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskCreatedPayload {
                 title: title.to_string(),
                 description: None,
                 priority,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: None,
                 task_type: None,
                 assignee: None,
@@ -408,8 +412,10 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::StatusChanged,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(StatusChangedPayload {
-                new_status: status.to_string(),
+                new_status: status.parse().unwrap(),
             })
             .unwrap(),
         };
@@ -423,6 +429,8 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::DependencyAdded,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(DependencyPayload {
                 depends_on_task_id: depends_on.to_string(),
             })
@@ -508,6 +516,8 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::TaskUpdated,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskUpdatedPayload {
                 title: None,
                 description: None,
@@ -574,11 +584,13 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::TaskCreated,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskCreatedPayload {
                 title: "Later due".to_string(),
                 description: None,
                 priority: 2,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: Some(2000),
                 task_type: None,
                 assignee: None,
@@ -593,11 +605,13 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::TaskCreated,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskCreatedPayload {
                 title: "Earlier due".to_string(),
                 description: None,
                 priority: 2,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: Some(1000),
                 task_type: None,
                 assignee: None,
@@ -612,11 +626,13 @@ mod tests {
             timestamp: now_ts(),
             actor: "user".to_string(),
             event_type: EventType::TaskCreated,
+
+            event_version: CURRENT_EVENT_VERSION,
             payload: serde_json::to_value(TaskCreatedPayload {
                 title: "No due date".to_string(),
                 description: None,
                 priority: 2,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: None,
                 task_type: None,
                 assignee: None,
