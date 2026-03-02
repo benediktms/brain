@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -12,7 +12,7 @@ pub fn get_or_create_file_id(conn: &Connection, path: &str) -> Result<(String, b
             [path],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .ok();
+        .optional()?;
 
     if let Some((file_id, deleted_at)) = existing {
         if deleted_at.is_some() {
@@ -37,15 +37,14 @@ pub fn get_or_create_file_id(conn: &Connection, path: &str) -> Result<(String, b
 
 /// Get the stored content hash for a file.
 pub fn get_content_hash(conn: &Connection, file_id: &str) -> Result<Option<String>> {
-    let hash: Option<String> = conn
+    Ok(conn
         .query_row(
             "SELECT content_hash FROM files WHERE file_id = ?1",
             [file_id],
             |row| row.get(0),
         )
-        .ok()
-        .flatten();
-    Ok(hash)
+        .optional()?
+        .flatten())
 }
 
 /// Set the indexing state for a file (idle | indexing_started | indexed).
@@ -84,7 +83,7 @@ pub fn handle_delete(conn: &Connection, path: &str) -> Result<Option<String>> {
             [path],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
 
     if let Some(ref fid) = file_id {
         let now = chrono_now();

@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -112,7 +112,7 @@ pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<Summary
                 })
             },
         )
-        .ok();
+        .optional()?;
 
     Ok(result)
 }

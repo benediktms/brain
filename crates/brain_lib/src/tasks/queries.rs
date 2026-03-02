@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::Result;
 
@@ -108,7 +108,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<TaskRow>> {
 /// Get a single task by ID.
 pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
     let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE task_id = ?1");
-    let result = conn.query_row(&sql, [task_id], row_to_task).ok();
+    let result = conn.query_row(&sql, [task_id], row_to_task).optional()?;
     Ok(result)
 }
 

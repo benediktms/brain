@@ -4,6 +4,8 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
+use rusqlite::OptionalExtension;
+
 use crate::db::Db;
 use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
 use crate::db::files;
@@ -365,7 +367,7 @@ impl IndexPipeline {
                     [&from_str],
                     |row| row.get(0),
                 )
-                .ok();
+                .optional()?;
 
             if let Some(ref fid) = file_id {
                 files::handle_rename(conn, fid, &to_str)?;
