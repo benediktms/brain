@@ -225,7 +225,8 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
 // ── show ────────────────────────────────────────────────────
 
 pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
-    let task = ctx.store
+    let task = ctx
+        .store
         .get_task(id)?
         .ok_or_else(|| anyhow::anyhow!("task not found: {id}"))?;
 
@@ -381,8 +382,7 @@ pub fn update(ctx: &TaskCtx, params: UpdateParams) -> Result<()> {
     // Status change is a separate event type
     if let Some(ref s) = params.status {
         let new_status: TaskStatus = s.parse().map_err(|e: String| anyhow::anyhow!(e))?;
-        let event =
-            TaskEvent::from_payload(&params.id, "cli", StatusChangedPayload { new_status });
+        let event = TaskEvent::from_payload(&params.id, "cli", StatusChangedPayload { new_status });
         ctx.store.append(&event)?;
     }
 
@@ -404,7 +404,8 @@ pub fn update(ctx: &TaskCtx, params: UpdateParams) -> Result<()> {
         ctx.store.append(&event)?;
     }
 
-    let task = ctx.store
+    let task = ctx
+        .store
         .get_task(&params.id)?
         .ok_or_else(|| anyhow::anyhow!("task not found after update: {}", params.id))?;
 

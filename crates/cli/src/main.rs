@@ -437,7 +437,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
         }
         Command::Tasks { json, action } => {
-            use commands::tasks::run::{TaskCtx, CreateParams, ListParams, UpdateParams};
+            use commands::tasks::run::{CreateParams, ListParams, TaskCtx, UpdateParams};
             let ctx = TaskCtx::new(&cli.sqlite_db, json)?;
 
             match action {
@@ -451,7 +451,14 @@ async fn async_main(cli: Cli) -> Result<()> {
                 } => {
                     commands::tasks::run::create(
                         &ctx,
-                        CreateParams { title, description, priority, task_type, assignee, parent },
+                        CreateParams {
+                            title,
+                            description,
+                            priority,
+                            task_type,
+                            assignee,
+                            parent,
+                        },
                     )?;
                 }
                 TasksAction::List {
@@ -464,7 +471,14 @@ async fn async_main(cli: Cli) -> Result<()> {
                 } => {
                     commands::tasks::run::list(
                         &ctx,
-                        &ListParams { status, priority, task_type, assignee, ready, blocked },
+                        &ListParams {
+                            status,
+                            priority,
+                            task_type,
+                            assignee,
+                            ready,
+                            blocked,
+                        },
                     )?;
                 }
                 TasksAction::Show { id } => {
@@ -483,8 +497,14 @@ async fn async_main(cli: Cli) -> Result<()> {
                     commands::tasks::run::update(
                         &ctx,
                         UpdateParams {
-                            id, title, description, status, priority, task_type,
-                            assignee, blocked_reason,
+                            id,
+                            title,
+                            description,
+                            status,
+                            priority,
+                            task_type,
+                            assignee,
+                            blocked_reason,
                         },
                     )?;
                 }
