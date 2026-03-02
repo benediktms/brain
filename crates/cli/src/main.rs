@@ -11,7 +11,8 @@ mod commands;
 #[derive(Parser)]
 #[command(
     name = "brain",
-    version, disable_version_flag = true,
+    version,
+    disable_version_flag = true,
     about = "A personal knowledge base with semantic search and task management",
     long_about = "A personal knowledge base with semantic search and task management.\n\n\
         brain indexes your Markdown notes into a vector database (LanceDB) using \
@@ -134,7 +135,8 @@ enum Command {
     },
 
     /// Start the MCP server (stdin/stdout JSON-RPC for agent integration)
-    #[command(long_about = "Start the MCP server (stdin/stdout JSON-RPC for agent integration).\n\n\
+    #[command(
+        long_about = "Start the MCP server (stdin/stdout JSON-RPC for agent integration).\n\n\
         Exposes brain's capabilities as MCP tools over stdin/stdout for use by \
         AI coding agents. Available tools:\n  \
         - memory_search_minimal  Search notes and return compact stubs\n  \
@@ -142,7 +144,8 @@ enum Command {
         - memory_write_episode   Record a goal/actions/outcome episode\n  \
         - memory_reflect         Retrieve source material for reflection\n  \
         - tasks_apply_event      Create or update tasks via event sourcing\n  \
-        - tasks_next             Get the next highest-priority ready task(s)")]
+        - tasks_next             Get the next highest-priority ready task(s)"
+    )]
     Mcp,
 }
 
@@ -235,7 +238,9 @@ mod tests {
     #[test]
     fn parse_index() {
         let cli = Cli::try_parse_from(["brain", "index", "./notes"]).unwrap();
-        assert!(matches!(cli.command, Command::Index { notes_path } if notes_path == PathBuf::from("./notes")));
+        assert!(
+            matches!(cli.command, Command::Index { notes_path } if notes_path == PathBuf::from("./notes"))
+        );
     }
 
     #[test]
@@ -265,7 +270,9 @@ mod tests {
     #[test]
     fn parse_watch() {
         let cli = Cli::try_parse_from(["brain", "watch", "./notes"]).unwrap();
-        assert!(matches!(cli.command, Command::Watch { notes_path } if notes_path == PathBuf::from("./notes")));
+        assert!(
+            matches!(cli.command, Command::Watch { notes_path } if notes_path == PathBuf::from("./notes"))
+        );
     }
 
     #[test]
@@ -273,7 +280,9 @@ mod tests {
         let cli = Cli::try_parse_from(["brain", "daemon", "start"]).unwrap();
         assert!(matches!(
             cli.command,
-            Command::Daemon { action: DaemonAction::Start { .. } }
+            Command::Daemon {
+                action: DaemonAction::Start { .. }
+            }
         ));
     }
 
@@ -282,7 +291,9 @@ mod tests {
         let cli = Cli::try_parse_from(["brain", "daemon", "stop"]).unwrap();
         assert!(matches!(
             cli.command,
-            Command::Daemon { action: DaemonAction::Stop }
+            Command::Daemon {
+                action: DaemonAction::Stop
+            }
         ));
     }
 
@@ -291,7 +302,9 @@ mod tests {
         let cli = Cli::try_parse_from(["brain", "daemon", "status"]).unwrap();
         assert!(matches!(
             cli.command,
-            Command::Daemon { action: DaemonAction::Status }
+            Command::Daemon {
+                action: DaemonAction::Status
+            }
         ));
     }
 
@@ -326,7 +339,9 @@ mod tests {
         let cli = Cli::try_parse_from(["brain", "d", "start"]).unwrap();
         assert!(matches!(
             cli.command,
-            Command::Daemon { action: DaemonAction::Start { .. } }
+            Command::Daemon {
+                action: DaemonAction::Start { .. }
+            }
         ));
     }
 
@@ -336,10 +351,14 @@ mod tests {
     fn global_args_override_defaults() {
         let cli = Cli::try_parse_from([
             "brain",
-            "--model-dir", "/m",
-            "--lance-db", "/l",
-            "--sqlite-db", "/s",
-            "query", "x",
+            "--model-dir",
+            "/m",
+            "--lance-db",
+            "/l",
+            "--sqlite-db",
+            "/s",
+            "query",
+            "x",
         ])
         .unwrap();
         assert_eq!(cli.model_dir, PathBuf::from("/m"));
@@ -350,7 +369,10 @@ mod tests {
     #[test]
     fn global_args_have_defaults() {
         let cli = Cli::try_parse_from(["brain", "mcp"]).unwrap();
-        assert_eq!(cli.model_dir, PathBuf::from("./.brain/models/bge-small-en-v1.5"));
+        assert_eq!(
+            cli.model_dir,
+            PathBuf::from("./.brain/models/bge-small-en-v1.5")
+        );
         assert_eq!(cli.lance_db, PathBuf::from("./.brain/lancedb"));
         assert_eq!(cli.sqlite_db, PathBuf::from("./.brain/brain.db"));
     }
