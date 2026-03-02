@@ -9,13 +9,54 @@ use brain_lib::tasks::TaskStore;
 use brain_lib::tasks::events::*;
 use brain_lib::utils::{task_row_to_json, ts_to_iso};
 
-fn open_store(sqlite_db: &Path) -> Result<TaskStore> {
-    let db = Db::open(sqlite_db).context("Failed to open SQLite database")?;
-    let tasks_dir = sqlite_db
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("tasks");
-    TaskStore::new(&tasks_dir, db).context("Failed to open task store")
+// ── shared context ─────────────────────────────────────────
+
+pub struct TaskCtx {
+    store: TaskStore,
+    json: bool,
+}
+
+impl TaskCtx {
+    pub fn new(sqlite_db: &Path, json: bool) -> Result<Self> {
+        let db = Db::open(sqlite_db).context("Failed to open SQLite database")?;
+        let tasks_dir = sqlite_db
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("tasks");
+        let store = TaskStore::new(&tasks_dir, db).context("Failed to open task store")?;
+        Ok(Self { store, json })
+    }
+}
+
+// ── param structs ──────────────────────────────────────────
+
+pub struct CreateParams {
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: i32,
+    pub task_type: String,
+    pub assignee: Option<String>,
+    pub parent: Option<String>,
+}
+
+pub struct ListParams {
+    pub status: Option<String>,
+    pub priority: Option<i32>,
+    pub task_type: Option<String>,
+    pub assignee: Option<String>,
+    pub ready: bool,
+    pub blocked: bool,
+}
+
+pub struct UpdateParams {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub priority: Option<i32>,
+    pub task_type: Option<String>,
+    pub assignee: Option<String>,
+    pub blocked_reason: Option<String>,
 }
 
 fn format_ts(ts: i64) -> String {
@@ -43,40 +84,30 @@ fn priority_label(p: i32) -> &'static str {
 
 // ── create ──────────────────────────────────────────────────
 
-pub fn create(
-    sqlite_db: &Path,
-    title: String,
-    description: Option<String>,
-    priority: i32,
-    task_type: String,
-    assignee: Option<String>,
-    parent: Option<String>,
-    json_output: bool,
-) -> Result<()> {
-    let store = open_store(sqlite_db)?;
+pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
     let task_id = new_event_id();
 
     let event = TaskEvent::from_payload(
         &task_id,
         "cli",
         TaskCreatedPayload {
-            title: title.clone(),
-            description: description.clone(),
-            priority,
+            title: params.title.clone(),
+            description: params.description.clone(),
+            priority: params.priority,
             status: TaskStatus::Open,
             due_ts: None,
-            task_type: Some(task_type.clone()),
-            assignee: assignee.clone(),
+            task_type: Some(params.task_type.clone()),
+            assignee: params.assignee.clone(),
             defer_until: None,
-            parent_task_id: parent.clone(),
+            parent_task_id: params.parent.clone(),
         },
     );
 
-    store.append(&event)?;
+    ctx.store.append(&event)?;
 
-    if json_output {
-        let task = store.get_task(&task_id)?.unwrap();
-        let labels = store.get_task_labels(&task_id)?;
+    if ctx.json {
+        let task = ctx.store.get_task(&task_id)?.unwrap();
+        let labels = ctx.store.get_task_labels(&task_id)?;
         let out = json!({
             "event_id": event.event_id,
             "task": task_row_to_json(&task, labels),
@@ -84,13 +115,13 @@ pub fn create(
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Created task {task_id}");
-        println!("  Title: {title}");
-        println!("  Priority: {}", priority_label(priority));
-        println!("  Type: {task_type}");
-        if let Some(ref a) = assignee {
+        println!("  Title: {}", params.title);
+        println!("  Priority: {}", priority_label(params.priority));
+        println!("  Type: {}", params.task_type);
+        if let Some(ref a) = params.assignee {
             println!("  Assignee: {a}");
         }
-        if let Some(ref p) = parent {
+        if let Some(ref p) = params.parent {
             println!("  Parent: {p}");
         }
     }
@@ -100,50 +131,39 @@ pub fn create(
 
 // ── list ────────────────────────────────────────────────────
 
-pub fn list(
-    sqlite_db: &Path,
-    status: Option<String>,
-    priority: Option<i32>,
-    task_type: Option<String>,
-    assignee: Option<String>,
-    ready: bool,
-    blocked: bool,
-    json_output: bool,
-) -> Result<()> {
-    if ready && blocked {
+pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
+    if params.ready && params.blocked {
         bail!("--ready and --blocked are mutually exclusive");
     }
 
-    let store = open_store(sqlite_db)?;
-
-    let tasks = if ready {
-        store.list_ready()?
-    } else if blocked {
-        store.list_blocked()?
+    let tasks = if params.ready {
+        ctx.store.list_ready()?
+    } else if params.blocked {
+        ctx.store.list_blocked()?
     } else {
-        store.list_all()?
+        ctx.store.list_all()?
     };
 
     // Apply client-side filters
     let tasks: Vec<_> = tasks
         .into_iter()
         .filter(|t| {
-            if let Some(ref s) = status {
+            if let Some(ref s) = params.status {
                 if t.status != *s {
                     return false;
                 }
             }
-            if let Some(p) = priority {
+            if let Some(p) = params.priority {
                 if t.priority != p {
                     return false;
                 }
             }
-            if let Some(ref tt) = task_type {
+            if let Some(ref tt) = params.task_type {
                 if t.task_type != *tt {
                     return false;
                 }
             }
-            if let Some(ref a) = assignee {
+            if let Some(ref a) = params.assignee {
                 if t.assignee.as_deref() != Some(a.as_str()) {
                     return false;
                 }
@@ -152,15 +172,15 @@ pub fn list(
         })
         .collect();
 
-    if json_output {
+    if ctx.json {
         let items: Vec<_> = tasks
             .iter()
             .map(|t| {
-                let labels = store.get_task_labels(&t.task_id).unwrap_or_default();
+                let labels = ctx.store.get_task_labels(&t.task_id).unwrap_or_default();
                 task_row_to_json(t, labels)
             })
             .collect();
-        let (ready_count, blocked_count) = store.count_ready_blocked()?;
+        let (ready_count, blocked_count) = ctx.store.count_ready_blocked()?;
         let out = json!({
             "tasks": items,
             "count": tasks.len(),
@@ -192,7 +212,7 @@ pub fn list(
             );
         }
 
-        let (ready_count, blocked_count) = store.count_ready_blocked()?;
+        let (ready_count, blocked_count) = ctx.store.count_ready_blocked()?;
         println!(
             "\n{} task(s) shown ({ready_count} ready, {blocked_count} blocked)",
             tasks.len()
@@ -204,20 +224,18 @@ pub fn list(
 
 // ── show ────────────────────────────────────────────────────
 
-pub fn show(sqlite_db: &Path, id: &str, json_output: bool) -> Result<()> {
-    let store = open_store(sqlite_db)?;
-
-    let task = store
+pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
+    let task = ctx.store
         .get_task(id)?
         .ok_or_else(|| anyhow::anyhow!("task not found: {id}"))?;
 
-    let labels = store.get_task_labels(id)?;
-    let comments = store.get_task_comments(id)?;
-    let dep_summary = store.get_dependency_summary(id)?;
-    let note_links = store.get_task_note_links(id)?;
-    let children = store.get_children(id)?;
+    let labels = ctx.store.get_task_labels(id)?;
+    let comments = ctx.store.get_task_comments(id)?;
+    let dep_summary = ctx.store.get_dependency_summary(id)?;
+    let note_links = ctx.store.get_task_note_links(id)?;
+    let children = ctx.store.get_children(id)?;
 
-    if json_output {
+    if ctx.json {
         let comments_json: Vec<_> = comments
             .iter()
             .map(|c| {
@@ -295,7 +313,7 @@ pub fn show(sqlite_db: &Path, id: &str, json_output: bool) -> Result<()> {
                 dep_summary.done_deps, dep_summary.total_deps
             );
             for dep_id in &dep_summary.blocking_task_ids {
-                let dep_task = store.get_task(dep_id)?;
+                let dep_task = ctx.store.get_task(dep_id)?;
                 let title = dep_task
                     .as_ref()
                     .map(|t| t.title.as_str())
@@ -347,67 +365,55 @@ pub fn show(sqlite_db: &Path, id: &str, json_output: bool) -> Result<()> {
 
 // ── update ──────────────────────────────────────────────────
 
-pub fn update(
-    sqlite_db: &Path,
-    id: &str,
-    title: Option<String>,
-    description: Option<String>,
-    status: Option<String>,
-    priority: Option<i32>,
-    task_type: Option<String>,
-    assignee: Option<String>,
-    blocked_reason: Option<String>,
-    json_output: bool,
-) -> Result<()> {
-    let store = open_store(sqlite_db)?;
-
-    let has_status = status.is_some();
-    let has_field_updates = title.is_some()
-        || description.is_some()
-        || priority.is_some()
-        || task_type.is_some()
-        || assignee.is_some()
-        || blocked_reason.is_some();
+pub fn update(ctx: &TaskCtx, params: UpdateParams) -> Result<()> {
+    let has_status = params.status.is_some();
+    let has_field_updates = params.title.is_some()
+        || params.description.is_some()
+        || params.priority.is_some()
+        || params.task_type.is_some()
+        || params.assignee.is_some()
+        || params.blocked_reason.is_some();
 
     if !has_status && !has_field_updates {
         bail!("no updates specified");
     }
 
     // Status change is a separate event type
-    if let Some(ref s) = status {
+    if let Some(ref s) = params.status {
         let new_status: TaskStatus = s.parse().map_err(|e: String| anyhow::anyhow!(e))?;
-        let event = TaskEvent::from_payload(id, "cli", StatusChangedPayload { new_status });
-        store.append(&event)?;
+        let event =
+            TaskEvent::from_payload(&params.id, "cli", StatusChangedPayload { new_status });
+        ctx.store.append(&event)?;
     }
 
     if has_field_updates {
         let event = TaskEvent::from_payload(
-            id,
+            &params.id,
             "cli",
             TaskUpdatedPayload {
-                title,
-                description,
-                priority,
+                title: params.title,
+                description: params.description,
+                priority: params.priority,
                 due_ts: None,
-                blocked_reason,
-                task_type,
-                assignee,
+                blocked_reason: params.blocked_reason,
+                task_type: params.task_type,
+                assignee: params.assignee,
                 defer_until: None,
             },
         );
-        store.append(&event)?;
+        ctx.store.append(&event)?;
     }
 
-    let task = store
-        .get_task(id)?
-        .ok_or_else(|| anyhow::anyhow!("task not found after update: {id}"))?;
+    let task = ctx.store
+        .get_task(&params.id)?
+        .ok_or_else(|| anyhow::anyhow!("task not found after update: {}", params.id))?;
 
-    if json_output {
-        let labels = store.get_task_labels(id)?;
+    if ctx.json {
+        let labels = ctx.store.get_task_labels(&params.id)?;
         let out = json!({ "task": task_row_to_json(&task, labels) });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Updated task {id}");
+        println!("Updated task {}", params.id);
         println!("  Title: {}", task.title);
         println!("  Status: {}", task.status);
         println!("  Priority: {}", priority_label(task.priority));
@@ -418,8 +424,7 @@ pub fn update(
 
 // ── dep add / dep remove ────────────────────────────────────
 
-pub fn dep_add(sqlite_db: &Path, task_id: &str, depends_on: &str, json_output: bool) -> Result<()> {
-    let store = open_store(sqlite_db)?;
+pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -428,9 +433,9 @@ pub fn dep_add(sqlite_db: &Path, task_id: &str, depends_on: &str, json_output: b
             depends_on_task_id: depends_on.to_string(),
         },
     );
-    store.append(&event)?;
+    ctx.store.append(&event)?;
 
-    if json_output {
+    if ctx.json {
         let out = json!({
             "event_id": event.event_id,
             "task_id": task_id,
@@ -445,13 +450,7 @@ pub fn dep_add(sqlite_db: &Path, task_id: &str, depends_on: &str, json_output: b
     Ok(())
 }
 
-pub fn dep_remove(
-    sqlite_db: &Path,
-    task_id: &str,
-    depends_on: &str,
-    json_output: bool,
-) -> Result<()> {
-    let store = open_store(sqlite_db)?;
+pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -460,9 +459,9 @@ pub fn dep_remove(
             depends_on_task_id: depends_on.to_string(),
         },
     );
-    store.append(&event)?;
+    ctx.store.append(&event)?;
 
-    if json_output {
+    if ctx.json {
         let out = json!({
             "event_id": event.event_id,
             "task_id": task_id,
@@ -479,8 +478,7 @@ pub fn dep_remove(
 
 // ── link / unlink ───────────────────────────────────────────
 
-pub fn link(sqlite_db: &Path, task_id: &str, chunk_id: &str, json_output: bool) -> Result<()> {
-    let store = open_store(sqlite_db)?;
+pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -489,9 +487,9 @@ pub fn link(sqlite_db: &Path, task_id: &str, chunk_id: &str, json_output: bool) 
             chunk_id: chunk_id.to_string(),
         },
     );
-    store.append(&event)?;
+    ctx.store.append(&event)?;
 
-    if json_output {
+    if ctx.json {
         let out = json!({
             "event_id": event.event_id,
             "task_id": task_id,
@@ -506,8 +504,7 @@ pub fn link(sqlite_db: &Path, task_id: &str, chunk_id: &str, json_output: bool) 
     Ok(())
 }
 
-pub fn unlink(sqlite_db: &Path, task_id: &str, chunk_id: &str, json_output: bool) -> Result<()> {
-    let store = open_store(sqlite_db)?;
+pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -516,9 +513,9 @@ pub fn unlink(sqlite_db: &Path, task_id: &str, chunk_id: &str, json_output: bool
             chunk_id: chunk_id.to_string(),
         },
     );
-    store.append(&event)?;
+    ctx.store.append(&event)?;
 
-    if json_output {
+    if ctx.json {
         let out = json!({
             "event_id": event.event_id,
             "task_id": task_id,
@@ -535,8 +532,7 @@ pub fn unlink(sqlite_db: &Path, task_id: &str, chunk_id: &str, json_output: bool
 
 // ── comment ─────────────────────────────────────────────────
 
-pub fn comment(sqlite_db: &Path, task_id: &str, body: &str, json_output: bool) -> Result<()> {
-    let store = open_store(sqlite_db)?;
+pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {
     let event = TaskEvent::from_payload(
         task_id,
         "cli",
@@ -544,9 +540,9 @@ pub fn comment(sqlite_db: &Path, task_id: &str, body: &str, json_output: bool) -
             body: body.to_string(),
         },
     );
-    store.append(&event)?;
+    ctx.store.append(&event)?;
 
-    if json_output {
+    if ctx.json {
         let out = json!({
             "event_id": event.event_id,
             "task_id": task_id,
@@ -562,8 +558,7 @@ pub fn comment(sqlite_db: &Path, task_id: &str, body: &str, json_output: bool) -
 
 // ── label add / label remove ────────────────────────────────
 
-pub fn label_add(sqlite_db: &Path, task_id: &str, label: &str, json_output: bool) -> Result<()> {
-    let store = open_store(sqlite_db)?;
+pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str) -> Result<()> {
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -572,9 +567,9 @@ pub fn label_add(sqlite_db: &Path, task_id: &str, label: &str, json_output: bool
             label: label.to_string(),
         },
     );
-    store.append(&event)?;
+    ctx.store.append(&event)?;
 
-    if json_output {
+    if ctx.json {
         let out = json!({
             "event_id": event.event_id,
             "task_id": task_id,
@@ -589,8 +584,7 @@ pub fn label_add(sqlite_db: &Path, task_id: &str, label: &str, json_output: bool
     Ok(())
 }
 
-pub fn label_remove(sqlite_db: &Path, task_id: &str, label: &str, json_output: bool) -> Result<()> {
-    let store = open_store(sqlite_db)?;
+pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str) -> Result<()> {
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -599,9 +593,9 @@ pub fn label_remove(sqlite_db: &Path, task_id: &str, label: &str, json_output: b
             label: label.to_string(),
         },
     );
-    store.append(&event)?;
+    ctx.store.append(&event)?;
 
-    if json_output {
+    if ctx.json {
         let out = json!({
             "event_id": event.event_id,
             "task_id": task_id,

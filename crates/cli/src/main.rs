@@ -436,61 +436,42 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::ImportBeads { path, dry_run } => {
             commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
         }
-        Command::Tasks { json, action } => match action {
-            TasksAction::Create {
-                title,
-                description,
-                priority,
-                task_type,
-                assignee,
-                parent,
-            } => {
-                commands::tasks::run::create(
-                    &cli.sqlite_db,
+        Command::Tasks { json, action } => {
+            use commands::tasks::run::{TaskCtx, CreateParams, ListParams, UpdateParams};
+            let ctx = TaskCtx::new(&cli.sqlite_db, json)?;
+
+            match action {
+                TasksAction::Create {
                     title,
                     description,
                     priority,
                     task_type,
                     assignee,
                     parent,
-                    json,
-                )?;
-            }
-            TasksAction::List {
-                status,
-                priority,
-                task_type,
-                assignee,
-                ready,
-                blocked,
-            } => {
-                commands::tasks::run::list(
-                    &cli.sqlite_db,
+                } => {
+                    commands::tasks::run::create(
+                        &ctx,
+                        CreateParams { title, description, priority, task_type, assignee, parent },
+                    )?;
+                }
+                TasksAction::List {
                     status,
                     priority,
                     task_type,
                     assignee,
                     ready,
                     blocked,
-                    json,
-                )?;
-            }
-            TasksAction::Show { id } => {
-                commands::tasks::run::show(&cli.sqlite_db, &id, json)?;
-            }
-            TasksAction::Update {
-                id,
-                title,
-                description,
-                status,
-                priority,
-                task_type,
-                assignee,
-                blocked_reason,
-            } => {
-                commands::tasks::run::update(
-                    &cli.sqlite_db,
-                    &id,
+                } => {
+                    commands::tasks::run::list(
+                        &ctx,
+                        &ListParams { status, priority, task_type, assignee, ready, blocked },
+                    )?;
+                }
+                TasksAction::Show { id } => {
+                    commands::tasks::run::show(&ctx, &id)?;
+                }
+                TasksAction::Update {
+                    id,
                     title,
                     description,
                     status,
@@ -498,54 +479,56 @@ async fn async_main(cli: Cli) -> Result<()> {
                     task_type,
                     assignee,
                     blocked_reason,
-                    json,
-                )?;
-            }
-            TasksAction::Dep { action } => match action {
-                DepAction::Add {
-                    task_id,
-                    depends_on,
                 } => {
-                    commands::tasks::run::dep_add(&cli.sqlite_db, &task_id, &depends_on, json)?;
-                }
-                DepAction::Remove {
-                    task_id,
-                    depends_on,
-                } => {
-                    commands::tasks::run::dep_remove(
-                        &cli.sqlite_db,
-                        &task_id,
-                        &depends_on,
-                        json,
+                    commands::tasks::run::update(
+                        &ctx,
+                        UpdateParams {
+                            id, title, description, status, priority, task_type,
+                            assignee, blocked_reason,
+                        },
                     )?;
                 }
-            },
-            TasksAction::Link { task_id, chunk_id } => {
-                commands::tasks::run::link(&cli.sqlite_db, &task_id, &chunk_id, json)?;
+                TasksAction::Dep { action } => match action {
+                    DepAction::Add {
+                        task_id,
+                        depends_on,
+                    } => {
+                        commands::tasks::run::dep_add(&ctx, &task_id, &depends_on)?;
+                    }
+                    DepAction::Remove {
+                        task_id,
+                        depends_on,
+                    } => {
+                        commands::tasks::run::dep_remove(&ctx, &task_id, &depends_on)?;
+                    }
+                },
+                TasksAction::Link { task_id, chunk_id } => {
+                    commands::tasks::run::link(&ctx, &task_id, &chunk_id)?;
+                }
+                TasksAction::Unlink { task_id, chunk_id } => {
+                    commands::tasks::run::unlink(&ctx, &task_id, &chunk_id)?;
+                }
+                TasksAction::Comment { task_id, body } => {
+                    commands::tasks::run::comment(&ctx, &task_id, &body)?;
+                }
+                TasksAction::Label { action } => match action {
+                    LabelAction::Add { task_id, label } => {
+                        commands::tasks::run::label_add(&ctx, &task_id, &label)?;
+                    }
+                    LabelAction::Remove { task_id, label } => {
+                        commands::tasks::run::label_remove(&ctx, &task_id, &label)?;
+                    }
+                },
+                TasksAction::Export { format, dir } => match format.as_str() {
+                    "markdown" | "md" => {
+                        commands::tasks::export_markdown::run(dir, cli.sqlite_db)?;
+                    }
+                    other => {
+                        anyhow::bail!("Unknown export format: {other}. Supported: markdown");
+                    }
+                },
             }
-            TasksAction::Unlink { task_id, chunk_id } => {
-                commands::tasks::run::unlink(&cli.sqlite_db, &task_id, &chunk_id, json)?;
-            }
-            TasksAction::Comment { task_id, body } => {
-                commands::tasks::run::comment(&cli.sqlite_db, &task_id, &body, json)?;
-            }
-            TasksAction::Label { action } => match action {
-                LabelAction::Add { task_id, label } => {
-                    commands::tasks::run::label_add(&cli.sqlite_db, &task_id, &label, json)?;
-                }
-                LabelAction::Remove { task_id, label } => {
-                    commands::tasks::run::label_remove(&cli.sqlite_db, &task_id, &label, json)?;
-                }
-            },
-            TasksAction::Export { format, dir } => match format.as_str() {
-                "markdown" | "md" => {
-                    commands::tasks::export_markdown::run(dir, cli.sqlite_db)?;
-                }
-                other => {
-                    anyhow::bail!("Unknown export format: {other}. Supported: markdown");
-                }
-            },
-        },
+        }
     }
 
     Ok(())
