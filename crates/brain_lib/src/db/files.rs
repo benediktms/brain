@@ -107,24 +107,14 @@ pub fn find_stuck_files(conn: &Connection) -> Result<Vec<(String, String)>> {
         "SELECT file_id, path FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
     )?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    super::collect_rows(rows)
 }
 
 /// Get all active (non-deleted) file paths for startup deletion detection.
 pub fn get_all_active_paths(conn: &Connection) -> Result<Vec<(String, String)>> {
     let mut stmt = conn.prepare("SELECT file_id, path FROM files WHERE deleted_at IS NULL")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    super::collect_rows(rows)
 }
 
 fn chrono_now() -> i64 {

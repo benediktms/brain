@@ -13,6 +13,21 @@ use rusqlite::Connection;
 
 use crate::error::{BrainCoreError, Result};
 
+/// Collect all rows from a `query_map` result into a `Vec`.
+///
+/// Replaces the boilerplate:
+/// ```ignore
+/// let mut result = Vec::new();
+/// for row in rows { result.push(row?); }
+/// Ok(result)
+/// ```
+pub(crate) fn collect_rows<T>(
+    rows: impl Iterator<Item = std::result::Result<T, rusqlite::Error>>,
+) -> Result<Vec<T>> {
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
 /// SQLite control-plane database with a thread-safe connection.
 ///
 /// The inner connection is wrapped in `Arc<Mutex<>>` so that `Db` is both

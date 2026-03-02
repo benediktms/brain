@@ -141,11 +141,7 @@ pub fn list_episodes(conn: &Connection, limit: usize) -> Result<Vec<SummaryRow>>
         })
     })?;
 
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    super::collect_rows(rows)
 }
 
 fn chrono_now() -> i64 {

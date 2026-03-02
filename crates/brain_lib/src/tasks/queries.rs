@@ -65,11 +65,7 @@ pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
     let mut stmt = conn.prepare(&sql)?;
 
     let rows = stmt.query_map([], row_to_task)?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// List tasks that are blocked: have unresolved deps or an explicit blocked_reason.
@@ -93,11 +89,7 @@ pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
     let mut stmt = conn.prepare(&sql)?;
 
     let rows = stmt.query_map([], row_to_task)?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// List all tasks.
@@ -110,11 +102,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<TaskRow>> {
     let mut stmt = conn.prepare(&sql)?;
 
     let rows = stmt.query_map([], row_to_task)?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// Get a single task by ID.
@@ -146,11 +134,7 @@ pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Resul
     )?;
 
     let rows = stmt.query_map([completed_task_id], |row| row.get::<_, String>(0))?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// Summary of a task's dependency state.
@@ -219,11 +203,7 @@ pub fn get_task_note_links(conn: &Connection, task_id: &str) -> Result<Vec<TaskN
         })
     })?;
 
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// Count of ready and blocked tasks (for response metadata).
@@ -268,11 +248,7 @@ pub fn get_task_labels(conn: &Connection, task_id: &str) -> Result<Vec<String>> 
     let mut stmt =
         conn.prepare("SELECT label FROM task_labels WHERE task_id = ?1 ORDER BY label")?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// A comment on a task.
@@ -298,11 +274,7 @@ pub fn get_task_comments(conn: &Connection, task_id: &str) -> Result<Vec<TaskCom
             created_at: row.get(3)?,
         })
     })?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// Get child tasks of a parent.
@@ -313,11 +285,7 @@ pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskR
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([parent_task_id], row_to_task)?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// A dependency edge between two tasks.
@@ -336,11 +304,7 @@ pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
             depends_on: row.get(1)?,
         })
     })?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// List all (task_id, label) pairs (bulk load for export).
@@ -350,11 +314,7 @@ pub fn list_all_labels(conn: &Connection) -> Result<Vec<(String, String)>> {
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
@@ -369,11 +329,7 @@ pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<TaskRo
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([task_id], row_to_task)?;
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    crate::db::collect_rows(rows)
 }
 
 /// Check if a task exists in the projection.

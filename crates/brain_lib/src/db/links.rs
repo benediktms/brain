@@ -43,11 +43,7 @@ pub fn get_backlinks(conn: &Connection, target_path: &str) -> Result<Vec<(String
         conn.prepare("SELECT source_file_id, link_text FROM links WHERE target_path = ?1")?;
     let rows = stmt.query_map([target_path], |row| Ok((row.get(0)?, row.get(1)?)))?;
 
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    super::collect_rows(rows)
 }
 
 /// Count backlinks for a given target path.

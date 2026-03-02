@@ -104,11 +104,7 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
         })
     })?;
 
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    super::collect_rows(rows)
 }
 
 #[cfg(test)]
