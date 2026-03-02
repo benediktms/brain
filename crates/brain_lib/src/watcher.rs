@@ -130,6 +130,63 @@ fn map_event(event: &notify_debouncer_full::DebouncedEvent) -> Vec<FileEvent> {
     result
 }
 
+/// Coalesce a batch of file events, eliminating redundant operations.
+///
+/// Rules:
+/// - `Changed`/`Created` for same path → keep one (deduplicate)
+/// - `Deleted` cancels prior `Changed`/`Created` for same path
+/// - `Created`/`Changed` after `Deleted` for same path → resolve to index (file recreated)
+/// - `Renamed` events tracked separately, old path removed from pending actions
+///
+/// Returns `(renames, index_paths, delete_paths)`.
+pub fn coalesce_events(
+    events: Vec<FileEvent>,
+) -> (Vec<(PathBuf, PathBuf)>, Vec<PathBuf>, Vec<PathBuf>) {
+    use std::collections::{HashMap, HashSet};
+
+    let mut renames: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut renamed_from: HashSet<PathBuf> = HashSet::new();
+
+    // Track last action per path: true = index, false = delete
+    let mut actions: HashMap<PathBuf, bool> = HashMap::new();
+
+    for event in events {
+        match event {
+            FileEvent::Renamed { from, to } => {
+                actions.remove(&from);
+                renamed_from.insert(from.clone());
+                renames.push((from, to));
+            }
+            FileEvent::Created(path) | FileEvent::Changed(path) => {
+                actions.insert(path, true);
+            }
+            FileEvent::Deleted(path) => {
+                actions.insert(path, false);
+            }
+        }
+    }
+
+    let mut index_paths: Vec<PathBuf> = Vec::new();
+    let mut delete_paths: Vec<PathBuf> = Vec::new();
+
+    for (path, should_index) in actions {
+        if renamed_from.contains(&path) {
+            continue;
+        }
+        if should_index {
+            index_paths.push(path);
+        } else {
+            delete_paths.push(path);
+        }
+    }
+
+    // Sort for deterministic output in tests
+    index_paths.sort();
+    delete_paths.sort();
+
+    (renames, index_paths, delete_paths)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +299,59 @@ mod tests {
         let results = map_event(&event);
         assert_eq!(results.len(), 1);
         assert!(matches!(&results[0], FileEvent::Deleted(_)));
+    }
+
+    // ─── coalesce_events tests ───────────────────────────────────
+
+    #[test]
+    fn coalesce_create_then_delete() {
+        let events = vec![
+            FileEvent::Created("/notes/a.md".into()),
+            FileEvent::Deleted("/notes/a.md".into()),
+        ];
+        let (renames, index, delete) = coalesce_events(events);
+        assert!(renames.is_empty());
+        assert!(index.is_empty());
+        assert_eq!(delete.len(), 1);
+    }
+
+    #[test]
+    fn coalesce_delete_then_create() {
+        let events = vec![
+            FileEvent::Deleted("/notes/a.md".into()),
+            FileEvent::Created("/notes/a.md".into()),
+        ];
+        let (renames, index, delete) = coalesce_events(events);
+        assert!(renames.is_empty());
+        assert_eq!(index.len(), 1);
+        assert!(delete.is_empty());
+    }
+
+    #[test]
+    fn coalesce_duplicate_changes() {
+        let events = vec![
+            FileEvent::Changed("/notes/a.md".into()),
+            FileEvent::Changed("/notes/a.md".into()),
+            FileEvent::Changed("/notes/a.md".into()),
+        ];
+        let (renames, index, delete) = coalesce_events(events);
+        assert!(renames.is_empty());
+        assert_eq!(index.len(), 1);
+        assert!(delete.is_empty());
+    }
+
+    #[test]
+    fn coalesce_rename_clears_old_path() {
+        let events = vec![
+            FileEvent::Changed("/notes/old.md".into()),
+            FileEvent::Renamed {
+                from: "/notes/old.md".into(),
+                to: "/notes/new.md".into(),
+            },
+        ];
+        let (renames, index, delete) = coalesce_events(events);
+        assert_eq!(renames.len(), 1);
+        assert!(index.is_empty());
+        assert!(delete.is_empty());
     }
 }
