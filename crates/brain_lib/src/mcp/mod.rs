@@ -14,6 +14,7 @@ use tracing::{debug, error, info};
 use crate::db::Db;
 use crate::embedder::Embed;
 use crate::store::Store;
+use crate::tasks::TaskStore;
 
 use protocol::{
     InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ServerCapabilities,
@@ -26,6 +27,7 @@ pub struct McpContext {
     pub db: Db,
     pub store: Store,
     pub embedder: Arc<dyn Embed>,
+    pub tasks: TaskStore,
 }
 
 /// Run the MCP server, reading JSON-RPC from stdin and writing to stdout.
@@ -219,11 +221,13 @@ mod tests {
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 6);
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"memory.search_minimal"));
         assert!(names.contains(&"memory.expand"));
+        assert!(names.contains(&"tasks.apply_event"));
+        assert!(names.contains(&"tasks.next"));
     }
 
     #[test]

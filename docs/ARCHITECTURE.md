@@ -701,7 +701,7 @@ The links table is a directed graph (adjacency list). Graph expansion performs 1
 
 ### Probability & Hashing
 
-BLAKE3 (256-bit) provides collision probability `< 10^(-70)` for 10k files. UUID v7 provides time-ordered identity with a birthday-problem safe threshold of ~2^64 IDs. ULID provides monotonic event ordering with same-millisecond disambiguation via incrementing counter. IVF-PQ indexing (Product Quantization in Voronoi cells) enables sub-5ms ANN search at 100x vector compression with >95% recall.
+BLAKE3 (256-bit) provides collision probability `< 10^(-70)` for 10k files. UUID v7 provides time-ordered identity with a birthday-problem safe threshold of ~2^64 IDs. UUID v7 provides monotonic event ordering with random bits for same-millisecond disambiguation. IVF-PQ indexing (Product Quantization in Voronoi cells) enables sub-5ms ANN search at 100x vector compression with >95% recall.
 
 ### Concurrency & Async
 

@@ -26,10 +26,19 @@ pub async fn run(model_dir: PathBuf, lance_db: PathBuf, sqlite_db: PathBuf) -> R
     // Keep the pipeline alive so LanceDB isn't dropped
     let _pipeline = pipeline;
 
+    // Task store: derive tasks_dir from sqlite_db parent (e.g. .brain/tasks/)
+    let tasks_dir = sqlite_db
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("tasks");
+    let tasks_db = brain_lib::db::Db::open(&sqlite_db)?;
+    let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db)?;
+
     let ctx = Arc::new(brain_lib::mcp::McpContext {
         db,
         store,
         embedder,
+        tasks,
     });
 
     brain_lib::mcp::run_server(ctx).await?;

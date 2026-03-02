@@ -147,6 +147,36 @@ enum Command {
         - tasks_next             Get the next highest-priority ready task(s)"
     )]
     Mcp,
+
+    /// Import beads issues into the brain task system
+    ImportBeads {
+        /// Path to beads issues.jsonl (auto-discovers .beads/issues.jsonl if omitted)
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Preview without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Manage brain tasks
+    Tasks {
+        #[command(subcommand)]
+        action: TasksAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TasksAction {
+    /// Export tasks to a file format (defaults to markdown)
+    Export {
+        /// Output format (currently only "markdown" is supported)
+        #[arg(default_value = "markdown")]
+        format: String,
+
+        /// Output directory
+        #[arg(long, default_value = ".brain/tasks/projections")]
+        dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -223,6 +253,19 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::Mcp => {
             commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
         }
+        Command::ImportBeads { path, dry_run } => {
+            commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
+        }
+        Command::Tasks { action } => match action {
+            TasksAction::Export { format, dir } => match format.as_str() {
+                "markdown" | "md" => {
+                    commands::tasks::export_markdown::run(dir, cli.sqlite_db)?;
+                }
+                other => {
+                    anyhow::bail!("Unknown export format: {other}. Supported: markdown");
+                }
+            },
+        },
     }
 
     Ok(())

@@ -600,6 +600,7 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
+ "chrono",
  "futures",
  "lancedb",
  "notify-debouncer-full",
@@ -844,6 +845,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "brain-lib",
+ "chrono",
  "clap",
  "dirs",
  "libc",

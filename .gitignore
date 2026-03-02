@@ -1,11 +1,10 @@
 /target
 .omc
 .claude
-# Brain derived data (not source of truth)
-.brain/brain.db*
-.brain/lancedb/
-.brain/models/
 
 .DS_Store
 
 .env
+
+# bv (beads viewer) local config and caches
+.bv/

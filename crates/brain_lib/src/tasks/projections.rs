@@ -3,8 +3,8 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    DependencyPayload, EventType, NoteLinkPayload, StatusChangedPayload, TaskCreatedPayload,
-    TaskEvent, TaskUpdatedPayload,
+    CommentPayload, DependencyPayload, EventType, LabelPayload, NoteLinkPayload, ParentSetPayload,
+    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
 };
 
 /// Apply a single event to the SQLite projection tables.
@@ -15,15 +15,20 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                 .map_err(|e| BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}")))?;
 
             conn.execute(
-                "INSERT INTO tasks (task_id, title, description, status, priority, due_ts, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO tasks (task_id, title, description, status, priority, due_ts,
+                                    task_type, assignee, defer_until, parent_task_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 rusqlite::params![
                     event.task_id,
                     p.title,
                     p.description,
-                    p.status,
+                    p.status.as_ref(),
                     p.priority,
                     p.due_ts,
+                    p.task_type.as_deref().unwrap_or("task"),
+                    p.assignee,
+                    p.defer_until,
+                    p.parent_task_id,
                     event.timestamp,
                     event.timestamp,
                 ],
@@ -64,6 +69,24 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                     rusqlite::params![blocked_reason, event.timestamp, event.task_id],
                 )?;
             }
+            if let Some(task_type) = &p.task_type {
+                conn.execute(
+                    "UPDATE tasks SET task_type = ?1, updated_at = ?2 WHERE task_id = ?3",
+                    rusqlite::params![task_type, event.timestamp, event.task_id],
+                )?;
+            }
+            if let Some(assignee) = &p.assignee {
+                conn.execute(
+                    "UPDATE tasks SET assignee = ?1, updated_at = ?2 WHERE task_id = ?3",
+                    rusqlite::params![assignee, event.timestamp, event.task_id],
+                )?;
+            }
+            if let Some(defer_until) = p.defer_until {
+                conn.execute(
+                    "UPDATE tasks SET defer_until = ?1, updated_at = ?2 WHERE task_id = ?3",
+                    rusqlite::params![defer_until, event.timestamp, event.task_id],
+                )?;
+            }
         }
 
         EventType::StatusChanged => {
@@ -74,7 +97,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
 
             conn.execute(
                 "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE task_id = ?3",
-                rusqlite::params![p.new_status, event.timestamp, event.task_id],
+                rusqlite::params![p.new_status.as_ref(), event.timestamp, event.task_id],
             )?;
         }
 
@@ -121,6 +144,53 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                 rusqlite::params![event.task_id, p.chunk_id],
             )?;
         }
+
+        EventType::LabelAdded => {
+            let p: LabelPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::TaskEvent(format!("bad LabelAdded payload: {e}")))?;
+
+            conn.execute(
+                "INSERT OR IGNORE INTO task_labels (task_id, label) VALUES (?1, ?2)",
+                rusqlite::params![event.task_id, p.label],
+            )?;
+        }
+
+        EventType::LabelRemoved => {
+            let p: LabelPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::TaskEvent(format!("bad LabelRemoved payload: {e}")))?;
+
+            conn.execute(
+                "DELETE FROM task_labels WHERE task_id = ?1 AND label = ?2",
+                rusqlite::params![event.task_id, p.label],
+            )?;
+        }
+
+        EventType::CommentAdded => {
+            let p: CommentPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::TaskEvent(format!("bad CommentAdded payload: {e}")))?;
+
+            conn.execute(
+                "INSERT INTO task_comments (comment_id, task_id, author, body, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    event.event_id,
+                    event.task_id,
+                    event.actor,
+                    p.body,
+                    event.timestamp,
+                ],
+            )?;
+        }
+
+        EventType::ParentSet => {
+            let p: ParentSetPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}")))?;
+
+            conn.execute(
+                "UPDATE tasks SET parent_task_id = ?1, updated_at = ?2 WHERE task_id = ?3",
+                rusqlite::params![p.parent_task_id, event.timestamp, event.task_id],
+            )?;
+        }
     }
 
     // Record the event itself
@@ -150,6 +220,8 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
     // Clear in FK-safe order
     tx.execute_batch(
         "DELETE FROM task_events;
+         DELETE FROM task_comments;
+         DELETE FROM task_labels;
          DELETE FROM task_note_links;
          DELETE FROM task_deps;
          DELETE FROM tasks;",
@@ -167,7 +239,7 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::db::schema::init_schema;
-    use crate::tasks::events::{new_event_id, now_ts};
+    use crate::tasks::events::TaskStatus;
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -176,21 +248,21 @@ mod tests {
     }
 
     fn make_created_event(task_id: &str, title: &str, priority: i32) -> TaskEvent {
-        TaskEvent {
-            event_id: new_event_id(),
-            task_id: task_id.to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-            payload: serde_json::to_value(TaskCreatedPayload {
+        TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskCreatedPayload {
                 title: title.to_string(),
                 description: None,
                 priority,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: None,
-            })
-            .unwrap(),
-        }
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: None,
+            },
+        )
     }
 
     #[test]
@@ -222,21 +294,20 @@ mod tests {
         let ev = make_created_event("t1", "Original", 4);
         apply_event(&conn, &ev).unwrap();
 
-        let update = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskUpdated,
-            payload: serde_json::to_value(TaskUpdatedPayload {
+        let update = TaskEvent::from_payload(
+            "t1",
+            "user",
+            TaskUpdatedPayload {
                 title: Some("Updated".to_string()),
                 description: Some("A description".to_string()),
                 priority: Some(1),
                 due_ts: None,
                 blocked_reason: None,
-            })
-            .unwrap(),
-        };
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+            },
+        );
         apply_event(&conn, &update).unwrap();
 
         let (title, desc, priority): (String, Option<String>, i32) = conn
@@ -257,17 +328,13 @@ mod tests {
         let ev = make_created_event("t1", "Task", 2);
         apply_event(&conn, &ev).unwrap();
 
-        let status_ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::StatusChanged,
-            payload: serde_json::to_value(StatusChangedPayload {
-                new_status: "done".to_string(),
-            })
-            .unwrap(),
-        };
+        let status_ev = TaskEvent::from_payload(
+            "t1",
+            "user",
+            StatusChangedPayload {
+                new_status: TaskStatus::Done,
+            },
+        );
         apply_event(&conn, &status_ev).unwrap();
 
         let status: String = conn
@@ -284,17 +351,14 @@ mod tests {
         apply_event(&conn, &make_created_event("t1", "Task 1", 2)).unwrap();
         apply_event(&conn, &make_created_event("t2", "Task 2", 2)).unwrap();
 
-        let dep_add = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep_add = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &dep_add).unwrap();
 
         let count: i64 = conn
@@ -307,17 +371,14 @@ mod tests {
         assert_eq!(count, 1);
 
         // Remove
-        let dep_rm = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyRemoved,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep_rm = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyRemoved,
+            &DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &dep_rm).unwrap();
 
         let count: i64 = conn
@@ -335,17 +396,14 @@ mod tests {
         let conn = setup();
         apply_event(&conn, &make_created_event("t1", "Task", 2)).unwrap();
 
-        let link = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::NoteLinked,
-            payload: serde_json::to_value(NoteLinkPayload {
+        let link = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::NoteLinked,
+            &NoteLinkPayload {
                 chunk_id: "c1".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &link).unwrap();
 
         let count: i64 = conn
@@ -357,17 +415,14 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
 
-        let unlink = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::NoteUnlinked,
-            payload: serde_json::to_value(NoteLinkPayload {
+        let unlink = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::NoteUnlinked,
+            &NoteLinkPayload {
                 chunk_id: "c1".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &unlink).unwrap();
 
         let count: i64 = conn

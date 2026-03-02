@@ -1,5 +1,6 @@
 pub mod cycle;
 pub mod events;
+pub mod import_beads;
 pub mod projections;
 pub mod queries;
 
@@ -79,6 +80,57 @@ impl TaskStore {
         self.db.with_conn(|conn| queries::get_task(conn, task_id))
     }
 
+    /// List task IDs that became unblocked because `completed_task_id` was resolved.
+    pub fn list_newly_unblocked(&self, completed_task_id: &str) -> Result<Vec<String>> {
+        self.db
+            .with_conn(|conn| queries::list_newly_unblocked(conn, completed_task_id))
+    }
+
+    /// Get the dependency summary for a task.
+    pub fn get_dependency_summary(&self, task_id: &str) -> Result<queries::DependencySummary> {
+        self.db
+            .with_conn(|conn| queries::get_dependency_summary(conn, task_id))
+    }
+
+    /// Get note links for a task.
+    pub fn get_task_note_links(&self, task_id: &str) -> Result<Vec<queries::TaskNoteLink>> {
+        self.db
+            .with_conn(|conn| queries::get_task_note_links(conn, task_id))
+    }
+
+    /// Get labels for a task.
+    pub fn get_task_labels(&self, task_id: &str) -> Result<Vec<String>> {
+        self.db
+            .with_conn(|conn| queries::get_task_labels(conn, task_id))
+    }
+
+    /// Get comments for a task.
+    pub fn get_task_comments(&self, task_id: &str) -> Result<Vec<queries::TaskComment>> {
+        self.db
+            .with_conn(|conn| queries::get_task_comments(conn, task_id))
+    }
+
+    /// Get child tasks of a parent.
+    pub fn get_children(&self, parent_task_id: &str) -> Result<Vec<queries::TaskRow>> {
+        self.db
+            .with_conn(|conn| queries::get_children(conn, parent_task_id))
+    }
+
+    /// Count of ready and blocked tasks.
+    pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
+        self.db.with_conn(queries::count_ready_blocked)
+    }
+
+    /// List all dependency edges (bulk load for export).
+    pub fn list_all_deps(&self) -> Result<Vec<queries::TaskDep>> {
+        self.db.with_conn(queries::list_all_deps)
+    }
+
+    /// List all (task_id, label) pairs (bulk load for export).
+    pub fn list_all_labels(&self) -> Result<Vec<(String, String)>> {
+        self.db.with_conn(queries::list_all_labels)
+    }
+
     /// Validate an event before writing it to the log.
     fn validate(&self, conn: &rusqlite::Connection, event: &TaskEvent) -> Result<()> {
         match event.event_type {
@@ -88,6 +140,23 @@ impl TaskStore {
                         "task already exists: {}",
                         event.task_id
                     )));
+                }
+                // Validate parent_task_id if provided
+                let payload: events::TaskCreatedPayload =
+                    serde_json::from_value(event.payload.clone()).map_err(|e| {
+                        BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}"))
+                    })?;
+                if let Some(ref parent_id) = payload.parent_task_id {
+                    if parent_id == &event.task_id {
+                        return Err(BrainCoreError::TaskEvent(
+                            "task cannot be its own parent".to_string(),
+                        ));
+                    }
+                    if !queries::task_exists(conn, parent_id)? {
+                        return Err(BrainCoreError::TaskEvent(format!(
+                            "parent task not found: {parent_id}"
+                        )));
+                    }
                 }
             }
 
@@ -120,7 +189,37 @@ impl TaskStore {
                 cycle::check_cycle(conn, &event.task_id, &payload.depends_on_task_id)?;
             }
 
-            EventType::DependencyRemoved | EventType::NoteLinked | EventType::NoteUnlinked => {
+            EventType::ParentSet => {
+                if !queries::task_exists(conn, &event.task_id)? {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "task not found: {}",
+                        event.task_id
+                    )));
+                }
+                let payload: events::ParentSetPayload =
+                    serde_json::from_value(event.payload.clone()).map_err(|e| {
+                        BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}"))
+                    })?;
+                if let Some(ref parent_id) = payload.parent_task_id {
+                    if parent_id == &event.task_id {
+                        return Err(BrainCoreError::TaskEvent(
+                            "task cannot be its own parent".to_string(),
+                        ));
+                    }
+                    if !queries::task_exists(conn, parent_id)? {
+                        return Err(BrainCoreError::TaskEvent(format!(
+                            "parent task not found: {parent_id}"
+                        )));
+                    }
+                }
+            }
+
+            EventType::DependencyRemoved
+            | EventType::NoteLinked
+            | EventType::NoteUnlinked
+            | EventType::LabelAdded
+            | EventType::LabelRemoved
+            | EventType::CommentAdded => {
                 if !queries::task_exists(conn, &event.task_id)? {
                     return Err(BrainCoreError::TaskEvent(format!(
                         "task not found: {}",
@@ -148,21 +247,21 @@ mod tests {
     }
 
     fn created_event(task_id: &str, title: &str, priority: i32) -> TaskEvent {
-        TaskEvent {
-            event_id: new_event_id(),
-            task_id: task_id.to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-            payload: serde_json::to_value(TaskCreatedPayload {
+        TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskCreatedPayload {
                 title: title.to_string(),
                 description: None,
                 priority,
-                status: "open".to_string(),
+                status: TaskStatus::Open,
                 due_ts: None,
-            })
-            .unwrap(),
-        }
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: None,
+            },
+        )
     }
 
     #[test]
@@ -178,17 +277,14 @@ mod tests {
         assert_eq!(ready.len(), 2);
 
         // Add dependency: t2 depends on t1
-        let dep_event = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t2".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep_event = TaskEvent::new(
+            "t2",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "t1".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         store.append(&dep_event).unwrap();
 
         // Only t1 ready now
@@ -202,17 +298,13 @@ mod tests {
         assert_eq!(blocked[0].task_id, "t2");
 
         // Complete t1
-        let done_event = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::StatusChanged,
-            payload: serde_json::to_value(StatusChangedPayload {
-                new_status: "done".to_string(),
-            })
-            .unwrap(),
-        };
+        let done_event = TaskEvent::from_payload(
+            "t1",
+            "user",
+            StatusChangedPayload {
+                new_status: TaskStatus::Done,
+            },
+        );
         store.append(&done_event).unwrap();
 
         // t2 now ready
@@ -235,17 +327,13 @@ mod tests {
     fn test_update_nonexistent_rejected() {
         let (_dir, store) = setup();
 
-        let ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "nonexistent".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::StatusChanged,
-            payload: serde_json::to_value(StatusChangedPayload {
-                new_status: "done".to_string(),
-            })
-            .unwrap(),
-        };
+        let ev = TaskEvent::from_payload(
+            "nonexistent",
+            "user",
+            StatusChangedPayload {
+                new_status: TaskStatus::Done,
+            },
+        );
         let result = store.append(&ev);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
@@ -258,31 +346,25 @@ mod tests {
         store.append(&created_event("t2", "Task 2", 2)).unwrap();
 
         // t1 depends on t2
-        let dep1 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep1 = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         store.append(&dep1).unwrap();
 
         // t2 depends on t1 — cycle!
-        let dep2 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t2".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep2 = TaskEvent::new(
+            "t2",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "t1".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         let result = store.append(&dep2);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cycle"));
@@ -293,17 +375,14 @@ mod tests {
         let (_dir, store) = setup();
         store.append(&created_event("t1", "Task 1", 2)).unwrap();
 
-        let dep = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "nonexistent".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         let result = store.append(&dep);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("target not found"));
