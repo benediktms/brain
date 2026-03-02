@@ -9,8 +9,7 @@ use crate::error::{BrainCoreError, Result};
 use super::TaskStore;
 use super::events::{
     CommentPayload, DependencyPayload, EventType, LabelPayload, ParentSetPayload,
-    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskUpdatedPayload,
-    CURRENT_EVENT_VERSION, new_event_id, now_ts,
+    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskUpdatedPayload, now_ts,
 };
 
 /// Summary of an import run.
@@ -196,18 +195,13 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
 
         let description = build_description(issue);
 
-        let created_event = TaskEvent {
-            event_id: new_event_id(),
-            task_id: issue.id.clone(),
-            timestamp: created_ts,
-            actor: issue
+        let created_event = TaskEvent::from_payload(
+            issue.id.clone(),
+            issue
                 .owner
                 .clone()
                 .unwrap_or_else(|| "beads-import".to_string()),
-            event_type: EventType::TaskCreated,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskCreatedPayload {
+            TaskCreatedPayload {
                 title: issue.title.clone(),
                 description,
                 priority: issue.priority,
@@ -217,27 +211,23 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                 assignee: issue.owner.clone(),
                 defer_until: None,
                 parent_task_id: None, // Set in pass 2
-            })
-            .unwrap(),
-        };
+            },
+        )
+        .with_timestamp(created_ts);
         all_events.push(created_event);
         report.issues_imported += 1;
 
         // Labels
         for label in &issue.labels {
-            let label_event = TaskEvent {
-                event_id: new_event_id(),
-                task_id: issue.id.clone(),
-                timestamp: created_ts,
-                actor: "beads-import".to_string(),
-                event_type: EventType::LabelAdded,
-
-                event_version: CURRENT_EVENT_VERSION,
-                payload: serde_json::to_value(LabelPayload {
+            let label_event = TaskEvent::new(
+                &issue.id,
+                "beads-import",
+                EventType::LabelAdded,
+                &LabelPayload {
                     label: label.clone(),
-                })
-                .unwrap(),
-            };
+                },
+            )
+            .with_timestamp(created_ts);
             all_events.push(label_event);
             report.labels_imported += 1;
         }
@@ -249,22 +239,17 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                 .as_deref()
                 .map(parse_iso_ts)
                 .unwrap_or(created_ts);
-            let comment_event = TaskEvent {
-                event_id: new_event_id(),
-                task_id: issue.id.clone(),
-                timestamp: comment_ts,
-                actor: comment
+            let comment_event = TaskEvent::from_payload(
+                issue.id.clone(),
+                comment
                     .author
                     .clone()
                     .unwrap_or_else(|| "beads-import".to_string()),
-                event_type: EventType::CommentAdded,
-
-                event_version: CURRENT_EVENT_VERSION,
-                payload: serde_json::to_value(CommentPayload {
+                CommentPayload {
                     body: comment.text.clone(),
-                })
-                .unwrap(),
-            };
+                },
+            )
+            .with_timestamp(comment_ts);
             all_events.push(comment_event);
             report.comments_imported += 1;
         }
@@ -307,19 +292,15 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                         report.deps_skipped += 1;
                         continue;
                     }
-                    let dep_event = TaskEvent {
-                        event_id: new_event_id(),
-                        task_id: dep.depends_on_id.clone(),
-                        timestamp: dep_created_ts,
-                        actor: "beads-import".to_string(),
-                        event_type: EventType::DependencyAdded,
-
-                        event_version: CURRENT_EVENT_VERSION,
-                        payload: serde_json::to_value(DependencyPayload {
+                    let dep_event = TaskEvent::new(
+                        &dep.depends_on_id,
+                        "beads-import",
+                        EventType::DependencyAdded,
+                        &DependencyPayload {
                             depends_on_task_id: dep.issue_id.clone(),
-                        })
-                        .unwrap(),
-                    };
+                        },
+                    )
+                    .with_timestamp(dep_created_ts);
                     all_events.push(dep_event);
                     report.deps_imported += 1;
                 }
@@ -343,19 +324,14 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                         report.deps_skipped += 1;
                         continue;
                     }
-                    let parent_event = TaskEvent {
-                        event_id: new_event_id(),
-                        task_id: dep.issue_id.clone(),
-                        timestamp: dep_created_ts,
-                        actor: "beads-import".to_string(),
-                        event_type: EventType::ParentSet,
-
-                        event_version: CURRENT_EVENT_VERSION,
-                        payload: serde_json::to_value(ParentSetPayload {
+                    let parent_event = TaskEvent::from_payload(
+                        dep.issue_id.clone(),
+                        "beads-import",
+                        ParentSetPayload {
                             parent_task_id: Some(dep.depends_on_id.clone()),
-                        })
-                        .unwrap(),
-                    };
+                        },
+                    )
+                    .with_timestamp(dep_created_ts);
                     all_events.push(parent_event);
                     report.parent_links_imported += 1;
                 }
@@ -383,39 +359,31 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                     .map(parse_iso_ts)
                     .unwrap_or_else(|| parse_iso_ts(&issue.created_at));
 
-                let status_event = TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: closed_ts,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::StatusChanged,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(StatusChangedPayload {
-                        new_status: TaskStatus::Done,
-                    })
-                    .unwrap(),
-                };
-                all_events.push(status_event);
+                all_events.push(
+                    TaskEvent::from_payload(
+                        &issue.id,
+                        "beads-import",
+                        StatusChangedPayload {
+                            new_status: TaskStatus::Done,
+                        },
+                    )
+                    .with_timestamp(closed_ts),
+                );
 
                 // Add close_reason as a comment if present
                 if let Some(reason) = &issue.close_reason
                     && !reason.is_empty()
                 {
-                    let comment_event = TaskEvent {
-                        event_id: new_event_id(),
-                        task_id: issue.id.clone(),
-                        timestamp: closed_ts,
-                        actor: "beads-import".to_string(),
-                        event_type: EventType::CommentAdded,
-
-                        event_version: CURRENT_EVENT_VERSION,
-                        payload: serde_json::to_value(CommentPayload {
-                            body: format!("[close_reason] {reason}"),
-                        })
-                        .unwrap(),
-                    };
-                    all_events.push(comment_event);
+                    all_events.push(
+                        TaskEvent::from_payload(
+                            &issue.id,
+                            "beads-import",
+                            CommentPayload {
+                                body: format!("[close_reason] {reason}"),
+                            },
+                        )
+                        .with_timestamp(closed_ts),
+                    );
                 }
             }
             "in_progress" => {
@@ -425,20 +393,16 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                     .map(parse_iso_ts)
                     .unwrap_or_else(|| parse_iso_ts(&issue.created_at));
 
-                let status_event = TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: updated_ts,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::StatusChanged,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(StatusChangedPayload {
-                        new_status: TaskStatus::InProgress,
-                    })
-                    .unwrap(),
-                };
-                all_events.push(status_event);
+                all_events.push(
+                    TaskEvent::from_payload(
+                        &issue.id,
+                        "beads-import",
+                        StatusChangedPayload {
+                            new_status: TaskStatus::InProgress,
+                        },
+                    )
+                    .with_timestamp(updated_ts),
+                );
             }
             _ => {} // "open" is the default, no status change needed
         }
@@ -586,16 +550,9 @@ pub fn import_beads_issues(
             }
 
             if has_field {
-                phase2.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: now,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::TaskUpdated,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(upd).unwrap(),
-                });
+                phase2.push(
+                    TaskEvent::from_payload(&issue.id, "beads-import", upd).with_timestamp(now),
+                );
                 changed = true;
             }
 
@@ -606,19 +563,16 @@ pub fn import_beads_issues(
                 _ => TaskStatus::Open,
             };
             if brain_status.as_ref() != existing.status {
-                phase2.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: now,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::StatusChanged,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(StatusChangedPayload {
-                        new_status: brain_status,
-                    })
-                    .unwrap(),
-                });
+                phase2.push(
+                    TaskEvent::from_payload(
+                        &issue.id,
+                        "beads-import",
+                        StatusChangedPayload {
+                            new_status: brain_status,
+                        },
+                    )
+                    .with_timestamp(now),
+                );
                 changed = true;
             }
 
@@ -629,35 +583,31 @@ pub fn import_beads_issues(
             let cur_labels_ref: HashSet<&str> = cur_labels.iter().map(|l| l.as_str()).collect();
 
             for label in beads_labels.difference(&cur_labels_ref) {
-                phase2.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: now,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::LabelAdded,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(LabelPayload {
-                        label: label.to_string(),
-                    })
-                    .unwrap(),
-                });
+                phase2.push(
+                    TaskEvent::new(
+                        &issue.id,
+                        "beads-import",
+                        EventType::LabelAdded,
+                        &LabelPayload {
+                            label: label.to_string(),
+                        },
+                    )
+                    .with_timestamp(now),
+                );
                 changed = true;
             }
             for label in cur_labels_ref.difference(&beads_labels) {
-                phase2.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: now,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::LabelRemoved,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(LabelPayload {
-                        label: label.to_string(),
-                    })
-                    .unwrap(),
-                });
+                phase2.push(
+                    TaskEvent::new(
+                        &issue.id,
+                        "beads-import",
+                        EventType::LabelRemoved,
+                        &LabelPayload {
+                            label: label.to_string(),
+                        },
+                    )
+                    .with_timestamp(now),
+                );
                 changed = true;
             }
 
@@ -675,35 +625,31 @@ pub fn import_beads_issues(
                 .unwrap_or_default();
 
             for dep in exp_beads_deps.difference(&cur_beads_deps) {
-                phase3.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: now,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::DependencyAdded,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(DependencyPayload {
-                        depends_on_task_id: dep.to_string(),
-                    })
-                    .unwrap(),
-                });
+                phase3.push(
+                    TaskEvent::new(
+                        &issue.id,
+                        "beads-import",
+                        EventType::DependencyAdded,
+                        &DependencyPayload {
+                            depends_on_task_id: dep.to_string(),
+                        },
+                    )
+                    .with_timestamp(now),
+                );
                 changed = true;
             }
             for dep in cur_beads_deps.difference(&exp_beads_deps) {
-                phase3.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: now,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::DependencyRemoved,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(DependencyPayload {
-                        depends_on_task_id: dep.to_string(),
-                    })
-                    .unwrap(),
-                });
+                phase3.push(
+                    TaskEvent::new(
+                        &issue.id,
+                        "beads-import",
+                        EventType::DependencyRemoved,
+                        &DependencyPayload {
+                            depends_on_task_id: dep.to_string(),
+                        },
+                    )
+                    .with_timestamp(now),
+                );
                 changed = true;
             }
 
@@ -714,19 +660,16 @@ pub fn import_beads_issues(
             let cur_is_beads = cur_parent.is_some_and(|p| beads_ids.contains(p));
 
             if (exp_is_beads || cur_is_beads) && exp_parent != cur_parent {
-                phase3.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: now,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::ParentSet,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(ParentSetPayload {
-                        parent_task_id: exp_parent.map(|p| p.to_string()),
-                    })
-                    .unwrap(),
-                });
+                phase3.push(
+                    TaskEvent::from_payload(
+                        &issue.id,
+                        "beads-import",
+                        ParentSetPayload {
+                            parent_task_id: exp_parent.map(|p| p.to_string()),
+                        },
+                    )
+                    .with_timestamp(now),
+                );
                 changed = true;
             }
 
@@ -740,47 +683,42 @@ pub fn import_beads_issues(
             let created_ts = parse_iso_ts(&issue.created_at);
             let description = build_description(issue);
 
-            phase1.push(TaskEvent {
-                event_id: new_event_id(),
-                task_id: issue.id.clone(),
-                timestamp: created_ts,
-                actor: issue
-                    .owner
-                    .clone()
-                    .unwrap_or_else(|| "beads-import".to_string()),
-                event_type: EventType::TaskCreated,
-
-                event_version: CURRENT_EVENT_VERSION,
-                payload: serde_json::to_value(TaskCreatedPayload {
-                    title: issue.title.clone(),
-                    description,
-                    priority: issue.priority,
-                    status: TaskStatus::Open,
-                    due_ts: None,
-                    task_type: issue.issue_type.clone(),
-                    assignee: issue.owner.clone(),
-                    defer_until: None,
-                    parent_task_id: None,
-                })
-                .unwrap(),
-            });
+            phase1.push(
+                TaskEvent::from_payload(
+                    issue.id.clone(),
+                    issue
+                        .owner
+                        .clone()
+                        .unwrap_or_else(|| "beads-import".to_string()),
+                    TaskCreatedPayload {
+                        title: issue.title.clone(),
+                        description,
+                        priority: issue.priority,
+                        status: TaskStatus::Open,
+                        due_ts: None,
+                        task_type: issue.issue_type.clone(),
+                        assignee: issue.owner.clone(),
+                        defer_until: None,
+                        parent_task_id: None,
+                    },
+                )
+                .with_timestamp(created_ts),
+            );
             report.issues_imported += 1;
 
             // Labels
             for label in &issue.labels {
-                phase1.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: created_ts,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::LabelAdded,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(LabelPayload {
-                        label: label.clone(),
-                    })
-                    .unwrap(),
-                });
+                phase1.push(
+                    TaskEvent::new(
+                        &issue.id,
+                        "beads-import",
+                        EventType::LabelAdded,
+                        &LabelPayload {
+                            label: label.clone(),
+                        },
+                    )
+                    .with_timestamp(created_ts),
+                );
                 report.labels_imported += 1;
             }
 
@@ -791,22 +729,19 @@ pub fn import_beads_issues(
                     .as_deref()
                     .map(parse_iso_ts)
                     .unwrap_or(created_ts);
-                phase1.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: comment_ts,
-                    actor: comment
-                        .author
-                        .clone()
-                        .unwrap_or_else(|| "beads-import".to_string()),
-                    event_type: EventType::CommentAdded,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(CommentPayload {
-                        body: comment.text.clone(),
-                    })
-                    .unwrap(),
-                });
+                phase1.push(
+                    TaskEvent::from_payload(
+                        issue.id.clone(),
+                        comment
+                            .author
+                            .clone()
+                            .unwrap_or_else(|| "beads-import".to_string()),
+                        CommentPayload {
+                            body: comment.text.clone(),
+                        },
+                    )
+                    .with_timestamp(comment_ts),
+                );
                 report.comments_imported += 1;
             }
 
@@ -820,36 +755,30 @@ pub fn import_beads_issues(
                         .map(parse_iso_ts)
                         .unwrap_or(created_ts);
 
-                    phase2.push(TaskEvent {
-                        event_id: new_event_id(),
-                        task_id: issue.id.clone(),
-                        timestamp: closed_ts,
-                        actor: "beads-import".to_string(),
-                        event_type: EventType::StatusChanged,
-
-                        event_version: CURRENT_EVENT_VERSION,
-                        payload: serde_json::to_value(StatusChangedPayload {
-                            new_status: TaskStatus::Done,
-                        })
-                        .unwrap(),
-                    });
+                    phase2.push(
+                        TaskEvent::from_payload(
+                            &issue.id,
+                            "beads-import",
+                            StatusChangedPayload {
+                                new_status: TaskStatus::Done,
+                            },
+                        )
+                        .with_timestamp(closed_ts),
+                    );
 
                     if let Some(reason) = &issue.close_reason
                         && !reason.is_empty()
                     {
-                        phase2.push(TaskEvent {
-                            event_id: new_event_id(),
-                            task_id: issue.id.clone(),
-                            timestamp: closed_ts,
-                            actor: "beads-import".to_string(),
-                            event_type: EventType::CommentAdded,
-
-                            event_version: CURRENT_EVENT_VERSION,
-                            payload: serde_json::to_value(CommentPayload {
-                                body: format!("[close_reason] {reason}"),
-                            })
-                            .unwrap(),
-                        });
+                        phase2.push(
+                            TaskEvent::from_payload(
+                                &issue.id,
+                                "beads-import",
+                                CommentPayload {
+                                    body: format!("[close_reason] {reason}"),
+                                },
+                            )
+                            .with_timestamp(closed_ts),
+                        );
                     }
                 }
                 "in_progress" => {
@@ -859,19 +788,16 @@ pub fn import_beads_issues(
                         .map(parse_iso_ts)
                         .unwrap_or(created_ts);
 
-                    phase2.push(TaskEvent {
-                        event_id: new_event_id(),
-                        task_id: issue.id.clone(),
-                        timestamp: updated_ts,
-                        actor: "beads-import".to_string(),
-                        event_type: EventType::StatusChanged,
-
-                        event_version: CURRENT_EVENT_VERSION,
-                        payload: serde_json::to_value(StatusChangedPayload {
-                            new_status: TaskStatus::InProgress,
-                        })
-                        .unwrap(),
-                    });
+                    phase2.push(
+                        TaskEvent::from_payload(
+                            &issue.id,
+                            "beads-import",
+                            StatusChangedPayload {
+                                new_status: TaskStatus::InProgress,
+                            },
+                        )
+                        .with_timestamp(updated_ts),
+                    );
                 }
                 _ => {}
             }
@@ -879,37 +805,32 @@ pub fn import_beads_issues(
             // Relationships (phase 3 — after all tasks exist)
             if let Some(deps) = expected_deps.get(&issue.id) {
                 for dep_on in deps {
-                    phase3.push(TaskEvent {
-                        event_id: new_event_id(),
-                        task_id: issue.id.clone(),
-                        timestamp: now,
-                        actor: "beads-import".to_string(),
-                        event_type: EventType::DependencyAdded,
-
-                        event_version: CURRENT_EVENT_VERSION,
-                        payload: serde_json::to_value(DependencyPayload {
-                            depends_on_task_id: dep_on.clone(),
-                        })
-                        .unwrap(),
-                    });
+                    phase3.push(
+                        TaskEvent::new(
+                            &issue.id,
+                            "beads-import",
+                            EventType::DependencyAdded,
+                            &DependencyPayload {
+                                depends_on_task_id: dep_on.clone(),
+                            },
+                        )
+                        .with_timestamp(now),
+                    );
                     report.deps_imported += 1;
                 }
             }
 
             if let Some(parent) = expected_parents.get(&issue.id) {
-                phase3.push(TaskEvent {
-                    event_id: new_event_id(),
-                    task_id: issue.id.clone(),
-                    timestamp: now,
-                    actor: "beads-import".to_string(),
-                    event_type: EventType::ParentSet,
-
-                    event_version: CURRENT_EVENT_VERSION,
-                    payload: serde_json::to_value(ParentSetPayload {
-                        parent_task_id: Some(parent.clone()),
-                    })
-                    .unwrap(),
-                });
+                phase3.push(
+                    TaskEvent::from_payload(
+                        &issue.id,
+                        "beads-import",
+                        ParentSetPayload {
+                            parent_task_id: Some(parent.clone()),
+                        },
+                    )
+                    .with_timestamp(now),
+                );
                 report.parent_links_imported += 1;
             }
         }

@@ -239,7 +239,7 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::db::schema::init_schema;
-    use crate::tasks::events::{CURRENT_EVENT_VERSION, TaskStatus, new_event_id, now_ts};
+    use crate::tasks::events::TaskStatus;
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -248,15 +248,10 @@ mod tests {
     }
 
     fn make_created_event(task_id: &str, title: &str, priority: i32) -> TaskEvent {
-        TaskEvent {
-            event_id: new_event_id(),
-            task_id: task_id.to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskCreatedPayload {
+        TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskCreatedPayload {
                 title: title.to_string(),
                 description: None,
                 priority,
@@ -266,9 +261,8 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-            })
-            .unwrap(),
-        }
+            },
+        )
     }
 
     #[test]
@@ -300,15 +294,10 @@ mod tests {
         let ev = make_created_event("t1", "Original", 4);
         apply_event(&conn, &ev).unwrap();
 
-        let update = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskUpdated,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskUpdatedPayload {
+        let update = TaskEvent::from_payload(
+            "t1",
+            "user",
+            TaskUpdatedPayload {
                 title: Some("Updated".to_string()),
                 description: Some("A description".to_string()),
                 priority: Some(1),
@@ -317,9 +306,8 @@ mod tests {
                 task_type: None,
                 assignee: None,
                 defer_until: None,
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &update).unwrap();
 
         let (title, desc, priority): (String, Option<String>, i32) = conn
@@ -340,19 +328,13 @@ mod tests {
         let ev = make_created_event("t1", "Task", 2);
         apply_event(&conn, &ev).unwrap();
 
-        let status_ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::StatusChanged,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(StatusChangedPayload {
+        let status_ev = TaskEvent::from_payload(
+            "t1",
+            "user",
+            StatusChangedPayload {
                 new_status: TaskStatus::Done,
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &status_ev).unwrap();
 
         let status: String = conn
@@ -369,19 +351,14 @@ mod tests {
         apply_event(&conn, &make_created_event("t1", "Task 1", 2)).unwrap();
         apply_event(&conn, &make_created_event("t2", "Task 2", 2)).unwrap();
 
-        let dep_add = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep_add = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &dep_add).unwrap();
 
         let count: i64 = conn
@@ -394,19 +371,14 @@ mod tests {
         assert_eq!(count, 1);
 
         // Remove
-        let dep_rm = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyRemoved,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep_rm = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyRemoved,
+            &DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &dep_rm).unwrap();
 
         let count: i64 = conn
@@ -424,19 +396,14 @@ mod tests {
         let conn = setup();
         apply_event(&conn, &make_created_event("t1", "Task", 2)).unwrap();
 
-        let link = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::NoteLinked,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(NoteLinkPayload {
+        let link = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::NoteLinked,
+            &NoteLinkPayload {
                 chunk_id: "c1".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &link).unwrap();
 
         let count: i64 = conn
@@ -448,19 +415,14 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
 
-        let unlink = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::NoteUnlinked,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(NoteLinkPayload {
+        let unlink = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::NoteUnlinked,
+            &NoteLinkPayload {
                 chunk_id: "c1".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &unlink).unwrap();
 
         let count: i64 = conn

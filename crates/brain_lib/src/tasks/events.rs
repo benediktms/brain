@@ -158,6 +158,117 @@ pub struct ParentSetPayload {
     pub parent_task_id: Option<String>,
 }
 
+// -- EventPayload trait --
+
+/// Maps a typed payload to its unambiguous `EventType`.
+///
+/// Implemented for the 5 payload types that map to exactly one event type.
+/// For ambiguous payloads (`DependencyPayload`, `NoteLinkPayload`, `LabelPayload`),
+/// use `TaskEvent::new()` with an explicit `event_type` instead.
+pub trait EventPayload: Serialize {
+    fn event_type() -> EventType;
+}
+
+impl EventPayload for TaskCreatedPayload {
+    fn event_type() -> EventType {
+        EventType::TaskCreated
+    }
+}
+
+impl EventPayload for TaskUpdatedPayload {
+    fn event_type() -> EventType {
+        EventType::TaskUpdated
+    }
+}
+
+impl EventPayload for StatusChangedPayload {
+    fn event_type() -> EventType {
+        EventType::StatusChanged
+    }
+}
+
+impl EventPayload for CommentPayload {
+    fn event_type() -> EventType {
+        EventType::CommentAdded
+    }
+}
+
+impl EventPayload for ParentSetPayload {
+    fn event_type() -> EventType {
+        EventType::ParentSet
+    }
+}
+
+// -- TaskEvent constructors --
+
+impl TaskEvent {
+    /// Create from a typed payload that implements `EventPayload` (event_type inferred).
+    pub fn from_payload<P: EventPayload>(
+        task_id: impl Into<String>,
+        actor: impl Into<String>,
+        payload: P,
+    ) -> Self {
+        Self {
+            event_id: new_event_id(),
+            task_id: task_id.into(),
+            timestamp: now_ts(),
+            actor: actor.into(),
+            event_type: P::event_type(),
+            event_version: CURRENT_EVENT_VERSION,
+            payload: serde_json::to_value(payload).unwrap(),
+        }
+    }
+
+    /// Create from any `Serialize` payload with an explicit `event_type`.
+    ///
+    /// For ambiguous payloads (`DependencyPayload`, `LabelPayload`, `NoteLinkPayload`)
+    /// that map to multiple event types.
+    pub fn new(
+        task_id: impl Into<String>,
+        actor: impl Into<String>,
+        event_type: EventType,
+        payload: &impl Serialize,
+    ) -> Self {
+        Self {
+            event_id: new_event_id(),
+            task_id: task_id.into(),
+            timestamp: now_ts(),
+            actor: actor.into(),
+            event_type,
+            event_version: CURRENT_EVENT_VERSION,
+            payload: serde_json::to_value(payload).unwrap(),
+        }
+    }
+
+    /// Create from pre-parsed raw JSON with an explicit `event_type`.
+    ///
+    /// Used by the MCP handler where the payload is already a `serde_json::Value`.
+    pub fn from_raw(
+        task_id: impl Into<String>,
+        actor: impl Into<String>,
+        event_type: EventType,
+        payload: serde_json::Value,
+    ) -> Self {
+        Self {
+            event_id: new_event_id(),
+            task_id: task_id.into(),
+            timestamp: now_ts(),
+            actor: actor.into(),
+            event_type,
+            event_version: CURRENT_EVENT_VERSION,
+            payload,
+        }
+    }
+
+    /// Override the auto-generated timestamp.
+    ///
+    /// Used by `import_beads` to preserve original timestamps.
+    pub fn with_timestamp(mut self, ts: i64) -> Self {
+        self.timestamp = ts;
+        self
+    }
+}
+
 /// Generate a new UUID v7 event ID.
 pub fn new_event_id() -> String {
     Uuid::now_v7().to_string()
@@ -226,15 +337,12 @@ mod tests {
     use tempfile::TempDir;
 
     fn sample_event(task_id: &str, event_type: EventType) -> TaskEvent {
-        TaskEvent {
-            event_id: new_event_id(),
-            task_id: task_id.to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
+        TaskEvent::from_raw(
+            task_id,
+            "user",
             event_type,
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::json!({"title": "Test task", "priority": 2, "status": "open"}),
-        }
+            serde_json::json!({"title": "Test task", "priority": 2, "status": "open"}),
+        )
     }
 
     #[test]
@@ -302,5 +410,106 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"event_type\":\"status_changed\""));
         assert!(json.contains("\"task_id\":\"t1\""));
+    }
+
+    #[test]
+    fn test_from_payload_sets_correct_event_type() {
+        let ev = TaskEvent::from_payload(
+            "t1",
+            "user",
+            StatusChangedPayload {
+                new_status: TaskStatus::Done,
+            },
+        );
+        assert_eq!(ev.event_type, EventType::StatusChanged);
+        assert_eq!(ev.task_id, "t1");
+        assert_eq!(ev.actor, "user");
+
+        let ev = TaskEvent::from_payload(
+            "t2",
+            "user",
+            TaskCreatedPayload {
+                title: "Test".to_string(),
+                description: None,
+                priority: 2,
+                status: TaskStatus::Open,
+                due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: None,
+            },
+        );
+        assert_eq!(ev.event_type, EventType::TaskCreated);
+
+        let ev = TaskEvent::from_payload(
+            "t3",
+            "user",
+            CommentPayload {
+                body: "hello".to_string(),
+            },
+        );
+        assert_eq!(ev.event_type, EventType::CommentAdded);
+
+        let ev = TaskEvent::from_payload(
+            "t4",
+            "user",
+            ParentSetPayload {
+                parent_task_id: Some("p1".to_string()),
+            },
+        );
+        assert_eq!(ev.event_type, EventType::ParentSet);
+
+        let ev = TaskEvent::from_payload(
+            "t5",
+            "user",
+            TaskUpdatedPayload {
+                title: Some("New".to_string()),
+                description: None,
+                priority: None,
+                due_ts: None,
+                blocked_reason: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+            },
+        );
+        assert_eq!(ev.event_type, EventType::TaskUpdated);
+    }
+
+    #[test]
+    fn test_new_sets_event_version() {
+        let ev = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
+                depends_on_task_id: "t2".to_string(),
+            },
+        );
+        assert_eq!(ev.event_version, CURRENT_EVENT_VERSION);
+        assert_eq!(ev.event_type, EventType::DependencyAdded);
+    }
+
+    #[test]
+    fn test_with_timestamp_overrides() {
+        let ev = TaskEvent::from_payload(
+            "t1",
+            "user",
+            StatusChangedPayload {
+                new_status: TaskStatus::Done,
+            },
+        )
+        .with_timestamp(12345);
+        assert_eq!(ev.timestamp, 12345);
+    }
+
+    #[test]
+    fn test_from_raw_preserves_payload() {
+        let payload = serde_json::json!({"new_status": "done"});
+        let ev = TaskEvent::from_raw("t1", "user", EventType::StatusChanged, payload.clone());
+        assert_eq!(ev.payload, payload);
+        assert_eq!(ev.event_type, EventType::StatusChanged);
+        assert_eq!(ev.event_version, CURRENT_EVENT_VERSION);
     }
 }

@@ -381,15 +381,10 @@ mod tests {
     }
 
     fn create_task(conn: &Connection, task_id: &str, title: &str, priority: i32) {
-        let ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: task_id.to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskCreatedPayload {
+        let ev = TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskCreatedPayload {
                 title: title.to_string(),
                 description: None,
                 priority,
@@ -399,43 +394,31 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(conn, &ev).unwrap();
     }
 
     fn set_status(conn: &Connection, task_id: &str, status: &str) {
-        let ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: task_id.to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::StatusChanged,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(StatusChangedPayload {
+        let ev = TaskEvent::from_payload(
+            task_id,
+            "user",
+            StatusChangedPayload {
                 new_status: status.parse().unwrap(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(conn, &ev).unwrap();
     }
 
     fn add_dep(conn: &Connection, task_id: &str, depends_on: &str) {
-        let ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: task_id.to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(DependencyPayload {
+        let ev = TaskEvent::new(
+            task_id,
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: depends_on.to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(conn, &ev).unwrap();
     }
 
@@ -510,15 +493,10 @@ mod tests {
         let conn = setup();
         create_task(&conn, "t1", "Task", 2);
 
-        let ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskUpdated,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskUpdatedPayload {
+        let ev = TaskEvent::from_payload(
+            "t1",
+            "user",
+            TaskUpdatedPayload {
                 title: None,
                 description: None,
                 priority: None,
@@ -527,9 +505,8 @@ mod tests {
                 task_type: None,
                 assignee: None,
                 defer_until: None,
-            })
-            .unwrap(),
-        };
+            },
+        );
         apply_event(&conn, &ev).unwrap();
 
         let blocked = list_blocked(&conn).unwrap();
@@ -578,15 +555,10 @@ mod tests {
         let conn = setup();
 
         // Same priority, different due dates
-        let ev1 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskCreatedPayload {
+        let ev1 = TaskEvent::from_payload(
+            "t1",
+            "user",
+            TaskCreatedPayload {
                 title: "Later due".to_string(),
                 description: None,
                 priority: 2,
@@ -596,18 +568,12 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-            })
-            .unwrap(),
-        };
-        let ev2 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t2".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskCreatedPayload {
+            },
+        );
+        let ev2 = TaskEvent::from_payload(
+            "t2",
+            "user",
+            TaskCreatedPayload {
                 title: "Earlier due".to_string(),
                 description: None,
                 priority: 2,
@@ -617,18 +583,12 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-            })
-            .unwrap(),
-        };
-        let ev3 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t3".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskCreatedPayload {
+            },
+        );
+        let ev3 = TaskEvent::from_payload(
+            "t3",
+            "user",
+            TaskCreatedPayload {
                 title: "No due date".to_string(),
                 description: None,
                 priority: 2,
@@ -638,9 +598,8 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-            })
-            .unwrap(),
-        };
+            },
+        );
 
         apply_event(&conn, &ev1).unwrap();
         apply_event(&conn, &ev2).unwrap();

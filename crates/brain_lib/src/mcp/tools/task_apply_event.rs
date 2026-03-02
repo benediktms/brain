@@ -3,9 +3,7 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::tasks::events::{
-    EventType, TaskEvent, TaskStatus, CURRENT_EVENT_VERSION, new_event_id, now_ts,
-};
+use crate::tasks::events::{EventType, TaskEvent, TaskStatus, new_event_id};
 
 use super::utils::{parse_timestamp, task_row_to_json};
 
@@ -98,15 +96,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         payload
     };
 
-    let event = TaskEvent {
-        event_id: new_event_id(),
-        task_id: task_id.clone(),
-        timestamp: now_ts(),
-        actor,
-        event_type: event_type.clone(),
-        event_version: CURRENT_EVENT_VERSION,
-        payload,
-    };
+    let event = TaskEvent::from_raw(task_id.clone(), actor, event_type.clone(), payload);
 
     // Append (validates + writes JSONL + applies projection)
     if let Err(e) = ctx.tasks.append(&event) {
@@ -133,8 +123,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
             .get("new_status")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if new_status == TaskStatus::Done.as_ref() || new_status == TaskStatus::Cancelled.as_ref()
-        {
+        if new_status == TaskStatus::Done.as_ref() || new_status == TaskStatus::Cancelled.as_ref() {
             ctx.tasks.list_newly_unblocked(&task_id).unwrap_or_default()
         } else {
             vec![]

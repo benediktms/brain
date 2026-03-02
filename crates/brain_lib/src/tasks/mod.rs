@@ -247,14 +247,10 @@ mod tests {
     }
 
     fn created_event(task_id: &str, title: &str, priority: i32) -> TaskEvent {
-        TaskEvent {
-            event_id: new_event_id(),
-            task_id: task_id.to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::TaskCreated,
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(TaskCreatedPayload {
+        TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskCreatedPayload {
                 title: title.to_string(),
                 description: None,
                 priority,
@@ -264,9 +260,8 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-            })
-            .unwrap(),
-        }
+            },
+        )
     }
 
     #[test]
@@ -282,18 +277,14 @@ mod tests {
         assert_eq!(ready.len(), 2);
 
         // Add dependency: t2 depends on t1
-        let dep_event = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t2".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep_event = TaskEvent::new(
+            "t2",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "t1".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         store.append(&dep_event).unwrap();
 
         // Only t1 ready now
@@ -307,18 +298,13 @@ mod tests {
         assert_eq!(blocked[0].task_id, "t2");
 
         // Complete t1
-        let done_event = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::StatusChanged,
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(StatusChangedPayload {
+        let done_event = TaskEvent::from_payload(
+            "t1",
+            "user",
+            StatusChangedPayload {
                 new_status: TaskStatus::Done,
-            })
-            .unwrap(),
-        };
+            },
+        );
         store.append(&done_event).unwrap();
 
         // t2 now ready
@@ -341,18 +327,13 @@ mod tests {
     fn test_update_nonexistent_rejected() {
         let (_dir, store) = setup();
 
-        let ev = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "nonexistent".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::StatusChanged,
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(StatusChangedPayload {
+        let ev = TaskEvent::from_payload(
+            "nonexistent",
+            "user",
+            StatusChangedPayload {
                 new_status: TaskStatus::Done,
-            })
-            .unwrap(),
-        };
+            },
+        );
         let result = store.append(&ev);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
@@ -365,33 +346,25 @@ mod tests {
         store.append(&created_event("t2", "Task 2", 2)).unwrap();
 
         // t1 depends on t2
-        let dep1 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep1 = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "t2".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         store.append(&dep1).unwrap();
 
         // t2 depends on t1 — cycle!
-        let dep2 = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t2".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep2 = TaskEvent::new(
+            "t2",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "t1".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         let result = store.append(&dep2);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cycle"));
@@ -402,18 +375,14 @@ mod tests {
         let (_dir, store) = setup();
         store.append(&created_event("t1", "Task 1", 2)).unwrap();
 
-        let dep = TaskEvent {
-            event_id: new_event_id(),
-            task_id: "t1".to_string(),
-            timestamp: now_ts(),
-            actor: "user".to_string(),
-            event_type: EventType::DependencyAdded,
-            event_version: CURRENT_EVENT_VERSION,
-            payload: serde_json::to_value(DependencyPayload {
+        let dep = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
                 depends_on_task_id: "nonexistent".to_string(),
-            })
-            .unwrap(),
-        };
+            },
+        );
         let result = store.append(&dep);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("target not found"));
