@@ -5,7 +5,6 @@ mod mem_search_minimal;
 mod mem_write_episode;
 mod task_apply_event;
 mod task_next;
-mod utils;
 
 use serde_json::{Value, json};
 

@@ -4,7 +4,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 
-use super::utils::task_row_to_json;
+use crate::utils::task_row_to_json;
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let policy = params

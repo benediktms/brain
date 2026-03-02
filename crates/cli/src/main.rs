@@ -159,7 +159,12 @@ enum Command {
     },
 
     /// Manage brain tasks
+    #[command(visible_alias = "task")]
     Tasks {
+        /// Output as JSON instead of human-readable text
+        #[arg(long, global = true)]
+        json: bool,
+
         #[command(subcommand)]
         action: TasksAction,
     },
@@ -167,6 +172,139 @@ enum Command {
 
 #[derive(Subcommand)]
 enum TasksAction {
+    /// Create a new task
+    Create {
+        /// Task title
+        #[arg(long)]
+        title: String,
+
+        /// Task description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Priority (0=critical, 1=high, 2=medium, 3=low, 4=backlog)
+        #[arg(long, default_value = "2")]
+        priority: i32,
+
+        /// Task type (e.g. task, bug, feature)
+        #[arg(long, value_name = "TYPE", default_value = "task")]
+        task_type: String,
+
+        /// Assignee
+        #[arg(long)]
+        assignee: Option<String>,
+
+        /// Parent task ID
+        #[arg(long)]
+        parent: Option<String>,
+    },
+
+    /// List tasks with optional filters
+    List {
+        /// Filter by status (open, in_progress, blocked, done, cancelled)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Filter by priority (0-4)
+        #[arg(long)]
+        priority: Option<i32>,
+
+        /// Filter by task type
+        #[arg(long, value_name = "TYPE")]
+        task_type: Option<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assignee: Option<String>,
+
+        /// Show only ready tasks (no blockers)
+        #[arg(long)]
+        ready: bool,
+
+        /// Show only blocked tasks
+        #[arg(long)]
+        blocked: bool,
+    },
+
+    /// Show details for a specific task
+    Show {
+        /// Task ID
+        id: String,
+    },
+
+    /// Update a task's fields or status
+    Update {
+        /// Task ID
+        id: String,
+
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// New status (open, in_progress, blocked, done, cancelled)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// New priority (0-4)
+        #[arg(long)]
+        priority: Option<i32>,
+
+        /// New task type
+        #[arg(long, value_name = "TYPE")]
+        task_type: Option<String>,
+
+        /// New assignee
+        #[arg(long)]
+        assignee: Option<String>,
+
+        /// Set blocked reason
+        #[arg(long)]
+        blocked_reason: Option<String>,
+    },
+
+    /// Manage task dependencies
+    Dep {
+        #[command(subcommand)]
+        action: DepAction,
+    },
+
+    /// Link a note (chunk) to a task
+    Link {
+        /// Task ID
+        task_id: String,
+
+        /// Chunk ID to link
+        chunk_id: String,
+    },
+
+    /// Unlink a note (chunk) from a task
+    Unlink {
+        /// Task ID
+        task_id: String,
+
+        /// Chunk ID to unlink
+        chunk_id: String,
+    },
+
+    /// Add a comment to a task
+    Comment {
+        /// Task ID
+        task_id: String,
+
+        /// Comment body
+        body: String,
+    },
+
+    /// Manage task labels
+    Label {
+        #[command(subcommand)]
+        action: LabelAction,
+    },
+
     /// Export tasks to a file format (defaults to markdown)
     Export {
         /// Output format (currently only "markdown" is supported)
@@ -176,6 +314,48 @@ enum TasksAction {
         /// Output directory
         #[arg(long, default_value = ".brain/tasks/projections")]
         dir: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum DepAction {
+    /// Add a dependency (task depends on another)
+    Add {
+        /// Task that has the dependency
+        task_id: String,
+
+        /// Task it depends on
+        depends_on: String,
+    },
+
+    /// Remove a dependency
+    Remove {
+        /// Task that has the dependency
+        task_id: String,
+
+        /// Task it depended on
+        depends_on: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LabelAction {
+    /// Add a label to a task
+    Add {
+        /// Task ID
+        task_id: String,
+
+        /// Label to add
+        label: String,
+    },
+
+    /// Remove a label from a task
+    Remove {
+        /// Task ID
+        task_id: String,
+
+        /// Label to remove
+        label: String,
     },
 }
 
@@ -256,16 +436,119 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::ImportBeads { path, dry_run } => {
             commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
         }
-        Command::Tasks { action } => match action {
-            TasksAction::Export { format, dir } => match format.as_str() {
-                "markdown" | "md" => {
-                    commands::tasks::export_markdown::run(dir, cli.sqlite_db)?;
+        Command::Tasks { json, action } => {
+            use commands::tasks::run::{CreateParams, ListParams, TaskCtx, UpdateParams};
+            let ctx = TaskCtx::new(&cli.sqlite_db, json)?;
+
+            match action {
+                TasksAction::Create {
+                    title,
+                    description,
+                    priority,
+                    task_type,
+                    assignee,
+                    parent,
+                } => {
+                    commands::tasks::run::create(
+                        &ctx,
+                        CreateParams {
+                            title,
+                            description,
+                            priority,
+                            task_type,
+                            assignee,
+                            parent,
+                        },
+                    )?;
                 }
-                other => {
-                    anyhow::bail!("Unknown export format: {other}. Supported: markdown");
+                TasksAction::List {
+                    status,
+                    priority,
+                    task_type,
+                    assignee,
+                    ready,
+                    blocked,
+                } => {
+                    commands::tasks::run::list(
+                        &ctx,
+                        &ListParams {
+                            status,
+                            priority,
+                            task_type,
+                            assignee,
+                            ready,
+                            blocked,
+                        },
+                    )?;
                 }
-            },
-        },
+                TasksAction::Show { id } => {
+                    commands::tasks::run::show(&ctx, &id)?;
+                }
+                TasksAction::Update {
+                    id,
+                    title,
+                    description,
+                    status,
+                    priority,
+                    task_type,
+                    assignee,
+                    blocked_reason,
+                } => {
+                    commands::tasks::run::update(
+                        &ctx,
+                        UpdateParams {
+                            id,
+                            title,
+                            description,
+                            status,
+                            priority,
+                            task_type,
+                            assignee,
+                            blocked_reason,
+                        },
+                    )?;
+                }
+                TasksAction::Dep { action } => match action {
+                    DepAction::Add {
+                        task_id,
+                        depends_on,
+                    } => {
+                        commands::tasks::run::dep_add(&ctx, &task_id, &depends_on)?;
+                    }
+                    DepAction::Remove {
+                        task_id,
+                        depends_on,
+                    } => {
+                        commands::tasks::run::dep_remove(&ctx, &task_id, &depends_on)?;
+                    }
+                },
+                TasksAction::Link { task_id, chunk_id } => {
+                    commands::tasks::run::link(&ctx, &task_id, &chunk_id)?;
+                }
+                TasksAction::Unlink { task_id, chunk_id } => {
+                    commands::tasks::run::unlink(&ctx, &task_id, &chunk_id)?;
+                }
+                TasksAction::Comment { task_id, body } => {
+                    commands::tasks::run::comment(&ctx, &task_id, &body)?;
+                }
+                TasksAction::Label { action } => match action {
+                    LabelAction::Add { task_id, label } => {
+                        commands::tasks::run::label_add(&ctx, &task_id, &label)?;
+                    }
+                    LabelAction::Remove { task_id, label } => {
+                        commands::tasks::run::label_remove(&ctx, &task_id, &label)?;
+                    }
+                },
+                TasksAction::Export { format, dir } => match format.as_str() {
+                    "markdown" | "md" => {
+                        commands::tasks::export_markdown::run(dir, cli.sqlite_db)?;
+                    }
+                    other => {
+                        anyhow::bail!("Unknown export format: {other}. Supported: markdown");
+                    }
+                },
+            }
+        }
     }
 
     Ok(())

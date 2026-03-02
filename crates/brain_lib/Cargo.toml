@@ -8,33 +8,27 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-
+chrono = { workspace = true }
 # ML inference
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
 tokenizers = "0.22"
-
 # Vector storage (drives arrow version — lancedb 0.26 uses arrow 57)
 lancedb = "0.26"
 arrow-schema = "57"
 arrow-array = "57"
 futures = "0.3"
 serde_json = { workspace = true }
-
 # Directory traversal
 walkdir = "2"
-
 # SQLite control plane
 rusqlite = { workspace = true }
 blake3 = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
-chrono = "0.4"
-
 # File watching
 notify-debouncer-full = "0.7"
-
 # Markdown parsing
 pulldown-cmark = "0.12"
 serde_yaml = "0.9"

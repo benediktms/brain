@@ -5,7 +5,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 use crate::tasks::events::{EventType, TaskEvent, TaskStatus, new_event_id};
 
-use super::utils::{parse_timestamp, task_row_to_json};
+use crate::utils::{parse_timestamp, task_row_to_json};
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     // Parse event_type

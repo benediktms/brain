@@ -14,6 +14,7 @@ pub mod scanner;
 pub mod store;
 pub mod tasks;
 pub mod tokens;
+pub mod utils;
 pub mod watcher;
 
 pub mod prelude {
