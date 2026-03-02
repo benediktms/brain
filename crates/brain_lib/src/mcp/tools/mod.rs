@@ -4,6 +4,8 @@ mod mem_reflect;
 mod mem_search_minimal;
 mod mem_write_episode;
 mod task_apply_event;
+mod task_get;
+mod task_list;
 mod task_next;
 
 use serde_json::{Value, json};
@@ -148,6 +150,48 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "tasks.get".into(),
+            description: "Get a single task by ID with full details including relationships, comments, labels, and linked notes. Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The task ID to retrieve"
+                    },
+                    "expand": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["parent", "children", "blocked_by", "blocks"]
+                        },
+                        "description": "Expand relationship stubs to full task objects"
+                    }
+                },
+                "required": ["task_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "tasks.list".into(),
+            description: "List tasks filtered by status or fetch specific tasks by ID. Returns summary task objects with aggregate counts.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["all", "ready", "blocked"],
+                        "description": "Filter tasks by status. 'all' (default): all tasks. 'ready': no unresolved deps. 'blocked': has unresolved deps or blocked_reason.",
+                        "default": "all"
+                    },
+                    "task_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Fetch specific tasks by ID (ignores status filter). Missing IDs are silently skipped."
+                    }
+                }
+            }),
+        },
+        ToolDefinition {
             name: "tasks.next".into(),
             description: "Get the next highest-priority ready task(s). Returns tasks with no unresolved dependencies, sorted by configurable policy. Includes dependency summary and linked notes for each task.".into(),
             input_schema: json!({
@@ -178,6 +222,8 @@ pub async fn dispatch_tool_call(name: &str, params: &Value, ctx: &McpContext) ->
         "memory.write_episode" => mem_write_episode::handle(params, ctx),
         "memory.reflect" => mem_reflect::handle(params, ctx).await,
         "tasks.apply_event" => task_apply_event::handle(params, ctx),
+        "tasks.get" => task_get::handle(params, ctx),
+        "tasks.list" => task_list::handle(params, ctx),
         "tasks.next" => task_next::handle(params, ctx),
         _ => ToolCallResult::error(format!("Unknown tool: {name}")),
     }
@@ -194,7 +240,7 @@ mod tests {
     #[test]
     fn test_tool_definitions_valid() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 6);
+        assert_eq!(defs.len(), 8);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
@@ -202,6 +248,8 @@ mod tests {
         assert!(names.contains(&"memory.write_episode"));
         assert!(names.contains(&"memory.reflect"));
         assert!(names.contains(&"tasks.apply_event"));
+        assert!(names.contains(&"tasks.get"));
+        assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));
 
         // All should have valid JSON schemas

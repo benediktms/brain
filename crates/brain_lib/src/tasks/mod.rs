@@ -116,6 +116,12 @@ impl TaskStore {
             .with_conn(|conn| queries::get_children(conn, parent_task_id))
     }
 
+    /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
+    pub fn get_tasks_blocking(&self, task_id: &str) -> Result<Vec<queries::TaskRow>> {
+        self.db
+            .with_conn(|conn| queries::get_tasks_blocking(conn, task_id))
+    }
+
     /// Count of ready and blocked tasks.
     pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
         self.db.with_conn(queries::count_ready_blocked)

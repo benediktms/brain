@@ -357,6 +357,25 @@ pub fn list_all_labels(conn: &Connection) -> Result<Vec<(String, String)>> {
     Ok(result)
 }
 
+/// Get tasks that depend on the given task and are not yet resolved (reverse deps).
+pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<TaskRow>> {
+    let sql = format!(
+        "SELECT {TASK_COLUMNS} FROM tasks
+         WHERE task_id IN (
+             SELECT d.task_id FROM task_deps d WHERE d.depends_on = ?1
+         )
+         AND status NOT IN ('done', 'cancelled')
+         ORDER BY priority ASC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([task_id], row_to_task)?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
 /// Check if a task exists in the projection.
 pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
     let count: i64 = conn.query_row(
