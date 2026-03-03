@@ -1,6 +1,6 @@
-use crate::utils::content_hash;
 use crate::parser::{ParsedDocument, Section};
 use crate::tokens::estimate_tokens;
+use crate::utils::content_hash;
 
 /// Current chunker algorithm version.
 /// Bump this when the chunking algorithm changes to trigger re-chunking.

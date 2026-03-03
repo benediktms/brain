@@ -91,9 +91,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
             let task_id_idx = params.len() + 1;
             params.push(SqlValue::Text(event.task_id.clone()));
 
-            let sql = format!(
-                "UPDATE tasks SET {set_clause} WHERE task_id = ?{task_id_idx}"
-            );
+            let sql = format!("UPDATE tasks SET {set_clause} WHERE task_id = ?{task_id_idx}");
             conn.execute(&sql, rusqlite::params_from_iter(params))?;
         }
 

@@ -23,7 +23,7 @@ pub mod prelude {
     pub use crate::db::Db;
     pub use crate::embedder::{Embed, Embedder};
     pub use crate::error::{BrainCoreError, Result};
-    pub use crate::hash_gate::{HashGate, GateVerdict};
+    pub use crate::hash_gate::{GateVerdict, HashGate};
     pub use crate::links::{Link, extract_links};
     pub use crate::parser::{ParsedDocument, parse_document};
     pub use crate::pipeline::{IndexPipeline, ScanStats};

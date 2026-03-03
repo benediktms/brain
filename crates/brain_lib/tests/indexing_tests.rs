@@ -9,9 +9,9 @@ use std::sync::Arc;
 use brain_lib::db::Db;
 use brain_lib::db::files;
 use brain_lib::embedder::MockEmbedder;
-use brain_lib::utils::content_hash;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::store::Store;
+use brain_lib::utils::content_hash;
 use brain_lib::watcher::FileEvent;
 
 use tempfile::TempDir;

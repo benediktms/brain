@@ -222,7 +222,6 @@ impl Store {
 
         Ok(output)
     }
-
 }
 
 #[derive(Debug)]
