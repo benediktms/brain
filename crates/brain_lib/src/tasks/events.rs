@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use ulid::Ulid;
 
 use crate::error::{BrainCoreError, Result};
 
@@ -280,9 +280,15 @@ impl TaskEvent {
     }
 }
 
-/// Generate a new UUID v7 event ID.
+/// Generate a new ULID event ID.
 pub fn new_event_id() -> String {
-    Uuid::now_v7().to_string()
+    Ulid::new().to_string()
+}
+
+/// Generate a new task ID with project prefix.
+/// Format: "{PREFIX}-{ULID}" e.g. "BRN-01JPHZS7VXQK4R3BGTHNED2P8M"
+pub fn new_task_id(prefix: &str) -> String {
+    format!("{}-{}", prefix, Ulid::new())
 }
 
 /// Current time as unix seconds.

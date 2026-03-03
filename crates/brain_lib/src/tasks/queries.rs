@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::error::Result;
+use crate::db::meta;
+use crate::error::{BrainCoreError, Result};
 
 use super::events::TaskStatus;
 
@@ -342,6 +345,192 @@ pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
     Ok(count > 0)
 }
 
+// -- Prefix resolution -------------------------------------------------------
+
+/// Minimum ULID prefix length (after project prefix + separator).
+const MIN_ULID_PREFIX_LEN: usize = 4;
+
+/// Minimum display prefix: "BRN-" (4) + 4 ULID chars = 8.
+const MIN_DISPLAY_PREFIX_LEN: usize = 8;
+
+/// Resolve a task ID from an exact match or unique prefix.
+///
+/// Accepts: full ID, prefix with project prefix ("BRN-01JPH"),
+/// or bare ULID prefix ("01JPH") — auto-prepends project prefix.
+/// Min prefix length: 4 chars (after any project prefix).
+pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
+    // Fast path: exact match
+    if task_exists(conn, input)? {
+        return Ok(input.to_string());
+    }
+
+    let normalized = input.to_ascii_uppercase();
+
+    // Determine if this looks like a prefixed ID (has a dash after position 0)
+    // or a bare ULID prefix. Legacy UUIDs also have dashes but at position 8.
+    let search_prefix = match normalized.find('-') {
+        Some(dash_pos) if dash_pos <= 4 => {
+            // Looks like a project prefix (1-4 chars before dash), e.g. "BRN-01JPH..."
+            let ulid_part = &normalized[dash_pos + 1..];
+            if ulid_part.len() < MIN_ULID_PREFIX_LEN {
+                return Err(BrainCoreError::TaskEvent(format!(
+                    "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters after '{}'",
+                    &normalized[..=dash_pos]
+                )));
+            }
+            normalized
+        }
+        Some(_) => {
+            // Legacy UUID format (dash at position 8, e.g. "019571A8-...") — search as-is
+            normalized
+        }
+        None => {
+            // No dash — bare ULID prefix, auto-prepend project prefix
+            if normalized.len() < MIN_ULID_PREFIX_LEN {
+                return Err(BrainCoreError::TaskEvent(format!(
+                    "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters, got {}",
+                    normalized.len()
+                )));
+            }
+            let prefix =
+                meta::get_meta(conn, "project_prefix")?.unwrap_or_else(|| "BRN".to_string());
+            format!("{prefix}-{normalized}")
+        }
+    };
+
+    // Range scan on PRIMARY KEY B-tree
+    let upper_bound = increment_string(&search_prefix);
+    let mut stmt =
+        conn.prepare("SELECT task_id FROM tasks WHERE task_id >= ?1 AND task_id < ?2")?;
+    let matches: Vec<String> = stmt
+        .query_map(rusqlite::params![search_prefix, upper_bound], |row| {
+            row.get(0)
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    match matches.len() {
+        0 => Err(BrainCoreError::TaskEvent(format!(
+            "no task found matching prefix: {input}"
+        ))),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        n => Err(BrainCoreError::TaskEvent(format!(
+            "ambiguous prefix '{input}': matches {n} tasks"
+        ))),
+    }
+}
+
+/// Compute the shortest unique prefix for a single task ID.
+///
+/// Uses two O(log n) index seeks (predecessor + successor) instead of loading
+/// all task IDs. Preferred over `shortest_unique_prefixes()` when displaying
+/// a single task (e.g. `tasks.get` responses).
+pub fn shortest_unique_prefix(conn: &Connection, task_id: &str) -> Result<String> {
+    let prev: Option<String> = conn
+        .query_row(
+            "SELECT task_id FROM tasks WHERE task_id < ?1 ORDER BY task_id DESC LIMIT 1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let next: Option<String> = conn
+        .query_row(
+            "SELECT task_id FROM tasks WHERE task_id > ?1 ORDER BY task_id ASC LIMIT 1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let min_prev = prev
+        .as_deref()
+        .map(|p| common_prefix_len(task_id, p) + 1)
+        .unwrap_or(1);
+    let min_next = next
+        .as_deref()
+        .map(|n| common_prefix_len(task_id, n) + 1)
+        .unwrap_or(1);
+
+    let min_len = min_prev
+        .max(min_next)
+        .max(MIN_DISPLAY_PREFIX_LEN)
+        .min(task_id.len());
+
+    Ok(task_id[..min_len].to_string())
+}
+
+/// Compute shortest unique prefixes for all tasks (batch, for list display).
+///
+/// Loads all IDs sorted, compares neighbors. O(n log n).
+/// The prefix portion (e.g. "BRN-") is always shown in full; only the ULID
+/// portion gets truncated.
+pub fn shortest_unique_prefixes(conn: &Connection) -> Result<HashMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT task_id FROM tasks ORDER BY task_id")?;
+    let ids: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut result = HashMap::new();
+    let n = ids.len();
+
+    for i in 0..n {
+        let id = &ids[i];
+        let prev = if i > 0 {
+            Some(ids[i - 1].as_str())
+        } else {
+            None
+        };
+        let next = if i + 1 < n {
+            Some(ids[i + 1].as_str())
+        } else {
+            None
+        };
+
+        // Find the minimum length to distinguish from both neighbors
+        let min_len_prev = prev.map(|p| common_prefix_len(id, p) + 1).unwrap_or(1);
+        let min_len_next = next.map(|nx| common_prefix_len(id, nx) + 1).unwrap_or(1);
+
+        let min_len = min_len_prev.max(min_len_next).max(MIN_DISPLAY_PREFIX_LEN);
+        let prefix_len = min_len.min(id.len());
+
+        result.insert(id.clone(), id[..prefix_len].to_string());
+    }
+
+    Ok(result)
+}
+
+/// Increment the last byte of a string for exclusive upper bounds in range scans.
+///
+/// Example: `"BRN-01JP"` → `"BRN-01JQ"`
+///
+/// Precondition: `s` must be ASCII (ULID chars are Crockford Base32 `0-9A-Z`,
+/// project prefixes are `A-Z`, and legacy UUIDs are `0-9a-f-`). All bytes are
+/// in the `0x00..0x7E` range so incrementing always produces valid UTF-8.
+/// If a non-ASCII byte is encountered, the fallback appends `\u{FFFF}`.
+fn increment_string(s: &str) -> String {
+    debug_assert!(s.is_ascii(), "increment_string expects ASCII input");
+    let mut bytes = s.as_bytes().to_vec();
+    for i in (0..bytes.len()).rev() {
+        if bytes[i] < 0xFF {
+            bytes[i] += 1;
+            return String::from_utf8(bytes).unwrap_or_else(|_| format!("{s}\u{FFFF}"));
+        }
+        bytes[i] = 0;
+    }
+    // All 0xFF — append a high character as upper bound
+    format!("{s}\u{FFFF}")
+}
+
+/// Length of the common byte prefix between two strings.
+///
+/// Uses byte comparison, which is correct and safe for ASCII strings (ULIDs,
+/// project prefixes, UUIDs). For non-ASCII task IDs, this still returns a
+/// valid byte offset since it only counts matching bytes.
+fn common_prefix_len(a: &str, b: &str) -> usize {
+    a.bytes()
+        .zip(b.bytes())
+        .take_while(|(ba, bb)| ba == bb)
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,5 +862,162 @@ mod tests {
         let (ready, blocked) = count_ready_blocked(&conn).unwrap();
         assert_eq!(ready, 2);
         assert_eq!(blocked, 1);
+    }
+
+    // -- Prefix resolution tests --
+
+    #[test]
+    fn test_resolve_exact_match() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Full ID task", 2);
+        let resolved = resolve_task_id(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M").unwrap();
+        assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
+    }
+
+    #[test]
+    fn test_resolve_prefix_match() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Task", 2);
+        let resolved = resolve_task_id(&conn, "BRN-01JPHZ").unwrap();
+        assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
+    }
+
+    #[test]
+    fn test_resolve_case_insensitive() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Task", 2);
+        let resolved = resolve_task_id(&conn, "brn-01jphz").unwrap();
+        assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
+    }
+
+    #[test]
+    fn test_resolve_bare_ulid_prefix() {
+        let conn = setup();
+        crate::db::meta::set_meta(&conn, "project_prefix", "BRN").unwrap();
+        create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Task", 2);
+        let resolved = resolve_task_id(&conn, "01JPHZ").unwrap();
+        assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
+    }
+
+    #[test]
+    fn test_resolve_too_short() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Task", 2);
+        let result = resolve_task_id(&conn, "BRN-01J");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too short"));
+    }
+
+    #[test]
+    fn test_resolve_not_found() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Task", 2);
+        let result = resolve_task_id(&conn, "BRN-99ZZZZ");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no task found"));
+    }
+
+    #[test]
+    fn test_resolve_ambiguous() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZAAAA", "Task A", 2);
+        create_task(&conn, "BRN-01JPHZAAAB", "Task B", 2);
+        let result = resolve_task_id(&conn, "BRN-01JPHZAAA");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("ambiguous"));
+    }
+
+    #[test]
+    fn test_resolve_legacy_uuid() {
+        let conn = setup();
+        create_task(&conn, "019571a8-7c4e-7d3a-beef-deadbeef0001", "Legacy", 2);
+        let resolved = resolve_task_id(&conn, "019571a8-7c4e-7d3a-beef-deadbeef0001").unwrap();
+        assert_eq!(resolved, "019571a8-7c4e-7d3a-beef-deadbeef0001");
+    }
+
+    #[test]
+    fn test_resolve_simple_test_ids() {
+        // Existing tests use "t1", "t2" etc — exact match fast path
+        let conn = setup();
+        create_task(&conn, "t1", "Task 1", 2);
+        let resolved = resolve_task_id(&conn, "t1").unwrap();
+        assert_eq!(resolved, "t1");
+    }
+
+    // -- Shortest unique prefix tests --
+
+    #[test]
+    fn test_shortest_unique_single_task() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Only task", 2);
+        let prefixes = shortest_unique_prefixes(&conn).unwrap();
+        let short = &prefixes["BRN-01JPHZS7VXQK4R3BGTHNED2P8M"];
+        assert_eq!(short.len(), MIN_DISPLAY_PREFIX_LEN);
+        assert_eq!(short, "BRN-01JP");
+    }
+
+    #[test]
+    fn test_shortest_unique_shared_prefix() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZAAAA", "Task A", 2);
+        create_task(&conn, "BRN-01JPHZAAAB", "Task B", 2);
+        let prefixes = shortest_unique_prefixes(&conn).unwrap();
+        // Must distinguish the last char
+        assert_eq!(prefixes["BRN-01JPHZAAAA"], "BRN-01JPHZAAAA");
+        assert_eq!(prefixes["BRN-01JPHZAAAB"], "BRN-01JPHZAAAB");
+    }
+
+    #[test]
+    fn test_shortest_unique_mixed_formats() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZ0001", "New format", 2);
+        create_task(&conn, "t1", "Simple ID", 2);
+        let prefixes = shortest_unique_prefixes(&conn).unwrap();
+        assert_eq!(prefixes.len(), 2);
+        // Both should be present; "t1" is too short for MIN_DISPLAY_PREFIX_LEN
+        // so it stays as "t1"
+        assert_eq!(prefixes["t1"], "t1");
+    }
+
+    #[test]
+    fn test_shortest_unique_prefix_singular_matches_batch() {
+        let conn = setup();
+        create_task(&conn, "BRN-01JPHZAAAA", "Task A", 2);
+        create_task(&conn, "BRN-01JPHZAAAB", "Task B", 2);
+        create_task(&conn, "BRN-01JPHZ9999", "Task C", 2);
+
+        // The O(log n) singular version should produce the same results as the
+        // O(n log n) batch version for each task.
+        let batch = shortest_unique_prefixes(&conn).unwrap();
+        for (id, expected) in &batch {
+            let single = shortest_unique_prefix(&conn, id).unwrap();
+            assert_eq!(&single, expected, "mismatch for {id}");
+        }
+    }
+
+    // -- Helper function tests --
+
+    #[test]
+    fn test_increment_string_basic() {
+        assert_eq!(increment_string("BRN-01JP"), "BRN-01JQ");
+        assert_eq!(increment_string("A"), "B");
+        assert_eq!(increment_string("Z"), "["); // Z (0x5A) + 1 = [ (0x5B)
+    }
+
+    #[test]
+    fn test_increment_string_carry() {
+        // 0xFF bytes carry over to the next position
+        let result = increment_string("\u{7f}"); // DEL (0x7F) → 0x80 (invalid UTF-8)
+        // Falls back to appending \u{FFFF} since 0x80 is invalid UTF-8
+        assert!(result.starts_with('\u{7f}'));
+    }
+
+    #[test]
+    fn test_common_prefix_len_basic() {
+        assert_eq!(common_prefix_len("BRN-01JPHA", "BRN-01JPHB"), 9);
+        assert_eq!(common_prefix_len("abc", "abd"), 2);
+        assert_eq!(common_prefix_len("abc", "xyz"), 0);
+        assert_eq!(common_prefix_len("abc", "abc"), 3);
+        assert_eq!(common_prefix_len("", "abc"), 0);
     }
 }
