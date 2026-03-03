@@ -6,6 +6,9 @@ use brain_lib::prelude::*;
 use brain_lib::watcher::coalesce_events;
 use tracing::info;
 
+// The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
+use tokio::signal::unix::SignalKind;
+
 /// Watch a directory for changes and re-index incrementally.
 pub async fn run(
     notes_path: PathBuf,
@@ -41,6 +44,10 @@ pub async fn run(
     // The check is near-free (two atomic loads + one mutex read); the 5min
     // threshold is evaluated inside should_optimize().
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
+
+    // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
+    let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+        .expect("failed to register SIGTERM handler");
 
     // Event loop: batch-drain, coalesce, and dispatch
     loop {
@@ -94,7 +101,11 @@ pub async fn run(
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("received Ctrl+C, shutting down");
-                // Final optimize before exit
+                pipeline.store().optimizer().force_optimize().await;
+                break;
+            }
+            _ = sigterm.recv() => {
+                info!("received SIGTERM, shutting down");
                 pipeline.store().optimizer().force_optimize().await;
                 break;
             }
