@@ -352,7 +352,35 @@ async fn test_roundtrip_with_fixtures() {
     );
 }
 
-// ─── 5. Empty vault: no crash ───────────────────────────────────
+// ─── 5. Optimize scheduler: force_optimize resets counter ────────
+
+#[tokio::test]
+async fn test_force_optimize_resets_counter() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    write_md(
+        &notes_dir,
+        "opt_test.md",
+        "# Optimize Test\n\nSome content to create fragments in LanceDB.",
+    );
+
+    let stats = pipeline.full_scan(&[notes_dir]).await.unwrap();
+    assert_eq!(stats.indexed, 1);
+
+    // After indexing, the optimizer should have pending mutations
+    let pending = pipeline.store().optimizer().pending_count();
+    assert!(pending > 0, "expected pending mutations after upsert, got 0");
+
+    // Force optimize should compact and reset the counter
+    pipeline.store().optimizer().force_optimize().await;
+
+    let after = pipeline.store().optimizer().pending_count();
+    assert_eq!(after, 0, "expected 0 pending after force_optimize, got {after}");
+}
+
+// ─── 6. Empty vault: no crash ───────────────────────────────────
 
 #[tokio::test]
 async fn test_empty_vault_no_crash() {

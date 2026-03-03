@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
