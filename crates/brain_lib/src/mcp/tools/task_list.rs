@@ -48,11 +48,8 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         return handle_batch(&task_ids, ctx);
     }
 
-    let status = match params
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("all")
-        .parse::<StatusFilter>()
+    use super::opt_str;
+    let status = match opt_str(params, "status", "all").parse::<StatusFilter>()
     {
         Ok(s) => s,
         Err(msg) => return ToolCallResult::error(msg),

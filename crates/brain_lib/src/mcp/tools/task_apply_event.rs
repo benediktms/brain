@@ -8,10 +8,11 @@ use crate::tasks::events::{EventType, TaskCreatedPayload, TaskEvent, TaskStatus,
 use crate::utils::{parse_timestamp, task_row_to_json};
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
+    use super::{opt_str, require_str};
     // Parse event_type
-    let event_type_str = match params.get("event_type").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return ToolCallResult::error("Missing required parameter: event_type"),
+    let event_type_str = match require_str(params, "event_type") {
+        Ok(s) => s,
+        Err(e) => return e,
     };
 
     let event_type: EventType = match serde_json::from_value(json!(event_type_str)) {
@@ -50,10 +51,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         }
     };
 
-    let actor_str = params
-        .get("actor")
-        .and_then(|v| v.as_str())
-        .unwrap_or("mcp");
+    let actor_str = opt_str(params, "actor", "mcp");
     if actor_str.len() > 256 {
         return ToolCallResult::error("actor exceeds maximum length of 256 characters");
     }

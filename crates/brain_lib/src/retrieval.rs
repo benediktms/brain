@@ -6,6 +6,19 @@
 use crate::ranking::RankedResult;
 use crate::tokens::estimate_tokens;
 
+/// Trait for types that can be expanded to full memory content.
+///
+/// Implemented by `RankedResult` (for backward compatibility) and by
+/// `ExpandableChunk` (used by `QueryPipeline::expand` to avoid constructing
+/// dummy `RankedResult` objects with zero scores).
+pub trait Expandable {
+    fn chunk_id(&self) -> &str;
+    fn content(&self) -> &str;
+    fn file_path(&self) -> &str;
+    fn heading_path(&self) -> &str;
+    fn token_estimate(&self) -> usize;
+}
+
 /// A compact memory stub for search results.
 #[derive(Debug, Clone)]
 pub struct MemoryStub {
@@ -48,6 +61,37 @@ pub struct ExpandResult {
     pub memories: Vec<ExpandedMemory>,
 }
 
+/// A lightweight struct for expanding chunks without requiring a full `RankedResult`.
+///
+/// Used by `QueryPipeline::expand` to avoid constructing dummy `RankedResult`
+/// objects with zero scores just to call `expand_results`.
+#[derive(Debug, Clone)]
+pub struct ExpandableChunk {
+    pub chunk_id: String,
+    pub content: String,
+    pub file_path: String,
+    pub heading_path: String,
+    pub token_estimate: usize,
+}
+
+impl Expandable for ExpandableChunk {
+    fn chunk_id(&self) -> &str {
+        &self.chunk_id
+    }
+    fn content(&self) -> &str {
+        &self.content
+    }
+    fn file_path(&self) -> &str {
+        &self.file_path
+    }
+    fn heading_path(&self) -> &str {
+        &self.heading_path
+    }
+    fn token_estimate(&self) -> usize {
+        self.token_estimate
+    }
+}
+
 /// Pack ranked results into compact stubs within a token budget.
 ///
 /// Iterates ranked results in score order, adding stubs until the
@@ -78,16 +122,19 @@ pub fn pack_minimal(ranked: &[RankedResult], budget_tokens: usize, k: usize) -> 
     }
 }
 
-/// Expand a set of ranked results to full content within a token budget.
+/// Expand a set of results to full content within a token budget.
 ///
 /// Packs greedily in the given order. If the last entry exceeds the
 /// remaining budget, its content is truncated with a `[truncated]` marker.
-pub fn expand_results(results: &[RankedResult], budget_tokens: usize) -> ExpandResult {
+///
+/// Accepts any type implementing `Expandable`, including `RankedResult` and
+/// `ExpandableChunk`.
+pub fn expand_results<T: Expandable>(results: &[T], budget_tokens: usize) -> ExpandResult {
     let mut memories = Vec::new();
     let mut used_tokens = 0;
 
     for result in results {
-        let content_tokens = result.token_estimate;
+        let content_tokens = result.token_estimate();
 
         if used_tokens + content_tokens > budget_tokens {
             // Try to fit a truncated version
@@ -95,13 +142,13 @@ pub fn expand_results(results: &[RankedResult], budget_tokens: usize) -> ExpandR
             if remaining > 20 {
                 // Truncate content to fit remaining budget
                 let truncated_content =
-                    truncate_to_tokens(&result.content, remaining.saturating_sub(5));
+                    truncate_to_tokens(result.content(), remaining.saturating_sub(5));
                 let actual_tokens = estimate_tokens(&truncated_content) + 5; // +5 for [truncated] marker
                 memories.push(ExpandedMemory {
-                    memory_id: result.chunk_id.clone(),
+                    memory_id: result.chunk_id().to_string(),
                     content: format!("{truncated_content}\n[truncated]"),
-                    file_path: result.file_path.clone(),
-                    heading_path: result.heading_path.clone(),
+                    file_path: result.file_path().to_string(),
+                    heading_path: result.heading_path().to_string(),
                     byte_start: 0,
                     byte_end: 0,
                     truncated: true,
@@ -112,10 +159,10 @@ pub fn expand_results(results: &[RankedResult], budget_tokens: usize) -> ExpandR
         }
 
         memories.push(ExpandedMemory {
-            memory_id: result.chunk_id.clone(),
-            content: result.content.clone(),
-            file_path: result.file_path.clone(),
-            heading_path: result.heading_path.clone(),
+            memory_id: result.chunk_id().to_string(),
+            content: result.content().to_string(),
+            file_path: result.file_path().to_string(),
+            heading_path: result.heading_path().to_string(),
             byte_start: 0,
             byte_end: 0,
             truncated: false,
@@ -319,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_expand_empty() {
-        let result = expand_results(&[], 1000);
+        let result = expand_results::<RankedResult>(&[], 1000);
         assert!(result.memories.is_empty());
         assert_eq!(result.used_tokens_est, 0);
     }

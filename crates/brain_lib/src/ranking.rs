@@ -152,6 +152,24 @@ pub struct SignalScores {
     pub importance: f64,
 }
 
+impl crate::retrieval::Expandable for RankedResult {
+    fn chunk_id(&self) -> &str {
+        &self.chunk_id
+    }
+    fn content(&self) -> &str {
+        &self.content
+    }
+    fn file_path(&self) -> &str {
+        &self.file_path
+    }
+    fn heading_path(&self) -> &str {
+        &self.heading_path
+    }
+    fn token_estimate(&self) -> usize {
+        self.token_estimate
+    }
+}
+
 /// Recency decay: exp(-age / tau), where tau = 30 days in seconds.
 const RECENCY_TAU: f64 = 30.0 * 24.0 * 3600.0;
 

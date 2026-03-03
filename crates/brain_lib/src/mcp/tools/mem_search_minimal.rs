@@ -3,25 +3,17 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 use crate::query_pipeline::QueryPipeline;
-use crate::ranking::resolve_intent;
 
 pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    let query = match params.get("query").and_then(|v| v.as_str()) {
-        Some(q) => q,
-        None => return ToolCallResult::error("Missing required parameter: query"),
+    use super::{opt_str, opt_u64, require_str};
+    let query = match require_str(params, "query") {
+        Ok(q) => q,
+        Err(e) => return e,
     };
 
-    let intent = params
-        .get("intent")
-        .and_then(|v| v.as_str())
-        .unwrap_or("auto");
-    let budget_tokens = params
-        .get("budget_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(800) as usize;
-    let k = params.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-
-    let profile = resolve_intent(intent);
+    let intent = opt_str(params, "intent", "auto");
+    let budget_tokens = opt_u64(params, "budget_tokens", 800) as usize;
+    let k = opt_u64(params, "k", 10) as usize;
 
     let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder);
     let search_result = match pipeline.search(query, intent, budget_tokens, k).await {
@@ -47,7 +39,7 @@ pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let response = json!({
         "budget_tokens": search_result.budget_tokens,
         "used_tokens_est": search_result.used_tokens_est,
-        "intent_resolved": format!("{profile:?}"),
+        "intent_resolved": format!("{:?}", crate::ranking::resolve_intent(intent)),
         "result_count": search_result.num_results,
         "total_available": search_result.total_available,
         "results": results_json

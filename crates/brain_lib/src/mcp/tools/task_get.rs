@@ -78,10 +78,11 @@ fn expanded_task(task_id: &str, ctx: &McpContext) -> Value {
 }
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
+    use super::require_str;
     // 1. Extract task_id
-    let task_id = match params.get("task_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ToolCallResult::error("Missing required parameter: task_id"),
+    let task_id = match require_str(params, "task_id") {
+        Ok(id) => id,
+        Err(e) => return e,
     };
 
     // 2. Parse expand

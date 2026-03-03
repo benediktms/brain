@@ -6,18 +6,16 @@ use crate::mcp::protocol::ToolCallResult;
 use crate::query_pipeline::QueryPipeline;
 
 pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    let memory_ids: Vec<String> = match params.get("memory_ids").and_then(|v| v.as_array()) {
-        Some(arr) => arr
+    use super::{opt_u64, require_array};
+    let memory_ids: Vec<String> = match require_array(params, "memory_ids") {
+        Ok(arr) => arr
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect(),
-        None => return ToolCallResult::error("Missing required parameter: memory_ids"),
+        Err(e) => return e,
     };
 
-    let budget_tokens = params
-        .get("budget_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2000) as usize;
+    let budget_tokens = opt_u64(params, "budget_tokens", 2000) as usize;
 
     let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder);
     let expand_result = match pipeline.expand(&memory_ids, budget_tokens).await {

@@ -5,15 +5,13 @@ use crate::mcp::protocol::ToolCallResult;
 use crate::query_pipeline::QueryPipeline;
 
 pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    let topic = match params.get("topic").and_then(|v| v.as_str()) {
-        Some(t) => t,
-        None => return ToolCallResult::error("Missing required parameter: topic"),
+    use super::{opt_u64, require_str};
+    let topic = match require_str(params, "topic") {
+        Ok(t) => t,
+        Err(e) => return e,
     };
 
-    let budget_tokens = params
-        .get("budget_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2000) as usize;
+    let budget_tokens = opt_u64(params, "budget_tokens", 2000) as usize;
 
     let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder);
     let reflect_result = match pipeline.reflect(topic.to_string(), budget_tokens).await {

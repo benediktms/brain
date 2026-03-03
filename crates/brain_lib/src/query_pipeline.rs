@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::db::Db;
 use crate::db::chunks::get_chunks_by_ids;
@@ -15,7 +15,7 @@ use crate::db::summaries::{SummaryRow, list_episodes};
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
-use crate::retrieval::{ExpandResult, SearchResult, expand_results, pack_minimal};
+use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
 use crate::store::Store;
 use crate::tokens::estimate_tokens;
 
@@ -54,24 +54,10 @@ impl<'a> QueryPipeline<'a> {
         let weights = Weights::from_profile(profile);
 
         // 1. Embed query
-        let embedder = Arc::clone(self.embedder);
-        let query_owned = query.to_string();
-        let query_vec =
-            match tokio::task::spawn_blocking(move || embedder.embed_batch(&[&query_owned])).await
-            {
-                Ok(Ok(vecs)) if !vecs.is_empty() => vecs.into_iter().next().unwrap(),
-                Ok(Ok(_)) => {
-                    return Err(BrainCoreError::Embedding("Empty embedding result".into()));
-                }
-                Ok(Err(e)) => {
-                    error!(error = %e, "embedding failed");
-                    return Err(e);
-                }
-                Err(e) => {
-                    error!(error = %e, "embedding task panicked");
-                    return Err(BrainCoreError::Embedding(format!("Embedding task failed: {e}")));
-                }
-            };
+        let vecs = crate::embedder::embed_batch_async(self.embedder, vec![query.to_string()]).await?;
+        let query_vec = vecs.into_iter().next().ok_or_else(|| {
+            BrainCoreError::Embedding("Empty embedding result".into())
+        })?;
 
         // 2. Vector search (top-50)
         let vector_results = self.store.query(&query_vec, CANDIDATE_LIMIT).await?;
@@ -212,33 +198,19 @@ impl<'a> QueryPipeline<'a> {
 
         // Preserve the requested order
         let row_map: HashMap<&str, _> = rows.iter().map(|r| (r.chunk_id.as_str(), r)).collect();
-        let ordered_rows: Vec<_> = memory_ids
+        let chunks: Vec<ExpandableChunk> = memory_ids
             .iter()
             .filter_map(|id| row_map.get(id.as_str()).copied())
-            .collect();
-
-        // Build RankedResult vec (scores don't matter)
-        let ranked: Vec<crate::ranking::RankedResult> = ordered_rows
-            .iter()
-            .map(|row| crate::ranking::RankedResult {
+            .map(|row| ExpandableChunk {
                 chunk_id: row.chunk_id.clone(),
-                hybrid_score: 0.0,
-                scores: crate::ranking::SignalScores {
-                    vector: 0.0,
-                    keyword: 0.0,
-                    recency: 0.0,
-                    links: 0.0,
-                    tag_match: 0.0,
-                    importance: 0.0,
-                },
+                content: row.content.clone(),
                 file_path: row.file_path.clone(),
                 heading_path: row.heading_path.clone(),
-                content: row.content.clone(),
                 token_estimate: row.token_estimate,
             })
             .collect();
 
-        Ok(expand_results(&ranked, budget_tokens))
+        Ok(expand_results(&chunks, budget_tokens))
     }
 
     /// Reflect: fetch recent episodes + search for related chunks, return combined result.

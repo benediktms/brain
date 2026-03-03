@@ -125,13 +125,7 @@ impl IndexPipeline {
 
         // Embed (in blocking task since it's CPU-intensive)
         let texts_owned: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
-        let embedder = Arc::clone(&self.embedder);
-        let embeddings = tokio::task::spawn_blocking(move || {
-            let refs: Vec<&str> = texts_owned.iter().map(|s| s.as_str()).collect();
-            embedder.embed_batch(&refs)
-        })
-        .await
-        .map_err(|e| crate::error::BrainCoreError::Embedding(format!("spawn_blocking: {e}")))??;
+        let embeddings = crate::embedder::embed_batch_async(&self.embedder, texts_owned).await?;
 
         // SQLite: replace chunk metadata + links
         let chunk_metas: Vec<ChunkMeta> = chunks
@@ -269,13 +263,7 @@ impl IndexPipeline {
             offsets.push((start, pf.chunks.len()));
         }
 
-        let embedder = Arc::clone(&self.embedder);
-        let all_embeddings = tokio::task::spawn_blocking(move || {
-            let refs: Vec<&str> = all_texts.iter().map(|s| s.as_str()).collect();
-            embedder.embed_batch(&refs)
-        })
-        .await
-        .map_err(|e| crate::error::BrainCoreError::Embedding(format!("spawn_blocking: {e}")))??;
+        let all_embeddings = crate::embedder::embed_batch_async(&self.embedder, all_texts).await?;
 
         let gate = HashGate::new(&self.db);
         let drained: Vec<PendingFile> = std::mem::take(pending);

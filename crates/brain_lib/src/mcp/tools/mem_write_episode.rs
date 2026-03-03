@@ -6,17 +6,18 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    let goal = match params.get("goal").and_then(|v| v.as_str()) {
-        Some(g) => g,
-        None => return ToolCallResult::error("Missing required parameter: goal"),
+    use super::require_str;
+    let goal = match require_str(params, "goal") {
+        Ok(g) => g,
+        Err(e) => return e,
     };
-    let actions = match params.get("actions").and_then(|v| v.as_str()) {
-        Some(a) => a,
-        None => return ToolCallResult::error("Missing required parameter: actions"),
+    let actions = match require_str(params, "actions") {
+        Ok(a) => a,
+        Err(e) => return e,
     };
-    let outcome = match params.get("outcome").and_then(|v| v.as_str()) {
-        Some(o) => o,
-        None => return ToolCallResult::error("Missing required parameter: outcome"),
+    let outcome = match require_str(params, "outcome") {
+        Ok(o) => o,
+        Err(e) => return e,
     };
 
     let tags: Vec<String> = params

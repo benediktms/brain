@@ -6,16 +6,9 @@ use crate::mcp::protocol::ToolCallResult;
 use crate::tasks::enrichment::enrich_task_summary;
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    let policy = params
-        .get("policy")
-        .and_then(|v| v.as_str())
-        .unwrap_or("priority");
-
-    let k = params
-        .get("k")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1)
-        .min(100) as usize;
+    use super::{opt_str, opt_u64};
+    let policy = opt_str(params, "policy", "priority");
+    let k = opt_u64(params, "k", 1).min(100) as usize;
 
     // Get ready tasks (already sorted by priority policy)
     let ready_tasks = match ctx.tasks.list_ready() {
