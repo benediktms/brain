@@ -36,57 +36,63 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
         }
 
         EventType::TaskUpdated => {
+            use rusqlite::types::Value as SqlValue;
+
             let p: TaskUpdatedPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| BrainCoreError::TaskEvent(format!("bad TaskUpdated payload: {e}")))?;
 
-            if let Some(title) = &p.title {
-                conn.execute(
-                    "UPDATE tasks SET title = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    rusqlite::params![title, event.timestamp, event.task_id],
-                )?;
+            let mut set_cols: Vec<&str> = Vec::new();
+            let mut params: Vec<SqlValue> = Vec::new();
+
+            if let Some(ref title) = p.title {
+                set_cols.push("title");
+                params.push(SqlValue::Text(title.clone()));
             }
-            if let Some(description) = &p.description {
-                conn.execute(
-                    "UPDATE tasks SET description = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    rusqlite::params![description, event.timestamp, event.task_id],
-                )?;
+            if let Some(ref description) = p.description {
+                set_cols.push("description");
+                params.push(SqlValue::Text(description.clone()));
             }
             if let Some(priority) = p.priority {
-                conn.execute(
-                    "UPDATE tasks SET priority = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    rusqlite::params![priority, event.timestamp, event.task_id],
-                )?;
+                set_cols.push("priority");
+                params.push(SqlValue::Integer(priority as i64));
             }
             if let Some(due_ts) = p.due_ts {
-                conn.execute(
-                    "UPDATE tasks SET due_ts = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    rusqlite::params![due_ts, event.timestamp, event.task_id],
-                )?;
+                set_cols.push("due_ts");
+                params.push(SqlValue::Integer(due_ts));
             }
-            if let Some(blocked_reason) = &p.blocked_reason {
-                conn.execute(
-                    "UPDATE tasks SET blocked_reason = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    rusqlite::params![blocked_reason, event.timestamp, event.task_id],
-                )?;
+            if let Some(ref blocked_reason) = p.blocked_reason {
+                set_cols.push("blocked_reason");
+                params.push(SqlValue::Text(blocked_reason.clone()));
             }
-            if let Some(task_type) = &p.task_type {
-                conn.execute(
-                    "UPDATE tasks SET task_type = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    rusqlite::params![task_type, event.timestamp, event.task_id],
-                )?;
+            if let Some(ref task_type) = p.task_type {
+                set_cols.push("task_type");
+                params.push(SqlValue::Text(task_type.clone()));
             }
-            if let Some(assignee) = &p.assignee {
-                conn.execute(
-                    "UPDATE tasks SET assignee = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    rusqlite::params![assignee, event.timestamp, event.task_id],
-                )?;
+            if let Some(ref assignee) = p.assignee {
+                set_cols.push("assignee");
+                params.push(SqlValue::Text(assignee.clone()));
             }
             if let Some(defer_until) = p.defer_until {
-                conn.execute(
-                    "UPDATE tasks SET defer_until = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    rusqlite::params![defer_until, event.timestamp, event.task_id],
-                )?;
+                set_cols.push("defer_until");
+                params.push(SqlValue::Integer(defer_until));
             }
+
+            // Always update the timestamp
+            set_cols.push("updated_at");
+            params.push(SqlValue::Integer(event.timestamp));
+
+            let set_clause: String = set_cols
+                .iter()
+                .enumerate()
+                .map(|(i, col)| format!("{col} = ?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let task_id_idx = params.len() + 1;
+            params.push(SqlValue::Text(event.task_id.clone()));
+
+            let sql = format!("UPDATE tasks SET {set_clause} WHERE task_id = ?{task_id_idx}");
+            conn.execute(&sql, rusqlite::params_from_iter(params))?;
         }
 
         EventType::StatusChanged => {

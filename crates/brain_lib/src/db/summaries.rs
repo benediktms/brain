@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -29,7 +29,7 @@ pub struct SummaryRow {
 /// Returns the summary_id.
 pub fn store_episode(conn: &Connection, episode: &Episode) -> Result<String> {
     let summary_id = Uuid::now_v7().to_string();
-    let now = chrono_now();
+    let now = crate::utils::now_ts();
     let tags_json = serde_json::to_string(&episode.tags).unwrap_or_else(|_| "[]".into());
 
     let content = format!(
@@ -65,7 +65,7 @@ pub fn store_reflection(
     importance: f64,
 ) -> Result<String> {
     let summary_id = Uuid::now_v7().to_string();
-    let now = chrono_now();
+    let now = crate::utils::now_ts();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
 
     let tx = conn.unchecked_transaction()?;
@@ -112,7 +112,7 @@ pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<Summary
                 })
             },
         )
-        .ok();
+        .optional()?;
 
     Ok(result)
 }
@@ -141,18 +141,7 @@ pub fn list_episodes(conn: &Connection, limit: usize) -> Result<Vec<SummaryRow>>
         })
     })?;
 
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
-}
-
-fn chrono_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+    super::collect_rows(rows)
 }
 
 #[cfg(test)]

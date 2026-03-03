@@ -45,9 +45,10 @@ pub enum EventType {
 }
 
 /// Valid task statuses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    #[default]
     Open,
     InProgress,
     Blocked,
@@ -94,11 +95,13 @@ pub struct TaskCreatedPayload {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default = "default_priority")]
     pub priority: i32,
+    #[serde(default)]
     pub status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due_ts: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_task_type", skip_serializing_if = "Option::is_none")]
     pub task_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
@@ -106,6 +109,14 @@ pub struct TaskCreatedPayload {
     pub defer_until: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
+}
+
+fn default_priority() -> i32 {
+    4
+}
+
+fn default_task_type() -> Option<String> {
+    Some("task".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,10 +287,7 @@ pub fn new_event_id() -> String {
 
 /// Current time as unix seconds.
 pub fn now_ts() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+    crate::utils::now_ts()
 }
 
 /// Append a single event to the JSONL file.

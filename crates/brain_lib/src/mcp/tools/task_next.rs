@@ -3,20 +3,12 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-
-use crate::utils::task_row_to_json;
+use crate::tasks::enrichment::enrich_task_summary;
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    let policy = params
-        .get("policy")
-        .and_then(|v| v.as_str())
-        .unwrap_or("priority");
-
-    let k = params
-        .get("k")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1)
-        .min(100) as usize;
+    use super::{opt_str, opt_u64};
+    let policy = opt_str(params, "policy", "priority");
+    let k = opt_u64(params, "k", 1).min(100) as usize;
 
     // Get ready tasks (already sorted by priority policy)
     let ready_tasks = match ctx.tasks.list_ready() {
@@ -50,47 +42,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     // Build response with dependency summaries and note links
     let results_json: Vec<Value> = selected
         .iter()
-        .map(|task| {
-            let dep_summary = ctx
-                .tasks
-                .get_dependency_summary(&task.task_id)
-                .unwrap_or_else(|_| crate::tasks::queries::DependencySummary {
-                    total_deps: 0,
-                    done_deps: 0,
-                    blocking_task_ids: vec![],
-                });
-
-            let note_links = ctx
-                .tasks
-                .get_task_note_links(&task.task_id)
-                .unwrap_or_default();
-
-            let labels = ctx.tasks.get_task_labels(&task.task_id).unwrap_or_default();
-
-            let linked_notes: Vec<Value> = note_links
-                .iter()
-                .map(|nl| {
-                    json!({
-                        "chunk_id": nl.chunk_id,
-                        "file_path": nl.file_path,
-                    })
-                })
-                .collect();
-
-            let mut task_json = task_row_to_json(task, labels);
-            if let Some(obj) = task_json.as_object_mut() {
-                obj.insert(
-                    "dependency_summary".into(),
-                    json!({
-                        "total_deps": dep_summary.total_deps,
-                        "done_deps": dep_summary.done_deps,
-                        "blocking_tasks": dep_summary.blocking_task_ids,
-                    }),
-                );
-                obj.insert("linked_notes".into(), json!(linked_notes));
-            }
-            task_json
-        })
+        .map(|task| enrich_task_summary(&ctx.tasks, task))
         .collect();
 
     // Get aggregate counts
@@ -115,7 +67,7 @@ mod tests {
     #[test]
     fn test_returns_highest_priority() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create tasks with different priorities
         for (id, title, priority) in &[("t1", "Low", 4), ("t2", "High", 1), ("t3", "Medium", 2)] {
@@ -142,7 +94,7 @@ mod tests {
     #[test]
     fn test_excludes_blocked() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // t1 (P2), t2 (P1) depends on t1
         let p1 = json!({
@@ -176,7 +128,7 @@ mod tests {
     #[test]
     fn test_k_multiple() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         for (id, title) in &[("t1", "Task 1"), ("t2", "Task 2"), ("t3", "Task 3")] {
             let p = json!({
@@ -195,7 +147,7 @@ mod tests {
     #[test]
     fn test_empty() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -206,7 +158,7 @@ mod tests {
     #[test]
     fn test_includes_dependency_summary() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create t1 (done), t2 depends on t1 (now ready)
         let p1 = json!({
@@ -252,7 +204,7 @@ mod tests {
     #[test]
     fn test_includes_labels() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let create = json!({
             "event_type": "task_created",

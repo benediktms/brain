@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -12,7 +12,7 @@ pub fn get_or_create_file_id(conn: &Connection, path: &str) -> Result<(String, b
             [path],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .ok();
+        .optional()?;
 
     if let Some((file_id, deleted_at)) = existing {
         if deleted_at.is_some() {
@@ -37,15 +37,14 @@ pub fn get_or_create_file_id(conn: &Connection, path: &str) -> Result<(String, b
 
 /// Get the stored content hash for a file.
 pub fn get_content_hash(conn: &Connection, file_id: &str) -> Result<Option<String>> {
-    let hash: Option<String> = conn
+    Ok(conn
         .query_row(
             "SELECT content_hash FROM files WHERE file_id = ?1",
             [file_id],
             |row| row.get(0),
         )
-        .ok()
-        .flatten();
-    Ok(hash)
+        .optional()?
+        .flatten())
 }
 
 /// Set the indexing state for a file (idle | indexing_started | indexed).
@@ -59,7 +58,7 @@ pub fn set_indexing_state(conn: &Connection, file_id: &str, state: &str) -> Resu
 
 /// Mark a file as fully indexed: update hash, timestamp, and state.
 pub fn mark_indexed(conn: &Connection, file_id: &str, content_hash: &str) -> Result<()> {
-    let now = chrono_now();
+    let now = crate::utils::now_ts();
     conn.execute(
         "UPDATE files SET content_hash = ?1, last_indexed_at = ?2, indexing_state = 'indexed' WHERE file_id = ?3",
         rusqlite::params![content_hash, now, file_id],
@@ -84,10 +83,10 @@ pub fn handle_delete(conn: &Connection, path: &str) -> Result<Option<String>> {
             [path],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
 
     if let Some(ref fid) = file_id {
-        let now = chrono_now();
+        let now = crate::utils::now_ts();
         conn.execute(
             "UPDATE files SET deleted_at = ?1 WHERE file_id = ?2",
             rusqlite::params![now, fid],
@@ -107,31 +106,14 @@ pub fn find_stuck_files(conn: &Connection) -> Result<Vec<(String, String)>> {
         "SELECT file_id, path FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
     )?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
+    super::collect_rows(rows)
 }
 
 /// Get all active (non-deleted) file paths for startup deletion detection.
 pub fn get_all_active_paths(conn: &Connection) -> Result<Vec<(String, String)>> {
     let mut stmt = conn.prepare("SELECT file_id, path FROM files WHERE deleted_at IS NULL")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-
-    let mut result = Vec::new();
-    for row in rows {
-        result.push(row?);
-    }
-    Ok(result)
-}
-
-fn chrono_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+    super::collect_rows(rows)
 }
 
 #[cfg(test)]

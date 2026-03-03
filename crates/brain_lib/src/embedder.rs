@@ -214,6 +214,21 @@ impl Embed for MockEmbedder {
     }
 }
 
+/// Async wrapper for `Embed::embed_batch` — runs on `spawn_blocking` to
+/// avoid blocking the Tokio runtime with CPU-intensive embedding work.
+pub async fn embed_batch_async(
+    embedder: &std::sync::Arc<dyn Embed>,
+    texts: Vec<String>,
+) -> crate::error::Result<Vec<Vec<f32>>> {
+    let embedder = std::sync::Arc::clone(embedder);
+    tokio::task::spawn_blocking(move || {
+        let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        embedder.embed_batch(&refs)
+    })
+    .await
+    .map_err(|e| crate::error::BrainCoreError::Embedding(format!("spawn_blocking: {e}")))?
+}
+
 /// Generate a deterministic 384-dim unit vector from text content using BLAKE3.
 fn mock_embedding(text: &str) -> Vec<f32> {
     let hash = blake3::hash(text.as_bytes());

@@ -37,7 +37,7 @@ pub struct Weights {
 
 impl Weights {
     pub fn from_profile(profile: WeightProfile) -> Self {
-        match profile {
+        let w = match profile {
             WeightProfile::Default => Self::equal(),
             WeightProfile::Lookup => Self {
                 vector: 0.10,
@@ -71,7 +71,14 @@ impl Weights {
                 tag_match: 0.10,
                 importance: 0.10,
             },
-        }
+        };
+        debug_assert!(
+            w.validate().is_ok(),
+            "weight profile {:?} failed validation: {:?}",
+            profile,
+            w.validate()
+        );
+        w
     }
 
     fn equal() -> Self {
@@ -148,6 +155,24 @@ pub struct SignalScores {
     pub links: f64,
     pub tag_match: f64,
     pub importance: f64,
+}
+
+impl crate::retrieval::Expandable for RankedResult {
+    fn chunk_id(&self) -> &str {
+        &self.chunk_id
+    }
+    fn content(&self) -> &str {
+        &self.content
+    }
+    fn file_path(&self) -> &str {
+        &self.file_path
+    }
+    fn heading_path(&self) -> &str {
+        &self.heading_path
+    }
+    fn token_estimate(&self) -> usize {
+        self.token_estimate
+    }
 }
 
 /// Recency decay: exp(-age / tau), where tau = 30 days in seconds.

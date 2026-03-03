@@ -4,6 +4,8 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
+use rusqlite::OptionalExtension;
+
 use crate::db::Db;
 use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
 use crate::db::files;
@@ -86,9 +88,19 @@ impl IndexPipeline {
         }
     }
 
-    /// Get a reference to the SQLite database (for testing/inspection).
-    pub fn db_ref(&self) -> &Db {
+    /// Get a reference to the SQLite database.
+    pub fn db(&self) -> &Db {
         &self.db
+    }
+
+    /// Get a reference to the LanceDB store.
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Get a reference to the embedder.
+    pub fn embedder(&self) -> &Arc<dyn Embed> {
+        &self.embedder
     }
 
     /// Index a single file. Returns true if it was actually re-indexed (not skipped).
@@ -123,13 +135,7 @@ impl IndexPipeline {
 
         // Embed (in blocking task since it's CPU-intensive)
         let texts_owned: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
-        let embedder = Arc::clone(&self.embedder);
-        let embeddings = tokio::task::spawn_blocking(move || {
-            let refs: Vec<&str> = texts_owned.iter().map(|s| s.as_str()).collect();
-            embedder.embed_batch(&refs)
-        })
-        .await
-        .map_err(|e| crate::error::BrainCoreError::Embedding(format!("spawn_blocking: {e}")))??;
+        let embeddings = crate::embedder::embed_batch_async(&self.embedder, texts_owned).await?;
 
         // SQLite: replace chunk metadata + links
         let chunk_metas: Vec<ChunkMeta> = chunks
@@ -267,13 +273,7 @@ impl IndexPipeline {
             offsets.push((start, pf.chunks.len()));
         }
 
-        let embedder = Arc::clone(&self.embedder);
-        let all_embeddings = tokio::task::spawn_blocking(move || {
-            let refs: Vec<&str> = all_texts.iter().map(|s| s.as_str()).collect();
-            embedder.embed_batch(&refs)
-        })
-        .await
-        .map_err(|e| crate::error::BrainCoreError::Embedding(format!("spawn_blocking: {e}")))??;
+        let all_embeddings = crate::embedder::embed_batch_async(&self.embedder, all_texts).await?;
 
         let gate = HashGate::new(&self.db);
         let drained: Vec<PendingFile> = std::mem::take(pending);
@@ -365,7 +365,7 @@ impl IndexPipeline {
                     [&from_str],
                     |row| row.get(0),
                 )
-                .ok();
+                .optional()?;
 
             if let Some(ref fid) = file_id {
                 files::handle_rename(conn, fid, &to_str)?;

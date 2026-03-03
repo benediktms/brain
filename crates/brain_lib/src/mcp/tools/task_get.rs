@@ -7,7 +7,8 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::utils::{task_row_to_json, ts_to_iso};
+use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
+use crate::utils::task_row_to_json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ExpandField {
@@ -77,10 +78,11 @@ fn expanded_task(task_id: &str, ctx: &McpContext) -> Value {
 }
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
+    use super::require_str;
     // 1. Extract task_id
-    let task_id = match params.get("task_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ToolCallResult::error("Missing required parameter: task_id"),
+    let task_id = match require_str(params, "task_id") {
+        Ok(id) => id,
+        Err(e) => return e,
     };
 
     // 2. Parse expand
@@ -103,17 +105,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
 
     let comments = ctx.tasks.get_task_comments(task_id).unwrap_or_default();
-    let comments_json: Vec<Value> = comments
-        .iter()
-        .map(|c| {
-            json!({
-                "comment_id": c.comment_id,
-                "author": c.author,
-                "body": c.body,
-                "created_at": ts_to_iso(c.created_at),
-            })
-        })
-        .collect();
+    let comments_json = comments_to_json(&comments);
 
     let dep_summary = ctx
         .tasks
@@ -125,10 +117,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         });
 
     let note_links = ctx.tasks.get_task_note_links(task_id).unwrap_or_default();
-    let linked_notes_json: Vec<Value> = note_links
-        .iter()
-        .map(|nl| json!({ "chunk_id": nl.chunk_id, "file_path": nl.file_path }))
-        .collect();
+    let linked_notes_json = note_links_to_json(&note_links);
 
     let children = ctx.tasks.get_children(task_id).unwrap_or_default();
     let blocks = ctx.tasks.get_tasks_blocking(task_id).unwrap_or_default();
@@ -217,10 +206,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         obj.insert("linked_notes".into(), json!(linked_notes_json));
         obj.insert(
             "dependency_summary".into(),
-            json!({
-                "total_deps": dep_summary.total_deps,
-                "done_deps": dep_summary.done_deps,
-            }),
+            dep_summary_to_json(&dep_summary),
         );
     }
 
@@ -241,7 +227,7 @@ mod tests {
     #[test]
     fn test_get_found_with_stubs() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create parent and child
         apply(
@@ -292,7 +278,7 @@ mod tests {
     #[test]
     fn test_get_not_found() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let result = rt.block_on(dispatch_tool_call(
             "tasks.get",
@@ -306,7 +292,7 @@ mod tests {
     #[test]
     fn test_get_expand_parent() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -341,7 +327,7 @@ mod tests {
     #[test]
     fn test_get_expand_children() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -378,7 +364,7 @@ mod tests {
     #[test]
     fn test_get_expand_blocked_by() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -423,7 +409,7 @@ mod tests {
     #[test]
     fn test_get_includes_comments_and_labels() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -470,7 +456,7 @@ mod tests {
     #[test]
     fn test_get_blocks_reverse_deps() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,

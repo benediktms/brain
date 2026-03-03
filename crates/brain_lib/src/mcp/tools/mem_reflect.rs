@@ -1,39 +1,26 @@
 use serde_json::{Value, json};
 
-use crate::db::summaries::list_episodes;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-
-use super::mem_search_minimal;
+use crate::query_pipeline::QueryPipeline;
 
 pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    let topic = match params.get("topic").and_then(|v| v.as_str()) {
-        Some(t) => t,
-        None => return ToolCallResult::error("Missing required parameter: topic"),
+    use super::{opt_u64, require_str};
+    let topic = match require_str(params, "topic") {
+        Ok(t) => t,
+        Err(e) => return e,
     };
 
-    let budget_tokens = params
-        .get("budget_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2000) as usize;
+    let budget_tokens = opt_u64(params, "budget_tokens", 2000) as usize;
 
-    // Gather source material: recent episodes + relevant chunks
-    let episodes = ctx
-        .db
-        .with_conn(|conn| list_episodes(conn, 10))
-        .unwrap_or_default();
+    let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder);
+    let reflect_result = match pipeline.reflect(topic.to_string(), budget_tokens).await {
+        Ok(r) => r,
+        Err(e) => return ToolCallResult::error(format!("Reflect failed: {e}")),
+    };
 
-    // Also search for relevant chunks via search_minimal logic
-    let search_params = json!({
-        "query": topic,
-        "intent": "reflection",
-        "budget_tokens": budget_tokens / 2,
-        "k": 5
-    });
-    let search_result = mem_search_minimal::handle(&search_params, ctx).await;
-
-    // Build combined source material
-    let episode_sources: Vec<Value> = episodes
+    let episode_sources: Vec<Value> = reflect_result
+        .episodes
         .iter()
         .map(|ep| {
             json!({
@@ -47,14 +34,34 @@ pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         })
         .collect();
 
+    let related_chunks_json: Vec<Value> = reflect_result
+        .search_result
+        .results
+        .iter()
+        .map(|stub| {
+            json!({
+                "memory_id": stub.memory_id,
+                "title": stub.title,
+                "summary": stub.summary_2sent,
+                "score": stub.hybrid_score,
+                "file_path": stub.file_path,
+                "heading_path": stub.heading_path,
+            })
+        })
+        .collect();
+
     let response = json!({
-        "topic": topic,
-        "budget_tokens": budget_tokens,
+        "topic": reflect_result.topic,
+        "budget_tokens": reflect_result.budget_tokens,
         "source_count": episode_sources.len(),
         "episodes": episode_sources,
-        "related_chunks": serde_json::from_str::<Value>(
-            search_result.content.first().map(|c| c.text.as_str()).unwrap_or("{}")
-        ).unwrap_or(json!({})),
+        "related_chunks": {
+            "budget_tokens": reflect_result.search_result.budget_tokens,
+            "used_tokens_est": reflect_result.search_result.used_tokens_est,
+            "result_count": reflect_result.search_result.num_results,
+            "total_available": reflect_result.search_result.total_available,
+            "results": related_chunks_json,
+        },
     });
 
     ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
@@ -70,7 +77,7 @@ mod tests {
     #[test]
     fn test_reflect() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({ "topic": "project architecture" });
         let result = rt.block_on(dispatch_tool_call("memory.reflect", &params, &ctx));

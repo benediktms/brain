@@ -14,6 +14,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use brain_lib::embedder::MockEmbedder;
 use brain_lib::prelude::*;
 use tempfile::TempDir;
 

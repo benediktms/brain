@@ -13,6 +13,35 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+/// Extract a required string parameter, returning a ToolCallResult error if missing.
+pub(super) fn require_str<'a>(params: &'a Value, name: &str) -> Result<&'a str, ToolCallResult> {
+    params
+        .get(name)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolCallResult::error(format!("Missing required parameter: {name}")))
+}
+
+/// Extract a required JSON array parameter.
+pub(super) fn require_array<'a>(
+    params: &'a Value,
+    name: &str,
+) -> Result<&'a Vec<Value>, ToolCallResult> {
+    params
+        .get(name)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| ToolCallResult::error(format!("Missing required parameter: {name}")))
+}
+
+/// Extract an optional u64 parameter with a default value.
+pub(super) fn opt_u64(params: &Value, name: &str, default: u64) -> u64 {
+    params.get(name).and_then(|v| v.as_u64()).unwrap_or(default)
+}
+
+/// Extract an optional string parameter with a default value.
+pub(super) fn opt_str<'a>(params: &'a Value, name: &str, default: &'a str) -> &'a str {
+    params.get(name).and_then(|v| v.as_str()).unwrap_or(default)
+}
+
 /// Return all available tool definitions.
 pub fn tool_definitions() -> Vec<ToolDefinition> {
     vec![
@@ -262,12 +291,12 @@ mod tests {
     #[test]
     fn test_dispatch_unknown_tool() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
         let result = rt.block_on(dispatch_tool_call("nonexistent", &json!({}), &ctx));
         assert_eq!(result.is_error, Some(true));
     }
 
-    pub(super) async fn create_test_context() -> McpContext {
+    pub(super) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
         let tmp = tempfile::TempDir::new().unwrap();
         let sqlite_path = tmp.path().join("test.db");
         let lance_path = tmp.path().join("test_lance");
@@ -281,14 +310,14 @@ mod tests {
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
 
-        // Leak the TempDir so it lives for the test duration
-        std::mem::forget(tmp);
-
-        McpContext {
-            db,
-            store,
-            embedder,
-            tasks,
-        }
+        (
+            tmp,
+            McpContext {
+                db,
+                store,
+                embedder,
+                tasks,
+            },
+        )
     }
 }

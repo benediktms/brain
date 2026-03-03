@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::utils::task_row_to_json;
+use crate::tasks::enrichment::enrich_task_list;
 
 #[derive(Debug, Clone, Copy)]
 enum StatusFilter {
@@ -48,12 +48,8 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         return handle_batch(&task_ids, ctx);
     }
 
-    let status = match params
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("all")
-        .parse::<StatusFilter>()
-    {
+    use super::opt_str;
+    let status = match opt_str(params, "status", "all").parse::<StatusFilter>() {
         Ok(s) => s,
         Err(msg) => return ToolCallResult::error(msg),
     };
@@ -90,23 +86,14 @@ fn handle_batch(task_ids: &[&str], ctx: &McpContext) -> ToolCallResult {
 }
 
 fn build_response(tasks: &[crate::tasks::queries::TaskRow], ctx: &McpContext) -> ToolCallResult {
-    let tasks_json: Vec<Value> = tasks
-        .iter()
-        .map(|task| {
-            let labels = ctx.tasks.get_task_labels(&task.task_id).unwrap_or_default();
-            task_row_to_json(task, labels)
-        })
-        .collect();
-
-    let (ready_count, blocked_count) = ctx.tasks.count_ready_blocked().unwrap_or((0, 0));
-
+    let (tasks_json, ready_count, blocked_count) = enrich_task_list(&ctx.tasks, tasks);
+    let count = tasks_json.len();
     let response = json!({
         "tasks": tasks_json,
-        "count": tasks_json.len(),
+        "count": count,
         "ready_count": ready_count,
         "blocked_count": blocked_count,
     });
-
     ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
 }
 
@@ -124,7 +111,7 @@ mod tests {
     #[test]
     fn test_list_all() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -159,7 +146,7 @@ mod tests {
     #[test]
     fn test_list_ready_filter() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -202,7 +189,7 @@ mod tests {
     #[test]
     fn test_list_blocked_filter() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -245,7 +232,7 @@ mod tests {
     #[test]
     fn test_list_batch_by_task_ids() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         for (id, title) in &[("t1", "A"), ("t2", "B"), ("t3", "C")] {
             apply(
@@ -280,7 +267,7 @@ mod tests {
     #[test]
     fn test_list_empty() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let result = rt.block_on(dispatch_tool_call("tasks.list", &json!({}), &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -293,7 +280,7 @@ mod tests {
     #[test]
     fn test_list_correct_aggregate_counts() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
