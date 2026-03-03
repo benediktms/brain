@@ -100,8 +100,18 @@ impl Embedder {
             return Ok(vec![]);
         }
 
-        let mut all_embeddings = Vec::with_capacity(texts.len());
-        for chunk in texts.chunks(Self::MAX_BATCH_SIZE) {
+        let total = texts.len();
+        let num_batches = total.div_ceil(Self::MAX_BATCH_SIZE);
+        let mut all_embeddings = Vec::with_capacity(total);
+        for (i, chunk) in texts.chunks(Self::MAX_BATCH_SIZE).enumerate() {
+            info!(
+                batch = i + 1,
+                of = num_batches,
+                size = chunk.len(),
+                done = all_embeddings.len(),
+                total,
+                "embedding sub-batch"
+            );
             let batch_result = self.embed_batch_inner(chunk)?;
             all_embeddings.extend(batch_result);
         }
