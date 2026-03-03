@@ -9,7 +9,7 @@ use std::sync::Arc;
 use brain_lib::db::Db;
 use brain_lib::db::files;
 use brain_lib::embedder::MockEmbedder;
-use brain_lib::hash_gate::content_hash;
+use brain_lib::utils::content_hash;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::store::Store;
 use brain_lib::watcher::FileEvent;
@@ -170,7 +170,7 @@ async fn test_startup_recovery_reindexes_stuck_files() {
 
     // Simulate a crash: set indexing_state to 'indexing_started'
     pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             assert_eq!(paths.len(), 1);
@@ -251,7 +251,7 @@ async fn test_multiple_scans_no_duplicates() {
 
     // Verify only one file tracked in SQLite
     let active = pipeline
-        .db_ref()
+        .db()
         .with_conn(files::get_all_active_paths)
         .unwrap();
     assert_eq!(active.len(), 1);
@@ -276,7 +276,7 @@ async fn test_file_rename_preserves_identity() {
 
     // Grab the original file_id
     let original_id = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths[0].0.clone())
@@ -290,7 +290,7 @@ async fn test_file_rename_preserves_identity() {
 
     // Verify: same file_id, updated path
     let active = pipeline
-        .db_ref()
+        .db()
         .with_conn(files::get_all_active_paths)
         .unwrap();
     assert_eq!(active.len(), 1);
@@ -323,7 +323,7 @@ async fn test_handle_event_created() {
 
     // Verify: file appears in SQLite with state=indexed
     let active = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             assert_eq!(paths.len(), 1);
@@ -367,7 +367,7 @@ async fn test_handle_event_deleted() {
 
     // Verify: soft-deleted (no active paths)
     let active = pipeline
-        .db_ref()
+        .db()
         .with_conn(files::get_all_active_paths)
         .unwrap();
     assert!(active.is_empty());
@@ -388,7 +388,7 @@ async fn test_handle_event_renamed() {
         .unwrap();
 
     let (original_id, original_hash) = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             let hash = files::get_content_hash(conn, &paths[0].0)?;
@@ -409,7 +409,7 @@ async fn test_handle_event_renamed() {
 
     // Verify: path updated, same file_id, same content_hash (no re-embedding)
     let (found_id, found_path, found_hash) = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             assert_eq!(paths.len(), 1);
@@ -440,7 +440,7 @@ async fn test_delete_then_recreate_resurrects_id() {
         .await
         .unwrap();
     let original_id = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths[0].0.clone())
@@ -471,7 +471,7 @@ async fn test_delete_then_recreate_resurrects_id() {
 
     // Verify: resurrected with the same file_id
     let resurrected_id = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             assert_eq!(paths.len(), 1);
@@ -502,7 +502,7 @@ async fn test_upsert_add_paragraph_adds_chunk() {
         .unwrap();
 
     let (file_id, count) = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             let fid = paths[0].0.clone();
@@ -532,7 +532,7 @@ async fn test_upsert_add_paragraph_adds_chunk() {
         .unwrap();
 
     let new_count: i64 = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let c: i64 = conn
                 .query_row(
@@ -566,7 +566,7 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
         .unwrap();
 
     let (file_id, count) = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             let fid = paths[0].0.clone();
@@ -589,7 +589,7 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
     pipeline.full_scan(&[notes_dir]).await.unwrap();
 
     let new_count: i64 = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let c: i64 = conn
                 .query_row(

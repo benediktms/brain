@@ -167,7 +167,7 @@ async fn test_links_stored_and_backlinks_queryable() {
 
     // Query backlinks to b.md's path
     let backlinks = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| count_backlinks(conn, "b"))
         .unwrap();
     assert_eq!(backlinks, 1, "b.md should have 1 backlink from a.md");
@@ -201,7 +201,7 @@ async fn test_fts_keyword_search_after_indexing() {
 
     // FTS search for "rust"
     let results = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| search_fts(conn, "rust", 10))
         .unwrap();
     assert!(!results.is_empty(), "FTS should find 'rust'");
@@ -213,7 +213,7 @@ async fn test_fts_keyword_search_after_indexing() {
 
     // FTS search for "machine learning"
     let results = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| search_fts(conn, "\"machine learning\"", 10))
         .unwrap();
     assert_eq!(
@@ -224,7 +224,7 @@ async fn test_fts_keyword_search_after_indexing() {
 
     // FTS search for something not present
     let results = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| search_fts(conn, "javascript", 10))
         .unwrap();
     assert!(results.is_empty(), "javascript not in any file");
@@ -247,7 +247,7 @@ async fn test_fts_consistent_after_file_update() {
         .unwrap();
 
     let results = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| search_fts(conn, "databases", 10))
         .unwrap();
     assert_eq!(results.len(), 1);
@@ -257,7 +257,7 @@ async fn test_fts_consistent_after_file_update() {
     pipeline.full_scan(&[notes_dir]).await.unwrap();
 
     let results = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| search_fts(conn, "databases", 10))
         .unwrap();
     assert!(
@@ -266,7 +266,7 @@ async fn test_fts_consistent_after_file_update() {
     );
 
     let results = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| search_fts(conn, "networking", 10))
         .unwrap();
     assert_eq!(results.len(), 1, "new keyword should be found");
@@ -449,7 +449,7 @@ async fn test_chunk_lookup_by_ids() {
 
     // Get all chunk IDs from the database
     let chunk_ids: Vec<String> = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             let mut stmt = conn.prepare("SELECT chunk_id FROM chunks ORDER BY chunk_ord")?;
             let rows = stmt.query_map([], |row| row.get(0))?;
@@ -469,7 +469,7 @@ async fn test_chunk_lookup_by_ids() {
 
     // Look up by IDs
     let rows = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| get_chunks_by_ids(conn, &chunk_ids))
         .unwrap();
 
@@ -754,7 +754,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
 
     // Verify FTS has entries
     let fts_results = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| search_fts(conn, "vector", 10))
         .unwrap();
     assert!(
@@ -764,7 +764,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
 
     // Verify chunks exist
     let chunk_count: i64 = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
                 .map_err(|e| BrainCoreError::Database(e.to_string()))
@@ -777,7 +777,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
 
     // Verify FTS count matches chunk count (external-content sync)
     let fts_count: i64 = pipeline
-        .db_ref()
+        .db()
         .with_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM fts_chunks", [], |row| row.get(0))
                 .map_err(|e| BrainCoreError::Database(e.to_string()))

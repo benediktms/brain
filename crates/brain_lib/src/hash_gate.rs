@@ -1,5 +1,6 @@
 use crate::db::Db;
 use crate::db::files;
+use crate::utils::content_hash;
 
 /// Result of a hash gate check: should this file be (re-)indexed?
 pub struct GateVerdict {
@@ -54,22 +55,6 @@ impl<'a> HashGate<'a> {
     }
 }
 
-/// Normalize content for deterministic hashing:
-/// - Strip trailing whitespace per line
-/// - Normalize line endings to LF
-fn normalize_content(text: &str) -> String {
-    text.lines()
-        .map(|line| line.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Compute BLAKE3 hash of normalized content, hex encoded.
-pub fn content_hash(text: &str) -> String {
-    let normalized = normalize_content(text);
-    blake3::hash(normalized.as_bytes()).to_hex().to_string()
-}
-
 /// Check if a file needs re-indexing by comparing stored hash with current content.
 fn needs_reindex(stored_hash: Option<&str>, current_content: &str) -> bool {
     match stored_hash {
@@ -81,41 +66,6 @@ fn needs_reindex(stored_hash: Option<&str>, current_content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_normalize_strips_trailing_whitespace() {
-        let input = "hello   \nworld\t\n";
-        let normalized = normalize_content(input);
-        assert_eq!(normalized, "hello\nworld");
-    }
-
-    #[test]
-    fn test_normalize_crlf_to_lf() {
-        let input = "hello\r\nworld\r\n";
-        let normalized = normalize_content(input);
-        assert_eq!(normalized, "hello\nworld");
-    }
-
-    #[test]
-    fn test_hash_deterministic() {
-        let h1 = content_hash("hello world");
-        let h2 = content_hash("hello world");
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn test_hash_differs_for_different_content() {
-        let h1 = content_hash("hello");
-        let h2 = content_hash("world");
-        assert_ne!(h1, h2);
-    }
-
-    #[test]
-    fn test_whitespace_normalization_same_hash() {
-        let h1 = content_hash("hello   \nworld\n");
-        let h2 = content_hash("hello\nworld\n");
-        assert_eq!(h1, h2);
-    }
 
     #[test]
     fn test_needs_reindex_no_stored_hash() {

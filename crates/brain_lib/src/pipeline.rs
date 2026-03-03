@@ -88,9 +88,19 @@ impl IndexPipeline {
         }
     }
 
-    /// Get a reference to the SQLite database (for testing/inspection).
-    pub fn db_ref(&self) -> &Db {
+    /// Get a reference to the SQLite database.
+    pub fn db(&self) -> &Db {
         &self.db
+    }
+
+    /// Get a reference to the LanceDB store.
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Get a reference to the embedder.
+    pub fn embedder(&self) -> &Arc<dyn Embed> {
+        &self.embedder
     }
 
     /// Index a single file. Returns true if it was actually re-indexed (not skipped).

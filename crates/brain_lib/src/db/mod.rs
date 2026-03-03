@@ -3,7 +3,7 @@ pub mod files;
 pub mod fts;
 pub mod links;
 mod migrations;
-pub mod schema;
+pub(crate) mod schema;
 pub mod summaries;
 
 use std::path::Path;

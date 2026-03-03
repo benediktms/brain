@@ -14,6 +14,8 @@ use crate::error::BrainCoreError;
 const EMBEDDING_DIM: i32 = 384;
 
 pub struct Store {
+    /// Kept alive so the LanceDB table handle remains valid.
+    #[allow(dead_code)]
     db: lancedb::Connection,
     table: lancedb::Table,
 }
@@ -221,10 +223,6 @@ impl Store {
         Ok(output)
     }
 
-    /// Get a reference to the underlying LanceDB connection.
-    pub fn connection(&self) -> &lancedb::Connection {
-        &self.db
-    }
 }
 
 #[derive(Debug)]

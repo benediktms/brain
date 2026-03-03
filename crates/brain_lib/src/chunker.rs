@@ -1,4 +1,4 @@
-use crate::hash_gate::content_hash;
+use crate::utils::content_hash;
 use crate::parser::{ParsedDocument, Section};
 use crate::tokens::estimate_tokens;
 
