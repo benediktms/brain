@@ -272,10 +272,13 @@ fn empty_record_batch(schema: &Schema) -> RecordBatch {
     .expect("empty batch should be valid")
 }
 
-/// Validate that a file_id is a well-formed UUID (hex digits and hyphens only)
-/// before interpolating it into a LanceDB filter expression.
+/// Validate that a file_id is safe to interpolate into a LanceDB filter expression.
+///
+/// Accepts both legacy UUID format (hex digits + hyphens) and ULID format
+/// (Crockford Base32: alphanumeric characters). The key constraint is preventing
+/// SQL injection in filter strings, so we allow only `[a-zA-Z0-9-]`.
 fn validate_file_id(file_id: &str) -> crate::error::Result<&str> {
-    if !file_id.is_empty() && file_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+    if !file_id.is_empty() && file_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         Ok(file_id)
     } else {
         Err(BrainCoreError::VectorDb(format!(
