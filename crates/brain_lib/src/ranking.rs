@@ -37,7 +37,7 @@ pub struct Weights {
 
 impl Weights {
     pub fn from_profile(profile: WeightProfile) -> Self {
-        match profile {
+        let w = match profile {
             WeightProfile::Default => Self::equal(),
             WeightProfile::Lookup => Self {
                 vector: 0.10,
@@ -71,7 +71,9 @@ impl Weights {
                 tag_match: 0.10,
                 importance: 0.10,
             },
-        }
+        };
+        debug_assert!(w.validate().is_ok(), "weight profile {:?} failed validation: {:?}", profile, w.validate());
+        w
     }
 
     fn equal() -> Self {
