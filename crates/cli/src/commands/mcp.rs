@@ -17,11 +17,10 @@ pub async fn run(model_dir: PathBuf, lance_db: PathBuf, sqlite_db: PathBuf) -> R
     let pipeline = IndexPipeline::new(&model_dir, &lance_db, &sqlite_db).await?;
 
     // Reuse Db and Embedder from the pipeline (cheap Arc clones).
-    // Store doesn't implement Clone, so we open a second handle; SQLite WAL
-    // allows concurrent readers and LanceDB is fine with parallel connections.
+    // StoreReader shares the Arc<Table> — no second LanceDB connection needed.
     let db = pipeline.db().clone();
     let embedder = Arc::clone(pipeline.embedder());
-    let store = brain_lib::store::Store::open_or_create(&lance_db).await?;
+    let store_reader = brain_lib::store::StoreReader::from_store(pipeline.store());
 
     // Task store: derive tasks_dir from sqlite_db parent (e.g. .brain/tasks/)
     let tasks_dir = sqlite_db
@@ -36,7 +35,7 @@ pub async fn run(model_dir: PathBuf, lance_db: PathBuf, sqlite_db: PathBuf) -> R
 
     let ctx = Arc::new(brain_lib::mcp::McpContext {
         db,
-        store,
+        store: store_reader,
         embedder,
         tasks,
     });

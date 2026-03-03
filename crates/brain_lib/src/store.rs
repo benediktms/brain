@@ -10,7 +10,6 @@ use arrow_array::{
     types::Float32Type,
 };
 use arrow_schema::{DataType, Field, Schema};
-use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::OptimizeAction;
 use tracing::{info, warn};
 
@@ -29,7 +28,7 @@ const DEFAULT_TIME_THRESHOLD: Duration = Duration::from_secs(300);
 /// sequential within a single tokio task, so the mutex is effectively
 /// uncontended — but the design remains safe if concurrency is added later.
 pub struct OptimizeScheduler {
-    table: lancedb::Table,
+    table: Arc<lancedb::Table>,
     pending_mutations: AtomicU64,
     /// Guards optimize execution and tracks when the last optimize completed.
     guard: tokio::sync::Mutex<Instant>,
@@ -38,7 +37,7 @@ pub struct OptimizeScheduler {
 }
 
 impl OptimizeScheduler {
-    pub fn new(table: lancedb::Table, row_threshold: u64, time_threshold: Duration) -> Self {
+    pub fn new(table: Arc<lancedb::Table>, row_threshold: u64, time_threshold: Duration) -> Self {
         Self {
             table,
             pending_mutations: AtomicU64::new(0),
@@ -129,8 +128,35 @@ pub struct Store {
     /// Kept alive so the LanceDB table handle remains valid.
     #[allow(dead_code)]
     db: lancedb::Connection,
-    table: lancedb::Table,
+    table: Arc<lancedb::Table>,
     optimize_scheduler: OptimizeScheduler,
+}
+
+/// Read-only handle to a LanceDB table for query operations.
+///
+/// Cheap to clone (wraps `Arc<Table>`). Created from an existing `Store`
+/// via `StoreReader::from_store()` — no extra connection needed.
+#[derive(Clone)]
+pub struct StoreReader {
+    table: Arc<lancedb::Table>,
+}
+
+impl StoreReader {
+    /// Create a reader from an existing store (shares the same table handle).
+    pub fn from_store(store: &Store) -> Self {
+        Self {
+            table: Arc::clone(&store.table),
+        }
+    }
+
+    /// Search for the top-k most similar chunks to the given embedding.
+    pub async fn query(
+        &self,
+        embedding: &[f32],
+        top_k: usize,
+    ) -> crate::error::Result<Vec<QueryResult>> {
+        query_impl(&self.table, embedding, top_k).await
+    }
 }
 
 impl Store {
@@ -180,8 +206,9 @@ impl Store {
                 .map_err(|e| BrainCoreError::VectorDb(format!("failed to create table: {e}")))?
         };
 
+        let table = Arc::new(table);
         let optimize_scheduler =
-            OptimizeScheduler::new(table.clone(), DEFAULT_ROW_THRESHOLD, DEFAULT_TIME_THRESHOLD);
+            OptimizeScheduler::new(Arc::clone(&table), DEFAULT_ROW_THRESHOLD, DEFAULT_TIME_THRESHOLD);
 
         info!("LanceDB store ready");
         Ok(Self {
@@ -297,61 +324,7 @@ impl Store {
         embedding: &[f32],
         top_k: usize,
     ) -> crate::error::Result<Vec<QueryResult>> {
-        let results = self
-            .table
-            .vector_search(embedding)
-            .map_err(|e| BrainCoreError::VectorDb(format!("search setup failed: {e}")))?
-            .distance_type(lancedb::DistanceType::Dot)
-            .limit(top_k)
-            .execute()
-            .await
-            .map_err(|e| BrainCoreError::VectorDb(format!("search failed: {e}")))?;
-
-        let mut output = Vec::new();
-        use futures::TryStreamExt;
-        let batches: Vec<RecordBatch> = results
-            .try_collect()
-            .await
-            .map_err(|e| BrainCoreError::VectorDb(format!("result collection failed: {e}")))?;
-
-        for batch in &batches {
-            let chunk_ids = batch
-                .column_by_name("chunk_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or_else(|| BrainCoreError::VectorDb("missing chunk_id column".into()))?;
-            let file_ids = batch
-                .column_by_name("file_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or_else(|| BrainCoreError::VectorDb("missing file_id column".into()))?;
-            let file_paths = batch
-                .column_by_name("file_path")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or_else(|| BrainCoreError::VectorDb("missing file_path column".into()))?;
-            let chunk_ords = batch
-                .column_by_name("chunk_ord")
-                .and_then(|c| c.as_any().downcast_ref::<Int32Array>())
-                .ok_or_else(|| BrainCoreError::VectorDb("missing chunk_ord column".into()))?;
-            let contents = batch
-                .column_by_name("content")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or_else(|| BrainCoreError::VectorDb("missing content column".into()))?;
-            let distances = batch
-                .column_by_name("_distance")
-                .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
-
-            for i in 0..batch.num_rows() {
-                output.push(QueryResult {
-                    chunk_id: chunk_ids.value(i).to_string(),
-                    file_id: file_ids.value(i).to_string(),
-                    file_path: file_paths.value(i).to_string(),
-                    chunk_ord: chunk_ords.value(i) as usize,
-                    content: contents.value(i).to_string(),
-                    score: distances.map(|d| d.value(i)),
-                });
-            }
-        }
-
-        Ok(output)
+        query_impl(&self.table, embedding, top_k).await
     }
 }
 
@@ -363,6 +336,70 @@ pub struct QueryResult {
     pub chunk_ord: usize,
     pub content: String,
     pub score: Option<f32>,
+}
+
+/// Shared vector search implementation used by both `Store` and `StoreReader`.
+async fn query_impl(
+    table: &lancedb::Table,
+    embedding: &[f32],
+    top_k: usize,
+) -> crate::error::Result<Vec<QueryResult>> {
+    use futures::TryStreamExt;
+    use lancedb::query::{ExecutableQuery, QueryBase};
+
+    let results = table
+        .vector_search(embedding)
+        .map_err(|e| BrainCoreError::VectorDb(format!("search setup failed: {e}")))?
+        .distance_type(lancedb::DistanceType::Dot)
+        .limit(top_k)
+        .execute()
+        .await
+        .map_err(|e| BrainCoreError::VectorDb(format!("search failed: {e}")))?;
+
+    let batches: Vec<RecordBatch> = results
+        .try_collect()
+        .await
+        .map_err(|e| BrainCoreError::VectorDb(format!("result collection failed: {e}")))?;
+
+    let mut output = Vec::new();
+    for batch in &batches {
+        let chunk_ids = batch
+            .column_by_name("chunk_id")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .ok_or_else(|| BrainCoreError::VectorDb("missing chunk_id column".into()))?;
+        let file_ids = batch
+            .column_by_name("file_id")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .ok_or_else(|| BrainCoreError::VectorDb("missing file_id column".into()))?;
+        let file_paths = batch
+            .column_by_name("file_path")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .ok_or_else(|| BrainCoreError::VectorDb("missing file_path column".into()))?;
+        let chunk_ords = batch
+            .column_by_name("chunk_ord")
+            .and_then(|c| c.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| BrainCoreError::VectorDb("missing chunk_ord column".into()))?;
+        let contents = batch
+            .column_by_name("content")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .ok_or_else(|| BrainCoreError::VectorDb("missing content column".into()))?;
+        let distances = batch
+            .column_by_name("_distance")
+            .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+
+        for i in 0..batch.num_rows() {
+            output.push(QueryResult {
+                chunk_id: chunk_ids.value(i).to_string(),
+                file_id: file_ids.value(i).to_string(),
+                file_path: file_paths.value(i).to_string(),
+                chunk_ord: chunk_ords.value(i) as usize,
+                content: contents.value(i).to_string(),
+                score: distances.map(|d| d.value(i)),
+            });
+        }
+    }
+
+    Ok(output)
 }
 
 fn chunks_schema() -> Schema {
@@ -484,7 +521,7 @@ mod tests {
             .execute()
             .await
             .unwrap();
-        let scheduler = OptimizeScheduler::new(table, row_threshold, time_threshold);
+        let scheduler = OptimizeScheduler::new(Arc::new(table), row_threshold, time_threshold);
         (scheduler, tmp)
     }
 

@@ -27,7 +27,7 @@ impl<'a> HashGate<'a> {
     pub fn check(&self, path: &str, content: &str) -> crate::error::Result<GateVerdict> {
         let hash = content_hash(content);
 
-        let (file_id, should_index) = self.db.with_conn(|conn| {
+        let (file_id, should_index) = self.db.with_write_conn(|conn| {
             let (file_id, _is_new) = files::get_or_create_file_id(conn, path)?;
             let stored_hash = files::get_content_hash(conn, &file_id)?;
             let should_index = needs_reindex(stored_hash.as_deref(), content);
@@ -45,13 +45,13 @@ impl<'a> HashGate<'a> {
     /// returns should_index=true, before starting the actual work.
     pub fn mark_in_progress(&self, file_id: &str) -> crate::error::Result<()> {
         self.db
-            .with_conn(|conn| files::set_indexing_state(conn, file_id, "indexing_started"))
+            .with_write_conn(|conn| files::set_indexing_state(conn, file_id, "indexing_started"))
     }
 
     /// Stamp the hash + mark indexed after successful indexing.
     pub fn mark_passed(&self, file_id: &str, hash: &str) -> crate::error::Result<()> {
         self.db
-            .with_conn(|conn| files::mark_indexed(conn, file_id, hash))
+            .with_write_conn(|conn| files::mark_indexed(conn, file_id, hash))
     }
 }
 

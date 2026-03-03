@@ -43,7 +43,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         importance,
     };
 
-    match ctx.db.with_conn(|conn| store_episode(conn, &episode)) {
+    match ctx.db.with_write_conn(|conn| store_episode(conn, &episode)) {
         Ok(summary_id) => {
             let response = json!({
                 "status": "stored",

@@ -43,7 +43,7 @@ impl TaskStore {
     /// - `NoteLinked`/`NoteUnlinked`: task must exist
     pub fn append(&self, event: &TaskEvent) -> Result<()> {
         // Validate before writing to JSONL
-        self.db.with_conn(|conn| {
+        self.db.with_write_conn(|conn| {
             self.validate(conn, event)?;
 
             // Write to JSONL (source of truth)
@@ -60,106 +60,106 @@ impl TaskStore {
     pub fn rebuild_projections(&self) -> Result<()> {
         let all_events = events::read_all_events(&self.events_path)?;
         self.db
-            .with_conn(|conn| projections::rebuild(conn, &all_events))
+            .with_write_conn(|conn| projections::rebuild(conn, &all_events))
     }
 
     /// List tasks that are ready to work on (no unresolved deps, not blocked).
     pub fn list_ready(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_conn(queries::list_ready)
+        self.db.with_read_conn(queries::list_ready)
     }
 
     /// List tasks that are blocked (unresolved deps or explicit blocked_reason).
     pub fn list_blocked(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_conn(queries::list_blocked)
+        self.db.with_read_conn(queries::list_blocked)
     }
 
     /// List all tasks.
     pub fn list_all(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_conn(queries::list_all)
+        self.db.with_read_conn(queries::list_all)
     }
 
     /// Get a single task by ID.
     pub fn get_task(&self, task_id: &str) -> Result<Option<queries::TaskRow>> {
-        self.db.with_conn(|conn| queries::get_task(conn, task_id))
+        self.db.with_read_conn(|conn| queries::get_task(conn, task_id))
     }
 
     /// List task IDs that became unblocked because `completed_task_id` was resolved.
     pub fn list_newly_unblocked(&self, completed_task_id: &str) -> Result<Vec<String>> {
         self.db
-            .with_conn(|conn| queries::list_newly_unblocked(conn, completed_task_id))
+            .with_read_conn(|conn| queries::list_newly_unblocked(conn, completed_task_id))
     }
 
     /// Get the dependency summary for a task.
     pub fn get_dependency_summary(&self, task_id: &str) -> Result<queries::DependencySummary> {
         self.db
-            .with_conn(|conn| queries::get_dependency_summary(conn, task_id))
+            .with_read_conn(|conn| queries::get_dependency_summary(conn, task_id))
     }
 
     /// Get note links for a task.
     pub fn get_task_note_links(&self, task_id: &str) -> Result<Vec<queries::TaskNoteLink>> {
         self.db
-            .with_conn(|conn| queries::get_task_note_links(conn, task_id))
+            .with_read_conn(|conn| queries::get_task_note_links(conn, task_id))
     }
 
     /// Get labels for a task.
     pub fn get_task_labels(&self, task_id: &str) -> Result<Vec<String>> {
         self.db
-            .with_conn(|conn| queries::get_task_labels(conn, task_id))
+            .with_read_conn(|conn| queries::get_task_labels(conn, task_id))
     }
 
     /// Get comments for a task.
     pub fn get_task_comments(&self, task_id: &str) -> Result<Vec<queries::TaskComment>> {
         self.db
-            .with_conn(|conn| queries::get_task_comments(conn, task_id))
+            .with_read_conn(|conn| queries::get_task_comments(conn, task_id))
     }
 
     /// Get child tasks of a parent.
     pub fn get_children(&self, parent_task_id: &str) -> Result<Vec<queries::TaskRow>> {
         self.db
-            .with_conn(|conn| queries::get_children(conn, parent_task_id))
+            .with_read_conn(|conn| queries::get_children(conn, parent_task_id))
     }
 
     /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
     pub fn get_tasks_blocking(&self, task_id: &str) -> Result<Vec<queries::TaskRow>> {
         self.db
-            .with_conn(|conn| queries::get_tasks_blocking(conn, task_id))
+            .with_read_conn(|conn| queries::get_tasks_blocking(conn, task_id))
     }
 
     /// Count of ready and blocked tasks.
     pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
-        self.db.with_conn(queries::count_ready_blocked)
+        self.db.with_read_conn(queries::count_ready_blocked)
     }
 
     /// List all dependency edges (bulk load for export).
     pub fn list_all_deps(&self) -> Result<Vec<queries::TaskDep>> {
-        self.db.with_conn(queries::list_all_deps)
+        self.db.with_read_conn(queries::list_all_deps)
     }
 
     /// List all (task_id, label) pairs (bulk load for export).
     pub fn list_all_labels(&self) -> Result<Vec<(String, String)>> {
-        self.db.with_conn(queries::list_all_labels)
+        self.db.with_read_conn(queries::list_all_labels)
     }
 
     /// Resolve a task ID from an exact match or unique prefix.
     pub fn resolve_task_id(&self, input: &str) -> Result<String> {
         self.db
-            .with_conn(|conn| queries::resolve_task_id(conn, input))
+            .with_read_conn(|conn| queries::resolve_task_id(conn, input))
     }
 
     /// Compute shortest unique prefixes for all tasks.
     pub fn shortest_unique_prefixes(&self) -> Result<HashMap<String, String>> {
-        self.db.with_conn(queries::shortest_unique_prefixes)
+        self.db.with_read_conn(queries::shortest_unique_prefixes)
     }
 
     /// Compute shortest unique prefix for a single task.
     pub fn shortest_unique_prefix(&self, task_id: &str) -> Result<String> {
         self.db
-            .with_conn(|conn| queries::shortest_unique_prefix(conn, task_id))
+            .with_read_conn(|conn| queries::shortest_unique_prefix(conn, task_id))
     }
 
     /// Get the project prefix, auto-generating from the brain directory name if needed.
     pub fn get_project_prefix(&self) -> Result<String> {
-        self.db.with_conn(|conn| {
+        self.db.with_write_conn(|conn| {
             // events_path = tasks_dir/events.jsonl, tasks_dir = brain_dir/tasks
             let brain_dir = self
                 .events_path

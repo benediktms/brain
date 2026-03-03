@@ -50,13 +50,15 @@ async fn setup_mcp() -> (McpContext, TempDir) {
 
     let db = Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
+    let store_reader = brain_lib::store::StoreReader::from_store(&store);
+    let _store = store; // keep alive so Arc<Table> remains valid
     let embedder = Arc::new(MockEmbedder);
     let tasks_db = Db::open(&sqlite_path).unwrap();
     let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
 
     let ctx = McpContext {
         db,
-        store,
+        store: store_reader,
         embedder,
         tasks,
     };
@@ -168,7 +170,7 @@ async fn test_links_stored_and_backlinks_queryable() {
     // Query backlinks to b.md's path
     let backlinks = pipeline
         .db()
-        .with_conn(|conn| count_backlinks(conn, "b"))
+        .with_read_conn(|conn| count_backlinks(conn, "b"))
         .unwrap();
     assert_eq!(backlinks, 1, "b.md should have 1 backlink from a.md");
 }
@@ -202,7 +204,7 @@ async fn test_fts_keyword_search_after_indexing() {
     // FTS search for "rust"
     let results = pipeline
         .db()
-        .with_conn(|conn| search_fts(conn, "rust", 10))
+        .with_read_conn(|conn| search_fts(conn, "rust", 10))
         .unwrap();
     assert!(!results.is_empty(), "FTS should find 'rust'");
     // The result should be from the rust.md chunk
@@ -214,7 +216,7 @@ async fn test_fts_keyword_search_after_indexing() {
     // FTS search for "machine learning"
     let results = pipeline
         .db()
-        .with_conn(|conn| search_fts(conn, "\"machine learning\"", 10))
+        .with_read_conn(|conn| search_fts(conn, "\"machine learning\"", 10))
         .unwrap();
     assert_eq!(
         results.len(),
@@ -225,7 +227,7 @@ async fn test_fts_keyword_search_after_indexing() {
     // FTS search for something not present
     let results = pipeline
         .db()
-        .with_conn(|conn| search_fts(conn, "javascript", 10))
+        .with_read_conn(|conn| search_fts(conn, "javascript", 10))
         .unwrap();
     assert!(results.is_empty(), "javascript not in any file");
 }
@@ -248,7 +250,7 @@ async fn test_fts_consistent_after_file_update() {
 
     let results = pipeline
         .db()
-        .with_conn(|conn| search_fts(conn, "databases", 10))
+        .with_read_conn(|conn| search_fts(conn, "databases", 10))
         .unwrap();
     assert_eq!(results.len(), 1);
 
@@ -258,7 +260,7 @@ async fn test_fts_consistent_after_file_update() {
 
     let results = pipeline
         .db()
-        .with_conn(|conn| search_fts(conn, "databases", 10))
+        .with_read_conn(|conn| search_fts(conn, "databases", 10))
         .unwrap();
     assert!(
         results.is_empty(),
@@ -267,7 +269,7 @@ async fn test_fts_consistent_after_file_update() {
 
     let results = pipeline
         .db()
-        .with_conn(|conn| search_fts(conn, "networking", 10))
+        .with_read_conn(|conn| search_fts(conn, "networking", 10))
         .unwrap();
     assert_eq!(results.len(), 1, "new keyword should be found");
 }
@@ -450,7 +452,7 @@ async fn test_chunk_lookup_by_ids() {
     // Get all chunk IDs from the database
     let chunk_ids: Vec<String> = pipeline
         .db()
-        .with_conn(|conn| {
+        .with_read_conn(|conn| {
             let mut stmt = conn.prepare("SELECT chunk_id FROM chunks ORDER BY chunk_ord")?;
             let rows = stmt.query_map([], |row| row.get(0))?;
             let mut ids = Vec::new();
@@ -470,7 +472,7 @@ async fn test_chunk_lookup_by_ids() {
     // Look up by IDs
     let rows = pipeline
         .db()
-        .with_conn(|conn| get_chunks_by_ids(conn, &chunk_ids))
+        .with_read_conn(|conn| get_chunks_by_ids(conn, &chunk_ids))
         .unwrap();
 
     assert_eq!(rows.len(), 2);
@@ -507,7 +509,7 @@ async fn test_mcp_write_episode_and_retrieve() {
     // Verify episode is in the database
     let episode = ctx
         .db
-        .with_conn(|conn| get_summary(conn, summary_id))
+        .with_read_conn(|conn| get_summary(conn, summary_id))
         .unwrap();
     assert!(episode.is_some(), "episode should be retrievable");
     let ep = episode.unwrap();
@@ -545,9 +547,10 @@ async fn test_mcp_search_minimal_returns_results() {
 
     // Create fresh McpContext that sees the indexed data
     let tasks_dir2 = tmp.path().join("tasks2");
+    let store2 = Store::open_or_create(&lance_path).await.unwrap();
     let ctx = McpContext {
         db: Db::open(&sqlite_path).unwrap(),
-        store: Store::open_or_create(&lance_path).await.unwrap(),
+        store: brain_lib::store::StoreReader::from_store(&store2),
         embedder: Arc::new(MockEmbedder),
         tasks: brain_lib::tasks::TaskStore::new(&tasks_dir2, Db::open(&sqlite_path).unwrap())
             .unwrap(),
@@ -601,9 +604,10 @@ async fn test_mcp_expand_returns_full_content() {
 
     // Create fresh McpContext that sees the indexed data
     let tasks_dir3 = tmp.path().join("tasks3");
+    let store3 = Store::open_or_create(&lance_path).await.unwrap();
     let ctx = McpContext {
         db: Db::open(&sqlite_path).unwrap(),
-        store: Store::open_or_create(&lance_path).await.unwrap(),
+        store: brain_lib::store::StoreReader::from_store(&store3),
         embedder: Arc::new(MockEmbedder),
         tasks: brain_lib::tasks::TaskStore::new(&tasks_dir3, Db::open(&sqlite_path).unwrap())
             .unwrap(),
@@ -612,7 +616,7 @@ async fn test_mcp_expand_returns_full_content() {
     // Get the chunk_id
     let chunk_ids: Vec<String> = ctx
         .db
-        .with_conn(|conn| {
+        .with_read_conn(|conn| {
             let mut stmt = conn.prepare("SELECT chunk_id FROM chunks")?;
             let rows = stmt.query_map([], |row| row.get(0))?;
             let mut ids = Vec::new();
@@ -684,7 +688,7 @@ fn test_episode_store_and_list() {
     let db = Db::open_in_memory().unwrap();
 
     let ep1_id = db
-        .with_conn(|conn| {
+        .with_write_conn(|conn| {
             store_episode(
                 conn,
                 &Episode {
@@ -699,7 +703,7 @@ fn test_episode_store_and_list() {
         .unwrap();
 
     let _ep2_id = db
-        .with_conn(|conn| {
+        .with_write_conn(|conn| {
             store_episode(
                 conn,
                 &Episode {
@@ -714,12 +718,12 @@ fn test_episode_store_and_list() {
         .unwrap();
 
     // List episodes
-    let episodes = db.with_conn(|conn| list_episodes(conn, 10)).unwrap();
+    let episodes = db.with_read_conn(|conn| list_episodes(conn, 10)).unwrap();
     assert_eq!(episodes.len(), 2);
 
     // Get specific episode
     let ep = db
-        .with_conn(|conn| get_summary(conn, &ep1_id))
+        .with_read_conn(|conn| get_summary(conn, &ep1_id))
         .unwrap()
         .unwrap();
     assert_eq!(ep.kind, "episode");
@@ -755,7 +759,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
     // Verify FTS has entries
     let fts_results = pipeline
         .db()
-        .with_conn(|conn| search_fts(conn, "vector", 10))
+        .with_read_conn(|conn| search_fts(conn, "vector", 10))
         .unwrap();
     assert!(
         !fts_results.is_empty(),
@@ -765,7 +769,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
     // Verify chunks exist
     let chunk_count: i64 = pipeline
         .db()
-        .with_conn(|conn| {
+        .with_read_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
                 .map_err(|e| BrainCoreError::Database(e.to_string()))
         })
@@ -778,7 +782,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
     // Verify FTS count matches chunk count (external-content sync)
     let fts_count: i64 = pipeline
         .db()
-        .with_conn(|conn| {
+        .with_read_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM fts_chunks", [], |row| row.get(0))
                 .map_err(|e| BrainCoreError::Database(e.to_string()))
         })

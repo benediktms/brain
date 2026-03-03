@@ -13,7 +13,7 @@ use tracing::{debug, error, info};
 
 use crate::db::Db;
 use crate::embedder::Embed;
-use crate::store::Store;
+use crate::store::StoreReader;
 use crate::tasks::TaskStore;
 
 use protocol::{
@@ -25,7 +25,7 @@ use tools::{dispatch_tool_call, tool_definitions};
 /// Shared context for MCP tool handlers.
 pub struct McpContext {
     pub db: Db,
-    pub store: Store,
+    pub store: StoreReader,
     pub embedder: Arc<dyn Embed>,
     pub tasks: TaskStore,
 }

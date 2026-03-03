@@ -124,7 +124,7 @@ impl IndexPipeline {
         if chunks.is_empty() {
             // Empty file — clear any existing chunks and links
             self.store.delete_file_chunks(&verdict.file_id).await?;
-            self.db.with_conn(|conn| {
+            self.db.with_write_conn(|conn| {
                 replace_chunk_metadata(conn, &verdict.file_id, &[])?;
                 replace_links(conn, &verdict.file_id, &[])?;
                 Ok(())
@@ -152,7 +152,7 @@ impl IndexPipeline {
                 token_estimate: c.token_estimate,
             })
             .collect();
-        self.db.with_conn(|conn| {
+        self.db.with_write_conn(|conn| {
             replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
             replace_links(conn, &verdict.file_id, &links)?;
             Ok(())
@@ -215,7 +215,7 @@ impl IndexPipeline {
             // Handle empty files immediately (no embedding needed)
             if chunks.is_empty() {
                 self.store.delete_file_chunks(&verdict.file_id).await?;
-                self.db.with_conn(|conn| {
+                self.db.with_write_conn(|conn| {
                     replace_chunk_metadata(conn, &verdict.file_id, &[])?;
                     replace_links(conn, &verdict.file_id, &[])?;
                     Ok(())
@@ -302,7 +302,7 @@ impl IndexPipeline {
             let links = &pf.links;
 
             match async {
-                self.db.with_conn(|conn| {
+                self.db.with_write_conn(|conn| {
                     replace_chunk_metadata(conn, file_id, &chunk_metas)?;
                     replace_links(conn, file_id, links)?;
                     Ok(())
@@ -343,7 +343,7 @@ impl IndexPipeline {
 
         let file_id = self
             .db
-            .with_conn(|conn| files::handle_delete(conn, &path_str))?;
+            .with_write_conn(|conn| files::handle_delete(conn, &path_str))?;
         if let Some(ref fid) = file_id {
             self.store.delete_file_chunks(fid).await?;
             info!(path = %path_str, "file deleted from index");
@@ -358,7 +358,7 @@ impl IndexPipeline {
         let from_str = from.to_string_lossy().to_string();
         let to_str = to.to_string_lossy().to_string();
 
-        let file_id = self.db.with_conn(|conn| {
+        let file_id = self.db.with_write_conn(|conn| {
             let file_id: Option<String> = conn
                 .query_row(
                     "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",
@@ -388,7 +388,7 @@ impl IndexPipeline {
         let mut stats = ScanStats::default();
 
         // 1. Recover stuck files (crash recovery)
-        let stuck = self.db.with_conn(files::find_stuck_files)?;
+        let stuck = self.db.with_write_conn(files::find_stuck_files)?;
         if !stuck.is_empty() {
             info!(
                 count = stuck.len(),
@@ -396,7 +396,7 @@ impl IndexPipeline {
             );
         }
         for (file_id, path) in &stuck {
-            self.db.with_conn(|conn| {
+            self.db.with_write_conn(|conn| {
                 files::set_indexing_state(conn, file_id, "idle")?;
                 conn.execute(
                     "UPDATE files SET content_hash = NULL WHERE file_id = ?1",
@@ -416,11 +416,11 @@ impl IndexPipeline {
             .collect();
 
         // 3. Detect deletions (files in DB but not on disk)
-        let active_paths = self.db.with_conn(files::get_all_active_paths)?;
+        let active_paths = self.db.with_write_conn(files::get_all_active_paths)?;
         for (file_id, db_path) in &active_paths {
             if !disk_paths.contains(db_path.as_str()) {
                 self.db
-                    .with_conn(|conn| files::handle_delete(conn, db_path))?;
+                    .with_write_conn(|conn| files::handle_delete(conn, db_path))?;
                 self.store.delete_file_chunks(file_id).await?;
                 info!(path = %db_path, "deleted stale file from index");
                 stats.deleted += 1;

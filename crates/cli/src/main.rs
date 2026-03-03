@@ -462,7 +462,7 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Config { action } => {
             let db = brain_lib::db::Db::open(&cli.sqlite_db)?;
-            db.with_conn(|conn| match action {
+            db.with_write_conn(|conn| match action {
                 ConfigAction::Set { key, value } => match key.as_str() {
                     "prefix" => {
                         let upper = value.to_ascii_uppercase();

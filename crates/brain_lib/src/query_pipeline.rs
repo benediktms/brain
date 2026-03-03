@@ -16,7 +16,7 @@ use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
 use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
-use crate::store::Store;
+use crate::store::StoreReader;
 use crate::tokens::estimate_tokens;
 
 const CANDIDATE_LIMIT: usize = 50;
@@ -33,12 +33,12 @@ pub struct ReflectResult {
 /// Orchestrates the read-path: hybrid search, expand, and reflect.
 pub struct QueryPipeline<'a> {
     db: &'a Db,
-    store: &'a Store,
+    store: &'a StoreReader,
     embedder: &'a Arc<dyn Embed>,
 }
 
 impl<'a> QueryPipeline<'a> {
-    pub fn new(db: &'a Db, store: &'a Store, embedder: &'a Arc<dyn Embed>) -> Self {
+    pub fn new(db: &'a Db, store: &'a StoreReader, embedder: &'a Arc<dyn Embed>) -> Self {
         Self {
             db,
             store,
@@ -71,7 +71,7 @@ impl<'a> QueryPipeline<'a> {
         // 3. FTS search (top-50, gracefully degrade on failure)
         let fts_results = match self
             .db
-            .with_conn(|conn| search_fts(conn, query, CANDIDATE_LIMIT))
+            .with_read_conn(|conn| search_fts(conn, query, CANDIDATE_LIMIT))
         {
             Ok(r) => r,
             Err(e) => {
@@ -141,7 +141,7 @@ impl<'a> QueryPipeline<'a> {
 
         // 5. Enrich from SQLite
         let chunk_ids: Vec<String> = candidates.keys().cloned().collect();
-        let enrichment = self.db.with_conn(|conn| {
+        let enrichment = self.db.with_read_conn(|conn| {
             let rows = get_chunks_by_ids(conn, &chunk_ids)?;
 
             let file_ids: Vec<String> = rows.iter().map(|r| r.file_id.clone()).collect();
@@ -204,7 +204,7 @@ impl<'a> QueryPipeline<'a> {
     ) -> Result<ExpandResult> {
         let rows = self
             .db
-            .with_conn(|conn| get_chunks_by_ids(conn, memory_ids))?;
+            .with_read_conn(|conn| get_chunks_by_ids(conn, memory_ids))?;
 
         // Preserve the requested order
         let row_map: HashMap<&str, _> = rows.iter().map(|r| (r.chunk_id.as_str(), r)).collect();
@@ -227,7 +227,7 @@ impl<'a> QueryPipeline<'a> {
     pub async fn reflect(&self, topic: String, budget_tokens: usize) -> Result<ReflectResult> {
         let episodes = self
             .db
-            .with_conn(|conn| list_episodes(conn, 10))
+            .with_read_conn(|conn| list_episodes(conn, 10))
             .unwrap_or_default();
 
         let search_result = self

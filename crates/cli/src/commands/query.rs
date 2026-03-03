@@ -17,9 +17,10 @@ pub async fn run(
     let embedder = Embedder::load(&model_dir)?;
     let embedder_arc: Arc<dyn Embed> = Arc::new(embedder);
     let store = Store::open_or_create(&db_path).await?;
+    let store_reader = brain_lib::store::StoreReader::from_store(&store);
     let db = brain_lib::db::Db::open(&sqlite_path)?;
 
-    let pipeline = QueryPipeline::new(&db, &store, &embedder_arc);
+    let pipeline = QueryPipeline::new(&db, &store_reader, &embedder_arc);
     let search_result = pipeline.search(&query, "auto", 800, top_k).await?;
 
     if search_result.results.is_empty() {
