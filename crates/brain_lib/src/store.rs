@@ -207,8 +207,11 @@ impl Store {
         };
 
         let table = Arc::new(table);
-        let optimize_scheduler =
-            OptimizeScheduler::new(Arc::clone(&table), DEFAULT_ROW_THRESHOLD, DEFAULT_TIME_THRESHOLD);
+        let optimize_scheduler = OptimizeScheduler::new(
+            Arc::clone(&table),
+            DEFAULT_ROW_THRESHOLD,
+            DEFAULT_TIME_THRESHOLD,
+        );
 
         info!("LanceDB store ready");
         Ok(Self {

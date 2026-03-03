@@ -80,7 +80,8 @@ impl TaskStore {
 
     /// Get a single task by ID.
     pub fn get_task(&self, task_id: &str) -> Result<Option<queries::TaskRow>> {
-        self.db.with_read_conn(|conn| queries::get_task(conn, task_id))
+        self.db
+            .with_read_conn(|conn| queries::get_task(conn, task_id))
     }
 
     /// List task IDs that became unblocked because `completed_task_id` was resolved.

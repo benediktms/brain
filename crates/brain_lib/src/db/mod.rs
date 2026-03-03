@@ -155,11 +155,8 @@ mod tests {
 
         // Read connections should reject INSERT statements
         let result = db.with_read_conn(|conn| {
-            conn.execute(
-                "CREATE TABLE test_rw (id INTEGER PRIMARY KEY)",
-                [],
-            )
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            conn.execute("CREATE TABLE test_rw (id INTEGER PRIMARY KEY)", [])
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
             Ok(())
         });
         assert!(result.is_err(), "write via read connection should fail");
@@ -172,11 +169,8 @@ mod tests {
 
         // with_read_conn should fall back to writer and succeed
         db.with_write_conn(|conn| {
-            conn.execute(
-                "CREATE TABLE fallback_test (id INTEGER PRIMARY KEY)",
-                [],
-            )
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            conn.execute("CREATE TABLE fallback_test (id INTEGER PRIMARY KEY)", [])
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
             conn.execute("INSERT INTO fallback_test (id) VALUES (1)", [])
                 .map_err(|e| BrainCoreError::Database(e.to_string()))?;
             Ok(())
@@ -186,11 +180,8 @@ mod tests {
         // Read via with_read_conn (which falls back to writer for in-memory)
         let count: i64 = db
             .with_read_conn(|conn| {
-                let c = conn.query_row(
-                    "SELECT COUNT(*) FROM fallback_test",
-                    [],
-                    |row| row.get(0),
-                )?;
+                let c =
+                    conn.query_row("SELECT COUNT(*) FROM fallback_test", [], |row| row.get(0))?;
                 Ok(c)
             })
             .unwrap();
@@ -244,11 +235,8 @@ mod tests {
                 for _ in 0..50 {
                     let count: i64 = db_r
                         .with_read_conn(|conn| {
-                            let c = conn.query_row(
-                                "SELECT COUNT(*) FROM conc",
-                                [],
-                                |row| row.get(0),
-                            )?;
+                            let c =
+                                conn.query_row("SELECT COUNT(*) FROM conc", [], |row| row.get(0))?;
                             Ok(c)
                         })
                         .unwrap();
@@ -266,8 +254,7 @@ mod tests {
         // Final count should be exactly 200
         let final_count: i64 = db
             .with_read_conn(|conn| {
-                let c =
-                    conn.query_row("SELECT COUNT(*) FROM conc", [], |row| row.get(0))?;
+                let c = conn.query_row("SELECT COUNT(*) FROM conc", [], |row| row.get(0))?;
                 Ok(c)
             })
             .unwrap();
