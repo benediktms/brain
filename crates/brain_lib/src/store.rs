@@ -278,7 +278,11 @@ fn empty_record_batch(schema: &Schema) -> RecordBatch {
 /// (Crockford Base32: alphanumeric characters). The key constraint is preventing
 /// SQL injection in filter strings, so we allow only `[a-zA-Z0-9-]`.
 fn validate_file_id(file_id: &str) -> crate::error::Result<&str> {
-    if !file_id.is_empty() && file_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !file_id.is_empty()
+        && file_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
         Ok(file_id)
     } else {
         Err(BrainCoreError::VectorDb(format!(
