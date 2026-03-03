@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn test_missing_query() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
         let result = rt.block_on(dispatch_tool_call(
             "memory.search_minimal",
             &json!({}),

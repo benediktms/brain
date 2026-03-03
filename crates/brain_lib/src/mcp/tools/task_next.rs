@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn test_returns_highest_priority() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create tasks with different priorities
         for (id, title, priority) in &[("t1", "Low", 4), ("t2", "High", 1), ("t3", "Medium", 2)] {
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn test_excludes_blocked() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // t1 (P2), t2 (P1) depends on t1
         let p1 = json!({
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn test_k_multiple() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         for (id, title) in &[("t1", "Task 1"), ("t2", "Task 2"), ("t3", "Task 3")] {
             let p = json!({
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn test_empty() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn test_includes_dependency_summary() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create t1 (done), t2 depends on t1 (now ready)
         let p1 = json!({
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn test_includes_labels() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let create = json!({
             "event_type": "task_created",

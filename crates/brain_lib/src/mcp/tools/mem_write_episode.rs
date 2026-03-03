@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn test_write_episode() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "goal": "Fix the bug",

@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn test_get_found_with_stubs() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create parent and child
         apply(
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn test_get_not_found() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let result = rt.block_on(dispatch_tool_call(
             "tasks.get",
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn test_get_expand_parent() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn test_get_expand_children() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn test_get_expand_blocked_by() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn test_get_includes_comments_and_labels() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn test_get_blocks_reverse_deps() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,

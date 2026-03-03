@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn test_create() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn test_auto_id() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_status_change() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create task first
         let create = json!({
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn test_unblocked() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create two tasks, t2 depends on t1
         for (id, title) in &[("t1", "Blocker"), ("t2", "Blocked")] {
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn test_cycle_rejected() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create two tasks
         for (id, title) in &[("t1", "Task 1"), ("t2", "Task 2")] {
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn test_missing_event_type() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({ "payload": { "title": "No event type" } });
         let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn test_invalid_event_type() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "bogus_event",
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn test_missing_task_id_for_update() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "status_changed",
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn test_with_type_and_assignee() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn test_labels() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         // Create task
         let create = json!({
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn test_comment() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let create = json!({
             "event_type": "task_created",
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn test_default_task_type() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn test_iso8601_defer_until() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn test_integer_defer_until_backward_compat() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn test_iso8601_due_ts() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn test_timestamps_returned_as_iso_strings() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",
@@ -529,7 +529,7 @@ mod tests {
     #[test]
     fn test_invalid_iso_timestamp_rejected() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let params = json!({
             "event_type": "task_created",

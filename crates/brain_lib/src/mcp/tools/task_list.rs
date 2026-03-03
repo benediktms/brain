@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn test_list_all() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn test_list_ready_filter() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_list_blocked_filter() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn test_list_batch_by_task_ids() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         for (id, title) in &[("t1", "A"), ("t2", "B"), ("t3", "C")] {
             apply(
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn test_list_empty() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let result = rt.block_on(dispatch_tool_call("tasks.list", &json!({}), &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn test_list_correct_aggregate_counts() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         apply(
             &rt,

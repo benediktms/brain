@@ -262,12 +262,12 @@ mod tests {
     #[test]
     fn test_dispatch_unknown_tool() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
         let result = rt.block_on(dispatch_tool_call("nonexistent", &json!({}), &ctx));
         assert_eq!(result.is_error, Some(true));
     }
 
-    pub(super) async fn create_test_context() -> McpContext {
+    pub(super) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
         let tmp = tempfile::TempDir::new().unwrap();
         let sqlite_path = tmp.path().join("test.db");
         let lance_path = tmp.path().join("test_lance");
@@ -281,14 +281,11 @@ mod tests {
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
 
-        // Leak the TempDir so it lives for the test duration
-        std::mem::forget(tmp);
-
-        McpContext {
+        (tmp, McpContext {
             db,
             store,
             embedder,
             tasks,
-        }
+        })
     }
 }

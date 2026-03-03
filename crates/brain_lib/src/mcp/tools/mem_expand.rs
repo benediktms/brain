@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn test_missing_ids() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
         let result = rt.block_on(dispatch_tool_call("memory.expand", &json!({}), &ctx));
         assert_eq!(result.is_error, Some(true));
     }
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_empty_ids() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let ctx = rt.block_on(async { create_test_context().await });
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
         let params = json!({ "memory_ids": [], "budget_tokens": 1000 });
         let result = rt.block_on(dispatch_tool_call("memory.expand", &params, &ctx));
         assert!(result.is_error.is_none());
