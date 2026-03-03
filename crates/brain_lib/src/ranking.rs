@@ -72,7 +72,12 @@ impl Weights {
                 importance: 0.10,
             },
         };
-        debug_assert!(w.validate().is_ok(), "weight profile {:?} failed validation: {:?}", profile, w.validate());
+        debug_assert!(
+            w.validate().is_ok(),
+            "weight profile {:?} failed validation: {:?}",
+            profile,
+            w.validate()
+        );
         w
     }
 

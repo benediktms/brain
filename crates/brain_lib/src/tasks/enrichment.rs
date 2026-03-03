@@ -90,7 +90,10 @@ pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
                 "blocking_tasks": dep_summary.blocking_task_ids,
             }),
         );
-        obj.insert("linked_notes".into(), json!(note_links_to_json(&note_links)));
+        obj.insert(
+            "linked_notes".into(),
+            json!(note_links_to_json(&note_links)),
+        );
     }
     task_json
 }

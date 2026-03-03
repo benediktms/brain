@@ -49,8 +49,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     }
 
     use super::opt_str;
-    let status = match opt_str(params, "status", "all").parse::<StatusFilter>()
-    {
+    let status = match opt_str(params, "status", "all").parse::<StatusFilter>() {
         Ok(s) => s,
         Err(msg) => return ToolCallResult::error(msg),
     };

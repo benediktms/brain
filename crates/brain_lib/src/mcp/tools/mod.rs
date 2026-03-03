@@ -310,11 +310,14 @@ mod tests {
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
 
-        (tmp, McpContext {
-            db,
-            store,
-            embedder,
-            tasks,
-        })
+        (
+            tmp,
+            McpContext {
+                db,
+                store,
+                embedder,
+                tasks,
+            },
+        )
     }
 }

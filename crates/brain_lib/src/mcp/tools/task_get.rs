@@ -204,7 +204,10 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         obj.insert("blocks".into(), json!(blocks_json));
         obj.insert("comments".into(), json!(comments_json));
         obj.insert("linked_notes".into(), json!(linked_notes_json));
-        obj.insert("dependency_summary".into(), dep_summary_to_json(&dep_summary));
+        obj.insert(
+            "dependency_summary".into(),
+            dep_summary_to_json(&dep_summary),
+        );
     }
 
     ToolCallResult::text(serde_json::to_string_pretty(&task_json).unwrap_or_default())

@@ -39,7 +39,11 @@ pub struct QueryPipeline<'a> {
 
 impl<'a> QueryPipeline<'a> {
     pub fn new(db: &'a Db, store: &'a Store, embedder: &'a Arc<dyn Embed>) -> Self {
-        Self { db, store, embedder }
+        Self {
+            db,
+            store,
+            embedder,
+        }
     }
 
     /// Hybrid search: vector + FTS union, enriched, ranked, packed within budget.
@@ -54,16 +58,20 @@ impl<'a> QueryPipeline<'a> {
         let weights = Weights::from_profile(profile);
 
         // 1. Embed query
-        let vecs = crate::embedder::embed_batch_async(self.embedder, vec![query.to_string()]).await?;
-        let query_vec = vecs.into_iter().next().ok_or_else(|| {
-            BrainCoreError::Embedding("Empty embedding result".into())
-        })?;
+        let vecs =
+            crate::embedder::embed_batch_async(self.embedder, vec![query.to_string()]).await?;
+        let query_vec = vecs
+            .into_iter()
+            .next()
+            .ok_or_else(|| BrainCoreError::Embedding("Empty embedding result".into()))?;
 
         // 2. Vector search (top-50)
         let vector_results = self.store.query(&query_vec, CANDIDATE_LIMIT).await?;
 
         // 3. FTS search (top-50, gracefully degrade on failure)
-        let fts_results = match self.db.with_conn(|conn| search_fts(conn, query, CANDIDATE_LIMIT))
+        let fts_results = match self
+            .db
+            .with_conn(|conn| search_fts(conn, query, CANDIDATE_LIMIT))
         {
             Ok(r) => r,
             Err(e) => {
@@ -141,11 +149,9 @@ impl<'a> QueryPipeline<'a> {
             for fid in &file_ids {
                 if !backlinks.contains_key(fid) {
                     let path: Option<String> = conn
-                        .query_row(
-                            "SELECT path FROM files WHERE file_id = ?1",
-                            [fid],
-                            |row| row.get(0),
-                        )
+                        .query_row("SELECT path FROM files WHERE file_id = ?1", [fid], |row| {
+                            row.get(0)
+                        })
                         .ok();
                     if let Some(path) = path {
                         let count = count_backlinks(conn, &path).unwrap_or(0);
@@ -191,7 +197,11 @@ impl<'a> QueryPipeline<'a> {
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.
-    pub async fn expand(&self, memory_ids: &[String], budget_tokens: usize) -> Result<ExpandResult> {
+    pub async fn expand(
+        &self,
+        memory_ids: &[String],
+        budget_tokens: usize,
+    ) -> Result<ExpandResult> {
         let rows = self
             .db
             .with_conn(|conn| get_chunks_by_ids(conn, memory_ids))?;
