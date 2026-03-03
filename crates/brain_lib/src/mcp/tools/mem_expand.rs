@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-
 use serde_json::{Value, json};
 use tracing::error;
 
-use crate::db::chunks::get_chunks_by_ids;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::retrieval::expand_results;
+use crate::query_pipeline::QueryPipeline;
 
 pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let memory_ids: Vec<String> = match params.get("memory_ids").and_then(|v| v.as_array()) {
@@ -22,47 +19,14 @@ pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         .and_then(|v| v.as_u64())
         .unwrap_or(2000) as usize;
 
-    // Look up chunks from SQLite
-    let rows = match ctx
-        .db
-        .with_conn(|conn| get_chunks_by_ids(conn, &memory_ids))
-    {
+    let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder);
+    let expand_result = match pipeline.expand(&memory_ids, budget_tokens).await {
         Ok(r) => r,
         Err(e) => {
-            error!(error = %e, "chunk lookup failed");
-            return ToolCallResult::error(format!("Chunk lookup failed: {e}"));
+            error!(error = %e, "expand failed");
+            return ToolCallResult::error(format!("Expand failed: {e}"));
         }
     };
-
-    // Preserve the requested order
-    let row_map: HashMap<&str, _> = rows.iter().map(|r| (r.chunk_id.as_str(), r)).collect();
-    let ordered_rows: Vec<_> = memory_ids
-        .iter()
-        .filter_map(|id| row_map.get(id.as_str()).copied())
-        .collect();
-
-    // Build ranked results for expand_results (scores don't matter here)
-    let ranked: Vec<crate::ranking::RankedResult> = ordered_rows
-        .iter()
-        .map(|row| crate::ranking::RankedResult {
-            chunk_id: row.chunk_id.clone(),
-            hybrid_score: 0.0,
-            scores: crate::ranking::SignalScores {
-                vector: 0.0,
-                keyword: 0.0,
-                recency: 0.0,
-                links: 0.0,
-                tag_match: 0.0,
-                importance: 0.0,
-            },
-            file_path: row.file_path.clone(),
-            heading_path: row.heading_path.clone(),
-            content: row.content.clone(),
-            token_estimate: row.token_estimate,
-        })
-        .collect();
-
-    let expand_result = expand_results(&ranked, budget_tokens);
 
     let memories_json: Vec<Value> = expand_result
         .memories

@@ -1,10 +1,12 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
+use brain_lib::embedder::{Embed, Embedder};
 use brain_lib::prelude::*;
+use brain_lib::query_pipeline::QueryPipeline;
 
-/// Query the LanceDB database for top-k results for the given input.
+/// Query the knowledge base using full hybrid search (vector + FTS + ranking).
 pub async fn run(
     query: String,
     top_k: usize,
@@ -13,47 +15,29 @@ pub async fn run(
     sqlite_path: PathBuf,
 ) -> Result<()> {
     let embedder = Embedder::load(&model_dir)?;
+    let embedder_arc: Arc<dyn Embed> = Arc::new(embedder);
     let store = Store::open_or_create(&db_path).await?;
     let db = brain_lib::db::Db::open(&sqlite_path)?;
 
-    let query_embedding = embedder.embed_batch(&[query.as_str()])?;
-    let results = store.query(&query_embedding[0], top_k).await?;
+    let pipeline = QueryPipeline::new(&db, &store, &embedder_arc);
+    let search_result = pipeline.search(&query, "auto", 800, top_k).await?;
 
-    if results.is_empty() {
+    if search_result.results.is_empty() {
         println!("No results found.");
         return Ok(());
     }
 
-    // Enrich results with heading_path from SQLite
-    let chunk_ids: Vec<String> = results.iter().map(|r| r.chunk_id.clone()).collect();
-    let chunk_rows =
-        db.with_conn(|conn| brain_lib::db::chunks::get_chunks_by_ids(conn, &chunk_ids));
-    let heading_map: HashMap<String, String> = chunk_rows
-        .map(|rows| {
-            rows.into_iter()
-                .map(|r| (r.chunk_id.clone(), r.heading_path.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    for (rank, result) in results.iter().enumerate() {
-        let snippet: String = result.content.chars().take(200).collect();
-        let score = result
-            .score
-            .map(|s| format!("{s:.4}"))
-            .unwrap_or_else(|| "n/a".to_string());
-        let heading = heading_map.get(&result.chunk_id).filter(|h| !h.is_empty());
-
-        println!("#{} [score: {}]", rank + 1, score);
-        if let Some(heading_path) = heading {
-            println!(
-                "  file: {} (chunk {}) | {}",
-                result.file_path, result.chunk_ord, heading_path
-            );
+    for (rank, stub) in search_result.results.iter().enumerate() {
+        println!("#{} [score: {:.4}]", rank + 1, stub.hybrid_score);
+        if !stub.heading_path.is_empty() {
+            println!("  file: {} | {}", stub.file_path, stub.heading_path);
         } else {
-            println!("  file: {} (chunk {})", result.file_path, result.chunk_ord);
+            println!("  file: {}", stub.file_path);
         }
-        println!("  {snippet}");
+        println!("  {}", stub.title);
+        if !stub.summary_2sent.is_empty() {
+            println!("  {}", stub.summary_2sent);
+        }
         println!();
     }
 
