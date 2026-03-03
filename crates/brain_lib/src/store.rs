@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use arrow_array::{
     FixedSizeListArray, Float32Array, Int32Array, RecordBatch, RecordBatchIterator, StringArray,
@@ -58,14 +60,18 @@ impl OptimizeScheduler {
 
     /// Check triggers and run optimize if thresholds met. Skips if already running.
     pub async fn maybe_optimize(&self) {
-        let pending = self.pending_mutations.load(Ordering::Relaxed);
-        if pending == 0 {
+        if self.pending_mutations.load(Ordering::Relaxed) == 0 {
             return;
         }
         // try_lock: skip if another optimize is in progress
         let Ok(guard) = self.guard.try_lock() else {
             return;
         };
+        // Re-read after acquiring lock for a fresh value
+        let pending = self.pending_mutations.load(Ordering::Relaxed);
+        if pending == 0 {
+            return;
+        }
         if !self.should_run(pending, &guard) {
             return;
         }
@@ -524,10 +530,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_maybe_optimize_triggers_on_time_threshold() {
-        let (sched, _tmp) = test_scheduler(1000, Duration::from_millis(1)).await;
+        tokio::time::pause();
+        let (sched, _tmp) = test_scheduler(1000, Duration::from_millis(100)).await;
 
         sched.record_mutation(1);
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        tokio::time::advance(Duration::from_millis(200)).await;
         sched.maybe_optimize().await;
         // Time threshold exceeded — optimize ran, counter reset
         assert_eq!(sched.pending_count(), 0);
@@ -546,5 +553,63 @@ mod tests {
 
         // Counter unchanged because optimize was skipped
         assert_eq!(sched.pending_count(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_force_optimize_noop_when_zero_pending() {
+        let (sched, _tmp) = test_scheduler(10, Duration::from_secs(300)).await;
+        assert_eq!(sched.pending_count(), 0);
+
+        // force_optimize with 0 pending → no-op, no panic
+        sched.force_optimize().await;
+        assert_eq!(sched.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_force_optimize_waits_not_skips() {
+        let (sched, _tmp) = test_scheduler(1000, Duration::from_secs(300)).await;
+        let sched = Arc::new(sched);
+        sched.record_mutation(5);
+
+        // Hold the guard to simulate an in-progress optimize
+        let guard = sched.guard.lock().await;
+
+        // Spawn force_optimize on a separate task — it should block on the mutex
+        let sched2 = Arc::clone(&sched);
+        let handle = tokio::spawn(async move {
+            sched2.force_optimize().await;
+        });
+
+        // Give the spawned task a chance to reach the lock
+        tokio::task::yield_now().await;
+
+        // force_optimize should still be waiting (not completed)
+        assert!(!handle.is_finished());
+        // Counter still set because optimize hasn't run
+        assert_eq!(sched.pending_count(), 5);
+
+        // Release the guard — force_optimize can now proceed
+        drop(guard);
+        handle.await.unwrap();
+
+        // Counter reset after optimize ran
+        assert_eq!(sched.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_multi_cycle_counter_resets() {
+        let (sched, _tmp) = test_scheduler(5, Duration::from_secs(300)).await;
+
+        // Cycle 1: accumulate past threshold and optimize
+        sched.record_mutation(10);
+        assert_eq!(sched.pending_count(), 10);
+        sched.maybe_optimize().await;
+        assert_eq!(sched.pending_count(), 0);
+
+        // Cycle 2: accumulate again past threshold and optimize
+        sched.record_mutation(5);
+        assert_eq!(sched.pending_count(), 5);
+        sched.maybe_optimize().await;
+        assert_eq!(sched.pending_count(), 0);
     }
 }
