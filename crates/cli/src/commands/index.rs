@@ -17,6 +17,9 @@ pub async fn run(
     let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
     let stats = pipeline.full_scan(&[notes_path]).await?;
 
+    // Compact all fragments created during the full scan
+    pipeline.store().optimizer().force_optimize().await;
+
     info!(
         indexed = stats.indexed,
         skipped = stats.skipped,

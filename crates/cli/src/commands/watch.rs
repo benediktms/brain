@@ -6,6 +6,9 @@ use brain_lib::prelude::*;
 use brain_lib::watcher::coalesce_events;
 use tracing::info;
 
+// The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
+use tokio::signal::unix::SignalKind;
+
 /// Watch a directory for changes and re-index incrementally.
 pub async fn run(
     notes_path: PathBuf,
@@ -28,11 +31,23 @@ pub async fn run(
         "startup scan complete"
     );
 
+    // Compact fragments created during full scan
+    pipeline.store().optimizer().force_optimize().await;
+
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let _watcher = brain_lib::watcher::BrainWatcher::new(&[notes_path], tx)?;
 
     info!("watching for changes... (press Ctrl+C to stop)");
+
+    // Periodic tick to check time-elapsed optimize trigger during quiet periods.
+    // The check is near-free (two atomic loads + one mutex read); the 5min
+    // threshold is evaluated inside should_optimize().
+    let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
+
+    // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
+    let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+        .expect("failed to register SIGTERM handler");
 
     // Event loop: batch-drain, coalesce, and dispatch
     loop {
@@ -70,6 +85,9 @@ pub async fn run(
                         {
                             tracing::warn!(error = %e, "error in batch index");
                         }
+
+                        // 6. Check row-count trigger after each batch
+                        pipeline.store().optimizer().maybe_optimize().await;
                     }
                     None => {
                         info!("watcher channel closed, shutting down");
@@ -77,8 +95,18 @@ pub async fn run(
                     }
                 }
             }
+            _ = optimize_tick.tick() => {
+                // Check time-elapsed trigger during quiet periods
+                pipeline.store().optimizer().maybe_optimize().await;
+            }
             _ = tokio::signal::ctrl_c() => {
                 info!("received Ctrl+C, shutting down");
+                pipeline.store().optimizer().force_optimize().await;
+                break;
+            }
+            _ = sigterm.recv() => {
+                info!("received SIGTERM, shutting down");
+                pipeline.store().optimizer().force_optimize().await;
                 break;
             }
         }
