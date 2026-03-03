@@ -45,9 +45,10 @@ pub enum EventType {
 }
 
 /// Valid task statuses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    #[default]
     Open,
     InProgress,
     Blocked,
@@ -116,12 +117,6 @@ fn default_priority() -> i32 {
 
 fn default_task_type() -> Option<String> {
     Some("task".to_string())
-}
-
-impl Default for TaskStatus {
-    fn default() -> Self {
-        TaskStatus::Open
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
