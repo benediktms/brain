@@ -235,12 +235,22 @@ impl IndexPipeline {
             });
 
             if total_chunks >= MAX_PENDING_CHUNKS {
+                info!(
+                    files = pending.len(),
+                    chunks = total_chunks,
+                    "flushing embedding wave"
+                );
                 self.flush_wave(&mut pending, &mut stats).await?;
                 total_chunks = 0;
             }
         }
 
         if !pending.is_empty() {
+            info!(
+                files = pending.len(),
+                chunks = total_chunks,
+                "flushing final embedding wave"
+            );
             self.flush_wave(&mut pending, &mut stats).await?;
         }
 
@@ -273,7 +283,9 @@ impl IndexPipeline {
             offsets.push((start, pf.chunks.len()));
         }
 
+        info!(chunk_count = all_texts.len(), "embedding wave…");
         let all_embeddings = crate::embedder::embed_batch_async(&self.embedder, all_texts).await?;
+        info!("embedding wave complete");
 
         let gate = HashGate::new(&self.db);
         let drained: Vec<PendingFile> = std::mem::take(pending);
@@ -416,7 +428,13 @@ impl IndexPipeline {
             .collect();
 
         // 3. Detect deletions (files in DB but not on disk)
+        info!("checking for stale files in DB");
         let active_paths = self.db.with_write_conn(files::get_all_active_paths)?;
+        info!(
+            active_in_db = active_paths.len(),
+            on_disk = disk_paths.len(),
+            "deletion check"
+        );
         for (file_id, db_path) in &active_paths {
             if !disk_paths.contains(db_path.as_str()) {
                 self.db
