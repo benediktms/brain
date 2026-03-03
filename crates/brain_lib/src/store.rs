@@ -107,7 +107,8 @@ impl OptimizeScheduler {
 
         match self.table.optimize(OptimizeAction::All).await {
             Ok(stats) => {
-                self.pending_mutations.fetch_sub(snapshot, Ordering::Relaxed);
+                self.pending_mutations
+                    .fetch_sub(snapshot, Ordering::Relaxed);
                 *last_optimize = Instant::now();
                 info!(
                     pending_before = snapshot,
@@ -245,8 +246,7 @@ impl Store {
             .await
             .map_err(|e| BrainCoreError::VectorDb(format!("upsert failed: {e}")))?;
 
-        self.optimize_scheduler
-            .record_mutation(chunks.len() as u64);
+        self.optimize_scheduler.record_mutation(chunks.len() as u64);
 
         info!(
             file_path,

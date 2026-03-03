@@ -371,13 +371,19 @@ async fn test_force_optimize_resets_counter() {
 
     // After indexing, the optimizer should have pending mutations
     let pending = pipeline.store().optimizer().pending_count();
-    assert!(pending > 0, "expected pending mutations after upsert, got 0");
+    assert!(
+        pending > 0,
+        "expected pending mutations after upsert, got 0"
+    );
 
     // Force optimize should compact and reset the counter
     pipeline.store().optimizer().force_optimize().await;
 
     let after = pipeline.store().optimizer().pending_count();
-    assert_eq!(after, 0, "expected 0 pending after force_optimize, got {after}");
+    assert_eq!(
+        after, 0,
+        "expected 0 pending after force_optimize, got {after}"
+    );
 }
 
 // ─── 6. Empty vault: no crash ───────────────────────────────────
