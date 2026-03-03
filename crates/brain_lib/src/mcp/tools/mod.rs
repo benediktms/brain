@@ -163,7 +163,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "task_id": {
                         "type": "string",
-                        "description": "Task ID. Optional for task_created (auto-generates UUID v7), required for all other event types."
+                        "description": "Task ID (full or prefix). Optional for task_created (auto-generates prefixed ULID). For other events, accepts full ID or a unique prefix (e.g. 'BRN-01JPH')."
                     },
                     "actor": {
                         "type": "string",
@@ -180,13 +180,13 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "tasks.get".into(),
-            description: "Get a single task by ID with full details including relationships, comments, labels, and linked notes. Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects.".into(),
+            description: "Get a single task by ID (full or prefix) with full details including relationships, comments, labels, and linked notes. Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "task_id": {
                         "type": "string",
-                        "description": "The task ID to retrieve"
+                        "description": "The task ID to retrieve (full ID or unique prefix, e.g. 'BRN-01JPH')"
                     },
                     "expand": {
                         "type": "array",
@@ -202,7 +202,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "tasks.list".into(),
-            description: "List tasks filtered by status or fetch specific tasks by ID. Returns summary task objects with aggregate counts.".into(),
+            description: "List tasks filtered by status or fetch specific tasks by ID (supports prefix resolution). Returns summary task objects with short_id and aggregate counts.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -215,7 +215,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     "task_ids": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Fetch specific tasks by ID (ignores status filter). Missing IDs are silently skipped."
+                        "description": "Fetch specific tasks by ID or prefix (ignores status filter). Unresolvable IDs are silently skipped."
                     }
                 }
             }),

@@ -7,6 +7,8 @@ pub mod queries;
 
 use std::path::PathBuf;
 
+use std::collections::HashMap;
+
 use crate::db::Db;
 use crate::error::{BrainCoreError, Result};
 
@@ -136,6 +138,36 @@ impl TaskStore {
     /// List all (task_id, label) pairs (bulk load for export).
     pub fn list_all_labels(&self) -> Result<Vec<(String, String)>> {
         self.db.with_conn(queries::list_all_labels)
+    }
+
+    /// Resolve a task ID from an exact match or unique prefix.
+    pub fn resolve_task_id(&self, input: &str) -> Result<String> {
+        self.db
+            .with_conn(|conn| queries::resolve_task_id(conn, input))
+    }
+
+    /// Compute shortest unique prefixes for all tasks.
+    pub fn shortest_unique_prefixes(&self) -> Result<HashMap<String, String>> {
+        self.db.with_conn(queries::shortest_unique_prefixes)
+    }
+
+    /// Compute shortest unique prefix for a single task.
+    pub fn shortest_unique_prefix(&self, task_id: &str) -> Result<String> {
+        self.db
+            .with_conn(|conn| queries::shortest_unique_prefix(conn, task_id))
+    }
+
+    /// Get the project prefix, auto-generating from the brain directory name if needed.
+    pub fn get_project_prefix(&self) -> Result<String> {
+        self.db.with_conn(|conn| {
+            // events_path = tasks_dir/events.jsonl, tasks_dir = brain_dir/tasks
+            let brain_dir = self
+                .events_path
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or(std::path::Path::new("."));
+            crate::db::meta::get_or_init_project_prefix(conn, brain_dir)
+        })
     }
 
     /// Validate an event before writing it to the log.

@@ -79,10 +79,14 @@ fn expanded_task(task_id: &str, ctx: &McpContext) -> Value {
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     use super::require_str;
-    // 1. Extract task_id
-    let task_id = match require_str(params, "task_id") {
+    // 1. Extract and resolve task_id
+    let raw_id = match require_str(params, "task_id") {
         Ok(id) => id,
         Err(e) => return e,
+    };
+    let task_id = match ctx.tasks.resolve_task_id(raw_id) {
+        Ok(id) => id,
+        Err(e) => return ToolCallResult::error(format!("Failed to resolve task_id: {e}")),
     };
 
     // 2. Parse expand
@@ -92,6 +96,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     };
 
     // 3. Get task
+    let task_id = task_id.as_str();
     let task = match ctx.tasks.get_task(task_id) {
         Ok(Some(t)) => t,
         Ok(None) => return ToolCallResult::error(format!("Task not found: {task_id}")),
@@ -196,8 +201,13 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     };
 
     // 9. Build base task JSON
+    let short_id = ctx
+        .tasks
+        .shortest_unique_prefix(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let mut task_json = task_row_to_json(&task, labels);
     if let Some(obj) = task_json.as_object_mut() {
+        obj.insert("short_id".into(), json!(short_id));
         obj.insert("parent".into(), parent_json);
         obj.insert("children".into(), json!(children_json));
         obj.insert("blocked_by".into(), json!(blocked_by_json));
@@ -286,7 +296,7 @@ mod tests {
             &ctx,
         ));
         assert_eq!(result.is_error, Some(true));
-        assert!(result.content[0].text.contains("not found"));
+        assert!(result.content[0].text.contains("no task found"));
     }
 
     #[test]

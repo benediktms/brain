@@ -16,7 +16,7 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 blake3 = "1"
-uuid = { version = "1", features = ["v7"] }
+ulid = "1"
 chrono = "0.4"
 
 # Optimize candle crates in dev builds for usable embedding speed.

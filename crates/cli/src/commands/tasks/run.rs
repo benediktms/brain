@@ -10,7 +10,7 @@ use brain_lib::tasks::enrichment::{
     children_stubs_to_json, comments_to_json, dep_summary_to_json_with_blocking, enrich_task_list,
     note_links_to_json,
 };
-use brain_lib::tasks::events::*;
+use brain_lib::tasks::events::{self, *};
 use brain_lib::utils::task_row_to_json;
 
 // ── shared context ─────────────────────────────────────────
@@ -89,7 +89,14 @@ fn priority_label(p: i32) -> &'static str {
 // ── create ──────────────────────────────────────────────────
 
 pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
-    let task_id = new_event_id();
+    let prefix = ctx.store.get_project_prefix()?;
+    let task_id = events::new_task_id(&prefix);
+
+    // Resolve parent task ID if provided
+    let parent = match params.parent {
+        Some(ref p) => Some(ctx.store.resolve_task_id(p)?),
+        None => None,
+    };
 
     let event = TaskEvent::from_payload(
         &task_id,
@@ -103,7 +110,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
             task_type: Some(params.task_type.clone()),
             assignee: params.assignee.clone(),
             defer_until: None,
-            parent_task_id: params.parent.clone(),
+            parent_task_id: parent.clone(),
         },
     );
 
@@ -191,20 +198,26 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             return Ok(());
         }
 
+        let short_ids = ctx.store.shortest_unique_prefixes()?;
+
         println!(
-            "{:<4} {:<12} {:<6} {:<10} {:<38} TITLE",
+            "{:<4} {:<12} {:<6} {:<10} {:<32} TITLE",
             "PRI", "STATUS", "TYPE", "ASSIGNEE", "ID"
         );
         println!("{}", "\u{2500}".repeat(100));
 
         for t in &tasks {
+            let display_id = short_ids
+                .get(&t.task_id)
+                .map(|s| s.as_str())
+                .unwrap_or(&t.task_id);
             println!(
-                "{:<4} {:<12} {:<6} {:<10} {:<38} {}",
+                "{:<4} {:<12} {:<6} {:<10} {:<32} {}",
                 priority_label(t.priority),
                 t.status,
                 &t.task_type,
                 t.assignee.as_deref().unwrap_or("-"),
-                &t.task_id,
+                display_id,
                 t.title,
             );
         }
@@ -222,16 +235,17 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
 // ── show ────────────────────────────────────────────────────
 
 pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
+    let id = ctx.store.resolve_task_id(id)?;
     let task = ctx
         .store
-        .get_task(id)?
+        .get_task(&id)?
         .ok_or_else(|| anyhow::anyhow!("task not found: {id}"))?;
 
-    let labels = ctx.store.get_task_labels(id)?;
-    let comments = ctx.store.get_task_comments(id)?;
-    let dep_summary = ctx.store.get_dependency_summary(id)?;
-    let note_links = ctx.store.get_task_note_links(id)?;
-    let children = ctx.store.get_children(id)?;
+    let labels = ctx.store.get_task_labels(&id)?;
+    let comments = ctx.store.get_task_comments(&id)?;
+    let dep_summary = ctx.store.get_dependency_summary(&id)?;
+    let note_links = ctx.store.get_task_note_links(&id)?;
+    let children = ctx.store.get_children(&id)?;
 
     if ctx.json {
         let comments_json = comments_to_json(&comments);
@@ -334,7 +348,8 @@ pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
 
 // ── update ──────────────────────────────────────────────────
 
-pub fn update(ctx: &TaskCtx, params: UpdateParams) -> Result<()> {
+pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
+    params.id = ctx.store.resolve_task_id(&params.id)?;
     let has_status = params.status.is_some();
     let has_field_updates = params.title.is_some()
         || params.description.is_some()
@@ -394,6 +409,8 @@ pub fn update(ctx: &TaskCtx, params: UpdateParams) -> Result<()> {
 // ── dep add / dep remove ────────────────────────────────────
 
 pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let depends_on = &ctx.store.resolve_task_id(depends_on)?;
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -420,6 +437,8 @@ pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
 }
 
 pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let depends_on = &ctx.store.resolve_task_id(depends_on)?;
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -448,8 +467,9 @@ pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> 
 // ── link / unlink ───────────────────────────────────────────
 
 pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
     let event = TaskEvent::new(
-        task_id,
+        task_id.as_str(),
         "cli",
         EventType::NoteLinked,
         &NoteLinkPayload {
@@ -474,8 +494,9 @@ pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
 }
 
 pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
     let event = TaskEvent::new(
-        task_id,
+        task_id.as_str(),
         "cli",
         EventType::NoteUnlinked,
         &NoteLinkPayload {
@@ -502,8 +523,9 @@ pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
 // ── comment ─────────────────────────────────────────────────
 
 pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
     let event = TaskEvent::from_payload(
-        task_id,
+        task_id.as_str(),
         "cli",
         CommentPayload {
             body: body.to_string(),
@@ -528,8 +550,9 @@ pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {
 // ── label add / label remove ────────────────────────────────
 
 pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
     let event = TaskEvent::new(
-        task_id,
+        task_id.as_str(),
         "cli",
         EventType::LabelAdded,
         &LabelPayload {
@@ -554,8 +577,9 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str) -> Result<()> {
 }
 
 pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
     let event = TaskEvent::new(
-        task_id,
+        task_id.as_str(),
         "cli",
         EventType::LabelRemoved,
         &LabelPayload {

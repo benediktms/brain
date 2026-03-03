@@ -74,7 +74,12 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
 fn handle_batch(task_ids: &[&str], ctx: &McpContext) -> ToolCallResult {
     let mut tasks = Vec::new();
     for id in task_ids {
-        match ctx.tasks.get_task(id) {
+        // Resolve each ID (supports prefix matching)
+        let resolved = match ctx.tasks.resolve_task_id(id) {
+            Ok(r) => r,
+            Err(_) => continue, // skip unresolvable
+        };
+        match ctx.tasks.get_task(&resolved) {
             Ok(Some(t)) => tasks.push(t),
             Ok(None) => {} // skip missing
             Err(e) => {
@@ -86,7 +91,22 @@ fn handle_batch(task_ids: &[&str], ctx: &McpContext) -> ToolCallResult {
 }
 
 fn build_response(tasks: &[crate::tasks::queries::TaskRow], ctx: &McpContext) -> ToolCallResult {
-    let (tasks_json, ready_count, blocked_count) = enrich_task_list(&ctx.tasks, tasks);
+    let (mut tasks_json, ready_count, blocked_count) = enrich_task_list(&ctx.tasks, tasks);
+
+    // Add short_id to each task
+    let short_ids = ctx.tasks.shortest_unique_prefixes().unwrap_or_default();
+    for task_val in &mut tasks_json {
+        if let Some(tid) = task_val.get("task_id").and_then(|v| v.as_str()) {
+            let short = short_ids
+                .get(tid)
+                .cloned()
+                .unwrap_or_else(|| tid.to_string());
+            if let Some(obj) = task_val.as_object_mut() {
+                obj.insert("short_id".into(), json!(short));
+            }
+        }
+    }
+
     let count = tasks_json.len();
     let response = json!({
         "tasks": tasks_json,

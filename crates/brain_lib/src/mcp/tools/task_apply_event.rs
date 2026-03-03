@@ -3,7 +3,7 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::tasks::events::{EventType, TaskCreatedPayload, TaskEvent, TaskStatus, new_event_id};
+use crate::tasks::events::{EventType, TaskCreatedPayload, TaskEvent, TaskStatus, new_task_id};
 
 use crate::utils::{parse_timestamp, task_row_to_json};
 
@@ -34,15 +34,33 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         None => return ToolCallResult::error("Missing required parameter: payload"),
     };
 
-    // Parse task_id: auto-generate for task_created if not provided
+    // Parse task_id: auto-generate for task_created, resolve prefix for others
     let task_id = match params.get("task_id").and_then(|v| v.as_str()) {
         Some(id) if id.len() > 256 => {
             return ToolCallResult::error("task_id exceeds maximum length of 256 characters");
         }
-        Some(id) => id.to_string(),
+        Some(id) => {
+            if event_type == EventType::TaskCreated {
+                id.to_string()
+            } else {
+                // Resolve prefix for non-create events
+                match ctx.tasks.resolve_task_id(id) {
+                    Ok(resolved) => resolved,
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Failed to resolve task_id: {e}"));
+                    }
+                }
+            }
+        }
         None => {
             if event_type == EventType::TaskCreated {
-                new_event_id() // UUID v7 as task ID
+                let prefix = match ctx.tasks.get_project_prefix() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Failed to get project prefix: {e}"));
+                    }
+                };
+                new_task_id(&prefix)
             } else {
                 return ToolCallResult::error(
                     "Missing required parameter: task_id (required for all event types except task_created)",
@@ -69,6 +87,34 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
                             "Invalid timestamp for '{field}': expected ISO 8601 string or integer"
                         ));
                     }
+                }
+            }
+        }
+        p
+    };
+
+    // Resolve depends_on_task_id and parent_task_id references in payload
+    let payload = {
+        let mut p = payload;
+        if let Some(dep_id) = p.get("depends_on_task_id").and_then(|v| v.as_str())
+            && !dep_id.is_empty()
+        {
+            match ctx.tasks.resolve_task_id(dep_id) {
+                Ok(resolved) => p["depends_on_task_id"] = json!(resolved),
+                Err(e) => {
+                    return ToolCallResult::error(format!(
+                        "Failed to resolve depends_on_task_id: {e}"
+                    ));
+                }
+            }
+        }
+        if let Some(parent_id) = p.get("parent_task_id").and_then(|v| v.as_str())
+            && !parent_id.is_empty()
+        {
+            match ctx.tasks.resolve_task_id(parent_id) {
+                Ok(resolved) => p["parent_task_id"] = json!(resolved),
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to resolve parent_task_id: {e}"));
                 }
             }
         }
@@ -123,9 +169,15 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         vec![]
     };
 
+    let short_id = ctx
+        .tasks
+        .shortest_unique_prefix(&task_id)
+        .unwrap_or_else(|_| task_id.clone());
+
     let response = json!({
         "event_id": event.event_id,
         "task_id": task_id,
+        "short_id": short_id,
         "task": task_json,
         "unblocked_task_ids": unblocked_task_ids,
     });

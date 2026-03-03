@@ -1,5 +1,5 @@
 use rusqlite::{Connection, OptionalExtension};
-use uuid::Uuid;
+use ulid::Ulid;
 
 use crate::error::Result;
 
@@ -28,7 +28,7 @@ pub struct SummaryRow {
 /// Store an episode in the summaries table.
 /// Returns the summary_id.
 pub fn store_episode(conn: &Connection, episode: &Episode) -> Result<String> {
-    let summary_id = Uuid::now_v7().to_string();
+    let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
     let tags_json = serde_json::to_string(&episode.tags).unwrap_or_else(|_| "[]".into());
 
@@ -64,7 +64,7 @@ pub fn store_reflection(
     tags: &[String],
     importance: f64,
 ) -> Result<String> {
-    let summary_id = Uuid::now_v7().to_string();
+    let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
 

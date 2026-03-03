@@ -158,6 +158,12 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Get or set brain configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Manage brain tasks
     #[command(visible_alias = "task")]
     Tasks {
@@ -360,6 +366,24 @@ enum LabelAction {
 }
 
 #[derive(Subcommand)]
+enum ConfigAction {
+    /// Set a configuration value
+    Set {
+        /// Configuration key (e.g. "prefix")
+        key: String,
+
+        /// Value to set
+        value: String,
+    },
+
+    /// Get a configuration value
+    Get {
+        /// Configuration key (e.g. "prefix")
+        key: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum DaemonAction {
     /// Start the daemon in the background
     #[command(long_about = "Start the daemon in the background.\n\n\
@@ -435,6 +459,39 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::ImportBeads { path, dry_run } => {
             commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
+        }
+        Command::Config { action } => {
+            let db = brain_lib::db::Db::open(&cli.sqlite_db)?;
+            db.with_conn(|conn| match action {
+                ConfigAction::Set { key, value } => match key.as_str() {
+                    "prefix" => {
+                        let upper = value.to_ascii_uppercase();
+                        if upper.len() != 3 || !upper.chars().all(|c| c.is_ascii_uppercase()) {
+                            return Err(brain_lib::error::BrainCoreError::Config(format!(
+                                "prefix must be exactly 3 uppercase ASCII letters, got: {value}"
+                            )));
+                        }
+                        brain_lib::db::meta::set_meta(conn, "project_prefix", &upper)?;
+                        println!("Set project prefix to {upper}");
+                        Ok(())
+                    }
+                    other => Err(brain_lib::error::BrainCoreError::Config(format!(
+                        "unknown config key: {other}. Known keys: prefix"
+                    ))),
+                },
+                ConfigAction::Get { key } => match key.as_str() {
+                    "prefix" => {
+                        let brain_dir = cli.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
+                        let prefix =
+                            brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
+                        println!("{prefix}");
+                        Ok(())
+                    }
+                    other => Err(brain_lib::error::BrainCoreError::Config(format!(
+                        "unknown config key: {other}. Known keys: prefix"
+                    ))),
+                },
+            })?;
         }
         Command::Tasks { json, action } => {
             use commands::tasks::run::{CreateParams, ListParams, TaskCtx, UpdateParams};

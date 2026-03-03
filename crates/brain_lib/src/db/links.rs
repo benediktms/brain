@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use uuid::Uuid;
+use ulid::Ulid;
 
 use crate::error::Result;
 use crate::links::Link;
@@ -22,7 +22,7 @@ pub fn replace_links(conn: &Connection, source_file_id: &str, links: &[Link]) ->
 
     for link in links {
         stmt.execute(rusqlite::params![
-            Uuid::now_v7().to_string(),
+            Ulid::new().to_string(),
             source_file_id,
             link.target,
             link.link_text,

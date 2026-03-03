@@ -1,5 +1,5 @@
 use rusqlite::{Connection, OptionalExtension};
-use uuid::Uuid;
+use ulid::Ulid;
 
 use crate::error::Result;
 
@@ -25,8 +25,8 @@ pub fn get_or_create_file_id(conn: &Connection, path: &str) -> Result<(String, b
         return Ok((file_id, false));
     }
 
-    // Create new entry with UUID v7
-    let file_id = Uuid::now_v7().to_string();
+    // Create new entry with ULID
+    let file_id = Ulid::new().to_string();
     conn.execute(
         "INSERT INTO files (file_id, path, indexing_state) VALUES (?1, ?2, 'idle')",
         rusqlite::params![file_id, path],
