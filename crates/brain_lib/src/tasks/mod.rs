@@ -1,4 +1,5 @@
 pub mod cycle;
+pub mod enrichment;
 pub mod events;
 pub mod import_beads;
 pub mod projections;

@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::utils::task_row_to_json;
+use crate::tasks::enrichment::enrich_task_list;
 
 #[derive(Debug, Clone, Copy)]
 enum StatusFilter {
@@ -90,23 +90,14 @@ fn handle_batch(task_ids: &[&str], ctx: &McpContext) -> ToolCallResult {
 }
 
 fn build_response(tasks: &[crate::tasks::queries::TaskRow], ctx: &McpContext) -> ToolCallResult {
-    let tasks_json: Vec<Value> = tasks
-        .iter()
-        .map(|task| {
-            let labels = ctx.tasks.get_task_labels(&task.task_id).unwrap_or_default();
-            task_row_to_json(task, labels)
-        })
-        .collect();
-
-    let (ready_count, blocked_count) = ctx.tasks.count_ready_blocked().unwrap_or((0, 0));
-
+    let (tasks_json, ready_count, blocked_count) = enrich_task_list(&ctx.tasks, tasks);
+    let count = tasks_json.len();
     let response = json!({
         "tasks": tasks_json,
-        "count": tasks_json.len(),
+        "count": count,
         "ready_count": ready_count,
         "blocked_count": blocked_count,
     });
-
     ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
 }
 

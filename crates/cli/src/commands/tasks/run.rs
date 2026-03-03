@@ -6,8 +6,12 @@ use serde_json::json;
 
 use brain_lib::db::Db;
 use brain_lib::tasks::TaskStore;
+use brain_lib::tasks::enrichment::{
+    children_stubs_to_json, comments_to_json, dep_summary_to_json_with_blocking, enrich_task_list,
+    note_links_to_json,
+};
 use brain_lib::tasks::events::*;
-use brain_lib::utils::{task_row_to_json, ts_to_iso};
+use brain_lib::utils::task_row_to_json;
 
 // ── shared context ─────────────────────────────────────────
 
@@ -173,14 +177,7 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         .collect();
 
     if ctx.json {
-        let items: Vec<_> = tasks
-            .iter()
-            .map(|t| {
-                let labels = ctx.store.get_task_labels(&t.task_id).unwrap_or_default();
-                task_row_to_json(t, labels)
-            })
-            .collect();
-        let (ready_count, blocked_count) = ctx.store.count_ready_blocked()?;
+        let (items, ready_count, blocked_count) = enrich_task_list(&ctx.store, &tasks);
         let out = json!({
             "tasks": items,
             "count": tasks.len(),
@@ -237,42 +234,13 @@ pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
     let children = ctx.store.get_children(id)?;
 
     if ctx.json {
-        let comments_json: Vec<_> = comments
-            .iter()
-            .map(|c| {
-                json!({
-                    "comment_id": c.comment_id,
-                    "author": c.author,
-                    "body": c.body,
-                    "created_at": ts_to_iso(c.created_at),
-                })
-            })
-            .collect();
-
-        let note_links_json: Vec<_> = note_links
-            .iter()
-            .map(|l| json!({"chunk_id": l.chunk_id, "file_path": l.file_path}))
-            .collect();
-
-        let children_json: Vec<_> = children
-            .iter()
-            .map(|c| {
-                json!({
-                    "task_id": c.task_id,
-                    "title": c.title,
-                    "status": c.status,
-                    "priority": c.priority,
-                })
-            })
-            .collect();
+        let comments_json = comments_to_json(&comments);
+        let note_links_json = note_links_to_json(&note_links);
+        let children_json = children_stubs_to_json(&children);
 
         let out = json!({
             "task": task_row_to_json(&task, labels),
-            "dependency_summary": {
-                "total_deps": dep_summary.total_deps,
-                "done_deps": dep_summary.done_deps,
-                "blocking_task_ids": dep_summary.blocking_task_ids,
-            },
+            "dependency_summary": dep_summary_to_json_with_blocking(&dep_summary),
             "linked_notes": note_links_json,
             "comments": comments_json,
             "children": children_json,

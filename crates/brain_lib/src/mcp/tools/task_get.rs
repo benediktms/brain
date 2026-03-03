@@ -7,7 +7,8 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::utils::{task_row_to_json, ts_to_iso};
+use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
+use crate::utils::task_row_to_json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ExpandField {
@@ -103,17 +104,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
 
     let comments = ctx.tasks.get_task_comments(task_id).unwrap_or_default();
-    let comments_json: Vec<Value> = comments
-        .iter()
-        .map(|c| {
-            json!({
-                "comment_id": c.comment_id,
-                "author": c.author,
-                "body": c.body,
-                "created_at": ts_to_iso(c.created_at),
-            })
-        })
-        .collect();
+    let comments_json = comments_to_json(&comments);
 
     let dep_summary = ctx
         .tasks
@@ -125,10 +116,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         });
 
     let note_links = ctx.tasks.get_task_note_links(task_id).unwrap_or_default();
-    let linked_notes_json: Vec<Value> = note_links
-        .iter()
-        .map(|nl| json!({ "chunk_id": nl.chunk_id, "file_path": nl.file_path }))
-        .collect();
+    let linked_notes_json = note_links_to_json(&note_links);
 
     let children = ctx.tasks.get_children(task_id).unwrap_or_default();
     let blocks = ctx.tasks.get_tasks_blocking(task_id).unwrap_or_default();
@@ -215,13 +203,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         obj.insert("blocks".into(), json!(blocks_json));
         obj.insert("comments".into(), json!(comments_json));
         obj.insert("linked_notes".into(), json!(linked_notes_json));
-        obj.insert(
-            "dependency_summary".into(),
-            json!({
-                "total_deps": dep_summary.total_deps,
-                "done_deps": dep_summary.done_deps,
-            }),
-        );
+        obj.insert("dependency_summary".into(), dep_summary_to_json(&dep_summary));
     }
 
     ToolCallResult::text(serde_json::to_string_pretty(&task_json).unwrap_or_default())

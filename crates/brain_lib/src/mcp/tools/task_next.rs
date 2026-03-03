@@ -3,8 +3,7 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-
-use crate::utils::task_row_to_json;
+use crate::tasks::enrichment::enrich_task_summary;
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let policy = params
@@ -50,47 +49,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     // Build response with dependency summaries and note links
     let results_json: Vec<Value> = selected
         .iter()
-        .map(|task| {
-            let dep_summary = ctx
-                .tasks
-                .get_dependency_summary(&task.task_id)
-                .unwrap_or_else(|_| crate::tasks::queries::DependencySummary {
-                    total_deps: 0,
-                    done_deps: 0,
-                    blocking_task_ids: vec![],
-                });
-
-            let note_links = ctx
-                .tasks
-                .get_task_note_links(&task.task_id)
-                .unwrap_or_default();
-
-            let labels = ctx.tasks.get_task_labels(&task.task_id).unwrap_or_default();
-
-            let linked_notes: Vec<Value> = note_links
-                .iter()
-                .map(|nl| {
-                    json!({
-                        "chunk_id": nl.chunk_id,
-                        "file_path": nl.file_path,
-                    })
-                })
-                .collect();
-
-            let mut task_json = task_row_to_json(task, labels);
-            if let Some(obj) = task_json.as_object_mut() {
-                obj.insert(
-                    "dependency_summary".into(),
-                    json!({
-                        "total_deps": dep_summary.total_deps,
-                        "done_deps": dep_summary.done_deps,
-                        "blocking_tasks": dep_summary.blocking_task_ids,
-                    }),
-                );
-                obj.insert("linked_notes".into(), json!(linked_notes));
-            }
-            task_json
-        })
+        .map(|task| enrich_task_summary(&ctx.tasks, task))
         .collect();
 
     // Get aggregate counts
