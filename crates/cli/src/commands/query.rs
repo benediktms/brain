@@ -8,35 +8,38 @@ use brain_lib::prelude::*;
 use brain_lib::query_pipeline::QueryPipeline;
 use brain_lib::ranking::resolve_intent;
 
+/// Parameters for a CLI query invocation.
+pub struct QueryParams {
+    pub query: String,
+    pub top_k: usize,
+    pub intent: String,
+    pub budget: usize,
+    pub verbose: bool,
+    pub model_dir: PathBuf,
+    pub db_path: PathBuf,
+    pub sqlite_path: PathBuf,
+}
+
 /// Query the knowledge base using full hybrid search (vector + FTS + ranking).
-pub async fn run(
-    query: String,
-    top_k: usize,
-    intent: String,
-    budget: usize,
-    verbose: bool,
-    model_dir: PathBuf,
-    db_path: PathBuf,
-    sqlite_path: PathBuf,
-) -> Result<()> {
-    let embedder = Embedder::load(&model_dir)?;
+pub async fn run(params: QueryParams) -> Result<()> {
+    let embedder = Embedder::load(&params.model_dir)?;
     let embedder_arc: Arc<dyn Embed> = Arc::new(embedder);
-    let store = Store::open_or_create(&db_path).await?;
+    let store = Store::open_or_create(&params.db_path).await?;
     let store_reader = brain_lib::store::StoreReader::from_store(&store);
-    let db = brain_lib::db::Db::open(&sqlite_path)?;
+    let db = brain_lib::db::Db::open(&params.sqlite_path)?;
 
     let metrics = Arc::new(Metrics::new());
     let pipeline = QueryPipeline::new(&db, &store_reader, &embedder_arc, &metrics);
 
-    let profile = resolve_intent(&intent);
+    let profile = resolve_intent(&params.intent);
 
-    let search_result = if verbose {
+    let search_result = if params.verbose {
         pipeline
-            .search_with_scores(&query, &intent, budget, top_k)
+            .search_with_scores(&params.query, &params.intent, params.budget, params.top_k)
             .await?
     } else {
         pipeline
-            .search(&query, &intent, budget, top_k)
+            .search(&params.query, &params.intent, params.budget, params.top_k)
             .await?
             .into()
     };
@@ -47,9 +50,10 @@ pub async fn run(
     }
 
     println!(
-        "Hybrid search | intent: {profile:?} | {}/{} results within {budget}-token budget\n",
+        "Hybrid search | intent: {profile:?} | {}/{} results within {}-token budget\n",
         search_result.results.len(),
         search_result.total_available,
+        params.budget,
     );
 
     for (rank, stub) in search_result.results.iter().enumerate() {

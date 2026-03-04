@@ -475,7 +475,17 @@ async fn async_main(cli: Cli) -> Result<()> {
             budget,
             verbose,
         } => {
-            commands::query::run(query, k, intent, budget, verbose, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
+            commands::query::run(commands::query::QueryParams {
+                query,
+                top_k: k,
+                intent,
+                budget,
+                verbose,
+                model_dir: cli.model_dir,
+                db_path: cli.lance_db,
+                sqlite_path: cli.sqlite_db,
+            })
+            .await?
         }
         Command::Watch { notes_path } => {
             commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
@@ -668,7 +678,13 @@ mod tests {
     fn parse_query_default_k() {
         let cli = Cli::try_parse_from(["brain", "query", "hello"]).unwrap();
         match cli.command {
-            Command::Query { query, k, intent, budget, verbose } => {
+            Command::Query {
+                query,
+                k,
+                intent,
+                budget,
+                verbose,
+            } => {
                 assert_eq!(query, "hello");
                 assert_eq!(k, 5);
                 assert_eq!(intent, "auto");
