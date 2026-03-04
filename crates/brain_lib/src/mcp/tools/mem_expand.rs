@@ -17,7 +17,7 @@ pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
 
     let budget_tokens = opt_u64(params, "budget_tokens", 2000) as usize;
 
-    let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder);
+    let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder, &ctx.metrics);
     let expand_result = match pipeline.expand(&memory_ids, budget_tokens).await {
         Ok(r) => r,
         Err(e) => {

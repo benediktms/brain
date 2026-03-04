@@ -28,6 +28,9 @@ pub enum BrainCoreError {
 
     #[error("task dependency cycle: {0}")]
     TaskCycle(String),
+
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl From<rusqlite::Error> for BrainCoreError {

@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use tracing::{instrument, warn};
 
+use std::sync::atomic::Ordering;
+
 use crate::db::Db;
 use crate::db::chunks::get_chunks_by_ids;
 use crate::db::fts::search_fts;
@@ -14,6 +16,7 @@ use crate::db::links::count_backlinks;
 use crate::db::summaries::{SummaryRow, list_episodes};
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
+use crate::metrics::Metrics;
 use crate::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
 use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
 use crate::store::StoreReader;
@@ -35,14 +38,21 @@ pub struct QueryPipeline<'a> {
     db: &'a Db,
     store: &'a StoreReader,
     embedder: &'a Arc<dyn Embed>,
+    metrics: &'a Arc<Metrics>,
 }
 
 impl<'a> QueryPipeline<'a> {
-    pub fn new(db: &'a Db, store: &'a StoreReader, embedder: &'a Arc<dyn Embed>) -> Self {
+    pub fn new(
+        db: &'a Db,
+        store: &'a StoreReader,
+        embedder: &'a Arc<dyn Embed>,
+        metrics: &'a Arc<Metrics>,
+    ) -> Self {
         Self {
             db,
             store,
             embedder,
+            metrics,
         }
     }
 
@@ -77,6 +87,7 @@ impl<'a> QueryPipeline<'a> {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, "FTS search failed, continuing with vector-only");
+                self.metrics.query_errors.fetch_add(1, Ordering::Relaxed);
                 Vec::new()
             }
         };

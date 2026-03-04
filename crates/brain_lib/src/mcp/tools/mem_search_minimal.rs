@@ -15,7 +15,7 @@ pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let budget_tokens = opt_u64(params, "budget_tokens", 800) as usize;
     let k = opt_u64(params, "k", 10) as usize;
 
-    let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder);
+    let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder, &ctx.metrics);
     let search_result = match pipeline.search(query, intent, budget_tokens, k).await {
         Ok(r) => r,
         Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),

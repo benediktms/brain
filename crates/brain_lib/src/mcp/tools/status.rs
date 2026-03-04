@@ -59,6 +59,12 @@ mod tests {
         assert!(parsed["indexing_latency"]["p95_us"].is_u64());
         assert!(parsed["indexing_latency"]["total_samples"].is_u64());
 
+        // Error counters
+        assert!(parsed.get("indexing_errors").is_some());
+        assert!(parsed.get("query_errors").is_some());
+        assert!(parsed["indexing_errors"].is_u64());
+        assert!(parsed["query_errors"].is_u64());
+
         // Nested token fields
         assert!(parsed["tokens"]["search_minimal_total"].is_u64());
         assert!(parsed["tokens"]["expand_total"].is_u64());
