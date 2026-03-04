@@ -190,7 +190,10 @@ mod tests {
 
         let (_, index, _) = q.drain_batch();
         let paths: Vec<String> = index.iter().map(|p| p.display().to_string()).collect();
-        assert!(!paths.contains(&"/1.md".to_string()), "oldest should be evicted");
+        assert!(
+            !paths.contains(&"/1.md".to_string()),
+            "oldest should be evicted"
+        );
         assert!(paths.contains(&"/4.md".to_string()));
     }
 
