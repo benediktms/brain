@@ -18,6 +18,7 @@ pub mod tasks;
 pub mod tokens;
 pub mod utils;
 pub mod watcher;
+pub mod work_queue;
 
 pub mod prelude {
     pub use crate::chunker::{Chunk, chunk_document, chunk_text};
@@ -37,4 +38,5 @@ pub mod prelude {
     pub use crate::tokens::estimate_tokens;
     pub use crate::utils::content_hash;
     pub use crate::watcher::{BrainWatcher, FileEvent};
+    pub use crate::work_queue::WorkQueue;
 }
