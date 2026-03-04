@@ -21,6 +21,9 @@ pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
     };
 
+    ctx.metrics
+        .record_search_minimal_tokens(search_result.used_tokens_est);
+
     let results_json: Vec<Value> = search_result
         .results
         .iter()

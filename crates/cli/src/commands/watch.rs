@@ -49,8 +49,18 @@ pub async fn run(
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
         .expect("failed to register SIGTERM handler");
 
+    // SIGUSR1 handler — dump metrics snapshot to stderr
+    let mut sigusr1 = tokio::signal::unix::signal(SignalKind::user_defined1())
+        .expect("failed to register SIGUSR1 handler");
+
     // Event loop: batch-drain, coalesce, and dispatch
     loop {
+        // Update queue depth + lancedb pending rows at top of each iteration
+        pipeline.metrics().set_queue_depth(rx.len() as u64);
+        pipeline
+            .metrics()
+            .set_lancedb_unoptimized_rows(pipeline.store().optimizer().pending_count());
+
         tokio::select! {
             event = rx.recv() => {
                 match event {
@@ -108,6 +118,15 @@ pub async fn run(
                 info!("received SIGTERM, shutting down");
                 pipeline.store().optimizer().force_optimize().await;
                 break;
+            }
+            _ = sigusr1.recv() => {
+                let mut snapshot = pipeline.metrics().snapshot();
+                // Enrich with stuck-file count via brain_lib's Db wrapper
+                let stuck_files = pipeline.db()
+                    .with_read_conn(brain_lib::db::files::find_stuck_files)
+                    .unwrap_or_default();
+                snapshot.dual_store_stuck_files = stuck_files.len() as u64;
+                eprintln!("{}", serde_json::to_string_pretty(&snapshot).unwrap_or_default());
             }
         }
     }

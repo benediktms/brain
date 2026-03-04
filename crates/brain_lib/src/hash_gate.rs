@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::db::Db;
 use crate::db::files;
 use crate::utils::content_hash;
@@ -24,6 +26,7 @@ impl<'a> HashGate<'a> {
 
     /// Resolve file identity (get_or_create) + compare stored hash with
     /// current content hash. Single DB transaction for atomicity.
+    #[instrument(skip_all)]
     pub fn check(&self, path: &str, content: &str) -> crate::error::Result<GateVerdict> {
         let hash = content_hash(content);
 
