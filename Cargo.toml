@@ -18,6 +18,7 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 blake3 = "1"
 ulid = "1"
 chrono = "0.4"
+criterion = { version = "0.5", features = ["async_tokio"] }
 
 # Optimize candle crates in dev builds for usable embedding speed.
 # opt-level 1 enables SIMD vectorization with minimal compile-time cost.
