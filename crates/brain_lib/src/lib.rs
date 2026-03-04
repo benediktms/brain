@@ -32,7 +32,10 @@ pub mod prelude {
     pub use crate::pipeline::{IndexPipeline, ScanStats};
     pub use crate::query_pipeline::QueryPipeline;
     pub use crate::ranking::{RankedResult, WeightProfile};
-    pub use crate::retrieval::{ExpandResult, ExpandedMemory, MemoryStub, SearchResult};
+    pub use crate::retrieval::{
+        ExpandResult, ExpandedMemory, MemoryStub, ScoredMemoryStub, ScoredSearchResult,
+        SearchResult,
+    };
     pub use crate::scanner::{ScannedFile, scan_brain};
     pub use crate::store::{QueryResult, Store};
     pub use crate::tokens::estimate_tokens;

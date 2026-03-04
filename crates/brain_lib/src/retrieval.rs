@@ -41,6 +41,55 @@ pub struct SearchResult {
     pub results: Vec<MemoryStub>,
 }
 
+/// A memory stub with optional per-signal score breakdown.
+#[derive(Debug, Clone)]
+pub struct ScoredMemoryStub {
+    pub memory_id: String,
+    pub title: String,
+    pub summary_2sent: String,
+    pub hybrid_score: f64,
+    pub file_path: String,
+    pub heading_path: String,
+    pub token_estimate: usize,
+    /// Per-signal scores, present when verbose/scored search is used.
+    pub signal_scores: Option<crate::ranking::SignalScores>,
+}
+
+/// Result of a scored search call (includes per-signal breakdowns).
+#[derive(Debug, Clone)]
+pub struct ScoredSearchResult {
+    pub budget_tokens: usize,
+    pub used_tokens_est: usize,
+    pub num_results: usize,
+    pub total_available: usize,
+    pub results: Vec<ScoredMemoryStub>,
+}
+
+impl From<SearchResult> for ScoredSearchResult {
+    fn from(sr: SearchResult) -> Self {
+        Self {
+            budget_tokens: sr.budget_tokens,
+            used_tokens_est: sr.used_tokens_est,
+            num_results: sr.num_results,
+            total_available: sr.total_available,
+            results: sr
+                .results
+                .into_iter()
+                .map(|s| ScoredMemoryStub {
+                    memory_id: s.memory_id,
+                    title: s.title,
+                    summary_2sent: s.summary_2sent,
+                    hybrid_score: s.hybrid_score,
+                    file_path: s.file_path,
+                    heading_path: s.heading_path,
+                    token_estimate: s.token_estimate,
+                    signal_scores: None,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// A fully expanded memory entry.
 #[derive(Debug, Clone)]
 pub struct ExpandedMemory {
@@ -89,6 +138,46 @@ impl Expandable for ExpandableChunk {
     }
     fn token_estimate(&self) -> usize {
         self.token_estimate
+    }
+}
+
+/// Pack ranked results into scored stubs (with signal breakdowns) within a token budget.
+pub fn pack_minimal_scored(
+    ranked: &[RankedResult],
+    budget_tokens: usize,
+    k: usize,
+) -> ScoredSearchResult {
+    let total_available = ranked.len();
+    let mut results = Vec::new();
+    let mut used_tokens = 0;
+
+    for result in ranked.iter().take(k) {
+        let stub = make_stub(result);
+        let stub_tokens = estimate_stub_tokens(&stub);
+
+        if used_tokens + stub_tokens > budget_tokens && !results.is_empty() {
+            break;
+        }
+
+        used_tokens += stub_tokens;
+        results.push(ScoredMemoryStub {
+            memory_id: stub.memory_id,
+            title: stub.title,
+            summary_2sent: stub.summary_2sent,
+            hybrid_score: stub.hybrid_score,
+            file_path: stub.file_path,
+            heading_path: stub.heading_path,
+            token_estimate: stub.token_estimate,
+            signal_scores: Some(result.scores),
+        });
+    }
+
+    ScoredSearchResult {
+        budget_tokens,
+        used_tokens_est: used_tokens,
+        num_results: results.len(),
+        total_available,
+        results,
     }
 }
 

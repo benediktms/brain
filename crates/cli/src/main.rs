@@ -87,17 +87,24 @@ enum Command {
         notes_path: PathBuf,
     },
 
-    /// Query indexed notes using semantic search
+    /// Query indexed notes using hybrid search (vector + keyword + ranking)
     #[command(
         visible_alias = "q",
-        long_about = "Query indexed notes using semantic search.\n\n\
-            Embeds your query with the same BGE model used for indexing, retrieves \
-            the top-k most similar chunks from LanceDB, and prints them enriched \
-            with their source file path and nearest Markdown heading.",
+        long_about = "Query indexed notes using hybrid search.\n\n\
+            Combines vector similarity (BGE embeddings) with BM25 keyword matching \
+            and a 6-signal ranking engine (vector, keyword, recency, backlinks, \
+            tags, importance). Use --intent to tune ranking for your retrieval goal.\n\n\
+            Weight profiles:\n  \
+            - auto      Equal weights across all signals (default)\n  \
+            - lookup    Keyword-heavy (40% BM25) for exact matches\n  \
+            - planning  Recency + links for project planning queries\n  \
+            - reflection Recency-heavy for journal/reflection queries\n  \
+            - synthesis  Vector-heavy (40%) for semantic similarity",
         after_help = "EXAMPLES:\n  \
             brain query \"how does authentication work\"\n  \
             brain query \"async error handling\" -k 10\n  \
-            brain query \"database migration steps\" -k 3"
+            brain query -i lookup \"database migration steps\"\n  \
+            brain query -i synthesis \"ownership and borrowing\" --verbose"
     )]
     Query {
         /// Natural-language search query
@@ -106,6 +113,18 @@ enum Command {
         /// Maximum number of results to return
         #[arg(short, long, default_value = "5")]
         k: usize,
+
+        /// Ranking intent profile (auto, lookup, planning, reflection, synthesis)
+        #[arg(short, long, default_value = "auto")]
+        intent: String,
+
+        /// Token budget for result packing
+        #[arg(short, long, default_value = "800")]
+        budget: usize,
+
+        /// Show per-signal score breakdown for each result
+        #[arg(short = 'V', long)]
+        verbose: bool,
     },
 
     /// Watch a directory for changes and re-index incrementally
@@ -449,8 +468,14 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::Index { notes_path } => {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
-        Command::Query { query, k } => {
-            commands::query::run(query, k, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
+        Command::Query {
+            query,
+            k,
+            intent,
+            budget,
+            verbose,
+        } => {
+            commands::query::run(query, k, intent, budget, verbose, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
         Command::Watch { notes_path } => {
             commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
@@ -643,9 +668,12 @@ mod tests {
     fn parse_query_default_k() {
         let cli = Cli::try_parse_from(["brain", "query", "hello"]).unwrap();
         match cli.command {
-            Command::Query { query, k } => {
+            Command::Query { query, k, intent, budget, verbose } => {
                 assert_eq!(query, "hello");
                 assert_eq!(k, 5);
+                assert_eq!(intent, "auto");
+                assert_eq!(budget, 800);
+                assert!(!verbose);
             }
             _ => panic!("expected Query"),
         }
@@ -655,9 +683,21 @@ mod tests {
     fn parse_query_custom_k() {
         let cli = Cli::try_parse_from(["brain", "query", "hello", "-k", "10"]).unwrap();
         match cli.command {
-            Command::Query { query, k } => {
+            Command::Query { query, k, .. } => {
                 assert_eq!(query, "hello");
                 assert_eq!(k, 10);
+            }
+            _ => panic!("expected Query"),
+        }
+    }
+
+    #[test]
+    fn parse_query_with_intent() {
+        let cli = Cli::try_parse_from(["brain", "query", "-i", "lookup", "hello"]).unwrap();
+        match cli.command {
+            Command::Query { query, intent, .. } => {
+                assert_eq!(query, "hello");
+                assert_eq!(intent, "lookup");
             }
             _ => panic!("expected Query"),
         }

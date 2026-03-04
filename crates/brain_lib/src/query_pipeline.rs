@@ -18,7 +18,10 @@ use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
 use crate::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
-use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
+use crate::retrieval::{
+    ExpandResult, ExpandableChunk, ScoredSearchResult, SearchResult, expand_results, pack_minimal,
+    pack_minimal_scored,
+};
 use crate::store::StoreReader;
 use crate::tokens::estimate_tokens;
 
@@ -65,6 +68,29 @@ impl<'a> QueryPipeline<'a> {
         budget_tokens: usize,
         k: usize,
     ) -> Result<SearchResult> {
+        let (ranked, _weights) = self.search_ranked(query, intent).await?;
+        Ok(pack_minimal(&ranked, budget_tokens, k))
+    }
+
+    /// Hybrid search returning scored stubs with per-signal breakdowns.
+    #[instrument(skip_all)]
+    pub async fn search_with_scores(
+        &self,
+        query: &str,
+        intent: &str,
+        budget_tokens: usize,
+        k: usize,
+    ) -> Result<ScoredSearchResult> {
+        let (ranked, _weights) = self.search_ranked(query, intent).await?;
+        Ok(pack_minimal_scored(&ranked, budget_tokens, k))
+    }
+
+    /// Core search logic: returns ranked results and resolved weights.
+    async fn search_ranked(
+        &self,
+        query: &str,
+        intent: &str,
+    ) -> Result<(Vec<crate::ranking::RankedResult>, Weights)> {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
 
@@ -96,7 +122,6 @@ impl<'a> QueryPipeline<'a> {
         let mut candidates: HashMap<String, CandidateSignals> = HashMap::new();
 
         for vr in &vector_results {
-            // Dot-product distance: lower = more similar. Convert: sim = 1.0 - distance
             let sim = 1.0 - vr.score.unwrap_or(1.0) as f64;
             candidates.insert(
                 vr.chunk_id.clone(),
@@ -142,13 +167,7 @@ impl<'a> QueryPipeline<'a> {
         }
 
         if candidates.is_empty() {
-            return Ok(SearchResult {
-                budget_tokens,
-                used_tokens_est: 0,
-                num_results: 0,
-                total_available: 0,
-                results: vec![],
-            });
+            return Ok((vec![], weights));
         }
 
         // 5. Enrich from SQLite
@@ -203,9 +222,7 @@ impl<'a> QueryPipeline<'a> {
 
         // 6. Rank
         let ranked = rank_candidates(&candidate_vec, &weights, &[]);
-
-        // 7. Pack within budget
-        Ok(pack_minimal(&ranked, budget_tokens, k))
+        Ok((ranked, weights))
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.
