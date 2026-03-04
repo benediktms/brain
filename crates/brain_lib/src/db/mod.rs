@@ -3,6 +3,8 @@ pub mod files;
 pub mod fts;
 pub mod links;
 pub mod meta;
+#[cfg(test)]
+mod migration_harness;
 mod migrations;
 pub(crate) mod schema;
 pub mod summaries;
