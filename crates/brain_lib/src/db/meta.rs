@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension};
+use tracing::warn;
 
 use crate::error::Result;
 
@@ -14,6 +15,23 @@ pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
         )
         .optional()?;
     Ok(result)
+}
+
+/// Get a meta value by key, parsed as u32.
+///
+/// Returns `Ok(None)` if the key does not exist or the stored value is not a
+/// valid u32. Emits a warning on parse failure so bad values are visible in logs.
+pub fn get_meta_u32(conn: &Connection, key: &str) -> Result<Option<u32>> {
+    match get_meta(conn, key)? {
+        None => Ok(None),
+        Some(s) => match s.parse::<u32>() {
+            Ok(v) => Ok(Some(v)),
+            Err(_) => {
+                warn!(key = key, value = %s, "brain_meta value is not a valid u32, treating as unset");
+                Ok(None)
+            }
+        },
+    }
 }
 
 /// Set a meta value (upsert).
@@ -294,6 +312,30 @@ mod tests {
         set_meta(&conn, "project_prefix", "XYZ").unwrap();
         let prefix = get_or_init_project_prefix(&conn, brain_dir).unwrap();
         assert_eq!(prefix, "XYZ");
+    }
+
+    #[test]
+    fn test_get_meta_u32() {
+        let conn = setup();
+
+        // Missing key → None
+        assert_eq!(get_meta_u32(&conn, "no_such_key").unwrap(), None);
+
+        // Valid u32
+        set_meta(&conn, "version", "42").unwrap();
+        assert_eq!(get_meta_u32(&conn, "version").unwrap(), Some(42));
+
+        // Zero is valid
+        set_meta(&conn, "version", "0").unwrap();
+        assert_eq!(get_meta_u32(&conn, "version").unwrap(), Some(0));
+
+        // Unparseable → None (warning emitted)
+        set_meta(&conn, "version", "not_a_number").unwrap();
+        assert_eq!(get_meta_u32(&conn, "version").unwrap(), None);
+
+        // Negative number → None (u32 can't be negative)
+        set_meta(&conn, "version", "-1").unwrap();
+        assert_eq!(get_meta_u32(&conn, "version").unwrap(), None);
     }
 
     #[test]

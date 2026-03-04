@@ -57,6 +57,63 @@ pub struct IndexPipeline {
     metrics: Arc<Metrics>,
 }
 
+/// Check/stamp the LanceDB schema version, rebuilding the table when needed.
+///
+/// Distinguishes three cases:
+/// - **No stored version** (first run): just stamp, no rebuild needed.
+/// - **Stored but wrong/unparseable**: full rebuild + clear content hashes + stamp.
+/// - **Matches**: skip rebuild, but warn if the live schema diverges (safety net).
+async fn ensure_schema_version(db: &Db, store: &mut Store) -> crate::error::Result<()> {
+    let expected = crate::store::LANCE_SCHEMA_VERSION;
+
+    let raw: Option<String> =
+        db.with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))?;
+    let parsed: Option<u32> =
+        db.with_read_conn(|conn| meta::get_meta_u32(conn, "lancedb_schema_version"))?;
+
+    match (raw.is_some(), parsed) {
+        // First run — no key at all. Stamp without rebuilding.
+        (false, _) => {
+            info!("First run: stamping LanceDB schema version {expected}");
+            db.with_write_conn(|conn| {
+                meta::set_meta(conn, "lancedb_schema_version", &expected.to_string())
+            })?;
+        }
+        // Key exists and parses to the expected version — all good.
+        (true, Some(v)) if v == expected => {
+            if !store.current_schema_matches_expected().await {
+                warn!("LanceDB schema version matches but actual table schema differs");
+            }
+        }
+        // Key exists but is wrong (either unparseable or different version).
+        (true, other) => {
+            match other {
+                None => {
+                    let raw_val = raw.as_deref().unwrap_or("?");
+                    warn!(
+                        raw_value = raw_val,
+                        expected, "LanceDB schema version is unparseable, rebuilding table"
+                    );
+                }
+                Some(v) => {
+                    info!(
+                        stored = v,
+                        expected, "LanceDB schema version changed, rebuilding table"
+                    );
+                }
+            }
+            store.drop_and_recreate_table().await?;
+            let cleared = db.with_write_conn(files::clear_all_content_hashes)?;
+            info!(cleared, "cleared content hashes to trigger full re-index");
+            db.with_write_conn(|conn| {
+                meta::set_meta(conn, "lancedb_schema_version", &expected.to_string())
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
 impl IndexPipeline {
     /// Create a new pipeline, opening SQLite, LanceDB, and loading the embedder.
     pub async fn new(
@@ -72,28 +129,7 @@ impl IndexPipeline {
         .map_err(|e| crate::error::BrainCoreError::Database(format!("spawn_blocking: {e}")))??;
 
         let mut store = Store::open_or_create(lance_path).await?;
-
-        // Check LanceDB schema version — rebuild on mismatch
-        let stored_version: Option<u32> = db.with_read_conn(|conn| {
-            Ok(meta::get_meta(conn, "lancedb_schema_version")?.and_then(|v| v.parse().ok()))
-        })?;
-        if stored_version != Some(crate::store::LANCE_SCHEMA_VERSION) {
-            warn!(
-                stored = ?stored_version,
-                expected = crate::store::LANCE_SCHEMA_VERSION,
-                "LanceDB schema version mismatch — rebuilding table"
-            );
-            store.drop_and_recreate_table().await?;
-            let cleared = db.with_write_conn(files::clear_all_content_hashes)?;
-            info!(cleared, "cleared content hashes to trigger full re-index");
-            db.with_write_conn(|conn| {
-                meta::set_meta(
-                    conn,
-                    "lancedb_schema_version",
-                    &crate::store::LANCE_SCHEMA_VERSION.to_string(),
-                )
-            })?;
-        }
+        ensure_schema_version(&db, &mut store).await?;
 
         let embedder = {
             let model_dir = model_dir.to_path_buf();
@@ -114,35 +150,14 @@ impl IndexPipeline {
 
     /// Create a pipeline with a custom embedder (for testing with MockEmbedder).
     ///
-    /// Also performs the schema version check — returns an error if a rebuild
-    /// is needed but the caller hasn't handled it. In practice the version
-    /// should already match because tests create fresh stores.
+    /// Also performs the schema version check — rebuilds the table on version
+    /// mismatch, or just stamps the version on first run.
     pub async fn with_embedder(
         db: Db,
         mut store: Store,
         embedder: Arc<dyn Embed>,
     ) -> crate::error::Result<Self> {
-        // Schema version check (same as new())
-        let stored_version: Option<u32> = db.with_read_conn(|conn| {
-            Ok(meta::get_meta(conn, "lancedb_schema_version")?.and_then(|v| v.parse().ok()))
-        })?;
-        if stored_version != Some(crate::store::LANCE_SCHEMA_VERSION) {
-            warn!(
-                stored = ?stored_version,
-                expected = crate::store::LANCE_SCHEMA_VERSION,
-                "LanceDB schema version mismatch — rebuilding table"
-            );
-            store.drop_and_recreate_table().await?;
-            let cleared = db.with_write_conn(files::clear_all_content_hashes)?;
-            info!(cleared, "cleared content hashes to trigger full re-index");
-            db.with_write_conn(|conn| {
-                meta::set_meta(
-                    conn,
-                    "lancedb_schema_version",
-                    &crate::store::LANCE_SCHEMA_VERSION.to_string(),
-                )
-            })?;
-        }
+        ensure_schema_version(&db, &mut store).await?;
 
         Ok(Self {
             db,

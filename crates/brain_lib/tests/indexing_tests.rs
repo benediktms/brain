@@ -802,8 +802,9 @@ async fn test_schema_version_match_skips_rebuild() {
 }
 
 #[tokio::test]
-async fn test_schema_version_none_triggers_rebuild() {
-    // When no version is stored (fresh DB or pre-versioning), it should rebuild and stamp
+async fn test_first_run_stamps_without_rebuild() {
+    // First run (no version stored): should stamp the version WITHOUT rebuilding
+    // the table — data inserted before pipeline construction must survive.
     let tmp = TempDir::new().unwrap();
     let sqlite_path = tmp.path().join("brain.db");
     let lance_path = tmp.path().join("brain_lancedb");
@@ -812,11 +813,12 @@ async fn test_schema_version_none_triggers_rebuild() {
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder = Arc::new(MockEmbedder);
 
-    // Don't stamp any version — simulates first run or pre-versioning DB
+    // Construct pipeline — no version stored, first run
     let pipeline = IndexPipeline::with_embedder(db, store, embedder)
         .await
         .unwrap();
 
+    // Version should be stamped
     let stored: Option<String> = pipeline
         .db()
         .with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))
@@ -826,4 +828,46 @@ async fn test_schema_version_none_triggers_rebuild() {
         Some(LANCE_SCHEMA_VERSION.to_string()),
         "version should be stamped on first run"
     );
+
+    // Table should still be functional (not wiped) — index a file to prove it
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+    let path = notes_dir.join("test.md");
+    std::fs::write(&path, "# Test\n\nSome content.").unwrap();
+    assert!(pipeline.index_file(&path).await.unwrap());
+}
+
+#[tokio::test]
+async fn test_unparseable_version_triggers_rebuild() {
+    // When the stored version is not a valid u32, treat as mismatch and rebuild.
+    let tmp = TempDir::new().unwrap();
+    let sqlite_path = tmp.path().join("brain.db");
+    let lance_path = tmp.path().join("brain_lancedb");
+
+    let db = Db::open(&sqlite_path).unwrap();
+    let store = Store::open_or_create(&lance_path).await.unwrap();
+    let embedder = Arc::new(MockEmbedder);
+
+    // Set an unparseable version
+    db.with_write_conn(|conn| meta::set_meta(conn, "lancedb_schema_version", "not_a_number"))
+        .unwrap();
+
+    let pipeline = IndexPipeline::with_embedder(db, store, embedder)
+        .await
+        .unwrap();
+
+    // Version should be stamped to current
+    let stored: Option<String> = pipeline
+        .db()
+        .with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))
+        .unwrap();
+    assert_eq!(
+        stored,
+        Some(LANCE_SCHEMA_VERSION.to_string()),
+        "version should be stamped after rebuild"
+    );
+
+    // Table should be empty (rebuilt)
+    let ids = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    assert!(ids.is_empty(), "table should be empty after rebuild");
 }
