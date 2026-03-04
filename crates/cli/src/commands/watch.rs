@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use brain_lib::prelude::*;
-use brain_lib::watcher::coalesce_events;
 use tracing::info;
 
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
@@ -40,6 +39,9 @@ pub async fn run(
 
     info!("watching for changes... (press Ctrl+C to stop)");
 
+    // Work queue with file_id coalescing and bounded capacity.
+    let mut work_queue = WorkQueue::default();
+
     // Periodic tick to check time-elapsed optimize trigger during quiet periods.
     // The check is near-free (two atomic loads + one mutex read); the 5min
     // threshold is evaluated inside should_optimize().
@@ -66,14 +68,14 @@ pub async fn run(
                 match event {
                     Some(first) => {
                         // 1. Drain: collect first + any ready events (50ms window)
-                        let mut raw = vec![first];
+                        work_queue.push(first);
                         let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
                         while let Ok(Some(evt)) = tokio::time::timeout_at(deadline, rx.recv()).await {
-                            raw.push(evt);
+                            work_queue.push(evt);
                         }
 
-                        // 2. Coalesce
-                        let (renames, index_paths, delete_paths) = coalesce_events(raw);
+                        // 2. Coalesce via work queue (deduped, bounded)
+                        let (renames, index_paths, delete_paths) = work_queue.drain_batch();
 
                         // 3. Process renames
                         for (from, to) in &renames {
