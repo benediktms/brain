@@ -18,10 +18,7 @@ use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
 use crate::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
-use crate::retrieval::{
-    ExpandResult, ExpandableChunk, ScoredSearchResult, SearchResult, expand_results, pack_minimal,
-    pack_minimal_scored,
-};
+use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
 use crate::store::StoreReader;
 use crate::tokens::estimate_tokens;
 
@@ -68,11 +65,11 @@ impl<'a> QueryPipeline<'a> {
         budget_tokens: usize,
         k: usize,
     ) -> Result<SearchResult> {
-        let (ranked, _weights) = self.search_ranked(query, intent).await?;
-        Ok(pack_minimal(&ranked, budget_tokens, k))
+        let ranked = self.search_ranked(query, intent).await?;
+        Ok(pack_minimal(&ranked, budget_tokens, k, false))
     }
 
-    /// Hybrid search returning scored stubs with per-signal breakdowns.
+    /// Hybrid search returning stubs with per-signal score breakdowns.
     #[instrument(skip_all)]
     pub async fn search_with_scores(
         &self,
@@ -80,17 +77,17 @@ impl<'a> QueryPipeline<'a> {
         intent: &str,
         budget_tokens: usize,
         k: usize,
-    ) -> Result<ScoredSearchResult> {
-        let (ranked, _weights) = self.search_ranked(query, intent).await?;
-        Ok(pack_minimal_scored(&ranked, budget_tokens, k))
+    ) -> Result<SearchResult> {
+        let ranked = self.search_ranked(query, intent).await?;
+        Ok(pack_minimal(&ranked, budget_tokens, k, true))
     }
 
-    /// Core search logic: returns ranked results and resolved weights.
+    /// Core search logic: returns ranked results.
     async fn search_ranked(
         &self,
         query: &str,
         intent: &str,
-    ) -> Result<(Vec<crate::ranking::RankedResult>, Weights)> {
+    ) -> Result<Vec<crate::ranking::RankedResult>> {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
 
@@ -167,7 +164,7 @@ impl<'a> QueryPipeline<'a> {
         }
 
         if candidates.is_empty() {
-            return Ok((vec![], weights));
+            return Ok(vec![]);
         }
 
         // 5. Enrich from SQLite
@@ -221,8 +218,7 @@ impl<'a> QueryPipeline<'a> {
             .collect();
 
         // 6. Rank
-        let ranked = rank_candidates(&candidate_vec, &weights, &[]);
-        Ok((ranked, weights))
+        Ok(rank_candidates(&candidate_vec, &weights, &[]))
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.

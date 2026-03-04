@@ -1,12 +1,39 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueHint};
+use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use tracing_subscriber::EnvFilter;
 
 use crate::commands::daemon::Daemon;
 
 mod commands;
+
+/// Ranking intent profiles for hybrid search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Intent {
+    /// Equal weights across all signals
+    Auto,
+    /// Keyword-heavy (40% BM25) for exact matches
+    Lookup,
+    /// Recency + links for project planning queries
+    Planning,
+    /// Recency-heavy for journal/reflection queries
+    Reflection,
+    /// Vector-heavy (40%) for semantic similarity
+    Synthesis,
+}
+
+impl Intent {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Lookup => "lookup",
+            Self::Planning => "planning",
+            Self::Reflection => "reflection",
+            Self::Synthesis => "synthesis",
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -114,9 +141,9 @@ enum Command {
         #[arg(short, long, default_value = "5")]
         k: usize,
 
-        /// Ranking intent profile (auto, lookup, planning, reflection, synthesis)
+        /// Ranking intent profile
         #[arg(short, long, default_value = "auto")]
-        intent: String,
+        intent: Intent,
 
         /// Token budget for result packing
         #[arg(short, long, default_value = "800")]
@@ -478,7 +505,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             commands::query::run(commands::query::QueryParams {
                 query,
                 top_k: k,
-                intent,
+                intent: intent.as_str().to_string(),
                 budget,
                 verbose,
                 model_dir: cli.model_dir,
@@ -687,7 +714,7 @@ mod tests {
             } => {
                 assert_eq!(query, "hello");
                 assert_eq!(k, 5);
-                assert_eq!(intent, "auto");
+                assert_eq!(intent, Intent::Auto);
                 assert_eq!(budget, 800);
                 assert!(!verbose);
             }
@@ -713,10 +740,16 @@ mod tests {
         match cli.command {
             Command::Query { query, intent, .. } => {
                 assert_eq!(query, "hello");
-                assert_eq!(intent, "lookup");
+                assert_eq!(intent, Intent::Lookup);
             }
             _ => panic!("expected Query"),
         }
+    }
+
+    #[test]
+    fn parse_query_invalid_intent_rejected() {
+        let result = Cli::try_parse_from(["brain", "query", "-i", "bogus", "hello"]);
+        assert!(result.is_err(), "invalid intent should be rejected");
     }
 
     #[test]

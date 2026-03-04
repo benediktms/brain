@@ -3,7 +3,7 @@
 /// Provides a two-tier API:
 /// - `search_minimal`: returns compact stubs within a token budget
 /// - `expand`: returns full content for selected memory IDs
-use crate::ranking::RankedResult;
+use crate::ranking::{RankedResult, SignalScores};
 use crate::tokens::estimate_tokens;
 
 /// Trait for types that can be expanded to full memory content.
@@ -29,6 +29,9 @@ pub struct MemoryStub {
     pub file_path: String,
     pub heading_path: String,
     pub token_estimate: usize,
+    /// Per-signal score breakdown. Present when `pack_minimal` is called with
+    /// `include_scores: true`.
+    pub signal_scores: Option<SignalScores>,
 }
 
 /// Result of a search_minimal call.
@@ -39,55 +42,6 @@ pub struct SearchResult {
     pub num_results: usize,
     pub total_available: usize,
     pub results: Vec<MemoryStub>,
-}
-
-/// A memory stub with optional per-signal score breakdown.
-#[derive(Debug, Clone)]
-pub struct ScoredMemoryStub {
-    pub memory_id: String,
-    pub title: String,
-    pub summary_2sent: String,
-    pub hybrid_score: f64,
-    pub file_path: String,
-    pub heading_path: String,
-    pub token_estimate: usize,
-    /// Per-signal scores, present when verbose/scored search is used.
-    pub signal_scores: Option<crate::ranking::SignalScores>,
-}
-
-/// Result of a scored search call (includes per-signal breakdowns).
-#[derive(Debug, Clone)]
-pub struct ScoredSearchResult {
-    pub budget_tokens: usize,
-    pub used_tokens_est: usize,
-    pub num_results: usize,
-    pub total_available: usize,
-    pub results: Vec<ScoredMemoryStub>,
-}
-
-impl From<SearchResult> for ScoredSearchResult {
-    fn from(sr: SearchResult) -> Self {
-        Self {
-            budget_tokens: sr.budget_tokens,
-            used_tokens_est: sr.used_tokens_est,
-            num_results: sr.num_results,
-            total_available: sr.total_available,
-            results: sr
-                .results
-                .into_iter()
-                .map(|s| ScoredMemoryStub {
-                    memory_id: s.memory_id,
-                    title: s.title,
-                    summary_2sent: s.summary_2sent,
-                    hybrid_score: s.hybrid_score,
-                    file_path: s.file_path,
-                    heading_path: s.heading_path,
-                    token_estimate: s.token_estimate,
-                    signal_scores: None,
-                })
-                .collect(),
-        }
-    }
 }
 
 /// A fully expanded memory entry.
@@ -141,61 +95,33 @@ impl Expandable for ExpandableChunk {
     }
 }
 
-/// Pack ranked results into scored stubs (with signal breakdowns) within a token budget.
-pub fn pack_minimal_scored(
+/// Pack ranked results into compact stubs within a token budget.
+///
+/// Iterates ranked results in score order, adding stubs until the
+/// token budget is exhausted. Returns at most `k` results.
+///
+/// When `include_scores` is true, each stub carries the per-signal score
+/// breakdown from ranking.
+pub fn pack_minimal(
     ranked: &[RankedResult],
     budget_tokens: usize,
     k: usize,
-) -> ScoredSearchResult {
+    include_scores: bool,
+) -> SearchResult {
     let total_available = ranked.len();
     let mut results = Vec::new();
     let mut used_tokens = 0;
 
     for result in ranked.iter().take(k) {
-        let stub = make_stub(result);
+        let mut stub = make_stub(result);
         let stub_tokens = estimate_stub_tokens(&stub);
 
         if used_tokens + stub_tokens > budget_tokens && !results.is_empty() {
             break;
         }
 
-        used_tokens += stub_tokens;
-        results.push(ScoredMemoryStub {
-            memory_id: stub.memory_id,
-            title: stub.title,
-            summary_2sent: stub.summary_2sent,
-            hybrid_score: stub.hybrid_score,
-            file_path: stub.file_path,
-            heading_path: stub.heading_path,
-            token_estimate: stub.token_estimate,
-            signal_scores: Some(result.scores),
-        });
-    }
-
-    ScoredSearchResult {
-        budget_tokens,
-        used_tokens_est: used_tokens,
-        num_results: results.len(),
-        total_available,
-        results,
-    }
-}
-
-/// Pack ranked results into compact stubs within a token budget.
-///
-/// Iterates ranked results in score order, adding stubs until the
-/// token budget is exhausted. Returns at most `k` results.
-pub fn pack_minimal(ranked: &[RankedResult], budget_tokens: usize, k: usize) -> SearchResult {
-    let total_available = ranked.len();
-    let mut results = Vec::new();
-    let mut used_tokens = 0;
-
-    for result in ranked.iter().take(k) {
-        let stub = make_stub(result);
-        let stub_tokens = estimate_stub_tokens(&stub);
-
-        if used_tokens + stub_tokens > budget_tokens && !results.is_empty() {
-            break;
+        if include_scores {
+            stub.signal_scores = Some(result.scores);
         }
 
         used_tokens += stub_tokens;
@@ -301,6 +227,7 @@ fn make_stub(result: &RankedResult) -> MemoryStub {
         file_path: result.file_path.clone(),
         heading_path: result.heading_path.clone(),
         token_estimate: stub_tokens,
+        signal_scores: None,
     }
 }
 
@@ -384,10 +311,12 @@ mod tests {
             make_ranked("c", 0.7, "Third result content here."),
         ];
 
-        let result = pack_minimal(&ranked, 1000, 10);
+        let result = pack_minimal(&ranked, 1000, 10, false);
         assert_eq!(result.num_results, 3);
         assert!(result.used_tokens_est <= result.budget_tokens);
         assert_eq!(result.total_available, 3);
+        // Without include_scores, signal_scores should be None
+        assert!(result.results[0].signal_scores.is_none());
     }
 
     #[test]
@@ -399,7 +328,7 @@ mod tests {
         ];
 
         // Very tight budget — should only fit 1 stub
-        let result = pack_minimal(&ranked, 15, 10);
+        let result = pack_minimal(&ranked, 15, 10, false);
         assert!(result.num_results <= 2);
         assert!(result.used_tokens_est <= 15);
     }
@@ -412,13 +341,13 @@ mod tests {
             make_ranked("c", 0.7, "Content."),
         ];
 
-        let result = pack_minimal(&ranked, 10000, 2);
+        let result = pack_minimal(&ranked, 10000, 2, false);
         assert_eq!(result.num_results, 2);
     }
 
     #[test]
     fn test_pack_minimal_empty() {
-        let result = pack_minimal(&[], 1000, 10);
+        let result = pack_minimal(&[], 1000, 10, false);
         assert_eq!(result.num_results, 0);
         assert_eq!(result.used_tokens_est, 0);
     }
@@ -476,18 +405,18 @@ mod tests {
     #[test]
     fn test_stub_has_title_from_heading() {
         let ranked = vec![make_ranked("test", 0.9, "Some content.")];
-        let result = pack_minimal(&ranked, 1000, 10);
+        let result = pack_minimal(&ranked, 1000, 10, false);
         assert_eq!(result.results[0].title, "test");
     }
 
     #[test]
-    fn test_pack_minimal_scored_includes_signals() {
+    fn test_pack_minimal_with_scores() {
         let ranked = vec![
             make_ranked("a", 0.9, "First result content here."),
             make_ranked("b", 0.8, "Second result content here."),
         ];
 
-        let result = pack_minimal_scored(&ranked, 1000, 10);
+        let result = pack_minimal(&ranked, 1000, 10, true);
         assert_eq!(result.num_results, 2);
         assert!(result.used_tokens_est <= result.budget_tokens);
 
@@ -495,19 +424,14 @@ mod tests {
         for stub in &result.results {
             assert!(stub.signal_scores.is_some());
             let scores = stub.signal_scores.unwrap();
-            // Vector score should match what we set in make_ranked
             assert!(scores.vector > 0.0);
         }
     }
 
     #[test]
-    fn test_scored_search_result_from_search_result() {
+    fn test_pack_minimal_without_scores() {
         let ranked = vec![make_ranked("a", 0.9, "Content.")];
-        let search_result = pack_minimal(&ranked, 1000, 10);
-        let scored: ScoredSearchResult = search_result.into();
-
-        assert_eq!(scored.num_results, 1);
-        // Converted from SearchResult, so signal_scores should be None
-        assert!(scored.results[0].signal_scores.is_none());
+        let result = pack_minimal(&ranked, 1000, 10, false);
+        assert!(result.results[0].signal_scores.is_none());
     }
 }

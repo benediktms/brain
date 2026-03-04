@@ -41,7 +41,6 @@ pub async fn run(params: QueryParams) -> Result<()> {
         pipeline
             .search(&params.query, &params.intent, params.budget, params.top_k)
             .await?
-            .into()
     };
 
     if search_result.results.is_empty() {
