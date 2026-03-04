@@ -45,8 +45,13 @@ index notes_path=".": ensure-binary
     {{bin}} index {{notes_path}}
 
 [group('app')]
-query query_text top_k="5": ensure-binary
-    {{bin}} query "{{query_text}}" -k {{top_k}}
+query query_text top_k="5" intent="auto" *args: ensure-binary
+    {{bin}} query "{{query_text}}" -k {{top_k}} -i {{intent}} {{args}}
+
+# Query with per-signal score breakdown
+[group('app')]
+query-verbose query_text top_k="5" intent="auto": ensure-binary
+    {{bin}} query "{{query_text}}" -k {{top_k}} -i {{intent}} --verbose
 
 [group('maintenance')]
 clean:

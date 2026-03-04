@@ -65,6 +65,29 @@ impl<'a> QueryPipeline<'a> {
         budget_tokens: usize,
         k: usize,
     ) -> Result<SearchResult> {
+        let ranked = self.search_ranked(query, intent).await?;
+        Ok(pack_minimal(&ranked, budget_tokens, k, false))
+    }
+
+    /// Hybrid search returning stubs with per-signal score breakdowns.
+    #[instrument(skip_all)]
+    pub async fn search_with_scores(
+        &self,
+        query: &str,
+        intent: &str,
+        budget_tokens: usize,
+        k: usize,
+    ) -> Result<SearchResult> {
+        let ranked = self.search_ranked(query, intent).await?;
+        Ok(pack_minimal(&ranked, budget_tokens, k, true))
+    }
+
+    /// Core search logic: returns ranked results.
+    async fn search_ranked(
+        &self,
+        query: &str,
+        intent: &str,
+    ) -> Result<Vec<crate::ranking::RankedResult>> {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
 
@@ -96,7 +119,6 @@ impl<'a> QueryPipeline<'a> {
         let mut candidates: HashMap<String, CandidateSignals> = HashMap::new();
 
         for vr in &vector_results {
-            // Dot-product distance: lower = more similar. Convert: sim = 1.0 - distance
             let sim = 1.0 - vr.score.unwrap_or(1.0) as f64;
             candidates.insert(
                 vr.chunk_id.clone(),
@@ -142,13 +164,7 @@ impl<'a> QueryPipeline<'a> {
         }
 
         if candidates.is_empty() {
-            return Ok(SearchResult {
-                budget_tokens,
-                used_tokens_est: 0,
-                num_results: 0,
-                total_available: 0,
-                results: vec![],
-            });
+            return Ok(vec![]);
         }
 
         // 5. Enrich from SQLite
@@ -202,10 +218,7 @@ impl<'a> QueryPipeline<'a> {
             .collect();
 
         // 6. Rank
-        let ranked = rank_candidates(&candidate_vec, &weights, &[]);
-
-        // 7. Pack within budget
-        Ok(pack_minimal(&ranked, budget_tokens, k))
+        Ok(rank_candidates(&candidate_vec, &weights, &[]))
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.
