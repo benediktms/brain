@@ -479,4 +479,35 @@ mod tests {
         let result = pack_minimal(&ranked, 1000, 10);
         assert_eq!(result.results[0].title, "test");
     }
+
+    #[test]
+    fn test_pack_minimal_scored_includes_signals() {
+        let ranked = vec![
+            make_ranked("a", 0.9, "First result content here."),
+            make_ranked("b", 0.8, "Second result content here."),
+        ];
+
+        let result = pack_minimal_scored(&ranked, 1000, 10);
+        assert_eq!(result.num_results, 2);
+        assert!(result.used_tokens_est <= result.budget_tokens);
+
+        // Every stub should have signal scores
+        for stub in &result.results {
+            assert!(stub.signal_scores.is_some());
+            let scores = stub.signal_scores.unwrap();
+            // Vector score should match what we set in make_ranked
+            assert!(scores.vector > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_scored_search_result_from_search_result() {
+        let ranked = vec![make_ranked("a", 0.9, "Content.")];
+        let search_result = pack_minimal(&ranked, 1000, 10);
+        let scored: ScoredSearchResult = search_result.into();
+
+        assert_eq!(scored.num_results, 1);
+        // Converted from SearchResult, so signal_scores should be None
+        assert!(scored.results[0].signal_scores.is_none());
+    }
 }
