@@ -13,7 +13,10 @@ pub async fn run(
     let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
     let stats = pipeline.vacuum(older_than_days).await?;
 
-    println!("Vacuum complete: {} deleted files purged", stats.purged_files);
+    println!(
+        "Vacuum complete: {} deleted files purged",
+        stats.purged_files
+    );
     println!("SQLite VACUUM and LanceDB optimize done.");
 
     Ok(())

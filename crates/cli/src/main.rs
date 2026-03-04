@@ -554,22 +554,22 @@ async fn async_main(cli: Cli) -> Result<()> {
                 DaemonAction::Status => daemon.status()?,
             }
         }
-        Command::Reindex { full, file } => {
-            match (full, file) {
-                (Some(notes_path), None) => {
-                    commands::reindex::run_full(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
-                }
-                (None, Some(file_path)) => {
-                    commands::reindex::run_file(file_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
-                }
-                (Some(_), Some(_)) => {
-                    anyhow::bail!("Cannot specify both --full and --file");
-                }
-                (None, None) => {
-                    anyhow::bail!("Must specify either --full <path> or --file <path>");
-                }
+        Command::Reindex { full, file } => match (full, file) {
+            (Some(notes_path), None) => {
+                commands::reindex::run_full(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
+                    .await?
             }
-        }
+            (None, Some(file_path)) => {
+                commands::reindex::run_file(file_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
+                    .await?
+            }
+            (Some(_), Some(_)) => {
+                anyhow::bail!("Cannot specify both --full and --file");
+            }
+            (None, None) => {
+                anyhow::bail!("Must specify either --full <path> or --file <path>");
+            }
+        },
         Command::Vacuum { older_than } => {
             commands::vacuum::run(cli.model_dir, cli.lance_db, cli.sqlite_db, older_than).await?
         }

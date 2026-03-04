@@ -137,9 +137,8 @@ pub fn clear_content_hash_by_path(conn: &Connection, path: &str) -> Result<bool>
 /// Hard-delete files where `deleted_at` is older than the given threshold (Unix seconds).
 /// Returns the list of file_ids that were purged.
 pub fn purge_deleted_files(conn: &Connection, older_than_ts: i64) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare(
-        "SELECT file_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT file_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < ?1")?;
     let rows = stmt.query_map([older_than_ts], |row| row.get::<_, String>(0))?;
     let file_ids: Vec<String> = super::collect_rows(rows)?;
 
@@ -155,9 +154,8 @@ pub fn purge_deleted_files(conn: &Connection, older_than_ts: i64) -> Result<Vec<
 
 /// Get all active file_ids with their content hashes for doctor verification.
 pub fn get_files_with_hashes(conn: &Connection) -> Result<Vec<(String, String, Option<String>)>> {
-    let mut stmt = conn.prepare(
-        "SELECT file_id, path, content_hash FROM files WHERE deleted_at IS NULL",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT file_id, path, content_hash FROM files WHERE deleted_at IS NULL")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
     super::collect_rows(rows)
 }
@@ -371,7 +369,11 @@ mod tests {
 
         // File should be completely gone
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM files WHERE file_id = ?1", [&fid], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE file_id = ?1",
+                [&fid],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count, 0);
     }

@@ -511,9 +511,7 @@ impl IndexPipeline {
     /// Force re-index all files: clear all content hashes, then run full_scan + optimize.
     #[instrument(skip(self))]
     pub async fn reindex_full(&self, dirs: &[PathBuf]) -> crate::error::Result<ScanStats> {
-        let cleared = self
-            .db
-            .with_write_conn(files::clear_all_content_hashes)?;
+        let cleared = self.db.with_write_conn(files::clear_all_content_hashes)?;
         info!(cleared, "cleared all content hashes for full reindex");
 
         let stats = self.full_scan(dirs).await?;
@@ -583,9 +581,8 @@ impl IndexPipeline {
 
         // 1. Orphan chunks in LanceDB (file_id not in SQLite)
         let lance_file_ids = self.store.get_file_ids_with_chunks().await?;
-        let sqlite_file_ids: std::collections::HashSet<String> = self
-            .db
-            .with_read_conn(|conn| {
+        let sqlite_file_ids: std::collections::HashSet<String> =
+            self.db.with_read_conn(|conn| {
                 let pairs = files::get_all_active_paths(conn)?;
                 Ok(pairs.into_iter().map(|(fid, _)| fid).collect())
             })?;
@@ -594,12 +591,19 @@ impl IndexPipeline {
             .filter(|fid| !sqlite_file_ids.contains(*fid))
             .collect();
         if orphan_ids.is_empty() {
-            report.add("Orphan chunks", CheckStatus::Ok, "no orphan chunks in LanceDB");
+            report.add(
+                "Orphan chunks",
+                CheckStatus::Ok,
+                "no orphan chunks in LanceDB",
+            );
         } else {
             report.add(
                 "Orphan chunks",
                 CheckStatus::Problem,
-                format!("{} file_id(s) in LanceDB with no matching SQLite entry", orphan_ids.len()),
+                format!(
+                    "{} file_id(s) in LanceDB with no matching SQLite entry",
+                    orphan_ids.len()
+                ),
             );
         }
 
@@ -609,19 +613,24 @@ impl IndexPipeline {
             .filter(|fid| !lance_file_ids.contains(*fid))
             .collect();
         if missing.is_empty() {
-            report.add("Missing chunks", CheckStatus::Ok, "all SQLite files have LanceDB chunks");
+            report.add(
+                "Missing chunks",
+                CheckStatus::Ok,
+                "all SQLite files have LanceDB chunks",
+            );
         } else {
             report.add(
                 "Missing chunks",
                 CheckStatus::Warning,
-                format!("{} file(s) in SQLite have no chunks in LanceDB", missing.len()),
+                format!(
+                    "{} file(s) in SQLite have no chunks in LanceDB",
+                    missing.len()
+                ),
             );
         }
 
         // 3. Content hash mismatches (stored hash vs actual file on disk)
-        let files_with_hashes = self
-            .db
-            .with_read_conn(files::get_files_with_hashes)?;
+        let files_with_hashes = self.db.with_read_conn(files::get_files_with_hashes)?;
         let mut hash_mismatches = 0;
         let mut hash_errors = 0;
         for (_file_id, path, stored_hash) in &files_with_hashes {
@@ -640,7 +649,11 @@ impl IndexPipeline {
             }
         }
         if hash_mismatches == 0 && hash_errors == 0 {
-            report.add("Content hashes", CheckStatus::Ok, "all hashes match on-disk content");
+            report.add(
+                "Content hashes",
+                CheckStatus::Ok,
+                "all hashes match on-disk content",
+            );
         } else {
             let mut detail = Vec::new();
             if hash_mismatches > 0 {
@@ -651,7 +664,11 @@ impl IndexPipeline {
             }
             report.add(
                 "Content hashes",
-                if hash_mismatches > 0 { CheckStatus::Problem } else { CheckStatus::Warning },
+                if hash_mismatches > 0 {
+                    CheckStatus::Problem
+                } else {
+                    CheckStatus::Warning
+                },
                 detail.join(", "),
             );
         }
@@ -681,14 +698,22 @@ impl IndexPipeline {
                 }
             }
             Err(e) => {
-                report.add("FTS5 consistency", CheckStatus::Problem, format!("query error: {e}"));
+                report.add(
+                    "FTS5 consistency",
+                    CheckStatus::Problem,
+                    format!("query error: {e}"),
+                );
             }
         }
 
         // 5. Stuck files
         let stuck = self.db.with_read_conn(files::find_stuck_files)?;
         if stuck.is_empty() {
-            report.add("Stuck files", CheckStatus::Ok, "no files stuck in indexing_started");
+            report.add(
+                "Stuck files",
+                CheckStatus::Ok,
+                "no files stuck in indexing_started",
+            );
         } else {
             report.add(
                 "Stuck files",
@@ -701,7 +726,9 @@ impl IndexPipeline {
         let dirs_owned: Vec<PathBuf> = dirs.to_vec();
         let scanned = tokio::task::spawn_blocking(move || scan_brain(&dirs_owned))
             .await
-            .map_err(|e| crate::error::BrainCoreError::Internal(format!("scan task panicked: {e}")))?;
+            .map_err(|e| {
+                crate::error::BrainCoreError::Internal(format!("scan task panicked: {e}"))
+            })?;
         let disk_count = scanned.len();
         let indexed_count = files_with_hashes
             .iter()

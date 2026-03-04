@@ -35,7 +35,10 @@ pub async fn run_file(
     if indexed {
         println!("Re-indexed: {}", abs_path.display());
     } else {
-        println!("File unchanged (empty after re-check): {}", abs_path.display());
+        println!(
+            "File unchanged (empty after re-check): {}",
+            abs_path.display()
+        );
     }
 
     Ok(())

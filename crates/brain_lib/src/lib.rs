@@ -1,7 +1,7 @@
 pub mod capsule;
-pub mod doctor;
 pub mod chunker;
 pub mod db;
+pub mod doctor;
 pub mod embedder;
 pub mod error;
 pub mod hash_gate;
@@ -24,13 +24,13 @@ pub mod work_queue;
 pub mod prelude {
     pub use crate::chunker::{Chunk, chunk_document, chunk_text};
     pub use crate::db::Db;
+    pub use crate::doctor::{CheckStatus, DoctorReport};
     pub use crate::embedder::{Embed, Embedder};
     pub use crate::error::{BrainCoreError, Result};
     pub use crate::hash_gate::{GateVerdict, HashGate};
     pub use crate::links::{Link, extract_links};
     pub use crate::metrics::Metrics;
     pub use crate::parser::{ParsedDocument, parse_document};
-    pub use crate::doctor::{CheckStatus, DoctorReport};
     pub use crate::pipeline::{IndexPipeline, ScanStats, VacuumStats};
     pub use crate::query_pipeline::QueryPipeline;
     pub use crate::ranking::{RankedResult, WeightProfile};

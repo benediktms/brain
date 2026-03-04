@@ -47,9 +47,7 @@ impl DoctorReport {
 
     /// True if all checks passed (no warnings or problems).
     pub fn is_healthy(&self) -> bool {
-        self.checks
-            .iter()
-            .all(|c| c.status == CheckStatus::Ok)
+        self.checks.iter().all(|c| c.status == CheckStatus::Ok)
     }
 
     /// Count of checks with Problem status.

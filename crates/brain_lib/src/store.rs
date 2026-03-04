@@ -324,7 +324,9 @@ impl Store {
     }
 
     /// Get all distinct file_ids that have chunks in LanceDB.
-    pub async fn get_file_ids_with_chunks(&self) -> crate::error::Result<std::collections::HashSet<String>> {
+    pub async fn get_file_ids_with_chunks(
+        &self,
+    ) -> crate::error::Result<std::collections::HashSet<String>> {
         use futures::TryStreamExt;
         use lancedb::query::{ExecutableQuery, QueryBase};
 
@@ -356,7 +358,10 @@ impl Store {
     }
 
     /// Delete all chunks for the given file_ids (bulk orphan cleanup).
-    pub async fn delete_chunks_by_file_ids(&self, file_ids: &[String]) -> crate::error::Result<usize> {
+    pub async fn delete_chunks_by_file_ids(
+        &self,
+        file_ids: &[String],
+    ) -> crate::error::Result<usize> {
         if file_ids.is_empty() {
             return Ok(0);
         }
