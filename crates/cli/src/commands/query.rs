@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use brain_lib::embedder::{Embed, Embedder};
+use brain_lib::metrics::Metrics;
 use brain_lib::prelude::*;
 use brain_lib::query_pipeline::QueryPipeline;
 
@@ -20,7 +21,8 @@ pub async fn run(
     let store_reader = brain_lib::store::StoreReader::from_store(&store);
     let db = brain_lib::db::Db::open(&sqlite_path)?;
 
-    let pipeline = QueryPipeline::new(&db, &store_reader, &embedder_arc);
+    let metrics = Arc::new(Metrics::new());
+    let pipeline = QueryPipeline::new(&db, &store_reader, &embedder_arc, &metrics);
     let search_result = pipeline.search(&query, "auto", 800, top_k).await?;
 
     if search_result.results.is_empty() {
