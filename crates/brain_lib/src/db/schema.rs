@@ -8,7 +8,7 @@ use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-const SCHEMA_VERSION: i32 = 6;
+pub(crate) const SCHEMA_VERSION: i32 = 6;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///

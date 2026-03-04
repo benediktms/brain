@@ -1,0 +1,494 @@
+//! Migration test harness: loads schema snapshots at historical versions,
+//! runs migrations, and validates post-migration invariants.
+//!
+//! Each test creates a database frozen at an older schema version, seeds it
+//! with representative data, then calls `init_schema` to bring it to the
+//! current version. Assertions verify:
+//!
+//! - Schema version is stamped correctly
+//! - All expected tables and indexes exist
+//! - Seeded data survives the migration intact
+//! - FTS5 virtual table and triggers are present
+
+use rusqlite::Connection;
+
+use super::migrations::{
+    migrate_v0_to_v1, migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5,
+    migrate_v5_to_v6,
+};
+use super::schema::{SCHEMA_VERSION, init_schema};
+
+// ─── Snapshot helpers ────────────────────────────────────────────
+
+/// Create an in-memory database frozen at a specific schema version.
+///
+/// Runs migrations 0..version sequentially, producing a database that
+/// looks exactly like one created when that version was current.
+fn snapshot_at_version(version: i32) -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+    for v in 0..version {
+        match v {
+            0 => migrate_v0_to_v1(&conn).unwrap(),
+            1 => migrate_v1_to_v2(&conn).unwrap(),
+            2 => migrate_v2_to_v3(&conn).unwrap(),
+            3 => migrate_v3_to_v4(&conn).unwrap(),
+            4 => migrate_v4_to_v5(&conn).unwrap(),
+            5 => migrate_v5_to_v6(&conn).unwrap(),
+            _ => panic!("no snapshot migration for version {v}"),
+        }
+    }
+    conn
+}
+
+/// Seed core tables (files + chunks) available from v1 onward.
+fn seed_v1_data(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO files (file_id, path, content_hash, indexing_state)
+         VALUES ('f1', '/notes/hello.md', 'abc123', 'indexed')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content)
+         VALUES ('f1:0', 'f1', 0, 'h0', 'hello world')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content)
+         VALUES ('f1:1', 'f1', 1, 'h1', 'second chunk')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO links (link_id, source_file_id, target_path, link_type)
+         VALUES ('l1', 'f1', '/notes/other.md', 'wiki')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO summaries (summary_id, kind, content, created_at, updated_at)
+         VALUES ('s1', 'episode', 'a summary', 1000, 1000)",
+        [],
+    )
+    .unwrap();
+}
+
+/// Seed task tables available from v2 onward.
+fn seed_v2_data(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO tasks (task_id, title, status, priority, created_at, updated_at)
+         VALUES ('t1', 'Fix bug', 'open', 1, 1000, 1000)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO tasks (task_id, title, status, priority, created_at, updated_at)
+         VALUES ('t2', 'Add feature', 'in_progress', 2, 1001, 1001)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO task_deps (task_id, depends_on) VALUES ('t2', 't1')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO task_events (event_id, task_id, event_type, timestamp, actor)
+         VALUES ('e1', 't1', 'created', 1000, 'user')",
+        [],
+    )
+    .unwrap();
+}
+
+/// Seed v3-specific data (labels, comments).
+fn seed_v3_data(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO task_labels (task_id, label) VALUES ('t1', 'bug')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO task_comments (comment_id, task_id, author, body, created_at)
+         VALUES ('c1', 't1', 'alice', 'looks good', 2000)",
+        [],
+    )
+    .unwrap();
+}
+
+// ─── Invariant assertions ────────────────────────────────────────
+
+/// All tables that must exist at the current schema version.
+const EXPECTED_TABLES: &[&str] = &[
+    "files",
+    "chunks",
+    "links",
+    "summaries",
+    "reflection_sources",
+    "tasks",
+    "task_deps",
+    "task_note_links",
+    "task_events",
+    "task_labels",
+    "task_comments",
+    "brain_meta",
+];
+
+/// All named indexes that must exist at the current schema version.
+const EXPECTED_INDEXES: &[&str] = &[
+    "idx_chunks_file_id",
+    "idx_links_source",
+    "idx_links_target",
+    "idx_summaries_kind",
+    "idx_tasks_parent",
+    "idx_tasks_status",
+    "idx_tasks_defer_until",
+    "idx_task_deps_depends_on",
+    "idx_task_comments_task_id",
+    "idx_task_events_task_id",
+];
+
+/// FTS5 triggers that must exist.
+const EXPECTED_TRIGGERS: &[&str] = &[
+    "chunks_fts_delete",
+    "chunks_fts_insert",
+    "chunks_fts_update",
+];
+
+fn assert_schema_version(conn: &Connection, expected: i32) {
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, expected, "schema version mismatch");
+}
+
+fn assert_tables_exist(conn: &Connection) {
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for expected in EXPECTED_TABLES {
+        assert!(
+            tables.contains(&expected.to_string()),
+            "missing table: {expected} (found: {tables:?})"
+        );
+    }
+}
+
+fn assert_indexes_exist(conn: &Connection) {
+    let indexes: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%' ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for expected in EXPECTED_INDEXES {
+        assert!(
+            indexes.contains(&expected.to_string()),
+            "missing index: {expected} (found: {indexes:?})"
+        );
+    }
+}
+
+fn assert_fts5_exists(conn: &Connection) {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'fts_chunks'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(count > 0, "fts_chunks virtual table should exist");
+
+    let triggers: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'chunks_fts_%' ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for expected in EXPECTED_TRIGGERS {
+        assert!(
+            triggers.contains(&expected.to_string()),
+            "missing trigger: {expected} (found: {triggers:?})"
+        );
+    }
+}
+
+fn assert_row_count(conn: &Connection, table: &str, expected: i64) {
+    let count: i64 = conn
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        count, expected,
+        "row count mismatch for {table}: got {count}, expected {expected}"
+    );
+}
+
+/// Assert all post-migration structural invariants.
+fn assert_full_invariants(conn: &Connection) {
+    assert_schema_version(conn, SCHEMA_VERSION);
+    assert_tables_exist(conn);
+    assert_indexes_exist(conn);
+    assert_fts5_exists(conn);
+}
+
+// ─── Migration tests from each historical version ────────────────
+
+#[test]
+fn migrate_from_v0_to_current() {
+    let conn = snapshot_at_version(0);
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+}
+
+#[test]
+fn migrate_from_v1_to_current() {
+    let conn = snapshot_at_version(1);
+    seed_v1_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    assert_row_count(&conn, "files", 1);
+    assert_row_count(&conn, "chunks", 2);
+    assert_row_count(&conn, "links", 1);
+    assert_row_count(&conn, "summaries", 1);
+}
+
+#[test]
+fn migrate_from_v2_to_current() {
+    let conn = snapshot_at_version(2);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    assert_row_count(&conn, "files", 1);
+    assert_row_count(&conn, "chunks", 2);
+    assert_row_count(&conn, "tasks", 2);
+    assert_row_count(&conn, "task_deps", 1);
+    assert_row_count(&conn, "task_events", 1);
+}
+
+#[test]
+fn migrate_from_v3_to_current() {
+    let conn = snapshot_at_version(3);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+    seed_v3_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    assert_row_count(&conn, "files", 1);
+    assert_row_count(&conn, "chunks", 2);
+    assert_row_count(&conn, "tasks", 2);
+    assert_row_count(&conn, "task_labels", 1);
+    assert_row_count(&conn, "task_comments", 1);
+
+    // v3 added task_type column — verify default value survived
+    let task_type: String = conn
+        .query_row(
+            "SELECT task_type FROM tasks WHERE task_id = 't1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(task_type, "task");
+}
+
+#[test]
+fn migrate_from_v4_to_current() {
+    let conn = snapshot_at_version(4);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+    seed_v3_data(&conn);
+
+    // v4 adds parent_task_id — set a parent relationship
+    conn.execute(
+        "UPDATE tasks SET parent_task_id = 't1' WHERE task_id = 't2'",
+        [],
+    )
+    .unwrap();
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    // Verify parent relationship survived
+    let parent: Option<String> = conn
+        .query_row(
+            "SELECT parent_task_id FROM tasks WHERE task_id = 't2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent, Some("t1".to_string()));
+}
+
+#[test]
+fn migrate_from_v5_to_current() {
+    let conn = snapshot_at_version(5);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+    seed_v3_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    // v5→v6 adds brain_meta table — verify it's functional
+    conn.execute(
+        "INSERT INTO brain_meta (key, value) VALUES ('test_key', 'test_value')",
+        [],
+    )
+    .unwrap();
+    let val: String = conn
+        .query_row(
+            "SELECT value FROM brain_meta WHERE key = 'test_key'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(val, "test_value");
+}
+
+// ─── Snapshot fixture on disk ────────────────────────────────────
+
+#[test]
+fn migrate_on_disk_snapshot_from_v3() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("snapshot_v3.db");
+
+    // Create a v3 database on disk with real data
+    {
+        let conn = Connection::open(&db_path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_v0_to_v1(&conn).unwrap();
+        migrate_v1_to_v2(&conn).unwrap();
+        migrate_v2_to_v3(&conn).unwrap();
+        seed_v1_data(&conn);
+        seed_v2_data(&conn);
+        seed_v3_data(&conn);
+    }
+
+    // Reopen with Db::open — triggers init_schema which runs v3→v4→v5→v6
+    let db = crate::db::Db::open(&db_path).unwrap();
+
+    db.with_read_conn(|conn| {
+        assert_full_invariants(conn);
+        assert_row_count(conn, "files", 1);
+        assert_row_count(conn, "chunks", 2);
+        assert_row_count(conn, "tasks", 2);
+        assert_row_count(conn, "task_labels", 1);
+        assert_row_count(conn, "task_comments", 1);
+        Ok(())
+    })
+    .unwrap();
+}
+
+// ─── Edge cases ──────────────────────────────────────────────────
+
+#[test]
+fn migrate_idempotent_from_current() {
+    let conn = snapshot_at_version(SCHEMA_VERSION);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+
+    // Running init_schema on an already-current DB should be a no-op
+    init_schema(&conn).unwrap();
+    init_schema(&conn).unwrap();
+
+    assert_full_invariants(&conn);
+    assert_row_count(&conn, "files", 1);
+    assert_row_count(&conn, "tasks", 2);
+}
+
+#[test]
+fn migrate_preserves_foreign_keys() {
+    let conn = snapshot_at_version(1);
+    seed_v1_data(&conn);
+
+    init_schema(&conn).unwrap();
+
+    // Rebuild FTS5 so the delete trigger can find the rows it needs to remove
+    conn.execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')", [])
+        .unwrap();
+
+    // Deleting a file should cascade-delete its chunks and links
+    conn.execute("DELETE FROM files WHERE file_id = 'f1'", [])
+        .unwrap();
+
+    assert_row_count(&conn, "chunks", 0);
+    assert_row_count(&conn, "links", 0);
+}
+
+#[test]
+fn migrate_fts5_works_after_migration() {
+    let conn = snapshot_at_version(1);
+    seed_v1_data(&conn);
+
+    init_schema(&conn).unwrap();
+
+    // FTS5 should index the chunks that existed before migration
+    // Since ensure_fts5 recreates triggers, we need to rebuild FTS content
+    conn.execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')", [])
+        .unwrap();
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'hello'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "FTS5 should find seeded chunk content");
+}
+
+#[test]
+fn migrate_v2_tasks_gain_v3_columns() {
+    let conn = snapshot_at_version(2);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+
+    init_schema(&conn).unwrap();
+
+    // Tasks created at v2 should now have v3 columns with defaults
+    let row: (String, Option<String>, Option<i64>) = conn
+        .query_row(
+            "SELECT task_type, assignee, defer_until FROM tasks WHERE task_id = 't1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row.0, "task");
+    assert_eq!(row.1, None);
+    assert_eq!(row.2, None);
+
+    // v4 column: parent_task_id should also exist with NULL default
+    let parent: Option<String> = conn
+        .query_row(
+            "SELECT parent_task_id FROM tasks WHERE task_id = 't1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(parent, None);
+}
