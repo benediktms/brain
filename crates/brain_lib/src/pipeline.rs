@@ -199,6 +199,9 @@ impl IndexPipeline {
                 Ok(c) => c,
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "failed to read file in batch");
+                    self.metrics
+                        .indexing_errors
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     stats.errors += 1;
                     continue;
                 }
@@ -210,6 +213,9 @@ impl IndexPipeline {
                 Ok(v) => v,
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "hash gate error in batch");
+                    self.metrics
+                        .indexing_errors
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     stats.errors += 1;
                     continue;
                 }
@@ -361,6 +367,9 @@ impl IndexPipeline {
                         error = %e,
                         "failed to upsert file in batch"
                     );
+                    self.metrics
+                        .indexing_errors
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     stats.errors += 1;
                 }
             }
@@ -442,7 +451,12 @@ impl IndexPipeline {
         }
 
         // 2. Scan disk for all markdown files
-        let scanned_files = scan_brain(dirs);
+        let dirs_owned: Vec<PathBuf> = dirs.to_vec();
+        let scanned_files = tokio::task::spawn_blocking(move || scan_brain(&dirs_owned))
+            .await
+            .map_err(|e| {
+                crate::error::BrainCoreError::Internal(format!("scan task panicked: {e}"))
+            })?;
         let disk_paths: std::collections::HashSet<String> = scanned_files
             .iter()
             .map(|f| f.path.to_string_lossy().to_string())
