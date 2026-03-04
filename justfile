@@ -56,6 +56,12 @@ clean:
 watch notes_path=".": ensure-binary
     {{bin}} watch {{notes_path}}
 
+# Watch with JSON structured logs written to .brain/brain.log
+[group('app')]
+watch-log notes_path=".": ensure-binary
+    @mkdir -p .brain
+    BRAIN_LOG_FORMAT=json {{bin}} watch {{notes_path}} 2>.brain/brain.log
+
 # Available actions: start, stop, status. e.g. "just daemon start ./notes"
 [group('app')]
 daemon +args: ensure-binary

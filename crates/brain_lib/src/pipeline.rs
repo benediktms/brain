@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
+use crate::metrics::Metrics;
 use rusqlite::OptionalExtension;
 
 use crate::db::Db;
@@ -45,6 +46,7 @@ pub struct IndexPipeline {
     db: Db,
     store: Store,
     embedder: Arc<dyn Embed>,
+    metrics: Arc<Metrics>,
 }
 
 impl IndexPipeline {
@@ -76,6 +78,7 @@ impl IndexPipeline {
             db,
             store,
             embedder: Arc::new(embedder),
+            metrics: Arc::new(Metrics::new()),
         })
     }
 
@@ -85,6 +88,7 @@ impl IndexPipeline {
             db,
             store,
             embedder,
+            metrics: Arc::new(Metrics::new()),
         }
     }
 
@@ -103,14 +107,22 @@ impl IndexPipeline {
         &self.embedder
     }
 
+    /// Get a reference to the metrics.
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
+    }
+
     /// Index a single file. Returns true if it was actually re-indexed (not skipped).
+    #[instrument(skip(self))]
     pub async fn index_file(&self, path: &Path) -> crate::error::Result<bool> {
+        let start = std::time::Instant::now();
         let content = tokio::fs::read_to_string(path).await?;
         let path_str = path.to_string_lossy().to_string();
 
         let gate = HashGate::new(&self.db);
         let verdict = gate.check(&path_str, &content)?;
         if !verdict.should_index {
+            self.metrics.record_stale_hash_prevented();
             return Ok(false);
         }
 
@@ -168,11 +180,13 @@ impl IndexPipeline {
         // Mark indexed (sets hash + state=indexed)
         gate.mark_passed(&verdict.file_id, &verdict.hash)?;
 
+        self.metrics.record_index_latency(start.elapsed());
         Ok(true)
     }
 
     /// Batch-index multiple files. Groups chunks across files and flushes
     /// in waves when the pending chunk count exceeds MAX_PENDING_CHUNKS.
+    #[instrument(skip(self))]
     pub async fn index_files_batch(&self, paths: &[PathBuf]) -> crate::error::Result<ScanStats> {
         let mut stats = ScanStats::default();
         let mut pending: Vec<PendingFile> = Vec::new();
@@ -202,6 +216,7 @@ impl IndexPipeline {
             };
 
             if !verdict.should_index {
+                self.metrics.record_stale_hash_prevented();
                 stats.skipped += 1;
                 continue;
             }
@@ -266,6 +281,7 @@ impl IndexPipeline {
 
     /// Flush a wave of pending files: embed all chunks in one batch call,
     /// then redistribute embeddings and upsert per-file.
+    #[instrument(skip_all)]
     async fn flush_wave(
         &self,
         pending: &mut Vec<PendingFile>,
@@ -291,6 +307,7 @@ impl IndexPipeline {
         let drained: Vec<PendingFile> = std::mem::take(pending);
 
         for (pf, &(offset_start, chunk_count)) in drained.iter().zip(offsets.iter()) {
+            let file_start = std::time::Instant::now();
             let file_embeddings = &all_embeddings[offset_start..offset_start + chunk_count];
 
             let chunk_metas: Vec<ChunkMeta> = pf
@@ -334,7 +351,10 @@ impl IndexPipeline {
             }
             .await
             {
-                Ok(()) => stats.indexed += 1,
+                Ok(()) => {
+                    self.metrics.record_index_latency(file_start.elapsed());
+                    stats.indexed += 1;
+                }
                 Err(e) => {
                     warn!(
                         path = %pf.path_str,
@@ -395,6 +415,7 @@ impl IndexPipeline {
     }
 
     /// Full scan: index all files, detect deletions, recover stuck states.
+    #[instrument(skip(self))]
     pub async fn full_scan(&self, dirs: &[PathBuf]) -> crate::error::Result<ScanStats> {
         let start = std::time::Instant::now();
         let mut stats = ScanStats::default();
@@ -467,6 +488,7 @@ impl IndexPipeline {
     }
 
     /// Handle a single file event from the watcher.
+    #[instrument(skip(self))]
     pub async fn handle_event(&self, event: crate::watcher::FileEvent) -> crate::error::Result<()> {
         match event {
             crate::watcher::FileEvent::Created(path) | crate::watcher::FileEvent::Changed(path) => {

@@ -11,7 +11,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use lancedb::table::OptimizeAction;
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use crate::error::BrainCoreError;
 
@@ -239,6 +239,7 @@ impl Store {
     /// - Matched chunks (by chunk_id) are updated
     /// - New chunks are inserted
     /// - Orphaned chunks for this file_id are deleted
+    #[instrument(skip_all)]
     pub async fn upsert_chunks(
         &self,
         file_id: &str,
@@ -309,6 +310,7 @@ impl Store {
     }
 
     /// Delete all chunks for a given file_id.
+    #[instrument(skip_all)]
     pub async fn delete_file_chunks(&self, file_id: &str) -> crate::error::Result<()> {
         self.table
             .delete(&format!("file_id = '{}'", validate_file_id(file_id)?))
@@ -322,6 +324,7 @@ impl Store {
     }
 
     /// Search for the top-k most similar chunks to the given embedding.
+    #[instrument(skip_all)]
     pub async fn query(
         &self,
         embedding: &[f32],

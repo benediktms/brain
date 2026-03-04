@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tracing::warn;
+use tracing::{instrument, warn};
 
 use crate::db::Db;
 use crate::db::chunks::get_chunks_by_ids;
@@ -47,6 +47,7 @@ impl<'a> QueryPipeline<'a> {
     }
 
     /// Hybrid search: vector + FTS union, enriched, ranked, packed within budget.
+    #[instrument(skip_all)]
     pub async fn search(
         &self,
         query: &str,
@@ -197,6 +198,7 @@ impl<'a> QueryPipeline<'a> {
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.
+    #[instrument(skip_all)]
     pub async fn expand(
         &self,
         memory_ids: &[String],
@@ -224,6 +226,7 @@ impl<'a> QueryPipeline<'a> {
     }
 
     /// Reflect: fetch recent episodes + search for related chunks, return combined result.
+    #[instrument(skip_all)]
     pub async fn reflect(&self, topic: String, budget_tokens: usize) -> Result<ReflectResult> {
         let episodes = self
             .db

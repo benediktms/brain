@@ -3,6 +3,7 @@ mod mem_expand;
 mod mem_reflect;
 mod mem_search_minimal;
 mod mem_write_episode;
+mod status;
 mod task_apply_event;
 mod task_get;
 mod task_list;
@@ -240,6 +241,14 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                 }
             }),
         },
+        ToolDefinition {
+            name: "status".into(),
+            description: "Get runtime health metrics: indexing/query latency (p50/p95), stale hash prevention count, token usage, queue depth, LanceDB unoptimized rows, stuck files, and uptime.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
     ]
 }
 
@@ -254,6 +263,7 @@ pub async fn dispatch_tool_call(name: &str, params: &Value, ctx: &McpContext) ->
         "tasks.get" => task_get::handle(params, ctx),
         "tasks.list" => task_list::handle(params, ctx),
         "tasks.next" => task_next::handle(params, ctx),
+        "status" => status::handle(ctx).await,
         _ => ToolCallResult::error(format!("Unknown tool: {name}")),
     }
 }
@@ -269,7 +279,7 @@ mod tests {
     #[test]
     fn test_tool_definitions_valid() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 8);
+        assert_eq!(defs.len(), 9);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
@@ -320,6 +330,7 @@ mod tests {
                 store: store_reader,
                 embedder,
                 tasks,
+                metrics: Arc::new(crate::metrics::Metrics::new()),
             },
         )
     }

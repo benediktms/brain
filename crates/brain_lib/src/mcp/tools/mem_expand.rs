@@ -26,6 +26,9 @@ pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         }
     };
 
+    ctx.metrics
+        .record_expand_tokens(expand_result.used_tokens_est);
+
     let memories_json: Vec<Value> = expand_result
         .memories
         .iter()

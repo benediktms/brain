@@ -13,6 +13,7 @@ use tracing::{debug, error, info};
 
 use crate::db::Db;
 use crate::embedder::Embed;
+use crate::metrics::Metrics;
 use crate::store::StoreReader;
 use crate::tasks::TaskStore;
 
@@ -28,6 +29,7 @@ pub struct McpContext {
     pub store: StoreReader,
     pub embedder: Arc<dyn Embed>,
     pub tasks: TaskStore,
+    pub metrics: Arc<Metrics>,
 }
 
 /// Run the MCP server, reading JSON-RPC from stdin and writing to stdout.
@@ -135,7 +137,14 @@ async fn handle_request(req: JsonRpcRequest, ctx: &McpContext) -> String {
                 .cloned()
                 .unwrap_or(Value::Object(serde_json::Map::new()));
 
+            let call_start = std::time::Instant::now();
             let result = dispatch_tool_call(tool_name, &arguments, ctx).await;
+            if matches!(
+                tool_name,
+                "memory.search_minimal" | "memory.expand" | "memory.reflect"
+            ) {
+                ctx.metrics.record_query_latency(call_start.elapsed());
+            }
             serialize_response(&JsonRpcResponse::new(
                 id,
                 serde_json::to_value(result).unwrap(),
@@ -221,7 +230,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"memory.search_minimal"));

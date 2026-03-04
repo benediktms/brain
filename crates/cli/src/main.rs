@@ -427,10 +427,23 @@ fn main() -> Result<()> {
 }
 
 async fn async_main(cli: Cli) -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
-        .with_writer(std::io::stderr)
-        .init();
+    let env_filter = EnvFilter::from_default_env().add_directive("info".parse()?);
+    let use_json = std::env::var("BRAIN_LOG_FORMAT")
+        .map(|v| v.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+
+    if use_json {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(std::io::stderr)
+            .json()
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(std::io::stderr)
+            .init();
+    }
 
     match cli.command {
         Command::Index { notes_path } => {

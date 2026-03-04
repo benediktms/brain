@@ -29,6 +29,12 @@ pub async fn run(model_dir: PathBuf, lance_db: PathBuf, sqlite_db: PathBuf) -> R
         .join("tasks");
     let tasks_db = pipeline.db().clone();
     let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db)?;
+    // Rebuild SQLite projections from the JSONL event log so task queries
+    // reflect the full history (events may have been appended by other
+    // processes, e.g. `brain import`, since the last time this DB was open).
+    tasks.rebuild_projections()?;
+
+    let metrics = Arc::clone(pipeline.metrics());
 
     // Keep the pipeline alive so its internal LanceDB table handles remain valid.
     let _pipeline = pipeline;
@@ -38,6 +44,7 @@ pub async fn run(model_dir: PathBuf, lance_db: PathBuf, sqlite_db: PathBuf) -> R
         store: store_reader,
         embedder,
         tasks,
+        metrics,
     });
 
     brain_lib::mcp::run_server(ctx).await?;

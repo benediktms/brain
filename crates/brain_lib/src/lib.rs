@@ -6,6 +6,7 @@ pub mod error;
 pub mod hash_gate;
 pub mod links;
 pub mod mcp;
+pub mod metrics;
 pub mod parser;
 pub mod pipeline;
 pub mod query_pipeline;
@@ -25,6 +26,7 @@ pub mod prelude {
     pub use crate::error::{BrainCoreError, Result};
     pub use crate::hash_gate::{GateVerdict, HashGate};
     pub use crate::links::{Link, extract_links};
+    pub use crate::metrics::Metrics;
     pub use crate::parser::{ParsedDocument, parse_document};
     pub use crate::pipeline::{IndexPipeline, ScanStats};
     pub use crate::query_pipeline::QueryPipeline;
