@@ -17,6 +17,12 @@ use crate::error::BrainCoreError;
 
 const EMBEDDING_DIM: i32 = 384;
 
+/// Bump this whenever the LanceDB Arrow schema changes (new columns, type
+/// changes, vector dimension changes). On startup the pipeline compares the
+/// stored version in `brain_meta` against this constant and triggers a full
+/// table rebuild + content-hash clear when they differ.
+pub const LANCE_SCHEMA_VERSION: u32 = 1;
+
 const DEFAULT_ROW_THRESHOLD: u64 = 200;
 const DEFAULT_TIME_THRESHOLD: Duration = Duration::from_secs(300);
 
@@ -174,28 +180,10 @@ impl Store {
             .map_err(|e| BrainCoreError::VectorDb(format!("failed to list tables: {e}")))?;
 
         let table = if table_names.iter().any(|n| n == "chunks") {
-            let t = db
-                .open_table("chunks")
+            db.open_table("chunks")
                 .execute()
                 .await
-                .map_err(|e| BrainCoreError::VectorDb(format!("failed to open table: {e}")))?;
-
-            // POC migration: detect old schema (no file_id column) and recreate
-            if Self::needs_migration(&t).await {
-                info!("detected old POC schema without file_id column — recreating table");
-                db.drop_table("chunks", &[]).await.map_err(|e| {
-                    BrainCoreError::VectorDb(format!("failed to drop old table: {e}"))
-                })?;
-                let schema = chunks_schema();
-                let empty_batch = empty_record_batch(&schema);
-                let batches = RecordBatchIterator::new(vec![Ok(empty_batch)], Arc::new(schema));
-                db.create_table("chunks", Box::new(batches))
-                    .execute()
-                    .await
-                    .map_err(|e| BrainCoreError::VectorDb(format!("failed to create table: {e}")))?
-            } else {
-                t
-            }
+                .map_err(|e| BrainCoreError::VectorDb(format!("failed to open table: {e}")))?
         } else {
             let schema = chunks_schema();
             let empty_batch = empty_record_batch(&schema);
@@ -226,12 +214,56 @@ impl Store {
         &self.optimize_scheduler
     }
 
-    /// Check if the table uses the old POC schema (no file_id column).
-    async fn needs_migration(table: &lancedb::Table) -> bool {
-        match table.schema().await {
-            Ok(schema) => schema.field_with_name("file_id").is_err(),
-            Err(_) => false,
+    /// Drop the `chunks` table and recreate it with the current schema.
+    ///
+    /// Called when `LANCE_SCHEMA_VERSION` changes. The caller is responsible
+    /// for clearing content hashes in SQLite so all files get re-indexed.
+    pub async fn drop_and_recreate_table(&mut self) -> crate::error::Result<()> {
+        warn!("dropping and recreating LanceDB chunks table for schema upgrade");
+
+        self.db
+            .drop_table("chunks", &[])
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("failed to drop chunks table: {e}")))?;
+
+        let schema = chunks_schema();
+        let empty_batch = empty_record_batch(&schema);
+        let batches = RecordBatchIterator::new(vec![Ok(empty_batch)], Arc::new(schema));
+        let table = self
+            .db
+            .create_table("chunks", Box::new(batches))
+            .execute()
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("failed to recreate table: {e}")))?;
+
+        let table = Arc::new(table);
+        self.optimize_scheduler = OptimizeScheduler::new(
+            Arc::clone(&table),
+            DEFAULT_ROW_THRESHOLD,
+            DEFAULT_TIME_THRESHOLD,
+        );
+        self.table = table;
+
+        info!("LanceDB chunks table recreated with current schema");
+        Ok(())
+    }
+
+    /// Check whether the live table schema matches the expected `chunks_schema()`.
+    ///
+    /// Compares field names and types. Used for diagnostic logging — the version
+    /// number in `brain_meta` is the actual migration trigger, not this check.
+    pub async fn current_schema_matches_expected(&self) -> bool {
+        let Ok(live) = self.table.schema().await else {
+            return false;
+        };
+        let expected = chunks_schema();
+        if live.fields().len() != expected.fields().len() {
+            return false;
         }
+        live.fields()
+            .iter()
+            .zip(expected.fields())
+            .all(|(a, b)| a.name() == b.name() && a.data_type() == b.data_type())
     }
 
     /// Upsert chunks for a file using merge_insert.
@@ -704,5 +736,53 @@ mod tests {
         assert_eq!(sched.pending_count(), 5);
         sched.maybe_optimize().await;
         assert_eq!(sched.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_lance_schema_version_is_positive() {
+        assert!(LANCE_SCHEMA_VERSION >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_drop_and_recreate_table() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut store = Store::open_or_create(tmp.path()).await.unwrap();
+
+        // Insert a chunk so the table is non-empty
+        let embedding = vec![0.0f32; EMBEDDING_DIM as usize];
+        store
+            .upsert_chunks("file-1", "/test.md", &[(0, "hello world")], &[embedding])
+            .await
+            .unwrap();
+
+        // Verify data exists
+        let ids = store.get_file_ids_with_chunks().await.unwrap();
+        assert!(ids.contains("file-1"));
+
+        // Rebuild
+        store.drop_and_recreate_table().await.unwrap();
+
+        // Table should be empty but functional
+        let ids = store.get_file_ids_with_chunks().await.unwrap();
+        assert!(ids.is_empty(), "table should be empty after rebuild");
+
+        // Schema should match expected
+        assert!(store.current_schema_matches_expected().await);
+
+        // Should be able to insert again
+        let embedding = vec![0.0f32; EMBEDDING_DIM as usize];
+        store
+            .upsert_chunks("file-2", "/test2.md", &[(0, "new data")], &[embedding])
+            .await
+            .unwrap();
+        let ids = store.get_file_ids_with_chunks().await.unwrap();
+        assert!(ids.contains("file-2"));
+    }
+
+    #[tokio::test]
+    async fn test_current_schema_matches_expected() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let store = Store::open_or_create(tmp.path()).await.unwrap();
+        assert!(store.current_schema_matches_expected().await);
     }
 }

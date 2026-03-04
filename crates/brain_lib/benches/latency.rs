@@ -24,7 +24,9 @@ async fn setup() -> (IndexPipeline, TempDir) {
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder = Arc::new(MockEmbedder);
 
-    let pipeline = IndexPipeline::with_embedder(db, store, embedder);
+    let pipeline = IndexPipeline::with_embedder(db, store, embedder)
+        .await
+        .unwrap();
     (pipeline, tmp)
 }
 
