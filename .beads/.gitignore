@@ -33,6 +33,8 @@ dolt-server.pid
 dolt-server.log
 dolt-server.lock
 dolt-server.activity
+dolt-server.port
+dolt-monitor.pid
 
 # Legacy files (from pre-Dolt versions)
 *.db

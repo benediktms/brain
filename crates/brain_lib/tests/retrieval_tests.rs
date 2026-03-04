@@ -38,7 +38,9 @@ async fn setup() -> (IndexPipeline, TempDir) {
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder = Arc::new(MockEmbedder);
 
-    let pipeline = IndexPipeline::with_embedder(db, store, embedder);
+    let pipeline = IndexPipeline::with_embedder(db, store, embedder)
+        .await
+        .unwrap();
     (pipeline, tmp)
 }
 
@@ -530,7 +532,9 @@ async fn test_mcp_search_minimal_returns_results() {
     let db = Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
-    let pipeline = IndexPipeline::with_embedder(db, store, embedder);
+    let pipeline = IndexPipeline::with_embedder(db, store, embedder)
+        .await
+        .unwrap();
 
     write_md(
         &notes_dir,
@@ -594,7 +598,9 @@ async fn test_mcp_expand_returns_full_content() {
     let db = Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
-    let pipeline = IndexPipeline::with_embedder(db, store, embedder);
+    let pipeline = IndexPipeline::with_embedder(db, store, embedder)
+        .await
+        .unwrap();
 
     write_md(
         &notes_dir,
