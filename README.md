@@ -10,8 +10,8 @@ A local-first personal knowledge base daemon that indexes Markdown notes into a 
 | --------------------- | ------------------------------------------------------------- | ----------- |
 | 0 — POC               | Scaffolding, embedding model, vector store, CLI               | Done        |
 | 1 — MVP               | Incremental indexing, content hashing, file identity          | Done        |
-| 2 — Feature Complete  | Hybrid retrieval, MCP server, structured parsing, task system | In Progress |
-| 3 — Hardening         | Batching, concurrency, observability, index optimization      | Planned     |
+| 2 — Feature Complete  | Hybrid retrieval, MCP server, structured parsing, task system | Done        |
+| 3 — Hardening         | Batching, concurrency, observability, index optimization      | In Progress |
 | 4 — Release Candidate | Migrations, packaging, daemon lifecycle, test suite           | Planned     |
 
 ---
@@ -84,8 +84,11 @@ brain daemon start
 | `memory.expand`         | Fetch full chunk content for specific IDs from `search_minimal`. Truncates at budget.         |
 | `memory.write_episode`  | Record an episodic memory (goal, actions, outcome) with tags and importance.                  |
 | `memory.reflect`        | Two-phase: returns source material for synthesis, then stores the agent-generated reflection. |
-| `tasks.apply_event`     | Append a task event (`create`, `update`, `complete`, `block`, etc.) to the event log.         |
-| `tasks.next`            | Return highest-priority actionable tasks, filtering blocked and incomplete dependencies.      |
+| `tasks.apply_event`     | Apply a task event (create, update, status change, dependency, label, comment) via event sourcing. |
+| `tasks.get`             | Get a single task by ID with full details, relationships, comments, labels, and linked notes. |
+| `tasks.list`            | List tasks filtered by status (`all`, `ready`, `blocked`) or fetch specific tasks by ID.      |
+| `tasks.next`            | Return highest-priority ready tasks, sorted by priority or due date.                          |
+| `status`                | Get runtime health metrics: latency percentiles, token usage, queue depth, stuck files.       |
 
 ### Progressive Retrieval Pattern
 
