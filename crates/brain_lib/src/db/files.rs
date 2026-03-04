@@ -116,6 +116,52 @@ pub fn get_all_active_paths(conn: &Connection) -> Result<Vec<(String, String)>> 
     super::collect_rows(rows)
 }
 
+/// Clear all content hashes (forces full re-index on next scan).
+pub fn clear_all_content_hashes(conn: &Connection) -> Result<usize> {
+    let count = conn.execute(
+        "UPDATE files SET content_hash = NULL, indexing_state = 'idle' WHERE deleted_at IS NULL",
+        [],
+    )?;
+    Ok(count)
+}
+
+/// Clear content hash for a specific file path (forces re-index of that file).
+pub fn clear_content_hash_by_path(conn: &Connection, path: &str) -> Result<bool> {
+    let count = conn.execute(
+        "UPDATE files SET content_hash = NULL, indexing_state = 'idle' WHERE path = ?1 AND deleted_at IS NULL",
+        [path],
+    )?;
+    Ok(count > 0)
+}
+
+/// Hard-delete files where `deleted_at` is older than the given threshold (Unix seconds).
+/// Returns the list of file_ids that were purged.
+pub fn purge_deleted_files(conn: &Connection, older_than_ts: i64) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT file_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+    )?;
+    let rows = stmt.query_map([older_than_ts], |row| row.get::<_, String>(0))?;
+    let file_ids: Vec<String> = super::collect_rows(rows)?;
+
+    if !file_ids.is_empty() {
+        conn.execute(
+            "DELETE FROM files WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+            [older_than_ts],
+        )?;
+    }
+
+    Ok(file_ids)
+}
+
+/// Get all active file_ids with their content hashes for doctor verification.
+pub fn get_files_with_hashes(conn: &Connection) -> Result<Vec<(String, String, Option<String>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT file_id, path, content_hash FROM files WHERE deleted_at IS NULL",
+    )?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+    super::collect_rows(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +311,86 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "other file's chunks must not be affected");
+    }
+
+    #[test]
+    fn test_clear_all_content_hashes() {
+        let conn = setup();
+        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
+        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        mark_indexed(&conn, &fid1, "hash1").unwrap();
+        mark_indexed(&conn, &fid2, "hash2").unwrap();
+
+        let cleared = clear_all_content_hashes(&conn).unwrap();
+        assert_eq!(cleared, 2);
+
+        assert_eq!(get_content_hash(&conn, &fid1).unwrap(), None);
+        assert_eq!(get_content_hash(&conn, &fid2).unwrap(), None);
+    }
+
+    #[test]
+    fn test_clear_content_hash_by_path() {
+        let conn = setup();
+        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
+        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        mark_indexed(&conn, &fid1, "hash1").unwrap();
+        mark_indexed(&conn, &fid2, "hash2").unwrap();
+
+        let found = clear_content_hash_by_path(&conn, "/notes/a.md").unwrap();
+        assert!(found);
+
+        assert_eq!(get_content_hash(&conn, &fid1).unwrap(), None);
+        // b.md untouched
+        assert_eq!(
+            get_content_hash(&conn, &fid2).unwrap(),
+            Some("hash2".to_string())
+        );
+
+        // Non-existent path returns false
+        let found = clear_content_hash_by_path(&conn, "/notes/nope.md").unwrap();
+        assert!(!found);
+    }
+
+    #[test]
+    fn test_purge_deleted_files() {
+        let conn = setup();
+        let (fid, _) = get_or_create_file_id(&conn, "/notes/old.md").unwrap();
+        handle_delete(&conn, "/notes/old.md").unwrap();
+
+        // Set deleted_at to a very old timestamp
+        conn.execute(
+            "UPDATE files SET deleted_at = 1000 WHERE file_id = ?1",
+            [&fid],
+        )
+        .unwrap();
+
+        // Purge with a cutoff well after the deletion
+        let purged = purge_deleted_files(&conn, 2000).unwrap();
+        assert_eq!(purged.len(), 1);
+        assert_eq!(purged[0], fid);
+
+        // File should be completely gone
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files WHERE file_id = ?1", [&fid], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_get_files_with_hashes() {
+        let conn = setup();
+        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
+        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        mark_indexed(&conn, &fid1, "hash1").unwrap();
+
+        let files = get_files_with_hashes(&conn).unwrap();
+        assert_eq!(files.len(), 2);
+
+        let a = files.iter().find(|(fid, _, _)| fid == &fid1).unwrap();
+        assert_eq!(a.2, Some("hash1".to_string()));
+
+        let b = files.iter().find(|(fid, _, _)| fid == &fid2).unwrap();
+        assert_eq!(b.2, None);
     }
 
     #[test]

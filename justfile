@@ -53,6 +53,26 @@ query query_text top_k="5" intent="auto" *args: ensure-binary
 query-verbose query_text top_k="5" intent="auto": ensure-binary
     {{bin}} query "{{query_text}}" -k {{top_k}} -i {{intent}} --verbose
 
+# Force re-index all files (clears content hashes, re-embeds everything)
+[group('maintenance')]
+reindex notes_path=".": ensure-binary
+    {{bin}} reindex --full {{notes_path}}
+
+# Re-index a single file
+[group('maintenance')]
+reindex-file path: ensure-binary
+    {{bin}} reindex --file {{path}}
+
+# Run health checks on the index
+[group('maintenance')]
+doctor notes_path=".": ensure-binary
+    {{bin}} doctor {{notes_path}}
+
+# Compact and reclaim space (SQLite VACUUM + LanceDB optimize + purge deleted)
+[group('maintenance')]
+vacuum *args: ensure-binary
+    {{bin}} vacuum {{args}}
+
 [group('maintenance')]
 clean:
     cargo clean

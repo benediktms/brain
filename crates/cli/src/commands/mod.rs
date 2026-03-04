@@ -1,7 +1,10 @@
 pub mod daemon;
+pub mod doctor;
 pub mod import_beads;
 pub mod index;
 pub mod mcp;
 pub mod query;
+pub mod reindex;
 pub mod tasks;
+pub mod vacuum;
 pub mod watch;

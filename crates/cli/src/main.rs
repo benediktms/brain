@@ -194,6 +194,31 @@ enum Command {
     )]
     Mcp,
 
+    /// Force re-index files (clears content hashes, re-embeds everything)
+    Reindex {
+        /// Re-index all files in this directory
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        full: Option<PathBuf>,
+
+        /// Re-index a single file
+        #[arg(long, value_hint = ValueHint::FilePath)]
+        file: Option<PathBuf>,
+    },
+
+    /// Compact and reclaim space (SQLite VACUUM + LanceDB optimize + purge deleted)
+    Vacuum {
+        /// Purge soft-deleted files older than this many days
+        #[arg(long, default_value = "30")]
+        older_than: u32,
+    },
+
+    /// Run health checks on the index
+    Doctor {
+        /// Path to the notes directory
+        #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
+        notes_path: PathBuf,
+    },
+
     /// Import beads issues into the brain task system
     ImportBeads {
         /// Path to beads issues.jsonl (auto-discovers .beads/issues.jsonl if omitted)
@@ -529,6 +554,28 @@ async fn async_main(cli: Cli) -> Result<()> {
                 DaemonAction::Status => daemon.status()?,
             }
         }
+        Command::Reindex { full, file } => {
+            match (full, file) {
+                (Some(notes_path), None) => {
+                    commands::reindex::run_full(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
+                }
+                (None, Some(file_path)) => {
+                    commands::reindex::run_file(file_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
+                }
+                (Some(_), Some(_)) => {
+                    anyhow::bail!("Cannot specify both --full and --file");
+                }
+                (None, None) => {
+                    anyhow::bail!("Must specify either --full <path> or --file <path>");
+                }
+            }
+        }
+        Command::Vacuum { older_than } => {
+            commands::vacuum::run(cli.model_dir, cli.lance_db, cli.sqlite_db, older_than).await?
+        }
+        Command::Doctor { notes_path } => {
+            commands::doctor::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
+        }
         Command::Mcp => {
             commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
         }
@@ -860,6 +907,78 @@ mod tests {
         );
         assert_eq!(cli.lance_db, PathBuf::from("./.brain/lancedb"));
         assert_eq!(cli.sqlite_db, PathBuf::from("./.brain/brain.db"));
+    }
+
+    // ── Edge cases ──────────────────────────────────────────────────
+
+    // ── New command parsing ─────────────────────────────────────────
+
+    #[test]
+    fn parse_reindex_full() {
+        let cli = Cli::try_parse_from(["brain", "reindex", "--full", "./notes"]).unwrap();
+        match cli.command {
+            Command::Reindex { full, file } => {
+                assert_eq!(full, Some(PathBuf::from("./notes")));
+                assert!(file.is_none());
+            }
+            _ => panic!("expected Reindex"),
+        }
+    }
+
+    #[test]
+    fn parse_reindex_file() {
+        let cli = Cli::try_parse_from(["brain", "reindex", "--file", "test.md"]).unwrap();
+        match cli.command {
+            Command::Reindex { full, file } => {
+                assert!(full.is_none());
+                assert_eq!(file, Some(PathBuf::from("test.md")));
+            }
+            _ => panic!("expected Reindex"),
+        }
+    }
+
+    #[test]
+    fn parse_vacuum_defaults() {
+        let cli = Cli::try_parse_from(["brain", "vacuum"]).unwrap();
+        match cli.command {
+            Command::Vacuum { older_than } => {
+                assert_eq!(older_than, 30);
+            }
+            _ => panic!("expected Vacuum"),
+        }
+    }
+
+    #[test]
+    fn parse_vacuum_custom() {
+        let cli = Cli::try_parse_from(["brain", "vacuum", "--older-than", "7"]).unwrap();
+        match cli.command {
+            Command::Vacuum { older_than } => {
+                assert_eq!(older_than, 7);
+            }
+            _ => panic!("expected Vacuum"),
+        }
+    }
+
+    #[test]
+    fn parse_doctor() {
+        let cli = Cli::try_parse_from(["brain", "doctor", "./notes"]).unwrap();
+        match cli.command {
+            Command::Doctor { notes_path } => {
+                assert_eq!(notes_path, PathBuf::from("./notes"));
+            }
+            _ => panic!("expected Doctor"),
+        }
+    }
+
+    #[test]
+    fn parse_doctor_default_path() {
+        let cli = Cli::try_parse_from(["brain", "doctor"]).unwrap();
+        match cli.command {
+            Command::Doctor { notes_path } => {
+                assert_eq!(notes_path, PathBuf::from("."));
+            }
+            _ => panic!("expected Doctor"),
+        }
     }
 
     // ── Edge cases ──────────────────────────────────────────────────

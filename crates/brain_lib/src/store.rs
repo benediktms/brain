@@ -6,8 +6,8 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use arrow_array::{
-    FixedSizeListArray, Float32Array, Int32Array, RecordBatch, RecordBatchIterator, StringArray,
-    types::Float32Type,
+    Array, FixedSizeListArray, Float32Array, Int32Array, RecordBatch, RecordBatchIterator,
+    StringArray, types::Float32Type,
 };
 use arrow_schema::{DataType, Field, Schema};
 use lancedb::table::OptimizeAction;
@@ -321,6 +321,51 @@ impl Store {
 
         info!(file_id, "file chunks deleted from LanceDB");
         Ok(())
+    }
+
+    /// Get all distinct file_ids that have chunks in LanceDB.
+    pub async fn get_file_ids_with_chunks(&self) -> crate::error::Result<std::collections::HashSet<String>> {
+        use futures::TryStreamExt;
+        use lancedb::query::{ExecutableQuery, QueryBase};
+
+        let results = self
+            .table
+            .query()
+            .select(lancedb::query::Select::columns(&["file_id"]))
+            .execute()
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("file_id query failed: {e}")))?;
+
+        let batches: Vec<RecordBatch> = results
+            .try_collect()
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("file_id collection failed: {e}")))?;
+
+        let mut file_ids = std::collections::HashSet::new();
+        for batch in &batches {
+            let col = batch
+                .column_by_name("file_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .ok_or_else(|| BrainCoreError::VectorDb("missing file_id column".into()))?;
+            for i in 0..col.len() {
+                file_ids.insert(col.value(i).to_string());
+            }
+        }
+
+        Ok(file_ids)
+    }
+
+    /// Delete all chunks for the given file_ids (bulk orphan cleanup).
+    pub async fn delete_chunks_by_file_ids(&self, file_ids: &[String]) -> crate::error::Result<usize> {
+        if file_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut deleted = 0;
+        for fid in file_ids {
+            self.delete_file_chunks(fid).await?;
+            deleted += 1;
+        }
+        Ok(deleted)
     }
 
     /// Search for the top-k most similar chunks to the given embedding.

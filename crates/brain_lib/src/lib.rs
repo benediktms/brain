@@ -1,4 +1,5 @@
 pub mod capsule;
+pub mod doctor;
 pub mod chunker;
 pub mod db;
 pub mod embedder;
@@ -29,7 +30,8 @@ pub mod prelude {
     pub use crate::links::{Link, extract_links};
     pub use crate::metrics::Metrics;
     pub use crate::parser::{ParsedDocument, parse_document};
-    pub use crate::pipeline::{IndexPipeline, ScanStats};
+    pub use crate::doctor::{CheckStatus, DoctorReport};
+    pub use crate::pipeline::{IndexPipeline, ScanStats, VacuumStats};
     pub use crate::query_pipeline::QueryPipeline;
     pub use crate::ranking::{RankedResult, WeightProfile};
     pub use crate::retrieval::{ExpandResult, ExpandedMemory, MemoryStub, SearchResult};
