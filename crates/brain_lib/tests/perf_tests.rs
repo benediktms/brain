@@ -7,15 +7,15 @@
 //! Uses MockEmbedder (deterministic, BLAKE3-based) — no model weights needed.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use brain_lib::db::files;
 use brain_lib::db::Db;
+use brain_lib::db::files;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::store::{Store, StoreReader};
-use brain_lib::watcher::{coalesce_events, FileEvent};
+use brain_lib::watcher::{FileEvent, coalesce_events};
 
 use tempfile::TempDir;
 
@@ -182,9 +182,7 @@ async fn test_coalescing_deduplicates() {
     let path = write_md(&notes_dir, "target.md", "## Initial\n\nOriginal content.");
 
     // ── Unit level: 10 Changed events for the same path → 1 index path
-    let events: Vec<FileEvent> = (0..10)
-        .map(|_| FileEvent::Changed(path.clone()))
-        .collect();
+    let events: Vec<FileEvent> = (0..10).map(|_| FileEvent::Changed(path.clone())).collect();
     let (_renames, index_paths, _delete_paths) = coalesce_events(events);
     assert_eq!(index_paths.len(), 1);
 
@@ -248,7 +246,10 @@ async fn test_concurrent_read_write_no_deadlocks() {
                 let results = results.unwrap();
                 // Seeded data should always return results; empty would
                 // indicate a concurrency bug (e.g. writes clearing the table).
-                assert!(!results.is_empty(), "reader {task_id} query {i} returned no results");
+                assert!(
+                    !results.is_empty(),
+                    "reader {task_id} query {i} returned no results"
+                );
                 for r in &results {
                     assert!(!r.chunk_id.is_empty());
                     assert!(!r.file_path.is_empty());
@@ -306,7 +307,10 @@ async fn test_optimize_row_threshold() {
     let embedder = pipeline.embedder().clone();
     let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
     let results = pipeline.store().query(&query_vec, 5).await.unwrap();
-    assert!(!results.is_empty(), "queries should return results after optimize");
+    assert!(
+        !results.is_empty(),
+        "queries should return results after optimize"
+    );
 }
 
 // ─── Test 6: Optimize scheduling — time threshold ────────────────
