@@ -207,10 +207,19 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         println!("{}", "\u{2500}".repeat(100));
 
         for t in &tasks {
-            let display_id = short_ids
-                .get(&t.task_id)
-                .map(|s| s.as_str())
-                .unwrap_or(&t.task_id);
+            let display_id = if let (Some(parent_id), Some(seq)) = (&t.parent_task_id, t.child_seq)
+            {
+                let parent_short = short_ids
+                    .get(parent_id.as_str())
+                    .map(|s| s.as_str())
+                    .unwrap_or(parent_id);
+                format!("{parent_short}.{seq}")
+            } else {
+                short_ids
+                    .get(&t.task_id)
+                    .cloned()
+                    .unwrap_or_else(|| t.task_id.clone())
+            };
             println!(
                 "{:<4} {:<12} {:<6} {:<10} {:<32} {}",
                 priority_label(t.priority),
@@ -246,11 +255,23 @@ pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
     let dep_summary = ctx.store.get_dependency_summary(&id)?;
     let note_links = ctx.store.get_task_note_links(&id)?;
     let children = ctx.store.get_children(&id)?;
+    let external_ids = ctx.store.get_external_ids(&id)?;
 
     if ctx.json {
         let comments_json = comments_to_json(&comments);
         let note_links_json = note_links_to_json(&note_links);
         let children_json = children_stubs_to_json(&children);
+
+        let ext_ids_json: Vec<serde_json::Value> = external_ids
+            .iter()
+            .map(|e| {
+                json!({
+                    "source": e.source,
+                    "external_id": e.external_id,
+                    "external_url": e.external_url,
+                })
+            })
+            .collect();
 
         let out = json!({
             "task": task_row_to_json(&task, labels),
@@ -258,10 +279,18 @@ pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
             "linked_notes": note_links_json,
             "comments": comments_json,
             "children": children_json,
+            "external_ids": ext_ids_json,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Task: {}", task.task_id);
+        if let (Some(parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq) {
+            let parent_short = ctx
+                .store
+                .shortest_unique_prefix(parent_id)
+                .unwrap_or_else(|_| parent_id.clone());
+            println!("Display ID: {parent_short}.{seq}");
+        }
         println!("Title: {}", task.title);
         println!("Status: {}", task.status);
         println!("Priority: {}", priority_label(task.priority));
@@ -327,6 +356,18 @@ pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
                     child.task_id,
                     child.title
                 );
+            }
+        }
+
+        if !external_ids.is_empty() {
+            println!("\nExternal References:");
+            for e in &external_ids {
+                let url = e.external_url.as_deref().unwrap_or("");
+                if url.is_empty() {
+                    println!("  [{}] {}", e.source, e.external_id);
+                } else {
+                    println!("  [{}] {} ({})", e.source, e.external_id, url);
+                }
             }
         }
 
@@ -401,6 +442,88 @@ pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
         println!("  Title: {}", task.title);
         println!("  Status: {}", task.status);
         println!("  Priority: {}", priority_label(task.priority));
+    }
+
+    Ok(())
+}
+
+// ── close ────────────────────────────────────────────────────
+
+pub fn close(ctx: &TaskCtx, ids: &[String]) -> Result<()> {
+    let mut closed = Vec::new();
+    let mut all_unblocked = Vec::new();
+
+    for raw_id in ids {
+        let id = ctx.store.resolve_task_id(raw_id)?;
+        let event = TaskEvent::from_payload(
+            &id,
+            "cli",
+            StatusChangedPayload {
+                new_status: TaskStatus::Done,
+            },
+        );
+        ctx.store.append(&event)?;
+
+        let unblocked = ctx.store.list_newly_unblocked(&id).unwrap_or_default();
+        all_unblocked.extend(unblocked.clone());
+
+        if ctx.json {
+            let task = ctx.store.get_task(&id)?.unwrap();
+            let labels = ctx.store.get_task_labels(&id)?;
+            closed.push(json!({
+                "task": task_row_to_json(&task, labels),
+                "unblocked": unblocked,
+            }));
+        } else {
+            println!("Closed task {id}");
+            for u in &unblocked {
+                println!("  Unblocked: {u}");
+            }
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "closed": closed,
+            "total_closed": ids.len(),
+            "total_unblocked": all_unblocked.len(),
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    }
+
+    Ok(())
+}
+
+// ── stats ────────────────────────────────────────────────────
+
+pub fn stats(ctx: &TaskCtx) -> Result<()> {
+    let counts = ctx.store.count_by_status()?;
+    let (ready, blocked) = ctx.store.count_ready_blocked()?;
+
+    if ctx.json {
+        let out = json!({
+            "open": counts.open,
+            "in_progress": counts.in_progress,
+            "blocked": counts.blocked,
+            "done": counts.done,
+            "cancelled": counts.cancelled,
+            "total": counts.total(),
+            "ready": ready,
+            "blocked_by_deps": blocked,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Task Statistics");
+        println!("{}", "\u{2500}".repeat(30));
+        println!("Open:        {:>4}", counts.open);
+        println!("In Progress: {:>4}", counts.in_progress);
+        println!("Blocked:     {:>4}", counts.blocked);
+        println!("Done:        {:>4}", counts.done);
+        println!("Cancelled:   {:>4}", counts.cancelled);
+        println!("{}", "\u{2500}".repeat(30));
+        println!("Total:       {:>4}", counts.total());
+        println!("Ready:       {:>4}", ready);
+        println!("Blocked:     {:>4}", blocked);
     }
 
     Ok(())

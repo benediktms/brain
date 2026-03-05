@@ -392,6 +392,22 @@ enum TasksAction {
         #[arg(long, default_value = ".brain/tasks/projections")]
         dir: PathBuf,
     },
+
+    /// Close one or more tasks (shorthand for update --status done)
+    Close {
+        /// Task IDs to close
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
+
+    /// Show ready tasks (no blockers)
+    Ready,
+
+    /// Show blocked tasks
+    Blocked,
+
+    /// Show project task statistics
+    Stats,
 }
 
 #[derive(Subcommand)]
@@ -726,6 +742,38 @@ async fn async_main(cli: Cli) -> Result<()> {
                         anyhow::bail!("Unknown export format: {other}. Supported: markdown");
                     }
                 },
+                TasksAction::Close { ids } => {
+                    commands::tasks::run::close(&ctx, &ids)?;
+                }
+                TasksAction::Ready => {
+                    commands::tasks::run::list(
+                        &ctx,
+                        &ListParams {
+                            status: None,
+                            priority: None,
+                            task_type: None,
+                            assignee: None,
+                            ready: true,
+                            blocked: false,
+                        },
+                    )?;
+                }
+                TasksAction::Blocked => {
+                    commands::tasks::run::list(
+                        &ctx,
+                        &ListParams {
+                            status: None,
+                            priority: None,
+                            task_type: None,
+                            assignee: None,
+                            ready: false,
+                            blocked: true,
+                        },
+                    )?;
+                }
+                TasksAction::Stats => {
+                    commands::tasks::run::stats(&ctx)?;
+                }
             }
         }
     }
@@ -979,6 +1027,63 @@ mod tests {
             }
             _ => panic!("expected Doctor"),
         }
+    }
+
+    // ── Convenience command parsing ────────────────────────────────
+
+    #[test]
+    fn parse_tasks_close() {
+        let cli = Cli::try_parse_from(["brain", "tasks", "close", "t1", "t2"]).unwrap();
+        match cli.command {
+            Command::Tasks {
+                action: TasksAction::Close { ids },
+                ..
+            } => {
+                assert_eq!(ids, vec!["t1", "t2"]);
+            }
+            _ => panic!("expected Tasks Close"),
+        }
+    }
+
+    #[test]
+    fn parse_tasks_close_requires_id() {
+        assert!(Cli::try_parse_from(["brain", "tasks", "close"]).is_err());
+    }
+
+    #[test]
+    fn parse_tasks_ready() {
+        let cli = Cli::try_parse_from(["brain", "tasks", "ready"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Tasks {
+                action: TasksAction::Ready,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_tasks_blocked() {
+        let cli = Cli::try_parse_from(["brain", "tasks", "blocked"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Tasks {
+                action: TasksAction::Blocked,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_tasks_stats() {
+        let cli = Cli::try_parse_from(["brain", "tasks", "stats"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Tasks {
+                action: TasksAction::Stats,
+                ..
+            }
+        ));
     }
 
     // ── Edge cases ──────────────────────────────────────────────────
