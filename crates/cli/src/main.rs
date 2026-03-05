@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 use crate::commands::daemon::Daemon;
 
 mod commands;
+pub mod markdown_table;
 
 /// Ranking intent profiles for hybrid search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -241,6 +242,10 @@ enum Command {
         /// Output as JSON instead of human-readable text
         #[arg(long, global = true)]
         json: bool,
+
+        /// Output as a markdown table (default for human-readable output)
+        #[arg(long, global = true)]
+        markdown: bool,
 
         #[command(subcommand)]
         action: TasksAction,
@@ -631,7 +636,11 @@ async fn async_main(cli: Cli) -> Result<()> {
                 },
             })?;
         }
-        Command::Tasks { json, action } => {
+        Command::Tasks {
+            json,
+            markdown: _,
+            action,
+        } => {
             use commands::tasks::run::{CreateParams, ListParams, TaskCtx, UpdateParams};
             let ctx = TaskCtx::new(&cli.sqlite_db, json)?;
 

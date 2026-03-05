@@ -13,6 +13,8 @@ use brain_lib::tasks::enrichment::{
 use brain_lib::tasks::events::{self, *};
 use brain_lib::utils::task_row_to_json;
 
+use crate::markdown_table::MarkdownTable;
+
 // ── shared context ─────────────────────────────────────────
 
 pub struct TaskCtx {
@@ -200,11 +202,8 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
 
         let short_ids = ctx.store.shortest_unique_prefixes()?;
 
-        println!(
-            "{:<4} {:<12} {:<6} {:<10} {:<32} TITLE",
-            "PRI", "STATUS", "TYPE", "ASSIGNEE", "ID"
-        );
-        println!("{}", "\u{2500}".repeat(100));
+        let mut table =
+            MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
 
         for t in &tasks {
             let display_id = if let (Some(parent_id), Some(seq)) = (&t.parent_task_id, t.child_seq)
@@ -220,20 +219,25 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
                     .cloned()
                     .unwrap_or_else(|| t.task_id.clone())
             };
-            println!(
-                "{:<4} {:<12} {:<6} {:<10} {:<32} {}",
-                priority_label(t.priority),
-                t.status,
-                &t.task_type,
-                t.assignee.as_deref().unwrap_or("-"),
+            table.add_row(vec![
+                priority_label(t.priority).to_string(),
+                t.status.clone(),
+                t.task_type.clone(),
+                t.assignee.as_deref().unwrap_or("-").to_string(),
                 display_id,
-                t.title,
-            );
+                t.title.clone(),
+            ]);
         }
+
+        print!("{table}");
+
+        // Blank line separates the table from the summary so markdown renderers
+        // (e.g. glow) don't treat the summary as a table row.
+        println!();
 
         let (ready_count, blocked_count) = ctx.store.count_ready_blocked()?;
         println!(
-            "\n{} task(s) shown ({ready_count} ready, {blocked_count} blocked)",
+            "{} task(s) shown ({ready_count} ready, {blocked_count} blocked)",
             tasks.len()
         );
     }
