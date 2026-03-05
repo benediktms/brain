@@ -108,6 +108,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
 
     // 4. Fetch enrichment data
     let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
+    let external_ids = ctx.tasks.get_external_ids(task_id).unwrap_or_default();
 
     let comments = ctx.tasks.get_task_comments(task_id).unwrap_or_default();
     let comments_json = comments_to_json(&comments);
@@ -214,6 +215,20 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         obj.insert("blocks".into(), json!(blocks_json));
         obj.insert("comments".into(), json!(comments_json));
         obj.insert("linked_notes".into(), json!(linked_notes_json));
+        obj.insert(
+            "external_ids".into(),
+            json!(
+                external_ids
+                    .iter()
+                    .map(|e| json!({
+                        "source": e.source,
+                        "external_id": e.external_id,
+                        "external_url": e.external_url,
+                        "imported_at": e.imported_at,
+                    }))
+                    .collect::<Vec<_>>()
+            ),
+        );
         obj.insert(
             "dependency_summary".into(),
             dep_summary_to_json(&dep_summary),

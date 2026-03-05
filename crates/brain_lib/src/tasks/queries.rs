@@ -21,12 +21,13 @@ pub struct TaskRow {
     pub assignee: Option<String>,
     pub defer_until: Option<i64>,
     pub parent_task_id: Option<String>,
+    pub child_seq: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 const TASK_COLUMNS: &str = "task_id, title, description, status, priority, blocked_reason, due_ts, \
-     task_type, assignee, defer_until, parent_task_id, created_at, updated_at";
+     task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at";
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
     Ok(TaskRow {
@@ -41,8 +42,9 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
         assignee: row.get(8)?,
         defer_until: row.get(9)?,
         parent_task_id: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        child_seq: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -209,6 +211,45 @@ pub fn get_task_note_links(conn: &Connection, task_id: &str) -> Result<Vec<TaskN
     crate::db::collect_rows(rows)
 }
 
+/// Per-status task counts for project health overview.
+#[derive(Debug, Clone, Default)]
+pub struct StatusCounts {
+    pub open: usize,
+    pub in_progress: usize,
+    pub blocked: usize,
+    pub done: usize,
+    pub cancelled: usize,
+}
+
+impl StatusCounts {
+    pub fn total(&self) -> usize {
+        self.open + self.in_progress + self.blocked + self.done + self.cancelled
+    }
+}
+
+/// Count tasks grouped by status.
+pub fn count_by_status(conn: &Connection) -> Result<StatusCounts> {
+    let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+
+    let mut counts = StatusCounts::default();
+    for row in rows {
+        let (status, count) = row?;
+        let count = count as usize;
+        match status.as_str() {
+            "open" => counts.open = count,
+            "in_progress" => counts.in_progress = count,
+            "blocked" => counts.blocked = count,
+            "done" => counts.done = count,
+            "cancelled" => counts.cancelled = count,
+            _ => {}
+        }
+    }
+    Ok(counts)
+}
+
 /// Count of ready and blocked tasks (for response metadata).
 pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
     let ready: i64 = conn.query_row(
@@ -252,6 +293,50 @@ pub fn get_task_labels(conn: &Connection, task_id: &str) -> Result<Vec<String>> 
         conn.prepare("SELECT label FROM task_labels WHERE task_id = ?1 ORDER BY label")?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
+}
+
+/// An external ID reference for a task.
+#[derive(Debug, Clone)]
+pub struct ExternalIdRow {
+    pub task_id: String,
+    pub source: String,
+    pub external_id: String,
+    pub external_url: Option<String>,
+    pub imported_at: i64,
+}
+
+/// Get external ID references for a task.
+pub fn get_external_ids(conn: &Connection, task_id: &str) -> Result<Vec<ExternalIdRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id, source, external_id, external_url, imported_at
+         FROM task_external_ids WHERE task_id = ?1 ORDER BY source, external_id",
+    )?;
+    let rows = stmt.query_map([task_id], |row| {
+        Ok(ExternalIdRow {
+            task_id: row.get(0)?,
+            source: row.get(1)?,
+            external_id: row.get(2)?,
+            external_url: row.get(3)?,
+            imported_at: row.get(4)?,
+        })
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+/// Resolve an external ID to a brain task_id.
+pub fn resolve_external_id(
+    conn: &Connection,
+    source: &str,
+    external_id: &str,
+) -> Result<Option<String>> {
+    let result = conn
+        .query_row(
+            "SELECT task_id FROM task_external_ids WHERE source = ?1 AND external_id = ?2",
+            rusqlite::params![source, external_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(result)
 }
 
 /// A comment on a task.
@@ -358,10 +443,44 @@ const MIN_DISPLAY_PREFIX_LEN: usize = 8;
 /// Accepts: full ID, prefix with project prefix ("BRN-01JPH"),
 /// or bare ULID prefix ("01JPH") — auto-prepends project prefix.
 /// Min prefix length: 4 chars (after any project prefix).
+/// Get the next child_seq for a parent task (max existing + 1, or 1 if no children).
+pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> Result<i64> {
+    let max: Option<i64> = conn
+        .query_row(
+            "SELECT MAX(child_seq) FROM tasks WHERE parent_task_id = ?1",
+            [parent_task_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(max.unwrap_or(0) + 1)
+}
+
 pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
     // Fast path: exact match
     if task_exists(conn, input)? {
         return Ok(input.to_string());
+    }
+
+    // Check for hierarchical display ID: "PREFIX.N" where N is child_seq
+    if let Some(dot_pos) = input.rfind('.') {
+        let parent_part = &input[..dot_pos];
+        let seq_part = &input[dot_pos + 1..];
+        if let Ok(seq) = seq_part.parse::<i64>() {
+            // Resolve the parent prefix first (recursive)
+            if let Ok(parent_id) = resolve_task_id(conn, parent_part) {
+                let child: Option<String> = conn
+                    .query_row(
+                        "SELECT task_id FROM tasks WHERE parent_task_id = ?1 AND child_seq = ?2",
+                        rusqlite::params![parent_id, seq],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(child_id) = child {
+                    return Ok(child_id);
+                }
+            }
+        }
     }
 
     let normalized = input.to_ascii_uppercase();

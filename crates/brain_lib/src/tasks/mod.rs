@@ -131,6 +131,23 @@ impl TaskStore {
         self.db.with_read_conn(queries::count_ready_blocked)
     }
 
+    /// Count tasks grouped by status.
+    pub fn count_by_status(&self) -> Result<queries::StatusCounts> {
+        self.db.with_read_conn(queries::count_by_status)
+    }
+
+    /// Get external ID references for a task.
+    pub fn get_external_ids(&self, task_id: &str) -> Result<Vec<queries::ExternalIdRow>> {
+        self.db
+            .with_read_conn(|conn| queries::get_external_ids(conn, task_id))
+    }
+
+    /// Resolve an external ID to a brain task_id.
+    pub fn resolve_external_id(&self, source: &str, external_id: &str) -> Result<Option<String>> {
+        self.db
+            .with_read_conn(|conn| queries::resolve_external_id(conn, source, external_id))
+    }
+
     /// List all dependency edges (bulk load for export).
     pub fn list_all_deps(&self) -> Result<Vec<queries::TaskDep>> {
         self.db.with_read_conn(queries::list_all_deps)
@@ -259,7 +276,9 @@ impl TaskStore {
             | EventType::NoteUnlinked
             | EventType::LabelAdded
             | EventType::LabelRemoved
-            | EventType::CommentAdded => {
+            | EventType::CommentAdded
+            | EventType::ExternalIdAdded
+            | EventType::ExternalIdRemoved => {
                 if !queries::task_exists(conn, &event.task_id)? {
                     return Err(BrainCoreError::TaskEvent(format!(
                         "task not found: {}",
