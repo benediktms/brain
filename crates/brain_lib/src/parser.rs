@@ -23,6 +23,9 @@ pub struct Section {
     pub byte_start: usize,
     /// End byte offset in the source text.
     pub byte_end: usize,
+    /// Byte offset where the trimmed content body begins in the source text.
+    /// Used by the chunker to compute accurate byte ranges for split chunks.
+    pub content_byte_start: usize,
 }
 
 struct HeadingInfo {
@@ -100,13 +103,16 @@ fn build_sections(text: &str, headings: &[HeadingInfo], body_start: usize) -> Ve
 
     // Content between body_start and first heading
     let first_heading_start = headings.first().map(|h| h.byte_start).unwrap_or(text.len());
-    let pre_content = text[body_start..first_heading_start].trim();
+    let pre_raw = &text[body_start..first_heading_start];
+    let pre_content = pre_raw.trim();
     if !pre_content.is_empty() {
+        let leading = pre_raw.len() - pre_raw.trim_start().len();
         sections.push(Section {
             heading_path: String::new(),
             content: pre_content.to_string(),
             byte_start: body_start,
             byte_end: first_heading_start,
+            content_byte_start: body_start + leading,
         });
     }
 
@@ -127,13 +133,16 @@ fn build_sections(text: &str, headings: &[HeadingInfo], body_start: usize) -> Ve
             .get(i + 1)
             .map(|h| h.byte_start)
             .unwrap_or(text.len());
-        let content = text[content_start..content_end].trim();
+        let raw = &text[content_start..content_end];
+        let content = raw.trim();
+        let leading = raw.len() - raw.trim_start().len();
 
         sections.push(Section {
             heading_path: format_heading_path(&heading_stack),
             content: content.to_string(),
             byte_start: heading.byte_start,
             byte_end: content_end,
+            content_byte_start: content_start + leading,
         });
     }
 
@@ -414,5 +423,152 @@ mod tests {
             .find(|s| s.heading_path == "# A > ## C")
             .unwrap();
         assert_eq!(c.content, "Content C.");
+    }
+
+    // ─── UTF-8 multibyte byte-offset tests ───────────────────────
+
+    #[test]
+    fn test_byte_offsets_utf8_emoji() {
+        let text = "# Emoji 🧠\n\nBrain has 🧠 emoji.\n\n## Next\n\nPlain text.\n";
+        let doc = parse_document(text);
+
+        for section in &doc.sections {
+            assert!(section.byte_end <= text.len());
+            let slice = &text[section.byte_start..section.byte_end];
+            assert!(
+                std::str::from_utf8(slice.as_bytes()).is_ok(),
+                "byte range should produce valid UTF-8"
+            );
+        }
+
+        let first = &doc.sections[0];
+        let extracted = &text[first.byte_start..first.byte_end];
+        assert!(
+            extracted.contains("🧠"),
+            "extracted slice should contain emoji"
+        );
+    }
+
+    #[test]
+    fn test_byte_offsets_utf8_cjk() {
+        let text = "# 日本語テスト\n\nこんにちは世界。\n\n## セクション二\n\n追加テキスト。\n";
+        let doc = parse_document(text);
+
+        assert!(doc.sections.len() >= 2);
+        for section in &doc.sections {
+            assert!(section.byte_end <= text.len());
+            let slice = &text[section.byte_start..section.byte_end];
+            assert!(
+                std::str::from_utf8(slice.as_bytes()).is_ok(),
+                "CJK byte range should produce valid UTF-8"
+            );
+        }
+
+        let first = &doc.sections[0];
+        let extracted = &text[first.byte_start..first.byte_end];
+        assert!(
+            extracted.contains("こんにちは"),
+            "extracted slice should contain CJK content"
+        );
+    }
+
+    #[test]
+    fn test_byte_offsets_utf8_accented() {
+        let text = "# Café résumé\n\nLes données naïves coûtent cher.\n\n## Über\n\nStraße führt weiter.\n";
+        let doc = parse_document(text);
+
+        for section in &doc.sections {
+            assert!(section.byte_end <= text.len());
+            let slice = &text[section.byte_start..section.byte_end];
+            assert!(
+                std::str::from_utf8(slice.as_bytes()).is_ok(),
+                "accented char byte range should produce valid UTF-8"
+            );
+        }
+
+        let first = &doc.sections[0];
+        let extracted = &text[first.byte_start..first.byte_end];
+        assert!(extracted.contains("données"));
+    }
+
+    #[test]
+    fn test_byte_offsets_utf8_mixed_widths() {
+        let text = "# Mixed: ASCII é 日本 🧠\n\nBoth 1-byte, 2-byte (é), 3-byte (日), and 4-byte (🧠) chars.\n";
+        let doc = parse_document(text);
+
+        assert_eq!(doc.sections.len(), 1);
+        let section = &doc.sections[0];
+        let extracted = &text[section.byte_start..section.byte_end];
+        assert!(extracted.contains("🧠"));
+        assert!(extracted.contains("日"));
+        assert!(extracted.contains("é"));
+    }
+
+    // ─── CRLF byte-offset tests ─────────────────────────────────
+
+    #[test]
+    fn test_byte_offsets_crlf() {
+        let text = "# Title\r\n\r\nContent here.\r\n\r\n## Next\r\n\r\nMore content.\r\n";
+        let doc = parse_document(text);
+
+        for section in &doc.sections {
+            assert!(
+                section.byte_start <= section.byte_end,
+                "byte_start <= byte_end with CRLF"
+            );
+            assert!(
+                section.byte_end <= text.len(),
+                "byte_end <= text.len() with CRLF"
+            );
+            let slice = &text[section.byte_start..section.byte_end];
+            assert!(
+                std::str::from_utf8(slice.as_bytes()).is_ok(),
+                "CRLF byte range should produce valid UTF-8"
+            );
+        }
+    }
+
+    #[test]
+    fn test_byte_offsets_crlf_content_extractable() {
+        let text = "# Hello\r\n\r\nWorld paragraph.\r\n\r\n## Second\r\n\r\nAnother paragraph.\r\n";
+        let doc = parse_document(text);
+
+        assert!(doc.sections.len() >= 2);
+        let first = &doc.sections[0];
+        let extracted = &text[first.byte_start..first.byte_end];
+        assert!(
+            extracted.contains("World paragraph"),
+            "CRLF: should extract content correctly"
+        );
+    }
+
+    #[test]
+    fn test_byte_offsets_crlf_with_utf8() {
+        let text = "# Título\r\n\r\nContenido con ñ y 🎉.\r\n\r\n## Sección\r\n\r\nMás texto.\r\n";
+        let doc = parse_document(text);
+
+        for section in &doc.sections {
+            assert!(section.byte_end <= text.len());
+            let slice = &text[section.byte_start..section.byte_end];
+            assert!(
+                std::str::from_utf8(slice.as_bytes()).is_ok(),
+                "CRLF+UTF-8 byte range should produce valid UTF-8"
+            );
+        }
+    }
+
+    #[test]
+    fn test_byte_offsets_mixed_line_endings() {
+        let text = "# Title\n\nLF paragraph.\n\n## CRLF\r\n\r\nCRLF paragraph.\r\n";
+        let doc = parse_document(text);
+
+        for section in &doc.sections {
+            assert!(section.byte_end <= text.len());
+            let slice = &text[section.byte_start..section.byte_end];
+            assert!(
+                std::str::from_utf8(slice.as_bytes()).is_ok(),
+                "mixed line ending byte range should produce valid UTF-8"
+            );
+        }
     }
 }
