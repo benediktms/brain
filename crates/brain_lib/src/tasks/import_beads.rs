@@ -670,10 +670,8 @@ pub fn import_beads_issues(
             // Parent diff (only when beads-related)
             let exp_parent = expected_parents.get(brain_id).map(|p| p.as_str());
             let cur_parent = existing.parent_task_id.as_deref();
-            let exp_is_beads =
-                exp_parent.is_some_and(|p| brain_ids_from_beads.contains(p));
-            let cur_is_beads =
-                cur_parent.is_some_and(|p| brain_ids_from_beads.contains(p));
+            let exp_is_beads = exp_parent.is_some_and(|p| brain_ids_from_beads.contains(p));
+            let cur_is_beads = cur_parent.is_some_and(|p| brain_ids_from_beads.contains(p));
 
             if (exp_is_beads || cur_is_beads) && exp_parent != cur_parent {
                 phase3.push(
@@ -902,10 +900,7 @@ mod tests {
     }
 
     /// Look up a brain task by its original beads ID via the external_ids table.
-    fn get_by_beads_id(
-        store: &TaskStore,
-        beads_id: &str,
-    ) -> super::super::queries::TaskRow {
+    fn get_by_beads_id(store: &TaskStore, beads_id: &str) -> super::super::queries::TaskRow {
         let brain_id = store
             .resolve_external_id("beads", beads_id)
             .unwrap()
@@ -1054,7 +1049,10 @@ mod tests {
 
         // Verify parent_task_id is set
         let child_row = store.get_task(&bid_child).unwrap().unwrap();
-        assert_eq!(child_row.parent_task_id.as_deref(), Some(bid_parent.as_str()));
+        assert_eq!(
+            child_row.parent_task_id.as_deref(),
+            Some(bid_parent.as_str())
+        );
 
         // Verify children query
         let children = store.get_children(&bid_parent).unwrap();
