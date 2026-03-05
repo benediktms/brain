@@ -98,7 +98,7 @@ fn split_section(section: &Section, ord: &mut usize) -> Vec<Chunk> {
                     byte_start: buf_byte_start,
                     byte_end: para_byte_start,
                     token_estimate: tokens,
-                    chunk_hash: content_hash(&buf.trim().to_string()),
+                    chunk_hash: content_hash(buf.trim()),
                 });
                 *ord += 1;
                 buf.clear();
@@ -148,7 +148,7 @@ fn split_section(section: &Section, ord: &mut usize) -> Vec<Chunk> {
                 byte_start: buf_byte_start,
                 byte_end: para_byte_start,
                 token_estimate: tokens,
-                chunk_hash: content_hash(&buf.trim().to_string()),
+                chunk_hash: content_hash(buf.trim()),
             });
             *ord += 1;
             buf.clear();
@@ -172,7 +172,7 @@ fn split_section(section: &Section, ord: &mut usize) -> Vec<Chunk> {
             byte_start: buf_byte_start,
             byte_end: section.byte_end,
             token_estimate: tokens,
-            chunk_hash: content_hash(&buf.trim().to_string()),
+            chunk_hash: content_hash(buf.trim()),
         });
         *ord += 1;
     }
