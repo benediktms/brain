@@ -98,3 +98,47 @@ pub fn save_brain_toml(brain_dir: &Path, cfg: &BrainToml) -> Result<()> {
     std::fs::write(&path, text).map_err(BrainCoreError::Io)?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Brain path resolution
+// ---------------------------------------------------------------------------
+
+/// Resolved paths for a discovered brain project.
+#[derive(Debug)]
+pub struct ResolvedPaths {
+    pub model_dir: PathBuf,
+    pub lance_db: PathBuf,
+    pub sqlite_db: PathBuf,
+}
+
+/// Walk up from `start` looking for `.brain/brain.toml`.
+/// Returns the directory containing `.brain/` if found.
+pub fn find_brain_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
+    loop {
+        if dir.join(".brain").join("brain.toml").is_file() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// Resolve brain paths from the marker file and global config.
+/// Returns `None` if no `.brain/brain.toml` marker is found.
+pub fn resolve_brain_paths(start: &Path) -> Result<Option<ResolvedPaths>> {
+    let root = match find_brain_root(start) {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    let brain_toml = load_brain_toml(&root.join(".brain"))?;
+    let home = brain_home()?;
+    let brain_data = home.join("brains").join(&brain_toml.name);
+
+    Ok(Some(ResolvedPaths {
+        model_dir: root.join(".brain").join("models").join("bge-small-en-v1.5"),
+        lance_db: brain_data.join("lancedb"),
+        sqlite_db: brain_data.join("brain.db"),
+    }))
+}

@@ -546,8 +546,38 @@ enum DaemonAction {
     Status,
 }
 
+/// If the user didn't pass explicit `--model-dir` / `--lance-db` / `--sqlite-db`
+/// flags (i.e. all three are still at their clap defaults), try to discover
+/// a `.brain/brain.toml` marker by walking up from cwd and resolve paths from it.
+fn resolve_defaults(cli: &mut Cli) {
+    use brain_lib::config::resolve_brain_paths;
+
+    let default_model = PathBuf::from("./.brain/models/bge-small-en-v1.5");
+    let default_lance = PathBuf::from("./.brain/lancedb");
+    let default_sqlite = PathBuf::from("./.brain/brain.db");
+
+    if cli.model_dir != default_model
+        || cli.lance_db != default_lance
+        || cli.sqlite_db != default_sqlite
+    {
+        return;
+    }
+
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+
+    if let Ok(Some(resolved)) = resolve_brain_paths(&cwd) {
+        cli.model_dir = resolved.model_dir;
+        cli.lance_db = resolved.lance_db;
+        cli.sqlite_db = resolved.sqlite_db;
+    }
+}
+
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    resolve_defaults(&mut cli);
 
     if let Command::Daemon {
         action: DaemonAction::Start { .. },
