@@ -8,8 +8,9 @@ use crate::error::{BrainCoreError, Result};
 
 use super::TaskStore;
 use super::events::{
-    CommentPayload, DependencyPayload, EventType, LabelPayload, ParentSetPayload,
-    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskUpdatedPayload, now_ts,
+    CommentPayload, DependencyPayload, EventType, ExternalIdPayload, LabelPayload,
+    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskStatus,
+    TaskUpdatedPayload, new_task_id, now_ts,
 };
 
 /// Summary of an import run.
@@ -432,7 +433,23 @@ pub fn import_beads_issues(
     // Rebuild projections so SQLite matches events.jsonl
     task_store.rebuild_projections()?;
 
-    // Load existing state for diffing
+    // Build beads_id → brain_id mapping:
+    //   - Already-imported issues: resolve via external_ids table
+    //   - New issues: generate a brain-native ID
+    let prefix = task_store.get_project_prefix()?;
+    let mut beads_to_brain: HashMap<String, String> = HashMap::new();
+    for issue in &issues {
+        if let Some(brain_id) = task_store.resolve_external_id("beads", &issue.id)? {
+            beads_to_brain.insert(issue.id.clone(), brain_id);
+        } else {
+            beads_to_brain.insert(issue.id.clone(), new_task_id(&prefix));
+        }
+    }
+
+    // Reverse lookup: brain_ids that came from beads (for dep diff filtering)
+    let brain_ids_from_beads: HashSet<&str> = beads_to_brain.values().map(|s| s.as_str()).collect();
+
+    // Load existing state for diffing (keyed by brain task_id)
     let existing_tasks: HashMap<String, super::queries::TaskRow> = task_store
         .list_all()?
         .into_iter()
@@ -455,41 +472,36 @@ pub fn import_beads_issues(
         map
     };
 
-    // Sets for relationship validation
+    // All beads IDs in this batch (for relationship validation)
     let beads_ids: HashSet<&str> = issues.iter().map(|i| i.id.as_str()).collect();
-    let all_known_ids: HashSet<&str> = existing_tasks
-        .keys()
-        .map(|k| k.as_str())
-        .chain(beads_ids.iter().copied())
-        .collect();
 
-    // Build expected relationships from all beads issues
+    // Build expected relationships using brain IDs
+    // Beads deps reference beads IDs — translate through the mapping.
     let mut expected_deps: HashMap<String, HashSet<String>> = HashMap::new();
     let mut expected_parents: HashMap<String, String> = HashMap::new();
 
     for issue in &issues {
         for dep in &issue.dependencies {
+            let has_both = beads_ids.contains(dep.depends_on_id.as_str())
+                && beads_ids.contains(dep.issue_id.as_str());
+            if !has_both {
+                report.deps_skipped += 1;
+                continue;
+            }
             match dep.dep_type.as_str() {
                 "blocks" => {
-                    if all_known_ids.contains(dep.depends_on_id.as_str())
-                        && all_known_ids.contains(dep.issue_id.as_str())
-                    {
-                        expected_deps
-                            .entry(dep.depends_on_id.clone())
-                            .or_default()
-                            .insert(dep.issue_id.clone());
-                    } else {
-                        report.deps_skipped += 1;
-                    }
+                    // "issue blocks depends_on" → in brain: depends_on depends_on issue
+                    let brain_blocked = &beads_to_brain[&dep.depends_on_id];
+                    let brain_blocker = &beads_to_brain[&dep.issue_id];
+                    expected_deps
+                        .entry(brain_blocked.clone())
+                        .or_default()
+                        .insert(brain_blocker.clone());
                 }
                 "parent-child" => {
-                    if all_known_ids.contains(dep.depends_on_id.as_str())
-                        && all_known_ids.contains(dep.issue_id.as_str())
-                    {
-                        expected_parents.insert(dep.issue_id.clone(), dep.depends_on_id.clone());
-                    } else {
-                        report.deps_skipped += 1;
-                    }
+                    let brain_child = &beads_to_brain[&dep.issue_id];
+                    let brain_parent = &beads_to_brain[&dep.depends_on_id];
+                    expected_parents.insert(brain_child.clone(), brain_parent.clone());
                 }
                 _ => {
                     report.deps_skipped += 1;
@@ -509,7 +521,9 @@ pub fn import_beads_issues(
     let now = now_ts();
 
     for issue in &issues {
-        if let Some(existing) = existing_tasks.get(&issue.id) {
+        let brain_id = &beads_to_brain[&issue.id];
+
+        if let Some(existing) = existing_tasks.get(brain_id) {
             // === EXISTING ISSUE — generate delta events ===
             let mut changed = false;
 
@@ -551,7 +565,7 @@ pub fn import_beads_issues(
 
             if has_field {
                 phase2.push(
-                    TaskEvent::from_payload(&issue.id, "beads-import", upd).with_timestamp(now),
+                    TaskEvent::from_payload(brain_id, "beads-import", upd).with_timestamp(now),
                 );
                 changed = true;
             }
@@ -565,7 +579,7 @@ pub fn import_beads_issues(
             if brain_status.as_ref() != existing.status {
                 phase2.push(
                     TaskEvent::from_payload(
-                        &issue.id,
+                        brain_id,
                         "beads-import",
                         StatusChangedPayload {
                             new_status: brain_status,
@@ -578,14 +592,14 @@ pub fn import_beads_issues(
 
             // Label diffs
             let empty_labels = HashSet::new();
-            let cur_labels = existing_labels.get(&issue.id).unwrap_or(&empty_labels);
+            let cur_labels = existing_labels.get(brain_id).unwrap_or(&empty_labels);
             let beads_labels: HashSet<&str> = issue.labels.iter().map(|l| l.as_str()).collect();
             let cur_labels_ref: HashSet<&str> = cur_labels.iter().map(|l| l.as_str()).collect();
 
             for label in beads_labels.difference(&cur_labels_ref) {
                 phase2.push(
                     TaskEvent::new(
-                        &issue.id,
+                        brain_id,
                         "beads-import",
                         EventType::LabelAdded,
                         &LabelPayload {
@@ -599,7 +613,7 @@ pub fn import_beads_issues(
             for label in cur_labels_ref.difference(&beads_labels) {
                 phase2.push(
                     TaskEvent::new(
-                        &issue.id,
+                        brain_id,
                         "beads-import",
                         EventType::LabelRemoved,
                         &LabelPayload {
@@ -611,23 +625,23 @@ pub fn import_beads_issues(
                 changed = true;
             }
 
-            // Dep diffs (only beads-to-beads deps)
+            // Dep diffs (only beads-originated deps)
             let empty_deps = HashSet::new();
-            let cur_deps = existing_deps.get(&issue.id).unwrap_or(&empty_deps);
+            let cur_deps = existing_deps.get(brain_id).unwrap_or(&empty_deps);
             let cur_beads_deps: HashSet<&str> = cur_deps
                 .iter()
-                .filter(|d| beads_ids.contains(d.as_str()))
+                .filter(|d| brain_ids_from_beads.contains(d.as_str()))
                 .map(|d| d.as_str())
                 .collect();
             let exp_beads_deps: HashSet<&str> = expected_deps
-                .get(&issue.id)
+                .get(brain_id)
                 .map(|ds| ds.iter().map(|d| d.as_str()).collect())
                 .unwrap_or_default();
 
             for dep in exp_beads_deps.difference(&cur_beads_deps) {
                 phase3.push(
                     TaskEvent::new(
-                        &issue.id,
+                        brain_id,
                         "beads-import",
                         EventType::DependencyAdded,
                         &DependencyPayload {
@@ -641,7 +655,7 @@ pub fn import_beads_issues(
             for dep in cur_beads_deps.difference(&exp_beads_deps) {
                 phase3.push(
                     TaskEvent::new(
-                        &issue.id,
+                        brain_id,
                         "beads-import",
                         EventType::DependencyRemoved,
                         &DependencyPayload {
@@ -654,15 +668,15 @@ pub fn import_beads_issues(
             }
 
             // Parent diff (only when beads-related)
-            let exp_parent = expected_parents.get(&issue.id).map(|p| p.as_str());
+            let exp_parent = expected_parents.get(brain_id).map(|p| p.as_str());
             let cur_parent = existing.parent_task_id.as_deref();
-            let exp_is_beads = exp_parent.is_some_and(|p| beads_ids.contains(p));
-            let cur_is_beads = cur_parent.is_some_and(|p| beads_ids.contains(p));
+            let exp_is_beads = exp_parent.is_some_and(|p| brain_ids_from_beads.contains(p));
+            let cur_is_beads = cur_parent.is_some_and(|p| brain_ids_from_beads.contains(p));
 
             if (exp_is_beads || cur_is_beads) && exp_parent != cur_parent {
                 phase3.push(
                     TaskEvent::from_payload(
-                        &issue.id,
+                        brain_id,
                         "beads-import",
                         ParentSetPayload {
                             parent_task_id: exp_parent.map(|p| p.to_string()),
@@ -685,7 +699,7 @@ pub fn import_beads_issues(
 
             phase1.push(
                 TaskEvent::from_payload(
-                    issue.id.clone(),
+                    brain_id,
                     issue
                         .owner
                         .clone()
@@ -704,13 +718,28 @@ pub fn import_beads_issues(
                 )
                 .with_timestamp(created_ts),
             );
+
+            // Track beads origin as external ID
+            phase1.push(
+                TaskEvent::new(
+                    brain_id,
+                    "beads-import",
+                    EventType::ExternalIdAdded,
+                    &ExternalIdPayload {
+                        source: "beads".to_string(),
+                        external_id: issue.id.clone(),
+                        external_url: None,
+                    },
+                )
+                .with_timestamp(created_ts),
+            );
             report.issues_imported += 1;
 
             // Labels
             for label in &issue.labels {
                 phase1.push(
                     TaskEvent::new(
-                        &issue.id,
+                        brain_id,
                         "beads-import",
                         EventType::LabelAdded,
                         &LabelPayload {
@@ -731,7 +760,7 @@ pub fn import_beads_issues(
                     .unwrap_or(created_ts);
                 phase1.push(
                     TaskEvent::from_payload(
-                        issue.id.clone(),
+                        brain_id,
                         comment
                             .author
                             .clone()
@@ -757,7 +786,7 @@ pub fn import_beads_issues(
 
                     phase2.push(
                         TaskEvent::from_payload(
-                            &issue.id,
+                            brain_id,
                             "beads-import",
                             StatusChangedPayload {
                                 new_status: TaskStatus::Done,
@@ -771,7 +800,7 @@ pub fn import_beads_issues(
                     {
                         phase2.push(
                             TaskEvent::from_payload(
-                                &issue.id,
+                                brain_id,
                                 "beads-import",
                                 CommentPayload {
                                     body: format!("[close_reason] {reason}"),
@@ -790,7 +819,7 @@ pub fn import_beads_issues(
 
                     phase2.push(
                         TaskEvent::from_payload(
-                            &issue.id,
+                            brain_id,
                             "beads-import",
                             StatusChangedPayload {
                                 new_status: TaskStatus::InProgress,
@@ -803,11 +832,11 @@ pub fn import_beads_issues(
             }
 
             // Relationships (phase 3 — after all tasks exist)
-            if let Some(deps) = expected_deps.get(&issue.id) {
+            if let Some(deps) = expected_deps.get(brain_id) {
                 for dep_on in deps {
                     phase3.push(
                         TaskEvent::new(
-                            &issue.id,
+                            brain_id,
                             "beads-import",
                             EventType::DependencyAdded,
                             &DependencyPayload {
@@ -820,10 +849,10 @@ pub fn import_beads_issues(
                 }
             }
 
-            if let Some(parent) = expected_parents.get(&issue.id) {
+            if let Some(parent) = expected_parents.get(brain_id) {
                 phase3.push(
                     TaskEvent::from_payload(
-                        &issue.id,
+                        brain_id,
                         "beads-import",
                         ParentSetPayload {
                             parent_task_id: Some(parent.clone()),
@@ -870,6 +899,23 @@ mod tests {
         (dir, store)
     }
 
+    /// Look up a brain task by its original beads ID via the external_ids table.
+    fn get_by_beads_id(store: &TaskStore, beads_id: &str) -> super::super::queries::TaskRow {
+        let brain_id = store
+            .resolve_external_id("beads", beads_id)
+            .unwrap()
+            .unwrap_or_else(|| panic!("no brain task for beads ID '{beads_id}'"));
+        store.get_task(&brain_id).unwrap().unwrap()
+    }
+
+    /// Resolve a beads ID to its brain task_id.
+    fn brain_id(store: &TaskStore, beads_id: &str) -> String {
+        store
+            .resolve_external_id("beads", beads_id)
+            .unwrap()
+            .unwrap_or_else(|| panic!("no brain task for beads ID '{beads_id}'"))
+    }
+
     fn write_jsonl(dir: &Path, issues: &[serde_json::Value]) -> std::path::PathBuf {
         let path = dir.join("issues.jsonl");
         let mut file = std::fs::File::create(&path).unwrap();
@@ -908,10 +954,12 @@ mod tests {
         let all = store.list_all().unwrap();
         assert_eq!(all.len(), 2);
 
-        let t1 = store.get_task("t1").unwrap().unwrap();
+        let t1 = get_by_beads_id(&store, "t1");
         assert_eq!(t1.title, "Task 1");
         assert_eq!(t1.status, "open");
         assert_eq!(t1.priority, 2);
+        // Brain ID should NOT be the beads ID
+        assert_ne!(t1.task_id, "t1");
     }
 
     #[test]
@@ -925,11 +973,12 @@ mod tests {
         let report = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(report.issues_imported, 1);
 
-        let t = store.get_task("t1").unwrap().unwrap();
+        let t = get_by_beads_id(&store, "t1");
         assert_eq!(t.status, "done");
 
         // close_reason should be a comment
-        let comments = store.get_task_comments("t1").unwrap();
+        let bid = brain_id(&store, "t1");
+        let comments = store.get_task_comments(&bid).unwrap();
         assert!(comments.iter().any(|c| c.body.contains("[close_reason]")));
     }
 
@@ -942,7 +991,7 @@ mod tests {
         let report = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(report.issues_imported, 1);
 
-        let t = store.get_task("t1").unwrap().unwrap();
+        let t = get_by_beads_id(&store, "t1");
         assert_eq!(t.status, "in_progress");
     }
 
@@ -963,14 +1012,17 @@ mod tests {
         let report = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(report.deps_imported, 1);
 
+        let bid_t1 = brain_id(&store, "t1");
+        let bid_t2 = brain_id(&store, "t2");
+
         // t1 should be ready, t2 should be blocked
         let ready = store.list_ready().unwrap();
         assert_eq!(ready.len(), 1);
-        assert_eq!(ready[0].task_id, "t1");
+        assert_eq!(ready[0].task_id, bid_t1);
 
         let blocked = store.list_blocked().unwrap();
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].task_id, "t2");
+        assert_eq!(blocked[0].task_id, bid_t2);
     }
 
     #[test]
@@ -992,14 +1044,20 @@ mod tests {
         assert_eq!(report.parent_links_imported, 1);
         assert_eq!(report.deps_imported, 0); // parent-child is NOT a block dep
 
+        let bid_child = brain_id(&store, "child-1");
+        let bid_parent = brain_id(&store, "parent-1");
+
         // Verify parent_task_id is set
-        let child_row = store.get_task("child-1").unwrap().unwrap();
-        assert_eq!(child_row.parent_task_id.as_deref(), Some("parent-1"));
+        let child_row = store.get_task(&bid_child).unwrap().unwrap();
+        assert_eq!(
+            child_row.parent_task_id.as_deref(),
+            Some(bid_parent.as_str())
+        );
 
         // Verify children query
-        let children = store.get_children("parent-1").unwrap();
+        let children = store.get_children(&bid_parent).unwrap();
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].task_id, "child-1");
+        assert_eq!(children[0].task_id, bid_child);
     }
 
     #[test]
@@ -1031,7 +1089,8 @@ mod tests {
         let report = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(report.labels_imported, 2);
 
-        let labels = store.get_task_labels("t1").unwrap();
+        let bid = brain_id(&store, "t1");
+        let labels = store.get_task_labels(&bid).unwrap();
         assert_eq!(labels.len(), 2);
         assert!(labels.contains(&"urgent".to_string()));
         assert!(labels.contains(&"backend".to_string()));
@@ -1050,7 +1109,8 @@ mod tests {
         let report = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(report.comments_imported, 2);
 
-        let comments = store.get_task_comments("t1").unwrap();
+        let bid = brain_id(&store, "t1");
+        let comments = store.get_task_comments(&bid).unwrap();
         assert_eq!(comments.len(), 2);
         assert_eq!(comments[0].body, "First comment");
         assert_eq!(comments[0].author, "alice");
@@ -1074,7 +1134,7 @@ mod tests {
 
         import_beads_issues(&path, &store, false).unwrap();
 
-        let t = store.get_task("t1").unwrap().unwrap();
+        let t = get_by_beads_id(&store, "t1");
         let desc = t.description.unwrap();
         assert!(desc.contains("Main description"));
         assert!(desc.contains("## Notes"));
@@ -1126,7 +1186,7 @@ mod tests {
 
         import_beads_issues(&path, &store, false).unwrap();
 
-        let t = store.get_task("t1").unwrap().unwrap();
+        let t = get_by_beads_id(&store, "t1");
         assert_eq!(t.task_type, "epic");
     }
 
@@ -1155,10 +1215,10 @@ mod tests {
         assert_eq!(r2.events_generated, 0);
 
         // Data unchanged
-        let t1 = store.get_task("t1").unwrap().unwrap();
+        let t1 = get_by_beads_id(&store, "t1");
         assert_eq!(t1.title, "Task 1");
         assert_eq!(t1.status, "open");
-        let t2 = store.get_task("t2").unwrap().unwrap();
+        let t2 = get_by_beads_id(&store, "t2");
         assert_eq!(t2.status, "done");
     }
 
@@ -1188,7 +1248,8 @@ mod tests {
         assert_eq!(r2.issues_skipped, 2);
         assert_eq!(r2.issues_updated, 0);
         assert_eq!(store.list_all().unwrap().len(), 3);
-        assert!(store.get_task("t3").unwrap().is_some());
+        // t3 should now have a brain ID
+        assert!(store.resolve_external_id("beads", "t3").unwrap().is_some());
     }
 
     #[test]
@@ -1197,10 +1258,7 @@ mod tests {
         let issues = vec![make_issue("t1", "Original Title", "open", 2)];
         let path = write_jsonl(dir.path(), &issues);
         import_beads_issues(&path, &store, false).unwrap();
-        assert_eq!(
-            store.get_task("t1").unwrap().unwrap().title,
-            "Original Title"
-        );
+        assert_eq!(get_by_beads_id(&store, "t1").title, "Original Title");
 
         // Change title in beads
         let issues = vec![make_issue("t1", "Updated Title", "open", 2)];
@@ -1211,7 +1269,7 @@ mod tests {
         assert_eq!(r.issues_imported, 0);
         assert_eq!(r.issues_skipped, 0);
 
-        let t = store.get_task("t1").unwrap().unwrap();
+        let t = get_by_beads_id(&store, "t1");
         assert_eq!(t.title, "Updated Title");
     }
 
@@ -1221,7 +1279,7 @@ mod tests {
         let issues = vec![make_issue("t1", "Task 1", "open", 2)];
         let path = write_jsonl(dir.path(), &issues);
         import_beads_issues(&path, &store, false).unwrap();
-        assert_eq!(store.get_task("t1").unwrap().unwrap().status, "open");
+        assert_eq!(get_by_beads_id(&store, "t1").status, "open");
 
         // Close in beads
         let mut closed = make_issue("t1", "Task 1", "closed", 2);
@@ -1231,7 +1289,7 @@ mod tests {
         let r = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(r.issues_updated, 1);
 
-        let t = store.get_task("t1").unwrap().unwrap();
+        let t = get_by_beads_id(&store, "t1");
         assert_eq!(t.status, "done");
     }
 
@@ -1243,7 +1301,8 @@ mod tests {
         let path = write_jsonl(dir.path(), &[issue]);
         import_beads_issues(&path, &store, false).unwrap();
 
-        let labels = store.get_task_labels("t1").unwrap();
+        let bid = brain_id(&store, "t1");
+        let labels = store.get_task_labels(&bid).unwrap();
         assert_eq!(labels.len(), 2);
         assert!(labels.contains(&"urgent".to_string()));
         assert!(labels.contains(&"backend".to_string()));
@@ -1256,7 +1315,7 @@ mod tests {
         let r = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(r.issues_updated, 1);
 
-        let labels = store.get_task_labels("t1").unwrap();
+        let labels = store.get_task_labels(&bid).unwrap();
         assert_eq!(labels.len(), 2);
         assert!(labels.contains(&"backend".to_string()));
         assert!(labels.contains(&"frontend".to_string()));
@@ -1269,7 +1328,7 @@ mod tests {
         let issues = vec![make_issue("t1", "Task 1", "open", 2)];
         let path = write_jsonl(dir.path(), &issues);
         import_beads_issues(&path, &store, false).unwrap();
-        assert_eq!(store.get_task("t1").unwrap().unwrap().priority, 2);
+        assert_eq!(get_by_beads_id(&store, "t1").priority, 2);
 
         // Change priority
         let issues = vec![make_issue("t1", "Task 1", "open", 0)];
@@ -1278,7 +1337,7 @@ mod tests {
         let r = import_beads_issues(&path, &store, false).unwrap();
         assert_eq!(r.issues_updated, 1);
 
-        let t = store.get_task("t1").unwrap().unwrap();
+        let t = get_by_beads_id(&store, "t1");
         assert_eq!(t.priority, 0);
     }
 
@@ -1298,10 +1357,14 @@ mod tests {
         let path = write_jsonl(dir.path(), &[t1, t2, t3]);
         import_beads_issues(&path, &store, false).unwrap();
 
+        let bid_t1 = brain_id(&store, "t1");
+        let bid_t2 = brain_id(&store, "t2");
+        let bid_t3 = brain_id(&store, "t3");
+
         // t2 should be blocked by t1
         let blocked = store.list_blocked().unwrap();
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].task_id, "t2");
+        assert_eq!(blocked[0].task_id, bid_t2);
 
         // Change deps: t1 no longer blocks t2, now t3 blocks t2
         let t1 = make_issue("t1", "Blocker", "open", 1); // no deps
@@ -1322,12 +1385,12 @@ mod tests {
         // t2 should now be blocked by t3, not t1
         let blocked = store.list_blocked().unwrap();
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].task_id, "t2");
+        assert_eq!(blocked[0].task_id, bid_t2);
 
         let ready = store.list_ready().unwrap();
         let ready_ids: Vec<&str> = ready.iter().map(|r| r.task_id.as_str()).collect();
-        assert!(ready_ids.contains(&"t1"));
-        assert!(ready_ids.contains(&"t3"));
-        assert!(!ready_ids.contains(&"t2"));
+        assert!(ready_ids.contains(&bid_t1.as_str()));
+        assert!(ready_ids.contains(&bid_t3.as_str()));
+        assert!(!ready_ids.contains(&bid_t2.as_str()));
     }
 }

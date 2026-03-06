@@ -14,7 +14,7 @@ use rusqlite::Connection;
 
 use super::migrations::{
     migrate_v0_to_v1, migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5,
-    migrate_v5_to_v6,
+    migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -37,6 +37,8 @@ fn snapshot_at_version(version: i32) -> Connection {
             3 => migrate_v3_to_v4(&conn).unwrap(),
             4 => migrate_v4_to_v5(&conn).unwrap(),
             5 => migrate_v5_to_v6(&conn).unwrap(),
+            6 => migrate_v6_to_v7(&conn).unwrap(),
+            7 => migrate_v7_to_v8(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -135,6 +137,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "task_labels",
     "task_comments",
     "brain_meta",
+    "task_external_ids",
 ];
 
 /// All named indexes that must exist at the current schema version.
@@ -149,6 +152,7 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_task_deps_depends_on",
     "idx_task_comments_task_id",
     "idx_task_events_task_id",
+    "idx_external_lookup",
 ];
 
 /// FTS5 triggers that must exist.
@@ -367,6 +371,66 @@ fn migrate_from_v5_to_current() {
         )
         .unwrap();
     assert_eq!(val, "test_value");
+}
+
+#[test]
+fn migrate_from_v6_to_current() {
+    let conn = snapshot_at_version(6);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+    seed_v3_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    // v6→v7 adds task_external_ids table — verify it's functional
+    conn.execute(
+        "INSERT INTO task_external_ids (task_id, source, external_id, imported_at)
+         VALUES ('t1', 'github', 'GH-42', 3000)",
+        [],
+    )
+    .unwrap();
+    let ext_id: String = conn
+        .query_row(
+            "SELECT external_id FROM task_external_ids WHERE task_id = 't1' AND source = 'github'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ext_id, "GH-42");
+}
+
+#[test]
+fn migrate_from_v7_to_current() {
+    let conn = snapshot_at_version(7);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+    seed_v3_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    // v7→v8 adds child_seq column — verify it exists and is nullable
+    let child_seq: Option<i64> = conn
+        .query_row(
+            "SELECT child_seq FROM tasks WHERE task_id = 't1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(child_seq, None);
+
+    // Set a child_seq value
+    conn.execute("UPDATE tasks SET child_seq = 1 WHERE task_id = 't2'", [])
+        .unwrap();
+    let child_seq: Option<i64> = conn
+        .query_row(
+            "SELECT child_seq FROM tasks WHERE task_id = 't2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(child_seq, Some(1));
 }
 
 // ─── Snapshot fixture on disk ────────────────────────────────────

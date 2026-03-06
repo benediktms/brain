@@ -203,6 +203,7 @@ mod tests {
             assignee: None,
             defer_until: None,
             parent_task_id: None,
+            child_seq: None,
             created_at: 0,
             updated_at: 0,
         };

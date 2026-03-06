@@ -22,7 +22,7 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 "Invalid event_type: '{event_type_str}'. Must be one of: task_created, \
                  task_updated, status_changed, dependency_added, dependency_removed, \
                  note_linked, note_unlinked, label_added, label_removed, comment_added, \
-                 parent_set"
+                 parent_set, external_id_added, external_id_removed"
             ));
         }
     };

@@ -3,9 +3,10 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    CommentPayload, DependencyPayload, EventType, LabelPayload, NoteLinkPayload, ParentSetPayload,
-    StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
+    CommentPayload, DependencyPayload, EventType, ExternalIdPayload, LabelPayload, NoteLinkPayload,
+    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
 };
+use super::queries::next_child_seq;
 
 /// Apply a single event to the SQLite projection tables.
 pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
@@ -14,10 +15,16 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
             let p: TaskCreatedPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}")))?;
 
+            let child_seq = p
+                .parent_task_id
+                .as_deref()
+                .map(|pid| next_child_seq(conn, pid))
+                .transpose()?;
+
             conn.execute(
                 "INSERT INTO tasks (task_id, title, description, status, priority, due_ts,
-                                    task_type, assignee, defer_until, parent_task_id, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                    task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 rusqlite::params![
                     event.task_id,
                     p.title,
@@ -29,6 +36,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                     p.assignee,
                     p.defer_until,
                     p.parent_task_id,
+                    child_seq,
                     event.timestamp,
                     event.timestamp,
                 ],
@@ -192,9 +200,40 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
             let p: ParentSetPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}")))?;
 
+            let child_seq = p
+                .parent_task_id
+                .as_deref()
+                .map(|pid| next_child_seq(conn, pid))
+                .transpose()?;
+
             conn.execute(
-                "UPDATE tasks SET parent_task_id = ?1, updated_at = ?2 WHERE task_id = ?3",
-                rusqlite::params![p.parent_task_id, event.timestamp, event.task_id],
+                "UPDATE tasks SET parent_task_id = ?1, child_seq = ?2, updated_at = ?3 WHERE task_id = ?4",
+                rusqlite::params![p.parent_task_id, child_seq, event.timestamp, event.task_id],
+            )?;
+        }
+
+        EventType::ExternalIdAdded => {
+            let p: ExternalIdPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("bad ExternalIdAdded payload: {e}"))
+                })?;
+
+            conn.execute(
+                "INSERT OR IGNORE INTO task_external_ids (task_id, source, external_id, external_url, imported_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![event.task_id, p.source, p.external_id, p.external_url, event.timestamp],
+            )?;
+        }
+
+        EventType::ExternalIdRemoved => {
+            let p: ExternalIdPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("bad ExternalIdRemoved payload: {e}"))
+                })?;
+
+            conn.execute(
+                "DELETE FROM task_external_ids WHERE task_id = ?1 AND source = ?2 AND external_id = ?3",
+                rusqlite::params![event.task_id, p.source, p.external_id],
             )?;
         }
     }
@@ -229,6 +268,7 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
          DELETE FROM task_comments;
          DELETE FROM task_labels;
          DELETE FROM task_note_links;
+         DELETE FROM task_external_ids;
          DELETE FROM task_deps;
          DELETE FROM tasks;",
     )?;

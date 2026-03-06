@@ -42,6 +42,8 @@ pub enum EventType {
     LabelRemoved,
     CommentAdded,
     ParentSet,
+    ExternalIdAdded,
+    ExternalIdRemoved,
 }
 
 /// Valid task statuses.
@@ -167,6 +169,14 @@ pub struct CommentPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParentSetPayload {
     pub parent_task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalIdPayload {
+    pub source: String,
+    pub external_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_url: Option<String>,
 }
 
 // -- EventPayload trait --
