@@ -9,14 +9,22 @@ fn brain_hooks() -> Value {
     json!({
         "UserPromptSubmit": [
             {
-                "type": "command",
-                "command": "brain tasks list --ready --json 2>/dev/null | head -c 2000"
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "brain tasks list --ready --json 2>/dev/null | head -c 2000"
+                    }
+                ]
             }
         ],
         "SessionStart": [
             {
-                "type": "command",
-                "command": "brain tasks stats --json 2>/dev/null"
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "brain tasks stats --json 2>/dev/null"
+                    }
+                ]
             }
         ]
     })
@@ -26,6 +34,15 @@ fn brain_hooks() -> Value {
 const BRAIN_COMMAND_PREFIX: &str = "brain tasks";
 
 fn is_brain_hook(entry: &Value) -> bool {
+    // New format: { "matcher": {}, "hooks": [{ "command": "brain tasks ..." }] }
+    if let Some(hooks_arr) = entry.get("hooks").and_then(|h| h.as_array()) {
+        return hooks_arr.iter().any(|hook| {
+            hook.get("command")
+                .and_then(|c| c.as_str())
+                .is_some_and(|cmd| cmd.starts_with(BRAIN_COMMAND_PREFIX))
+        });
+    }
+    // Legacy format: { "command": "brain tasks ..." }
     entry
         .get("command")
         .and_then(|c| c.as_str())
