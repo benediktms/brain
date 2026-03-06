@@ -14,7 +14,7 @@ use rusqlite::Connection;
 
 use super::migrations::{
     migrate_v0_to_v1, migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5,
-    migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8,
+    migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -39,6 +39,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             5 => migrate_v5_to_v6(&conn).unwrap(),
             6 => migrate_v6_to_v7(&conn).unwrap(),
             7 => migrate_v7_to_v8(&conn).unwrap(),
+            8 => migrate_v8_to_v9(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -431,6 +432,42 @@ fn migrate_from_v7_to_current() {
         )
         .unwrap();
     assert_eq!(child_seq, Some(1));
+}
+
+#[test]
+fn migrate_from_v8_to_current() {
+    let conn = snapshot_at_version(8);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+    seed_v3_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    // v8→v9 adds chunker_version column — verify it exists and is nullable
+    let chunker_version: Option<u32> = conn
+        .query_row(
+            "SELECT chunker_version FROM files WHERE file_id = 'f1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(chunker_version, None);
+
+    // Set a chunker_version value
+    conn.execute(
+        "UPDATE files SET chunker_version = 2 WHERE file_id = 'f1'",
+        [],
+    )
+    .unwrap();
+    let chunker_version: Option<u32> = conn
+        .query_row(
+            "SELECT chunker_version FROM files WHERE file_id = 'f1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(chunker_version, Some(2));
 }
 
 // ─── Snapshot fixture on disk ────────────────────────────────────
