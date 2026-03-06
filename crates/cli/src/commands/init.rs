@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use brain_lib::config::{
@@ -78,20 +79,54 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
     let brains_dir = home.join("brains").join(&brain_name);
     fs::create_dir_all(&brains_dir)?;
 
-    // 6. Generate CLAUDE.md (unless --no-claude-md)
+    // 6. Upsert CLAUDE.md (unless --no-claude-md)
     if !no_claude_md {
         let claude_md_path = cwd.join("CLAUDE.md");
-        if !claude_md_path.exists() {
-            let build_section = detect_build_section(&cwd);
-            let content = CLAUDE_MD_TEMPLATE
-                .replace("{brain_name}", &brain_name)
-                .replace("{build_section}", &build_section);
+        let build_section = detect_build_section(&cwd);
+        let brain_section = BRAIN_SECTION_TEMPLATE
+            .replace("{brain_name}", &brain_name)
+            .replace("{build_section}", &build_section);
+
+        if claude_md_path.exists() {
+            let existing = fs::read_to_string(&claude_md_path)?;
+            if existing.contains(BRAIN_SECTION_START) {
+                // Replace existing brain section.
+                let start = existing.find(BRAIN_SECTION_START).unwrap();
+                let end = existing
+                    .find(BRAIN_SECTION_END)
+                    .map(|i| i + BRAIN_SECTION_END.len())
+                    .unwrap_or(existing.len());
+                let mut updated = String::with_capacity(existing.len());
+                updated.push_str(&existing[..start]);
+                updated.push_str(&brain_section);
+                // Skip any trailing newline after the old end marker.
+                let rest = &existing[end..];
+                let rest = rest.strip_prefix('\n').unwrap_or(rest);
+                updated.push_str(rest);
+                fs::write(&claude_md_path, updated)?;
+                println!("Updated brain section in CLAUDE.md");
+            } else {
+                // Append brain section.
+                let mut content = existing;
+                if !content.ends_with('\n') {
+                    content.push('\n');
+                }
+                content.push('\n');
+                content.push_str(&brain_section);
+                fs::write(&claude_md_path, content)?;
+                println!("Appended brain section to CLAUDE.md");
+            }
+        } else {
+            let content = format!("# {brain_name}\n\n{brain_section}");
             fs::write(&claude_md_path, content)?;
             println!("Generated CLAUDE.md");
         }
     }
 
-    // 7. Print success
+    // 7. Register brain MCP server in Claude Code (user scope)
+    register_claude_mcp_server();
+
+    // 8. Print success
     let display_notes: Vec<String> = note_dirs.iter().map(|p| p.display().to_string()).collect();
     println!(
         "Brain \"{brain_name}\" initialized. Note directories: {:?}",
@@ -152,8 +187,35 @@ make test      # Test
     String::new()
 }
 
-const CLAUDE_MD_TEMPLATE: &str = r#"# {brain_name}
+fn register_claude_mcp_server() {
+    // Use the absolute path of the current binary so the MCP server works
+    // regardless of Claude Code's PATH.
+    let brain_bin = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "brain".into());
 
+    // Remove first in case it already exists (claude mcp add rejects duplicates).
+    let _ = Command::new("claude")
+        .args(["mcp", "remove", "brain", "--scope", "user"])
+        .output();
+
+    let status = Command::new("claude")
+        .args([
+            "mcp", "add", "--scope", "user", "brain", "--", &brain_bin, "mcp",
+        ])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => println!("Registered brain MCP server in Claude Code"),
+        Ok(_) => eprintln!("Warning: failed to register brain MCP server (claude mcp add failed)"),
+        Err(_) => eprintln!("Warning: 'claude' CLI not found, skipping MCP server registration"),
+    }
+}
+
+const BRAIN_SECTION_START: &str = "<!-- brain:start -->";
+const BRAIN_SECTION_END: &str = "<!-- brain:end -->";
+
+const BRAIN_SECTION_TEMPLATE: &str = r#"<!-- brain:start -->
 {build_section}## Task Management
 
 This project uses `brain` for task tracking. Use the CLI or MCP tools.
@@ -197,4 +259,5 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog
 - **Task types**: task, bug, feature, epic
 - **Statuses**: open, in_progress, blocked, done, cancelled
+<!-- brain:end -->
 "#;

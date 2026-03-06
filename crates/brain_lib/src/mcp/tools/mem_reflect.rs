@@ -13,7 +13,9 @@ pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
 
     let budget_tokens = opt_u64(params, "budget_tokens", 2000) as usize;
 
-    let pipeline = QueryPipeline::new(&ctx.db, &ctx.store, &ctx.embedder, &ctx.metrics);
+    let store = ctx.store.as_ref().unwrap();
+    let embedder = ctx.embedder.as_ref().unwrap();
+    let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
     let reflect_result = match pipeline.reflect(topic.to_string(), budget_tokens).await {
         Ok(r) => r,
         Err(e) => return ToolCallResult::error(format!("Reflect failed: {e}")),

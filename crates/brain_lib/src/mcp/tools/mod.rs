@@ -252,13 +252,23 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
+const MEMORY_UNAVAILABLE: &str = "Memory tools are unavailable: embedding model not found. Run `brain setup-model` to download it.";
+
 /// Dispatch a tool call to the appropriate handler.
 pub async fn dispatch_tool_call(name: &str, params: &Value, ctx: &McpContext) -> ToolCallResult {
     match name {
-        "memory.search_minimal" => mem_search_minimal::handle(params, ctx).await,
-        "memory.expand" => mem_expand::handle(params, ctx).await,
+        "memory.search_minimal" | "memory.expand" | "memory.reflect" => {
+            if ctx.store.is_none() || ctx.embedder.is_none() {
+                return ToolCallResult::error(MEMORY_UNAVAILABLE.to_string());
+            }
+            match name {
+                "memory.search_minimal" => mem_search_minimal::handle(params, ctx).await,
+                "memory.expand" => mem_expand::handle(params, ctx).await,
+                "memory.reflect" => mem_reflect::handle(params, ctx).await,
+                _ => unreachable!(),
+            }
+        }
         "memory.write_episode" => mem_write_episode::handle(params, ctx),
-        "memory.reflect" => mem_reflect::handle(params, ctx).await,
         "tasks.apply_event" => task_apply_event::handle(params, ctx),
         "tasks.get" => task_get::handle(params, ctx),
         "tasks.list" => task_list::handle(params, ctx),
@@ -327,8 +337,8 @@ mod tests {
             tmp,
             McpContext {
                 db,
-                store: store_reader,
-                embedder,
+                store: Some(store_reader),
+                embedder: Some(embedder),
                 tasks,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
             },

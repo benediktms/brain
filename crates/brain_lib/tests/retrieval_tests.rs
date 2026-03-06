@@ -60,8 +60,8 @@ async fn setup_mcp() -> (McpContext, TempDir) {
 
     let ctx = McpContext {
         db,
-        store: store_reader,
-        embedder,
+        store: Some(store_reader),
+        embedder: Some(embedder),
         tasks,
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
     };
@@ -555,8 +555,8 @@ async fn test_mcp_search_minimal_returns_results() {
     let store2 = Store::open_or_create(&lance_path).await.unwrap();
     let ctx = McpContext {
         db: Db::open(&sqlite_path).unwrap(),
-        store: brain_lib::store::StoreReader::from_store(&store2),
-        embedder: Arc::new(MockEmbedder),
+        store: Some(brain_lib::store::StoreReader::from_store(&store2)),
+        embedder: Some(Arc::new(MockEmbedder)),
         tasks: brain_lib::tasks::TaskStore::new(&tasks_dir2, Db::open(&sqlite_path).unwrap())
             .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
@@ -615,8 +615,8 @@ async fn test_mcp_expand_returns_full_content() {
     let store3 = Store::open_or_create(&lance_path).await.unwrap();
     let ctx = McpContext {
         db: Db::open(&sqlite_path).unwrap(),
-        store: brain_lib::store::StoreReader::from_store(&store3),
-        embedder: Arc::new(MockEmbedder),
+        store: Some(brain_lib::store::StoreReader::from_store(&store3)),
+        embedder: Some(Arc::new(MockEmbedder)),
         tasks: brain_lib::tasks::TaskStore::new(&tasks_dir3, Db::open(&sqlite_path).unwrap())
             .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
