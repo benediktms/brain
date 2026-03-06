@@ -8,7 +8,7 @@ use crate::metrics::Metrics;
 use rusqlite::OptionalExtension;
 
 use crate::db::Db;
-use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
+use crate::db::chunks::{ChunkMeta, get_chunk_hashes, replace_chunk_metadata};
 use crate::db::files;
 use crate::db::links::replace_links;
 use crate::db::meta;
@@ -47,6 +47,33 @@ struct PendingFile {
     hash: String,
     chunks: Vec<Chunk>,
     links: Vec<Link>,
+}
+
+/// Build ChunkMeta vec from chunks and file_id.
+fn build_chunk_metas(file_id: &str, chunks: &[Chunk]) -> Vec<ChunkMeta> {
+    chunks
+        .iter()
+        .map(|c| ChunkMeta {
+            chunk_id: format!("{file_id}:{}", c.ord),
+            chunk_ord: c.ord,
+            chunk_hash: c.chunk_hash.clone(),
+            chunker_version: CHUNKER_VERSION,
+            content: c.content.clone(),
+            heading_path: c.heading_path.clone(),
+            byte_start: c.byte_start,
+            byte_end: c.byte_end,
+            token_estimate: c.token_estimate,
+        })
+        .collect()
+}
+
+/// Check if new chunk hashes match stored chunk hashes (same count, same order).
+fn chunks_match_stored(chunks: &[Chunk], stored_hashes: &[String]) -> bool {
+    chunks.len() == stored_hashes.len()
+        && chunks
+            .iter()
+            .zip(stored_hashes.iter())
+            .all(|(c, stored)| c.chunk_hash == *stored)
 }
 
 /// Orchestrates Db + Store + Embedder for incremental indexing.
@@ -220,30 +247,27 @@ impl IndexPipeline {
             return Ok(true);
         }
 
-        // Embed (in blocking task since it's CPU-intensive)
-        let texts_owned: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
-        let embeddings = crate::embedder::embed_batch_async(&self.embedder, texts_owned).await?;
+        // Version-bump optimization: if chunk hashes are identical, skip embedding.
+        let stored_hashes = self
+            .db
+            .with_read_conn(|conn| get_chunk_hashes(conn, &verdict.file_id))?;
 
-        // SQLite: replace chunk metadata + links
-        let chunk_metas: Vec<ChunkMeta> = chunks
-            .iter()
-            .map(|c| ChunkMeta {
-                chunk_id: format!("{}:{}", verdict.file_id, c.ord),
-                chunk_ord: c.ord,
-                chunk_hash: c.chunk_hash.clone(),
-                chunker_version: CHUNKER_VERSION,
-                content: c.content.clone(),
-                heading_path: c.heading_path.clone(),
-                byte_start: c.byte_start,
-                byte_end: c.byte_end,
-                token_estimate: c.token_estimate,
-            })
-            .collect();
+        let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
         self.db.with_write_conn(|conn| {
             replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
             replace_links(conn, &verdict.file_id, &links)?;
             Ok(())
         })?;
+
+        if chunks_match_stored(&chunks, &stored_hashes) {
+            gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+            self.metrics.record_index_latency(start.elapsed());
+            return Ok(true);
+        }
+
+        // Embed (in blocking task since it's CPU-intensive)
+        let texts_owned: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
+        let embeddings = crate::embedder::embed_batch_async(&self.embedder, texts_owned).await?;
 
         // LanceDB: upsert
         let chunk_pairs: Vec<(usize, &str)> =
@@ -321,6 +345,23 @@ impl IndexPipeline {
                 continue;
             }
 
+            // Version-bump optimization: if chunk hashes are identical, skip embedding
+            let stored_hashes = self
+                .db
+                .with_read_conn(|conn| get_chunk_hashes(conn, &verdict.file_id))?;
+
+            if chunks_match_stored(&chunks, &stored_hashes) {
+                let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
+                self.db.with_write_conn(|conn| {
+                    replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
+                    replace_links(conn, &verdict.file_id, &links)?;
+                    Ok(())
+                })?;
+                gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+                stats.indexed += 1;
+                continue;
+            }
+
             total_chunks += chunks.len();
             pending.push(PendingFile {
                 file_id: verdict.file_id,
@@ -391,21 +432,7 @@ impl IndexPipeline {
             let file_start = std::time::Instant::now();
             let file_embeddings = &all_embeddings[offset_start..offset_start + chunk_count];
 
-            let chunk_metas: Vec<ChunkMeta> = pf
-                .chunks
-                .iter()
-                .map(|c| ChunkMeta {
-                    chunk_id: format!("{}:{}", pf.file_id, c.ord),
-                    chunk_ord: c.ord,
-                    chunk_hash: c.chunk_hash.clone(),
-                    chunker_version: CHUNKER_VERSION,
-                    content: c.content.clone(),
-                    heading_path: c.heading_path.clone(),
-                    byte_start: c.byte_start,
-                    byte_end: c.byte_end,
-                    token_estimate: c.token_estimate,
-                })
-                .collect();
+            let chunk_metas = build_chunk_metas(&pf.file_id, &pf.chunks);
 
             let file_id = &pf.file_id;
             let path_str = &pf.path_str;
@@ -555,7 +582,18 @@ impl IndexPipeline {
             }
         }
 
-        // 4. Batch-index all scanned files (hash gate skips unchanged)
+        // 4. Check for stale chunker versions
+        let stale_count = self
+            .db
+            .with_read_conn(|conn| files::count_stale_chunker_version(conn, CHUNKER_VERSION))?;
+        if stale_count > 0 {
+            warn!(
+                count = stale_count,
+                "chunker version changed, file(s) have stale chunker version"
+            );
+        }
+
+        // 5. Batch-index all scanned files (hash gate skips unchanged)
         let paths: Vec<PathBuf> = scanned_files.iter().map(|f| f.path.clone()).collect();
         let batch_stats = self.index_files_batch(&paths).await?;
         stats.indexed += batch_stats.indexed;

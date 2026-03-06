@@ -107,6 +107,14 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
     super::collect_rows(rows)
 }
 
+/// Get ordered chunk hashes for a file (by chunk_ord).
+pub fn get_chunk_hashes(conn: &Connection, file_id: &str) -> Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT chunk_hash FROM chunks WHERE file_id = ?1 ORDER BY chunk_ord")?;
+    let rows = stmt.query_map([file_id], |row| row.get::<_, String>(0))?;
+    super::collect_rows(rows)
+}
+
 #[cfg(test)]
 impl ChunkMeta {
     /// Create a test ChunkMeta with sensible defaults for the new fields.
