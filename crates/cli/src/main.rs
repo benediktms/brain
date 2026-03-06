@@ -230,10 +230,45 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Initialize a new brain in the current directory
+    Init {
+        /// Brain name (defaults to directory name)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Note directories to index (defaults to current directory)
+        #[arg(long)]
+        notes: Vec<PathBuf>,
+
+        /// Skip generating CLAUDE.md
+        #[arg(long)]
+        no_claude_md: bool,
+    },
+
+    /// List all registered brains
+    #[command(visible_alias = "ls")]
+    List,
+
+    /// Remove a registered brain
+    #[command(visible_alias = "rm")]
+    Remove {
+        /// Brain name to remove
+        name: String,
+        /// Also delete derived data (~/.brain/brains/<name>/)
+        #[arg(long)]
+        purge: bool,
+    },
+
     /// Get or set brain configuration
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+
+    /// Manage Claude Code hook integration
+    Hooks {
+        #[command(subcommand)]
+        action: HooksAction,
     },
 
     /// Manage brain tasks
@@ -476,6 +511,18 @@ enum ConfigAction {
 }
 
 #[derive(Subcommand)]
+enum HooksAction {
+    /// Install brain hooks into Claude Code settings
+    Install {
+        /// Print the hook config without writing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show current hook status
+    Status,
+}
+
+#[derive(Subcommand)]
 enum DaemonAction {
     /// Start the daemon in the background
     #[command(long_about = "Start the daemon in the background.\n\n\
@@ -600,8 +647,29 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::Mcp => {
             commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
         }
+        Command::Hooks { action } => match action {
+            HooksAction::Install { dry_run } => {
+                commands::hooks::install(dry_run)?;
+            }
+            HooksAction::Status => {
+                commands::hooks::status()?;
+            }
+        },
         Command::ImportBeads { path, dry_run } => {
             commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
+        }
+        Command::Init {
+            name,
+            notes,
+            no_claude_md,
+        } => {
+            commands::init::run(name, notes, no_claude_md)?;
+        }
+        Command::List => {
+            commands::list::run_list()?;
+        }
+        Command::Remove { name, purge } => {
+            commands::list::run_remove(&name, purge)?;
         }
         Command::Config { action } => {
             let db = brain_lib::db::Db::open(&cli.sqlite_db)?;

@@ -1,5 +1,6 @@
 pub mod capsule;
 pub mod chunker;
+pub mod config;
 pub mod db;
 pub mod doctor;
 pub mod embedder;

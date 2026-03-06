@@ -19,6 +19,8 @@ blake3 = "1"
 ulid = "1"
 chrono = "0.4"
 criterion = { version = "0.5", features = ["async_tokio"] }
+toml = "0.8"
+dirs = "6"
 
 # Optimize candle crates in dev builds for usable embedding speed.
 # opt-level 1 enables SIMD vectorization with minimal compile-time cost.
