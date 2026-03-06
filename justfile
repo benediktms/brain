@@ -159,3 +159,10 @@ dist-linkage:
 [group('release')]
 dist-generate:
     cargo dist generate
+
+# Build release binary and symlink to ~/bin/brain
+[group('dev')]
+install:
+    cargo build --release
+    @mkdir -p ~/bin
+    @ln -sf "{{justfile_directory()}}/target/release/brain" ~/bin/brain
