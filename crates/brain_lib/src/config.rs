@@ -137,7 +137,7 @@ pub fn resolve_brain_paths(start: &Path) -> Result<Option<ResolvedPaths>> {
     let brain_data = home.join("brains").join(&brain_toml.name);
 
     Ok(Some(ResolvedPaths {
-        model_dir: root.join(".brain").join("models").join("bge-small-en-v1.5"),
+        model_dir: home.join("models").join("bge-small-en-v1.5"),
         lance_db: brain_data.join("lancedb"),
         sqlite_db: brain_data.join("brain.db"),
     }))

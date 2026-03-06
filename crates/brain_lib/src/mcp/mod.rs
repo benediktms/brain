@@ -24,10 +24,14 @@ use protocol::{
 use tools::{dispatch_tool_call, tool_definitions};
 
 /// Shared context for MCP tool handlers.
+///
+/// `store` and `embedder` are optional — they require the embedding model to
+/// be downloaded. When absent, task tools still work but memory/search tools
+/// return an error asking the user to run `brain setup-model`.
 pub struct McpContext {
     pub db: Db,
-    pub store: StoreReader,
-    pub embedder: Arc<dyn Embed>,
+    pub store: Option<StoreReader>,
+    pub embedder: Option<Arc<dyn Embed>>,
     pub tasks: TaskStore,
     pub metrics: Arc<Metrics>,
 }
