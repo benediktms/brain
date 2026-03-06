@@ -49,9 +49,9 @@ impl MarkdownTable {
         // Data rows
         for row in &self.rows {
             out.push('|');
-            for i in 0..col_count {
+            for (i, width) in widths.iter().enumerate().take(col_count) {
                 let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
-                out.push_str(&format!(" {:<width$} |", cell, width = widths[i]));
+                out.push_str(&format!(" {:<width$} |", cell, width = width));
             }
             out.push('\n');
         }
