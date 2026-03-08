@@ -10,6 +10,7 @@ use arrow_array::{
     StringArray, types::Float32Type,
 };
 use arrow_schema::{DataType, Field, Schema};
+use lancedb::index::{Index, vector::IvfPqIndexBuilder};
 use lancedb::table::OptimizeAction;
 use tracing::{info, instrument, warn};
 
@@ -25,6 +26,38 @@ pub const LANCE_SCHEMA_VERSION: u32 = 1;
 
 const DEFAULT_ROW_THRESHOLD: u64 = 200;
 const DEFAULT_TIME_THRESHOLD: Duration = Duration::from_secs(300);
+
+/// Minimum rows required before IVF-PQ index creation is worthwhile.
+/// LanceDB needs sufficient data for IVF partition training.
+const MIN_ROWS_FOR_INDEX: u64 = 256;
+
+/// Default nprobes used when querying with an IVF index.
+pub const DEFAULT_NPROBES: usize = 20;
+
+/// Configuration for IVF-PQ vector index creation.
+#[derive(Debug, Clone)]
+pub struct IvfPqConfig {
+    pub num_partitions: Option<u32>,
+    pub num_sub_vectors: Option<u32>,
+    pub nprobes: usize,
+}
+
+impl IvfPqConfig {
+    /// Auto-calculate partitions from row count (sqrt(N)).
+    pub fn auto_partitions(row_count: u64) -> u32 {
+        (row_count as f64).sqrt().ceil().max(1.0) as u32
+    }
+}
+
+impl Default for IvfPqConfig {
+    fn default() -> Self {
+        Self {
+            num_partitions: None,  // let LanceDB auto-calculate (sqrt(N))
+            num_sub_vectors: None, // let LanceDB auto-calculate (dim/16 or dim/8)
+            nprobes: DEFAULT_NPROBES,
+        }
+    }
+}
 
 /// Tracks unoptimized mutations and schedules LanceDB optimize() calls.
 ///
@@ -125,6 +158,71 @@ impl OptimizeScheduler {
             Err(e) => {
                 // Don't subtract — mutations still pending for next trigger
                 warn!(error = %e, "LanceDB optimize failed, will retry on next trigger");
+                return;
+            }
+        }
+
+        // Auto-create IVF-PQ index if enough rows and no index exists yet
+        self.maybe_create_index().await;
+    }
+
+    /// Create IVF-PQ vector index if the table has enough rows and no vector index exists.
+    async fn maybe_create_index(&self) {
+        let indices = match self.table.list_indices().await {
+            Ok(i) => i,
+            Err(e) => {
+                warn!(error = %e, "failed to list indices, skipping auto-index");
+                return;
+            }
+        };
+
+        let has_vector_index = indices
+            .iter()
+            .any(|i| i.columns.contains(&"embedding".to_string()));
+
+        if has_vector_index {
+            return;
+        }
+
+        let count = match self.table.count_rows(None).await {
+            Ok(c) => c as u64,
+            Err(e) => {
+                warn!(error = %e, "failed to count rows for auto-index");
+                return;
+            }
+        };
+
+        if count < MIN_ROWS_FOR_INDEX {
+            return;
+        }
+
+        let config = IvfPqConfig {
+            num_partitions: Some(IvfPqConfig::auto_partitions(count)),
+            ..Default::default()
+        };
+
+        let mut builder = IvfPqIndexBuilder::default().distance_type(lancedb::DistanceType::Dot);
+
+        if let Some(np) = config.num_partitions {
+            builder = builder.num_partitions(np);
+        }
+
+        match self
+            .table
+            .create_index(&["embedding"], Index::IvfPq(builder))
+            .replace(true)
+            .execute()
+            .await
+        {
+            Ok(()) => {
+                info!(
+                    row_count = count,
+                    num_partitions = ?config.num_partitions,
+                    "IVF-PQ vector index auto-created during optimize"
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "auto index creation failed, will retry on next optimize");
             }
         }
     }
@@ -160,8 +258,9 @@ impl StoreReader {
         &self,
         embedding: &[f32],
         top_k: usize,
+        nprobes: usize,
     ) -> crate::error::Result<Vec<QueryResult>> {
-        query_impl(&self.table, embedding, top_k).await
+        query_impl(&self.table, embedding, top_k, nprobes).await
     }
 }
 
@@ -212,6 +311,11 @@ impl Store {
     /// Access the optimize scheduler (for triggering optimize from CLI commands).
     pub fn optimizer(&self) -> &OptimizeScheduler {
         &self.optimize_scheduler
+    }
+
+    /// Access the underlying LanceDB table (for index inspection/management).
+    pub fn table(&self) -> &lancedb::Table {
+        &self.table
     }
 
     /// Drop the `chunks` table and recreate it with the current schema.
@@ -411,8 +515,35 @@ impl Store {
         &self,
         embedding: &[f32],
         top_k: usize,
+        nprobes: usize,
     ) -> crate::error::Result<Vec<QueryResult>> {
-        query_impl(&self.table, embedding, top_k).await
+        query_impl(&self.table, embedding, top_k, nprobes).await
+    }
+
+    /// Create an IVF-PQ vector index on the embedding column.
+    pub async fn create_vector_index(&self, config: &IvfPqConfig) -> crate::error::Result<()> {
+        let mut builder = IvfPqIndexBuilder::default().distance_type(lancedb::DistanceType::Dot);
+
+        if let Some(np) = config.num_partitions {
+            builder = builder.num_partitions(np);
+        }
+        if let Some(nsv) = config.num_sub_vectors {
+            builder = builder.num_sub_vectors(nsv);
+        }
+
+        self.table
+            .create_index(&["embedding"], Index::IvfPq(builder))
+            .replace(true)
+            .execute()
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("index creation failed: {e}")))?;
+
+        info!(
+            num_partitions = ?config.num_partitions,
+            num_sub_vectors = ?config.num_sub_vectors,
+            "IVF-PQ vector index created"
+        );
+        Ok(())
     }
 }
 
@@ -431,6 +562,7 @@ async fn query_impl(
     table: &lancedb::Table,
     embedding: &[f32],
     top_k: usize,
+    nprobes: usize,
 ) -> crate::error::Result<Vec<QueryResult>> {
     use futures::TryStreamExt;
     use lancedb::query::{ExecutableQuery, QueryBase};
@@ -439,6 +571,7 @@ async fn query_impl(
         .vector_search(embedding)
         .map_err(|e| BrainCoreError::VectorDb(format!("search setup failed: {e}")))?
         .distance_type(lancedb::DistanceType::Dot)
+        .nprobes(nprobes)
         .limit(top_k)
         .execute()
         .await

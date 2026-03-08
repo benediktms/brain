@@ -239,7 +239,7 @@ async fn test_concurrent_read_write_no_deadlocks() {
         let qv = query_vec.clone();
         reader_handles.push(tokio::spawn(async move {
             for i in 0..25 {
-                let results = r.query(&qv, 5).await;
+                let results = r.query(&qv, 5, 20).await;
                 assert!(
                     results.is_ok(),
                     "reader {task_id} query {i} failed: {:?}",
@@ -308,7 +308,7 @@ async fn test_optimize_row_threshold() {
     // Queries should still work after optimize
     let embedder = pipeline.embedder().clone();
     let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
-    let results = pipeline.store().query(&query_vec, 5).await.unwrap();
+    let results = pipeline.store().query(&query_vec, 5, 20).await.unwrap();
     assert!(
         !results.is_empty(),
         "queries should return results after optimize"
@@ -433,5 +433,99 @@ async fn test_scan_watcher_race_idempotent() {
     assert!(
         latency_after > latency_before,
         "modified file should be re-indexed"
+    );
+}
+
+// ─── Test 8: IVF-PQ index creation ──────────────────────────────
+
+#[tokio::test]
+async fn test_ivf_pq_index_creation() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    // Need >256 rows for index creation (128 files × 2 chunks = 256)
+    let paths = generate_vault(&notes_dir, 130);
+    let stats = pipeline.index_files_batch(&paths).await.unwrap();
+    assert_eq!(stats.indexed, 130);
+
+    // Create index explicitly
+    let config = brain_lib::store::IvfPqConfig::default();
+    pipeline.store().create_vector_index(&config).await.unwrap();
+
+    // Verify index exists via list_indices
+    let indices = pipeline.store().table().list_indices().await.unwrap();
+    let has_embedding_index = indices
+        .iter()
+        .any(|i| i.columns.contains(&"embedding".to_string()));
+    assert!(
+        has_embedding_index,
+        "should have a vector index on embedding column"
+    );
+}
+
+// ─── Test 9: IVF-PQ query returns results ────────────────────────
+
+#[tokio::test]
+async fn test_ivf_pq_query_returns_results() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    let paths = generate_vault(&notes_dir, 130);
+    pipeline.index_files_batch(&paths).await.unwrap();
+
+    // Create index
+    let config = brain_lib::store::IvfPqConfig::default();
+    pipeline.store().create_vector_index(&config).await.unwrap();
+
+    // Query with nprobes
+    let embedder = pipeline.embedder().clone();
+    let query_vec = embedder.embed_batch(&["search query"]).unwrap()[0].clone();
+    let results = pipeline.store().query(&query_vec, 10, 20).await.unwrap();
+
+    assert!(
+        !results.is_empty(),
+        "query should return results after index creation"
+    );
+    for r in &results {
+        assert!(!r.chunk_id.is_empty());
+        assert!(!r.file_path.is_empty());
+    }
+}
+
+// ─── Test 10: Auto-index on optimize ─────────────────────────────
+
+#[tokio::test]
+async fn test_auto_index_on_optimize() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+
+    // Generate enough files to exceed both row threshold and MIN_ROWS_FOR_INDEX
+    // 150 files × 2 chunks = 300 > 256 (MIN_ROWS_FOR_INDEX)
+    let paths = generate_vault(&notes_dir, 150);
+    pipeline.index_files_batch(&paths).await.unwrap();
+
+    // Force optimize — should also auto-create index
+    pipeline.store().optimizer().force_optimize().await;
+
+    // Verify index was auto-created
+    let indices = pipeline.store().table().list_indices().await.unwrap();
+    let has_embedding_index = indices
+        .iter()
+        .any(|i| i.columns.contains(&"embedding".to_string()));
+    assert!(
+        has_embedding_index,
+        "optimize should auto-create IVF-PQ index when row count >= 256"
+    );
+
+    // Queries should still work with the index
+    let embedder = pipeline.embedder().clone();
+    let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
+    let results = pipeline.store().query(&query_vec, 5, 20).await.unwrap();
+    assert!(
+        !results.is_empty(),
+        "queries should return results after auto-index"
     );
 }

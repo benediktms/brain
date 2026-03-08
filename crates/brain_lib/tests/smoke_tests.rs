@@ -272,7 +272,7 @@ async fn test_roundtrip_index_then_query() {
     let store = Store::open_or_create(&tmp.path().join("brain_lancedb"))
         .await
         .unwrap();
-    let results = store.query(&query_vec[0], 5).await.unwrap();
+    let results = store.query(&query_vec[0], 5, 20).await.unwrap();
 
     assert!(!results.is_empty(), "query should return results");
 
@@ -331,7 +331,7 @@ async fn test_roundtrip_with_fixtures() {
     let store = Store::open_or_create(&tmp.path().join("brain_lancedb"))
         .await
         .unwrap();
-    let results = store.query(&query_vec[0], 10).await.unwrap();
+    let results = store.query(&query_vec[0], 10, 20).await.unwrap();
 
     assert!(
         !results.is_empty(),
@@ -419,7 +419,7 @@ async fn test_empty_vault_query_returns_nothing() {
     let store = Store::open_or_create(&tmp.path().join("brain_lancedb"))
         .await
         .unwrap();
-    let results = store.query(&query_vec[0], 5).await.unwrap();
+    let results = store.query(&query_vec[0], 5, 20).await.unwrap();
     assert!(results.is_empty(), "empty index should return no results");
 }
 

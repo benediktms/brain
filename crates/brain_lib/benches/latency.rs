@@ -132,7 +132,7 @@ fn bench_querying(c: &mut Criterion) {
                 let qv = query_vec.clone();
                 let store = pipeline.store();
                 async move {
-                    black_box(store.query(&qv, 10).await.unwrap());
+                    black_box(store.query(&qv, 10, 20).await.unwrap());
                 }
             });
         });
@@ -163,5 +163,99 @@ fn bench_embedding(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_indexing, bench_querying, bench_embedding);
+// ─── IVF-PQ recall benchmarks ───────────────────────────────────
+
+fn bench_ivf_pq_recall(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut group = c.benchmark_group("ivf_pq_recall");
+    // Fewer iterations since index creation is expensive
+    group.sample_size(10);
+
+    let corpus_size = 500; // 500 files × 2 chunks = 1000 vectors
+
+    // One-time setup: build corpus, get brute-force ground truth, then create index
+    let (pipeline, _tmp, query_vecs, ground_truth) = rt.block_on(async {
+        let (pipeline, tmp) = setup().await;
+        let dir = tmp.path().join("notes");
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = generate_vault(&dir, corpus_size);
+        pipeline.index_files_batch(&paths).await.unwrap();
+        pipeline.store().optimizer().force_optimize().await;
+
+        // Generate 10 query vectors
+        let queries: Vec<String> = (0..10)
+            .map(|i| format!("recall benchmark query number {i}"))
+            .collect();
+        let query_strs: Vec<&str> = queries.iter().map(|s| s.as_str()).collect();
+        let query_vecs = pipeline.embedder().embed_batch(&query_strs).unwrap();
+
+        // Brute-force ground truth (no index, nprobes ignored)
+        let mut ground_truth = Vec::new();
+        for qv in &query_vecs {
+            let results = pipeline.store().query(qv, 10, 20).await.unwrap();
+            let ids: Vec<String> = results.into_iter().map(|r| r.chunk_id).collect();
+            ground_truth.push(ids);
+        }
+
+        // Create IVF-PQ index
+        let config = brain_lib::store::IvfPqConfig::default();
+        pipeline.store().create_vector_index(&config).await.unwrap();
+
+        (pipeline, tmp, query_vecs, ground_truth)
+    });
+
+    for nprobes in [5, 10, 20, 40] {
+        group.bench_function(format!("query_nprobes_{nprobes}"), |b| {
+            b.to_async(&rt).iter(|| {
+                let store = pipeline.store();
+                let qvs = &query_vecs;
+                async move {
+                    for qv in qvs {
+                        black_box(store.query(qv, 10, nprobes).await.unwrap());
+                    }
+                }
+            });
+        });
+    }
+
+    // After benching, measure recall@10 for each nprobes setting
+    let recall_results: Vec<(usize, f64)> = rt.block_on(async {
+        let mut results = Vec::new();
+        for nprobes in [5, 10, 20, 40] {
+            let mut total_recall = 0.0;
+            for (i, qv) in query_vecs.iter().enumerate() {
+                let ann_results = pipeline.store().query(qv, 10, nprobes).await.unwrap();
+                let ann_ids: std::collections::HashSet<&str> =
+                    ann_results.iter().map(|r| r.chunk_id.as_str()).collect();
+                let gt_ids: std::collections::HashSet<&str> =
+                    ground_truth[i].iter().map(|s| s.as_str()).collect();
+                let intersection = ann_ids.intersection(&gt_ids).count();
+                total_recall += intersection as f64 / gt_ids.len().max(1) as f64;
+            }
+            let avg_recall = total_recall / query_vecs.len() as f64;
+            results.push((nprobes, avg_recall));
+        }
+        results
+    });
+
+    // Print recall results for reference
+    eprintln!(
+        "\n── IVF-PQ Recall@10 (corpus={corpus_size} files, {} vectors) ──",
+        corpus_size * 2
+    );
+    for (nprobes, recall) in &recall_results {
+        eprintln!("  nprobes={nprobes:>3}: recall@10 = {recall:.4}");
+    }
+    eprintln!();
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_indexing,
+    bench_querying,
+    bench_embedding,
+    bench_ivf_pq_recall,
+);
 criterion_main!(benches);

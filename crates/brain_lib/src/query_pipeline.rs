@@ -19,7 +19,7 @@ use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
 use crate::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
 use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
-use crate::store::StoreReader;
+use crate::store::{DEFAULT_NPROBES, StoreReader};
 use crate::tokens::estimate_tokens;
 
 const CANDIDATE_LIMIT: usize = 50;
@@ -100,7 +100,10 @@ impl<'a> QueryPipeline<'a> {
             .ok_or_else(|| BrainCoreError::Embedding("Empty embedding result".into()))?;
 
         // 2. Vector search (top-50)
-        let vector_results = self.store.query(&query_vec, CANDIDATE_LIMIT).await?;
+        let vector_results = self
+            .store
+            .query(&query_vec, CANDIDATE_LIMIT, DEFAULT_NPROBES)
+            .await?;
 
         // 3. FTS search (top-50, gracefully degrade on failure)
         let fts_results = match self
