@@ -46,6 +46,13 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `memory_write_episode` — Record episodes
 - `memory_reflect` — Retrieve source material for reflection
 
+### Workflow
+
+When working on tasks:
+1. **Before starting**: Mark the task `in_progress` via `tasks_apply_event` (status_changed) or `brain tasks update <id> --status=in_progress`
+2. **While working**: Add comments for significant decisions or blockers
+3. **On completion**: Close the task via `tasks_apply_event` (status_changed to `done`) or `brain tasks close <id>`
+
 ### Conventions
 
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog
