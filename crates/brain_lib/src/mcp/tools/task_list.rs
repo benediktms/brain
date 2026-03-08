@@ -126,11 +126,12 @@ fn build_response(
     let short_ids = ctx.tasks.shortest_unique_prefixes().unwrap_or_default();
     for task_val in &mut tasks_json {
         if let Some(obj) = task_val.as_object_mut() {
-            if let Some(tid) = obj.get("task_id").and_then(|v| v.as_str()).map(String::from) {
-                let short = short_ids
-                    .get(tid.as_str())
-                    .cloned()
-                    .unwrap_or(tid);
+            if let Some(tid) = obj
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+            {
+                let short = short_ids.get(tid.as_str()).cloned().unwrap_or(tid);
                 obj.insert("short_id".into(), json!(short));
             }
             if !include_description {
