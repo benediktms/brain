@@ -203,20 +203,30 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "tasks.list".into(),
-            description: "List tasks filtered by status or fetch specific tasks by ID (supports prefix resolution). Returns summary task objects with short_id and aggregate counts.".into(),
+            description: "List tasks filtered by status. Returns summary task objects (descriptions omitted by default — use tasks.get for full details). Results are sorted by priority and paginated.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["all", "ready", "blocked"],
-                        "description": "Filter tasks by status. 'all' (default): all tasks. 'ready': no unresolved deps. 'blocked': has unresolved deps or blocked_reason.",
-                        "default": "all"
+                        "enum": ["open", "all", "ready", "blocked"],
+                        "description": "Filter tasks by status. 'open' (default): excludes done/cancelled. 'all': every task including done/cancelled. 'ready': no unresolved deps. 'blocked': has unresolved deps or blocked_reason.",
+                        "default": "open"
                     },
                     "task_ids": {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Fetch specific tasks by ID or prefix (ignores status filter). Unresolvable IDs are silently skipped."
+                    },
+                    "include_description": {
+                        "type": "boolean",
+                        "description": "Include task descriptions in output. Default: false (omitted to reduce response size).",
+                        "default": false
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of tasks to return. Default: 50. Response includes 'total' and 'has_more' for pagination.",
+                        "default": 50
                     }
                 }
             }),

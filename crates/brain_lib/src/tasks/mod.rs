@@ -78,6 +78,11 @@ impl TaskStore {
         self.db.with_read_conn(queries::list_all)
     }
 
+    /// List open tasks (excludes done/cancelled).
+    pub fn list_open(&self) -> Result<Vec<queries::TaskRow>> {
+        self.db.with_read_conn(queries::list_open)
+    }
+
     /// Get a single task by ID.
     pub fn get_task(&self, task_id: &str) -> Result<Option<queries::TaskRow>> {
         self.db

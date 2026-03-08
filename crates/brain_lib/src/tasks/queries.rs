@@ -110,6 +110,20 @@ pub fn list_all(conn: &Connection) -> Result<Vec<TaskRow>> {
     crate::db::collect_rows(rows)
 }
 
+/// List open tasks (excludes done/cancelled).
+pub fn list_open(conn: &Connection) -> Result<Vec<TaskRow>> {
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
+         FROM tasks
+         WHERE status IN ('open', 'in_progress', 'blocked')
+         ORDER BY priority ASC, due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+
+    let rows = stmt.query_map([], row_to_task)?;
+    crate::db::collect_rows(rows)
+}
+
 /// Get a single task by ID.
 pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
     let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE task_id = ?1");
