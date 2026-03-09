@@ -1,12 +1,10 @@
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
-
 use anyhow::{Context, Result, bail};
 use brain_lib::config::{
     BrainEntry, BrainToml, brain_home, load_global_config, paths::normalize_note_paths,
     save_brain_toml, save_global_config,
 };
+use std::fs;
+use std::path::PathBuf;
 
 /// Initialize a new brain in the current (or given) directory.
 pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Result<()> {
@@ -117,7 +115,12 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
     }
 
     // 7. Register brain MCP server in Claude Code (user scope)
-    register_claude_mcp_server();
+    let brain_bin = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "brain".into());
+    if let Err(e) = super::mcp_setup::register_claude(&brain_bin, false) {
+        eprintln!("Warning: {e}");
+    }
 
     // 8. Print success
     let display_notes: Vec<String> = note_dirs.iter().map(|p| p.display().to_string()).collect();
@@ -178,31 +181,6 @@ make test      # Test
         .to_string();
     }
     String::new()
-}
-
-fn register_claude_mcp_server() {
-    // Use the absolute path of the current binary so the MCP server works
-    // regardless of Claude Code's PATH.
-    let brain_bin = std::env::current_exe()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "brain".into());
-
-    // Remove first in case it already exists (claude mcp add rejects duplicates).
-    let _ = Command::new("claude")
-        .args(["mcp", "remove", "brain", "--scope", "user"])
-        .output();
-
-    let status = Command::new("claude")
-        .args([
-            "mcp", "add", "--scope", "user", "brain", "--", &brain_bin, "mcp",
-        ])
-        .status();
-
-    match status {
-        Ok(s) if s.success() => println!("Registered brain MCP server in Claude Code"),
-        Ok(_) => eprintln!("Warning: failed to register brain MCP server (claude mcp add failed)"),
-        Err(_) => eprintln!("Warning: 'claude' CLI not found, skipping MCP server registration"),
-    }
 }
 
 const BRAIN_SECTION_START: &str = "<!-- brain:start -->";
