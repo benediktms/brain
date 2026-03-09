@@ -1185,6 +1185,8 @@ async fn async_main(cli: Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use clap::Parser;
 
@@ -1194,7 +1196,7 @@ mod tests {
     fn parse_index() {
         let cli = Cli::try_parse_from(["brain", "index", "./notes"]).unwrap();
         assert!(
-            matches!(cli.command, Command::Index { notes_path } if notes_path == PathBuf::from("./notes"))
+            matches!(cli.command, Command::Index { notes_path } if notes_path == Path::new("./notes"))
         );
     }
 
@@ -1253,7 +1255,7 @@ mod tests {
     fn parse_watch() {
         let cli = Cli::try_parse_from(["brain", "watch", "./notes"]).unwrap();
         assert!(
-            matches!(cli.command, Command::Watch { notes_path } if notes_path == PathBuf::from("./notes"))
+            matches!(cli.command, Command::Watch { notes_path } if notes_path == Path::new("./notes"))
         );
     }
 

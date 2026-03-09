@@ -109,12 +109,12 @@ impl TaskApplyEvent {
         }
 
         // Validate task_type if provided
-        if let Some(tt) = payload.get("task_type").and_then(|v| v.as_str()) {
-            if tt.parse::<TaskType>().is_err() {
-                return ToolCallResult::error(format!(
-                    "Invalid task_type: '{tt}'. Must be one of: task, bug, feature, epic, spike"
-                ));
-            }
+        if let Some(tt) = payload.get("task_type").and_then(|v| v.as_str())
+            && tt.parse::<TaskType>().is_err()
+        {
+            return ToolCallResult::error(format!(
+                "Invalid task_type: '{tt}'. Must be one of: task, bug, feature, epic, spike"
+            ));
         }
 
         // Resolve depends_on_task_id and parent_task_id references in payload
@@ -591,7 +591,10 @@ mod tests {
             "payload": { "title": "Spike task", "task_type": "spike" }
         });
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
-        assert!(result.is_error.is_none(), "spike should be a valid task type");
+        assert!(
+            result.is_error.is_none(),
+            "spike should be a valid task type"
+        );
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["task"]["task_type"], "spike");

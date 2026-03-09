@@ -219,7 +219,7 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
     // Build filter (status is handled separately via list_ready/list_blocked/list_all)
     let filter = TaskFilter {
         priority: params.priority,
-        task_type: params.task_type.clone(),
+        task_type: params.task_type,
         assignee: params.assignee.clone(),
         label: params.label.clone(),
         search: params.search.clone(),

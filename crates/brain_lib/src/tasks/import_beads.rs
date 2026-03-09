@@ -208,7 +208,10 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                 priority: issue.priority,
                 status: TaskStatus::Open,
                 due_ts: None,
-                task_type: issue.issue_type.as_deref().and_then(|s| s.parse::<TaskType>().ok()),
+                task_type: issue
+                    .issue_type
+                    .as_deref()
+                    .and_then(|s| s.parse::<TaskType>().ok()),
                 assignee: issue.owner.clone(),
                 defer_until: None,
                 parent_task_id: None, // Set in pass 2
@@ -714,7 +717,10 @@ pub fn import_beads_issues(
                         priority: issue.priority,
                         status: TaskStatus::Open,
                         due_ts: None,
-                        task_type: issue.issue_type.as_deref().and_then(|s| s.parse::<TaskType>().ok()),
+                        task_type: issue
+                            .issue_type
+                            .as_deref()
+                            .and_then(|s| s.parse::<TaskType>().ok()),
                         assignee: issue.owner.clone(),
                         defer_until: None,
                         parent_task_id: None,
