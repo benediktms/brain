@@ -253,9 +253,9 @@ enum Command {
         #[arg(long)]
         notes: Vec<PathBuf>,
 
-        /// Skip generating CLAUDE.md
+        /// Skip generating AGENTS.md
         #[arg(long)]
-        no_claude_md: bool,
+        no_agents_md: bool,
     },
 
     /// List all registered brains
@@ -881,9 +881,9 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::Init {
             name,
             notes,
-            no_claude_md,
+            no_agents_md,
         } => {
-            commands::init::run(name, notes, no_claude_md)?;
+            commands::init::run(name, notes, no_agents_md)?;
         }
         Command::List => {
             commands::list::run_list()?;

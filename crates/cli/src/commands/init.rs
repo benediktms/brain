@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Initialize a new brain in the current (or given) directory.
-pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Result<()> {
+pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("cannot determine current directory")?;
     let brain_dir = cwd.join(".brain");
     let marker_path = brain_dir.join("brain.toml");
@@ -70,16 +70,16 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
     brain_lib::fs_permissions::ensure_private_dir(&brains_dir)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // 6. Upsert CLAUDE.md (unless --no-claude-md)
-    if !no_claude_md {
-        let claude_md_path = cwd.join("CLAUDE.md");
+    // 6. Upsert AGENTS.md (unless --no-agents-md)
+    if !no_agents_md {
+        let agents_md_path = cwd.join("AGENTS.md");
         let build_section = detect_build_section(&cwd);
         let brain_section = BRAIN_SECTION_TEMPLATE
             .replace("{brain_name}", &brain_name)
             .replace("{build_section}", &build_section);
 
-        if claude_md_path.exists() {
-            let existing = fs::read_to_string(&claude_md_path)?;
+        if agents_md_path.exists() {
+            let existing = fs::read_to_string(&agents_md_path)?;
             if existing.contains(BRAIN_SECTION_START) {
                 // Replace existing brain section.
                 let start = existing.find(BRAIN_SECTION_START).unwrap();
@@ -94,8 +94,8 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
                 let rest = &existing[end..];
                 let rest = rest.strip_prefix('\n').unwrap_or(rest);
                 updated.push_str(rest);
-                fs::write(&claude_md_path, updated)?;
-                println!("Updated brain section in CLAUDE.md");
+                fs::write(&agents_md_path, updated)?;
+                println!("Updated brain section in AGENTS.md");
             } else {
                 // Append brain section.
                 let mut content = existing;
@@ -104,13 +104,33 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
                 }
                 content.push('\n');
                 content.push_str(&brain_section);
-                fs::write(&claude_md_path, content)?;
-                println!("Appended brain section to CLAUDE.md");
+                fs::write(&agents_md_path, content)?;
+                println!("Appended brain section to AGENTS.md");
             }
         } else {
             let content = format!("# {brain_name}\n\n{brain_section}");
-            fs::write(&claude_md_path, content)?;
-            println!("Generated CLAUDE.md");
+            fs::write(&agents_md_path, content)?;
+            println!("Generated AGENTS.md");
+        }
+
+        // Also generate a thin CLAUDE.md bridge if it doesn't exist or has old brain content.
+        let claude_md_path = cwd.join("CLAUDE.md");
+        let bridge_content = format!(
+            "# {brain_name}\n\n\
+             Read [AGENTS.md](./AGENTS.md) for project instructions — it is the canonical reference for all AI agents.\n\n\
+             <!-- Additional Claude Code-specific instructions below if needed -->\n"
+        );
+        if claude_md_path.exists() {
+            let existing = fs::read_to_string(&claude_md_path)?;
+            if existing.contains(BRAIN_SECTION_START) {
+                // Old-style CLAUDE.md with brain content — replace with bridge.
+                fs::write(&claude_md_path, &bridge_content)?;
+                println!("Replaced CLAUDE.md with bridge to AGENTS.md");
+            }
+            // Otherwise leave existing CLAUDE.md untouched.
+        } else {
+            fs::write(&claude_md_path, &bridge_content)?;
+            println!("Generated CLAUDE.md (bridge to AGENTS.md)");
         }
     }
 
@@ -206,8 +226,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
 **Memory tools:**
-- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy).
-- `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit.
+- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
+- `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
