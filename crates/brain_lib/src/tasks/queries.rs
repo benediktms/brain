@@ -29,6 +29,35 @@ pub struct TaskRow {
 const TASK_COLUMNS: &str = "task_id, title, description, status, priority, blocked_reason, due_ts, \
      task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at";
 
+/// Reusable `WITH RECURSIVE` CTE that produces `has_blocked_ancestor(tid)` — the set
+/// of task IDs whose parent chain contains at least one blocked ancestor.
+/// An ancestor is blocking if it has unresolved deps, a `blocked_reason`, or a future `defer_until`.
+const ANCESTOR_BLOCKED_CTE: &str = "\
+WITH RECURSIVE ancestor_chain(tid, ancestor_id) AS (
+    SELECT task_id, parent_task_id FROM tasks WHERE parent_task_id IS NOT NULL
+    UNION ALL
+    SELECT ac.tid, t.parent_task_id
+    FROM ancestor_chain ac
+    JOIN tasks t ON t.task_id = ac.ancestor_id
+    WHERE t.parent_task_id IS NOT NULL
+),
+has_blocked_ancestor(tid) AS (
+    SELECT DISTINCT ac.tid
+    FROM ancestor_chain ac
+    JOIN tasks a ON a.task_id = ac.ancestor_id
+    WHERE a.status NOT IN ('done', 'cancelled')
+      AND (
+          a.blocked_reason IS NOT NULL
+          OR (a.defer_until IS NOT NULL AND a.defer_until > strftime('%s', 'now'))
+          OR EXISTS (
+              SELECT 1 FROM task_deps d
+              JOIN tasks dep ON dep.task_id = d.depends_on
+              WHERE d.task_id = a.task_id
+                AND dep.status NOT IN ('done', 'cancelled')
+          )
+      )
+) ";
+
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
     Ok(TaskRow {
         task_id: row.get(0)?,
@@ -54,7 +83,8 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
 /// Ordered by priority ASC, epics first within tier, due_ts ASC NULLS LAST, updated_at DESC.
 pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
     let sql = format!(
-        "SELECT {TASK_COLUMNS}
+        "{ANCESTOR_BLOCKED_CTE}
+         SELECT {TASK_COLUMNS}
          FROM tasks t
          WHERE t.status IN ('open', 'in_progress')
            AND t.blocked_reason IS NULL
@@ -65,6 +95,7 @@ pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
                WHERE d.task_id = t.task_id
                  AND dep.status NOT IN ('done', 'cancelled')
            )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
          ORDER BY t.priority ASC,
                   CASE WHEN t.task_type = 'epic' THEN 0 ELSE 1 END ASC,
                   t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
@@ -79,7 +110,8 @@ pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
 /// Used by `tasks.next` so epics don't occupy top-k slots.
 pub fn list_ready_actionable(conn: &Connection) -> Result<Vec<TaskRow>> {
     let sql = format!(
-        "SELECT {TASK_COLUMNS}
+        "{ANCESTOR_BLOCKED_CTE}
+         SELECT {TASK_COLUMNS}
          FROM tasks t
          WHERE t.status IN ('open', 'in_progress')
            AND t.blocked_reason IS NULL
@@ -91,6 +123,7 @@ pub fn list_ready_actionable(conn: &Connection) -> Result<Vec<TaskRow>> {
                WHERE d.task_id = t.task_id
                  AND dep.status NOT IN ('done', 'cancelled')
            )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
          ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -102,7 +135,8 @@ pub fn list_ready_actionable(conn: &Connection) -> Result<Vec<TaskRow>> {
 /// List tasks that are blocked: have unresolved deps or an explicit blocked_reason.
 pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
     let sql = format!(
-        "SELECT {TASK_COLUMNS}
+        "{ANCESTOR_BLOCKED_CTE}
+         SELECT {TASK_COLUMNS}
          FROM tasks t
          WHERE t.status IN ('open', 'in_progress', 'blocked')
            AND (
@@ -114,6 +148,7 @@ pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
                    WHERE d.task_id = t.task_id
                      AND dep.status NOT IN ('done', 'cancelled')
                )
+               OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
            )
          ORDER BY t.priority ASC,
                   CASE WHEN t.task_type = 'epic' THEN 0 ELSE 1 END ASC,
@@ -183,8 +218,9 @@ pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
 pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Result<Vec<String>> {
     // Find tasks that depend on the completed task, are open/in_progress,
     // have no blocked_reason, and all of their deps are now done/cancelled.
-    let mut stmt = conn.prepare(
-        "SELECT d.task_id
+    let sql = format!(
+        "{ANCESTOR_BLOCKED_CTE}
+         SELECT d.task_id
          FROM task_deps d
          JOIN tasks t ON t.task_id = d.task_id
          WHERE d.depends_on = ?1
@@ -195,8 +231,10 @@ pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Resul
                JOIN tasks dep ON dep.task_id = d2.depends_on
                WHERE d2.task_id = d.task_id
                  AND dep.status NOT IN ('done', 'cancelled')
-           )",
-    )?;
+           )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)"
+    );
+    let mut stmt = conn.prepare(&sql)?;
 
     let rows = stmt.query_map([completed_task_id], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
@@ -312,8 +350,9 @@ pub fn count_by_status(conn: &Connection) -> Result<StatusCounts> {
 
 /// Count of ready and blocked tasks (for response metadata).
 pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
-    let ready: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks t
+    let ready_sql = format!(
+        "{ANCESTOR_BLOCKED_CTE}
+         SELECT COUNT(*) FROM tasks t
          WHERE t.status IN ('open', 'in_progress')
            AND t.blocked_reason IS NULL
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
@@ -322,13 +361,14 @@ pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
                JOIN tasks dep ON dep.task_id = d.depends_on
                WHERE d.task_id = t.task_id
                  AND dep.status NOT IN ('done', 'cancelled')
-           )",
-        [],
-        |row| row.get(0),
-    )?;
+           )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)"
+    );
+    let ready: i64 = conn.query_row(&ready_sql, [], |row| row.get(0))?;
 
-    let blocked: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks t
+    let blocked_sql = format!(
+        "{ANCESTOR_BLOCKED_CTE}
+         SELECT COUNT(*) FROM tasks t
          WHERE t.status IN ('open', 'in_progress', 'blocked')
            AND (
                t.blocked_reason IS NOT NULL
@@ -339,10 +379,10 @@ pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
                    WHERE d.task_id = t.task_id
                      AND dep.status NOT IN ('done', 'cancelled')
                )
-           )",
-        [],
-        |row| row.get(0),
-    )?;
+               OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
+           )"
+    );
+    let blocked: i64 = conn.query_row(&blocked_sql, [], |row| row.get(0))?;
 
     Ok((ready as usize, blocked as usize))
 }
@@ -1269,5 +1309,246 @@ mod tests {
         assert_eq!(common_prefix_len("abc", "xyz"), 0);
         assert_eq!(common_prefix_len("abc", "abc"), 3);
         assert_eq!(common_prefix_len("", "abc"), 0);
+    }
+
+    // -- Ancestor-blocked propagation tests --
+
+    fn create_child_task(
+        conn: &Connection,
+        task_id: &str,
+        parent_id: &str,
+        title: &str,
+        priority: i32,
+    ) {
+        let ev = TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskCreatedPayload {
+                title: title.to_string(),
+                description: None,
+                priority,
+                status: TaskStatus::Open,
+                due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: Some(parent_id.to_string()),
+            },
+        );
+        apply_event(conn, &ev).unwrap();
+    }
+
+    fn create_epic(conn: &Connection, task_id: &str, title: &str, priority: i32) {
+        let ev = TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskCreatedPayload {
+                title: title.to_string(),
+                description: None,
+                priority,
+                status: TaskStatus::Open,
+                due_ts: None,
+                task_type: Some("epic".to_string()),
+                assignee: None,
+                defer_until: None,
+                parent_task_id: None,
+            },
+        );
+        apply_event(conn, &ev).unwrap();
+    }
+
+    fn set_blocked_reason(conn: &Connection, task_id: &str, reason: Option<&str>) {
+        let ev = TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskUpdatedPayload {
+                title: None,
+                description: None,
+                priority: None,
+                due_ts: None,
+                blocked_reason: reason.map(|s| s.to_string()),
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+            },
+        );
+        apply_event(conn, &ev).unwrap();
+    }
+
+    fn set_defer_until(conn: &Connection, task_id: &str, ts: Option<i64>) {
+        let ev = TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskUpdatedPayload {
+                title: None,
+                description: None,
+                priority: None,
+                due_ts: None,
+                blocked_reason: None,
+                task_type: None,
+                assignee: None,
+                defer_until: ts,
+            },
+        );
+        apply_event(conn, &ev).unwrap();
+    }
+
+    #[test]
+    fn test_list_ready_excludes_child_of_blocked_epic() {
+        let conn = setup();
+        create_epic(&conn, "epic1", "Epic", 1);
+        create_task(&conn, "blocker", "Blocker", 2);
+        add_dep(&conn, "epic1", "blocker"); // epic blocked by dep
+        create_child_task(&conn, "child1", "epic1", "Child 1", 2);
+
+        let ready = list_ready(&conn).unwrap();
+        let ready_ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            !ready_ids.contains(&"child1"),
+            "child of blocked epic should NOT be ready"
+        );
+        assert!(ready_ids.contains(&"blocker"));
+    }
+
+    #[test]
+    fn test_list_blocked_includes_child_of_blocked_epic() {
+        let conn = setup();
+        create_epic(&conn, "epic1", "Epic", 1);
+        create_task(&conn, "blocker", "Blocker", 2);
+        add_dep(&conn, "epic1", "blocker");
+        create_child_task(&conn, "child1", "epic1", "Child 1", 2);
+
+        let blocked = list_blocked(&conn).unwrap();
+        let blocked_ids: Vec<&str> = blocked.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            blocked_ids.contains(&"child1"),
+            "child of blocked epic should be in blocked list"
+        );
+        assert!(
+            blocked_ids.contains(&"epic1"),
+            "epic itself should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_child_becomes_ready_when_epic_dep_resolved() {
+        let conn = setup();
+        create_epic(&conn, "epic1", "Epic", 1);
+        create_task(&conn, "blocker", "Blocker", 2);
+        add_dep(&conn, "epic1", "blocker");
+        create_child_task(&conn, "child1", "epic1", "Child 1", 2);
+
+        // Child should NOT be ready while epic is blocked
+        let ready = list_ready(&conn).unwrap();
+        assert!(!ready.iter().any(|t| t.task_id == "child1"));
+
+        // Complete the blocker
+        set_status(&conn, "blocker", "done");
+
+        // Now child should be ready
+        let ready = list_ready(&conn).unwrap();
+        assert!(
+            ready.iter().any(|t| t.task_id == "child1"),
+            "child should be ready after epic's dep is resolved"
+        );
+    }
+
+    #[test]
+    fn test_grandchild_blocked_by_grandparent_dep() {
+        let conn = setup();
+        create_epic(&conn, "grandparent", "GP Epic", 1);
+        create_task(&conn, "blocker", "Blocker", 2);
+        add_dep(&conn, "grandparent", "blocker");
+        create_child_task(&conn, "parent", "grandparent", "Parent", 2);
+        create_child_task(&conn, "grandchild", "parent", "Grandchild", 2);
+
+        let ready = list_ready(&conn).unwrap();
+        assert!(
+            !ready.iter().any(|t| t.task_id == "grandchild"),
+            "grandchild should NOT be ready when grandparent is blocked"
+        );
+
+        let blocked = list_blocked(&conn).unwrap();
+        assert!(
+            blocked.iter().any(|t| t.task_id == "grandchild"),
+            "grandchild should be in blocked list"
+        );
+
+        // Resolve grandparent's dep
+        set_status(&conn, "blocker", "done");
+        let ready = list_ready(&conn).unwrap();
+        assert!(
+            ready.iter().any(|t| t.task_id == "grandchild"),
+            "grandchild should be ready after grandparent unblocked"
+        );
+    }
+
+    #[test]
+    fn test_child_blocked_by_parent_blocked_reason() {
+        let conn = setup();
+        create_task(&conn, "parent", "Parent", 1);
+        create_child_task(&conn, "child1", "parent", "Child", 2);
+
+        // Parent gets an explicit blocked_reason
+        set_blocked_reason(&conn, "parent", Some("waiting on external"));
+
+        let ready = list_ready(&conn).unwrap();
+        assert!(
+            !ready.iter().any(|t| t.task_id == "child1"),
+            "child should NOT be ready when parent has blocked_reason"
+        );
+
+        let blocked = list_blocked(&conn).unwrap();
+        assert!(blocked.iter().any(|t| t.task_id == "child1"));
+    }
+
+    #[test]
+    fn test_child_blocked_by_parent_defer_until() {
+        let conn = setup();
+        create_task(&conn, "parent", "Parent", 1);
+        create_child_task(&conn, "child1", "parent", "Child", 2);
+
+        // Set defer_until far in the future
+        set_defer_until(&conn, "parent", Some(i64::MAX));
+
+        let ready = list_ready(&conn).unwrap();
+        assert!(
+            !ready.iter().any(|t| t.task_id == "child1"),
+            "child should NOT be ready when parent has future defer_until"
+        );
+
+        let blocked = list_blocked(&conn).unwrap();
+        assert!(blocked.iter().any(|t| t.task_id == "child1"));
+    }
+
+    #[test]
+    fn test_count_ready_blocked_reflects_ancestor_deps() {
+        let conn = setup();
+        create_epic(&conn, "epic1", "Epic", 1);
+        create_task(&conn, "blocker", "Blocker", 2);
+        add_dep(&conn, "epic1", "blocker");
+        create_child_task(&conn, "child1", "epic1", "Child 1", 2);
+        create_child_task(&conn, "child2", "epic1", "Child 2", 2);
+
+        let (ready, blocked) = count_ready_blocked(&conn).unwrap();
+        // Only "blocker" is ready; epic1 + child1 + child2 are blocked
+        assert_eq!(ready, 1, "only blocker should be ready");
+        assert_eq!(blocked, 3, "epic + 2 children should be blocked");
+    }
+
+    #[test]
+    fn test_child_without_blocked_parent_still_ready() {
+        let conn = setup();
+        create_task(&conn, "parent", "Parent", 1);
+        create_child_task(&conn, "child1", "parent", "Child", 2);
+
+        // Parent has no deps, no blocked_reason, no defer_until — child should be ready
+        let ready = list_ready(&conn).unwrap();
+        let ready_ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            ready_ids.contains(&"child1"),
+            "child of unblocked parent should be ready"
+        );
+        assert!(ready_ids.contains(&"parent"));
     }
 }
