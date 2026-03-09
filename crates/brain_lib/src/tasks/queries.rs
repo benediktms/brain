@@ -424,6 +424,20 @@ pub fn get_labels_for_tasks(
     Ok(map)
 }
 
+/// Get all task IDs that have a given label.
+pub fn get_task_ids_with_label(conn: &Connection, label: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT task_id FROM task_labels WHERE label = ?1")?;
+    let rows = stmt.query_map([label], |row| row.get::<_, String>(0))?;
+    crate::db::collect_rows(rows)
+}
+
+/// Get all dependency targets for a task (what it depends on).
+pub fn get_deps_for_task(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT depends_on FROM task_deps WHERE task_id = ?1")?;
+    let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
+    crate::db::collect_rows(rows)
+}
+
 /// An external ID reference for a task.
 #[derive(Debug, Clone)]
 pub struct ExternalIdRow {
@@ -530,6 +544,34 @@ pub fn list_all_labels(conn: &Connection) -> Result<Vec<(String, String)>> {
         conn.prepare("SELECT task_id, label FROM task_labels ORDER BY task_id, label")?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+/// Summary of a label: name, count, and associated task IDs.
+#[derive(Debug, Clone)]
+pub struct LabelSummary {
+    pub label: String,
+    pub count: usize,
+    pub task_ids: Vec<String>,
+}
+
+/// Get all labels with counts and associated task IDs, sorted by count descending.
+pub fn label_summary(conn: &Connection) -> Result<Vec<LabelSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT label, COUNT(*) as cnt, GROUP_CONCAT(task_id) as task_ids \
+         FROM task_labels GROUP BY label ORDER BY cnt DESC, label ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let label: String = row.get(0)?;
+        let count: usize = row.get::<_, i64>(1)? as usize;
+        let task_ids_str: String = row.get(2)?;
+        let task_ids: Vec<String> = task_ids_str.split(',').map(|s| s.to_string()).collect();
+        Ok(LabelSummary {
+            label,
+            count,
+            task_ids,
+        })
     })?;
     crate::db::collect_rows(rows)
 }

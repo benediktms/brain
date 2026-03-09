@@ -89,7 +89,7 @@ impl McpTool for MemWriteEpisode {
                     "tags": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Tags for categorization"
+                        "description": "Tags for categorization. Pass as a JSON array, e.g. [\"debugging\", \"auth\"]"
                     },
                     "importance": {
                         "type": "number",

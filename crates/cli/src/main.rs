@@ -366,6 +366,10 @@ enum TasksAction {
         /// Include task descriptions in JSON output (omitted by default)
         #[arg(long)]
         include_description: bool,
+
+        /// Group output by a field (currently supports: label)
+        #[arg(long)]
+        group_by: Option<String>,
     },
 
     /// Show details for a specific task
@@ -473,6 +477,9 @@ enum TasksAction {
 
     /// Show project task statistics
     Stats,
+
+    /// List all labels with counts
+    Labels,
 }
 
 #[derive(Subcommand)]
@@ -494,6 +501,29 @@ enum DepAction {
         /// Task it depended on
         depends_on: String,
     },
+
+    /// Create a sequential dependency chain (each task depends on the previous)
+    AddChain {
+        /// Task IDs in order (at least 2)
+        #[arg(required = true)]
+        task_ids: Vec<String>,
+    },
+
+    /// Make multiple tasks depend on a single source task
+    AddFan {
+        /// Source task (the one others depend on)
+        source: String,
+
+        /// Tasks that depend on the source (comma-separated)
+        #[arg(required = true, value_delimiter = ',')]
+        dependents: Vec<String>,
+    },
+
+    /// Remove all dependencies for a task
+    Clear {
+        /// Task ID
+        task_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -513,6 +543,41 @@ enum LabelAction {
         task_id: String,
 
         /// Label to remove
+        label: String,
+    },
+
+    /// Add a label to multiple tasks at once
+    BatchAdd {
+        /// Comma-separated task IDs
+        #[arg(long, value_delimiter = ',')]
+        tasks: Vec<String>,
+
+        /// Label to add
+        label: String,
+    },
+
+    /// Remove a label from multiple tasks at once
+    BatchRemove {
+        /// Comma-separated task IDs
+        #[arg(long, value_delimiter = ',')]
+        tasks: Vec<String>,
+
+        /// Label to remove
+        label: String,
+    },
+
+    /// Rename a label across all tasks
+    Rename {
+        /// Current label name
+        old_label: String,
+
+        /// New label name
+        new_label: String,
+    },
+
+    /// Remove a label from all tasks
+    Purge {
+        /// Label to purge
         label: String,
     },
 }
@@ -934,21 +999,21 @@ async fn async_main(cli: Cli) -> Result<()> {
                     ready,
                     blocked,
                     include_description,
+                    group_by,
                 } => {
-                    commands::tasks::run::list(
-                        &ctx,
-                        &ListParams {
-                            status,
-                            priority,
-                            task_type,
-                            assignee,
-                            label,
-                            search,
-                            ready,
-                            blocked,
-                            include_description,
-                        },
-                    )?;
+                    let params = ListParams {
+                        status,
+                        priority,
+                        task_type,
+                        assignee,
+                        label,
+                        search,
+                        ready,
+                        blocked,
+                        include_description,
+                        group_by,
+                    };
+                    commands::tasks::run::list(&ctx, &params)?;
                 }
                 TasksAction::Show { id } => {
                     commands::tasks::run::show(&ctx, &id)?;
@@ -990,6 +1055,15 @@ async fn async_main(cli: Cli) -> Result<()> {
                     } => {
                         commands::tasks::run::dep_remove(&ctx, &task_id, &depends_on)?;
                     }
+                    DepAction::AddChain { task_ids } => {
+                        commands::tasks::run::dep_add_chain(&ctx, &task_ids)?;
+                    }
+                    DepAction::AddFan { source, dependents } => {
+                        commands::tasks::run::dep_add_fan(&ctx, &source, &dependents)?;
+                    }
+                    DepAction::Clear { task_id } => {
+                        commands::tasks::run::dep_clear(&ctx, &task_id)?;
+                    }
                 },
                 TasksAction::Link { task_id, chunk_id } => {
                     commands::tasks::run::link(&ctx, &task_id, &chunk_id)?;
@@ -1006,6 +1080,21 @@ async fn async_main(cli: Cli) -> Result<()> {
                     }
                     LabelAction::Remove { task_id, label } => {
                         commands::tasks::run::label_remove(&ctx, &task_id, &label)?;
+                    }
+                    LabelAction::BatchAdd { tasks, label } => {
+                        commands::tasks::run::label_batch_add(&ctx, &tasks, &label)?;
+                    }
+                    LabelAction::BatchRemove { tasks, label } => {
+                        commands::tasks::run::label_batch_remove(&ctx, &tasks, &label)?;
+                    }
+                    LabelAction::Rename {
+                        old_label,
+                        new_label,
+                    } => {
+                        commands::tasks::run::label_rename(&ctx, &old_label, &new_label)?;
+                    }
+                    LabelAction::Purge { label } => {
+                        commands::tasks::run::label_purge(&ctx, &label)?;
                     }
                 },
                 TasksAction::Export { format, dir } => match format.as_str() {
@@ -1032,6 +1121,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                             ready: true,
                             blocked: false,
                             include_description: false,
+                            group_by: None,
                         },
                     )?;
                 }
@@ -1048,11 +1138,15 @@ async fn async_main(cli: Cli) -> Result<()> {
                             ready: false,
                             blocked: true,
                             include_description: false,
+                            group_by: None,
                         },
                     )?;
                 }
                 TasksAction::Stats => {
                     commands::tasks::run::stats(&ctx)?;
+                }
+                TasksAction::Labels => {
+                    commands::tasks::run::labels(&ctx)?;
                 }
             }
         }

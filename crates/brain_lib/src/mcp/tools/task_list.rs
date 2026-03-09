@@ -231,7 +231,7 @@ impl McpTool for TaskList {
                     "task_ids": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Fetch specific tasks by ID or prefix (ignores status filter). Unresolvable IDs are silently skipped."
+                        "description": "Fetch specific tasks by ID or prefix (ignores status filter). Unresolvable IDs are silently skipped. Pass as a JSON array, e.g. [\"BRN-01JPH\", \"BRN-02ABC\"]"
                     },
                     "priority": {
                         "type": "integer",
