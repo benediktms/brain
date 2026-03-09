@@ -258,7 +258,7 @@ impl McpTool for TaskLabelsBatch {
                     "task_ids": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Task IDs (full or prefix). Required for add/remove."
+                        "description": "Task IDs (full or prefix). Required for add/remove. Pass as a JSON array, e.g. [\"BRN-01JPH\", \"BRN-02ABC\"]"
                     },
                     "old_label": {
                         "type": "string",

@@ -250,7 +250,7 @@ impl McpTool for TaskGet {
                             "type": "string",
                             "enum": ["parent", "children", "blocked_by", "blocks"]
                         },
-                        "description": "Expand relationship stubs to full task objects"
+                        "description": "Expand relationship stubs to full task objects. Pass as a JSON array, e.g. [\"parent\", \"blocked_by\"]"
                     }
                 },
                 "required": ["task_id"]

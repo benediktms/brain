@@ -356,12 +356,12 @@ impl McpTool for TaskDepsBatch {
                             },
                             "required": ["task_id", "depends_on_task_id"]
                         },
-                        "description": "Dependency pairs (required for add/remove)"
+                        "description": "Dependency pairs for add/remove. Pass as a JSON array of objects, e.g. [{\"task_id\": \"BRN-02\", \"depends_on_task_id\": \"BRN-01\"}]"
                     },
                     "task_ids": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Ordered task IDs for chain (at least 2). Each task depends on the previous."
+                        "description": "Ordered task IDs for chain (at least 2). Each task depends on the previous. Pass as a JSON array, e.g. [\"BRN-01\", \"BRN-02\", \"BRN-03\"]"
                     },
                     "source_task_id": {
                         "type": "string",
@@ -370,7 +370,7 @@ impl McpTool for TaskDepsBatch {
                     "dependent_task_ids": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Tasks that depend on the source (required for fan)"
+                        "description": "Tasks that depend on the source (required for fan). Pass as a JSON array, e.g. [\"BRN-02\", \"BRN-03\"]"
                     },
                     "task_id": {
                         "type": "string",

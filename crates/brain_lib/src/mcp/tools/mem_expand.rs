@@ -41,7 +41,7 @@ impl McpTool for MemExpand {
                     "memory_ids": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Memory IDs to expand (from search_minimal results)"
+                        "description": "Memory IDs to expand (from search_minimal results). Pass as a JSON array, e.g. [\"abc123\", \"def456\"]"
                     },
                     "budget_tokens": {
                         "type": "integer",
