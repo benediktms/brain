@@ -14,7 +14,7 @@ use rusqlite::Connection;
 
 use super::migrations::{
     migrate_v0_to_v1, migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5,
-    migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9,
+    migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -40,6 +40,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             6 => migrate_v6_to_v7(&conn).unwrap(),
             7 => migrate_v7_to_v8(&conn).unwrap(),
             8 => migrate_v8_to_v9(&conn).unwrap(),
+            9 => migrate_v9_to_v10(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -154,6 +155,7 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_task_comments_task_id",
     "idx_task_events_task_id",
     "idx_external_lookup",
+    "idx_tasks_status_priority",
 ];
 
 /// FTS5 triggers that must exist.
@@ -468,6 +470,30 @@ fn migrate_from_v8_to_current() {
         )
         .unwrap();
     assert_eq!(chunker_version, Some(2));
+}
+
+#[test]
+fn migrate_from_v9_to_current() {
+    let conn = snapshot_at_version(9);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+    seed_v3_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    // v9→v10 adds composite index — verify it exists
+    let has_index: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name = 'idx_tasks_status_priority'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        has_index,
+        "idx_tasks_status_priority should exist after v9→v10"
+    );
 }
 
 // ─── Snapshot fixture on disk ────────────────────────────────────

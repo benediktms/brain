@@ -7,6 +7,7 @@ mod v5_to_v6;
 mod v6_to_v7;
 mod v7_to_v8;
 mod v8_to_v9;
+mod v9_to_v10;
 
 pub use v0_to_v1::migrate_v0_to_v1;
 pub use v1_to_v2::migrate_v1_to_v2;
@@ -17,3 +18,4 @@ pub use v5_to_v6::migrate_v5_to_v6;
 pub use v6_to_v7::migrate_v6_to_v7;
 pub use v7_to_v8::migrate_v7_to_v8;
 pub use v8_to_v9::migrate_v8_to_v9;
+pub use v9_to_v10::migrate_v9_to_v10;

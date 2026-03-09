@@ -51,13 +51,39 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
 /// List tasks that are ready to work on: open/in_progress, no blocked_reason,
 /// and all dependencies are done or cancelled.
 ///
-/// Ordered by priority ASC, due_ts ASC NULLS LAST, updated_at DESC.
+/// Ordered by priority ASC, epics first within tier, due_ts ASC NULLS LAST, updated_at DESC.
 pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
     let sql = format!(
         "SELECT {TASK_COLUMNS}
          FROM tasks t
          WHERE t.status IN ('open', 'in_progress')
            AND t.blocked_reason IS NULL
+           AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
+           AND NOT EXISTS (
+               SELECT 1 FROM task_deps d
+               JOIN tasks dep ON dep.task_id = d.depends_on
+               WHERE d.task_id = t.task_id
+                 AND dep.status NOT IN ('done', 'cancelled')
+           )
+         ORDER BY t.priority ASC,
+                  CASE WHEN t.task_type = 'epic' THEN 0 ELSE 1 END ASC,
+                  t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+
+    let rows = stmt.query_map([], row_to_task)?;
+    crate::db::collect_rows(rows)
+}
+
+/// Like `list_ready` but excludes epics — returns only actionable work items.
+/// Used by `tasks.next` so epics don't occupy top-k slots.
+pub fn list_ready_actionable(conn: &Connection) -> Result<Vec<TaskRow>> {
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
+         FROM tasks t
+         WHERE t.status IN ('open', 'in_progress')
+           AND t.blocked_reason IS NULL
+           AND t.task_type != 'epic'
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
                SELECT 1 FROM task_deps d
@@ -89,7 +115,9 @@ pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
                      AND dep.status NOT IN ('done', 'cancelled')
                )
            )
-         ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
+         ORDER BY t.priority ASC,
+                  CASE WHEN t.task_type = 'epic' THEN 0 ELSE 1 END ASC,
+                  t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
@@ -102,7 +130,9 @@ pub fn list_all(conn: &Connection) -> Result<Vec<TaskRow>> {
     let sql = format!(
         "SELECT {TASK_COLUMNS}
          FROM tasks
-         ORDER BY priority ASC, due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
+         ORDER BY priority ASC,
+                  CASE WHEN task_type = 'epic' THEN 0 ELSE 1 END ASC,
+                  due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
@@ -116,7 +146,23 @@ pub fn list_open(conn: &Connection) -> Result<Vec<TaskRow>> {
         "SELECT {TASK_COLUMNS}
          FROM tasks
          WHERE status IN ('open', 'in_progress', 'blocked')
-         ORDER BY priority ASC, due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
+         ORDER BY priority ASC,
+                  CASE WHEN task_type = 'epic' THEN 0 ELSE 1 END ASC,
+                  due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+
+    let rows = stmt.query_map([], row_to_task)?;
+    crate::db::collect_rows(rows)
+}
+
+/// List done/cancelled tasks, most recently updated first.
+pub fn list_done(conn: &Connection) -> Result<Vec<TaskRow>> {
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
+         FROM tasks
+         WHERE status IN ('done', 'cancelled')
+         ORDER BY updated_at DESC, task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
@@ -307,6 +353,35 @@ pub fn get_task_labels(conn: &Connection, task_id: &str) -> Result<Vec<String>> 
         conn.prepare("SELECT label FROM task_labels WHERE task_id = ?1 ORDER BY label")?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
+}
+
+/// Batch-fetch labels for a set of task IDs. Returns a map from task_id to sorted labels.
+pub fn get_labels_for_tasks(
+    conn: &Connection,
+    task_ids: &[&str],
+) -> Result<HashMap<String, Vec<String>>> {
+    if task_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders: Vec<&str> = task_ids.iter().map(|_| "?").collect();
+    let sql = format!(
+        "SELECT task_id, label FROM task_labels WHERE task_id IN ({}) ORDER BY task_id, label",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = task_ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let (tid, label) = row?;
+        map.entry(tid).or_default().push(label);
+    }
+    Ok(map)
 }
 
 /// An external ID reference for a task.
@@ -552,12 +627,8 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
     }
 }
 
-/// Compute the shortest unique prefix for a single task ID.
-///
-/// Uses two O(log n) index seeks (predecessor + successor) instead of loading
-/// all task IDs. Preferred over `shortest_unique_prefixes()` when displaying
-/// a single task (e.g. `tasks.get` responses).
-pub fn shortest_unique_prefix(conn: &Connection, task_id: &str) -> Result<String> {
+/// Core ULID-based prefix computation without dot notation.
+fn shortest_unique_prefix_ulid(conn: &Connection, task_id: &str) -> Result<String> {
     let prev: Option<String> = conn
         .query_row(
             "SELECT task_id FROM tasks WHERE task_id < ?1 ORDER BY task_id DESC LIMIT 1",
@@ -590,11 +661,35 @@ pub fn shortest_unique_prefix(conn: &Connection, task_id: &str) -> Result<String
     Ok(task_id[..min_len].to_string())
 }
 
+/// Compute the shortest unique prefix for a single task ID.
+///
+/// Uses two O(log n) index seeks (predecessor + successor) instead of loading
+/// all task IDs. For epic children with `child_seq`, returns dot notation
+/// (e.g. "BRN-01KK7NY.3") when it's shorter than the ULID prefix.
+pub fn shortest_unique_prefix(conn: &Connection, task_id: &str) -> Result<String> {
+    let ulid_prefix = shortest_unique_prefix_ulid(conn, task_id)?;
+
+    // Check for dot notation: epic child with child_seq
+    if let Some(task) = get_task(conn, task_id)?
+        && let (Some(parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq)
+        && let Some(parent) = get_task(conn, parent_id)?
+        && parent.task_type == "epic"
+    {
+        let parent_prefix = shortest_unique_prefix_ulid(conn, parent_id)?;
+        let dot_form = format!("{parent_prefix}.{seq}");
+        if dot_form.len() < ulid_prefix.len() {
+            return Ok(dot_form);
+        }
+    }
+
+    Ok(ulid_prefix)
+}
+
 /// Compute shortest unique prefixes for all tasks (batch, for list display).
 ///
 /// Loads all IDs sorted, compares neighbors. O(n log n).
 /// The prefix portion (e.g. "BRN-") is always shown in full; only the ULID
-/// portion gets truncated.
+/// portion gets truncated. Epic children get dot notation when shorter.
 pub fn shortest_unique_prefixes(conn: &Connection) -> Result<HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT task_id FROM tasks ORDER BY task_id")?;
     let ids: Vec<String> = stmt
@@ -625,6 +720,28 @@ pub fn shortest_unique_prefixes(conn: &Connection) -> Result<HashMap<String, Str
         let prefix_len = min_len.min(id.len());
 
         result.insert(id.clone(), id[..prefix_len].to_string());
+    }
+
+    // Apply dot notation for epic children (parent_prefix.child_seq when shorter)
+    let mut epic_stmt = conn.prepare(
+        "SELECT t.task_id, t.parent_task_id, t.child_seq
+         FROM tasks t
+         JOIN tasks p ON p.task_id = t.parent_task_id AND p.task_type = 'epic'
+         WHERE t.child_seq IS NOT NULL",
+    )?;
+    let epic_children: Vec<(String, String, i64)> = epic_stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    for (child_id, parent_id, seq) in epic_children {
+        if let Some(parent_prefix) = result.get(&parent_id).cloned() {
+            let dot_form = format!("{parent_prefix}.{seq}");
+            if let Some(ulid_prefix) = result.get(&child_id)
+                && dot_form.len() < ulid_prefix.len()
+            {
+                result.insert(child_id, dot_form);
+            }
+        }
     }
 
     Ok(result)

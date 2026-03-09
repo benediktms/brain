@@ -83,6 +83,16 @@ impl TaskStore {
         self.db.with_read_conn(queries::list_open)
     }
 
+    /// List done/cancelled tasks.
+    pub fn list_done(&self) -> Result<Vec<queries::TaskRow>> {
+        self.db.with_read_conn(queries::list_done)
+    }
+
+    /// List ready tasks excluding epics (actionable work items only).
+    pub fn list_ready_actionable(&self) -> Result<Vec<queries::TaskRow>> {
+        self.db.with_read_conn(queries::list_ready_actionable)
+    }
+
     /// Get a single task by ID.
     pub fn get_task(&self, task_id: &str) -> Result<Option<queries::TaskRow>> {
         self.db
@@ -111,6 +121,12 @@ impl TaskStore {
     pub fn get_task_labels(&self, task_id: &str) -> Result<Vec<String>> {
         self.db
             .with_read_conn(|conn| queries::get_task_labels(conn, task_id))
+    }
+
+    /// Batch-fetch labels for a set of task IDs.
+    pub fn get_labels_for_tasks(&self, task_ids: &[&str]) -> Result<HashMap<String, Vec<String>>> {
+        self.db
+            .with_read_conn(|conn| queries::get_labels_for_tasks(conn, task_ids))
     }
 
     /// Get comments for a task.

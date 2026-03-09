@@ -209,8 +209,8 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["open", "all", "ready", "blocked"],
-                        "description": "Filter tasks by status. 'open' (default): excludes done/cancelled. 'all': every task including done/cancelled. 'ready': no unresolved deps. 'blocked': has unresolved deps or blocked_reason.",
+                        "enum": ["open", "ready", "blocked", "done"],
+                        "description": "Filter tasks by status. 'open' (default): excludes done/cancelled. 'ready': no unresolved deps. 'blocked': has unresolved deps or blocked_reason. 'done': completed or cancelled tasks.",
                         "default": "open"
                     },
                     "task_ids": {

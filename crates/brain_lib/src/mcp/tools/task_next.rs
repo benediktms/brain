@@ -1,17 +1,19 @@
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::tasks::enrichment::enrich_task_summary;
+use crate::tasks::enrichment::enrich_task_summaries;
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     use super::{opt_str, opt_u64};
     let policy = opt_str(params, "policy", "priority");
     let k = opt_u64(params, "k", 1).min(100) as usize;
 
-    // Get ready tasks (already sorted by priority policy)
-    let ready_tasks = match ctx.tasks.list_ready() {
+    // Get ready actionable tasks (excludes epics)
+    let ready_tasks = match ctx.tasks.list_ready_actionable() {
         Ok(tasks) => tasks,
         Err(e) => {
             error!(error = %e, "failed to list ready tasks");
@@ -23,7 +25,6 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     let mut tasks = ready_tasks;
     if policy == "due_date" {
         tasks.sort_by(|a, b| {
-            // due_ts ASC NULLS LAST, then priority ASC, then task_id ASC
             let due_cmp = match (a.due_ts, b.due_ts) {
                 (Some(a_ts), Some(b_ts)) => a_ts.cmp(&b_ts),
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -39,17 +40,95 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     // Take top-k
     let selected: Vec<_> = tasks.into_iter().take(k).collect();
 
-    // Build response with dependency summaries and note links
-    let results_json: Vec<Value> = selected
-        .iter()
-        .map(|task| enrich_task_summary(&ctx.tasks, task))
+    // Build enriched task JSON with batch label fetching
+    let mut results_json = enrich_task_summaries(&ctx.tasks, &selected);
+
+    // Add short_id to each task (supports dot notation for epic children)
+    for task_val in &mut results_json {
+        if let Some(obj) = task_val.as_object_mut()
+            && let Some(tid) = obj
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        {
+            let short = ctx
+                .tasks
+                .shortest_unique_prefix(&tid)
+                .unwrap_or_else(|_| tid.clone());
+            obj.insert("short_id".into(), json!(short));
+        }
+    }
+
+    // Collect unique parent_task_ids that are epics
+    let mut epic_cache: HashMap<String, Option<Value>> = HashMap::new();
+    for task in &selected {
+        if let Some(ref parent_id) = task.parent_task_id {
+            if epic_cache.contains_key(parent_id) {
+                continue;
+            }
+            let epic_val = ctx
+                .tasks
+                .get_task(parent_id)
+                .ok()
+                .flatten()
+                .filter(|t| t.task_type == "epic")
+                .map(|t| {
+                    let short_id = ctx
+                        .tasks
+                        .shortest_unique_prefix(&t.task_id)
+                        .unwrap_or_else(|_| t.task_id.clone());
+                    json!({
+                        "short_id": short_id,
+                        "task_id": t.task_id,
+                        "title": t.title,
+                    })
+                });
+            epic_cache.insert(parent_id.clone(), epic_val);
+        }
+    }
+
+    // Group tasks by parent epic, preserving selection order
+    let mut groups: Vec<(Option<Value>, Vec<Value>)> = Vec::new();
+    let mut group_index: HashMap<Option<String>, usize> = HashMap::new();
+
+    for (task, task_json) in selected.iter().zip(results_json) {
+        // Determine the epic key for this task
+        let epic_key: Option<String> = task
+            .parent_task_id
+            .as_ref()
+            .and_then(|pid| epic_cache.get(pid))
+            .and_then(|v| v.as_ref())
+            .map(|_| task.parent_task_id.clone())
+            .unwrap_or(None);
+
+        if let Some(&idx) = group_index.get(&epic_key) {
+            groups[idx].1.push(task_json);
+        } else {
+            let epic_val: Option<Value> = epic_key
+                .as_ref()
+                .and_then(|pid| epic_cache.get(pid))
+                .and_then(|v| v.clone());
+            let idx = groups.len();
+            group_index.insert(epic_key, idx);
+            groups.push((epic_val, vec![task_json]));
+        }
+    }
+
+    let groups_json: Vec<Value> = groups
+        .into_iter()
+        .map(|(epic, tasks)| {
+            json!({
+                "epic": epic,
+                "tasks": tasks,
+            })
+        })
         .collect();
 
     // Get aggregate counts
     let (ready_count, blocked_count) = ctx.tasks.count_ready_blocked().unwrap_or((0, 0));
 
     let response = json!({
-        "results": results_json,
+        "results": groups_json,
         "ready_count": ready_count,
         "blocked_count": blocked_count,
     });
@@ -64,12 +143,21 @@ mod tests {
     use super::super::dispatch_tool_call;
     use super::super::tests::create_test_context;
 
+    /// Helper: collect all tasks from the grouped results structure.
+    fn collect_tasks(parsed: &Value) -> Vec<&Value> {
+        parsed["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["tasks"].as_array().unwrap().iter())
+            .collect()
+    }
+
     #[test]
     fn test_returns_highest_priority() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
-        // Create tasks with different priorities
         for (id, title, priority) in &[("t1", "Low", 4), ("t2", "High", 1), ("t3", "Medium", 2)] {
             let p = json!({
                 "event_type": "task_created",
@@ -83,10 +171,10 @@ mod tests {
         assert!(result.is_error.is_none());
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let results = parsed["results"].as_array().unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0]["task_id"], "t2");
-        assert_eq!(results[0]["priority"], 1);
+        let tasks = collect_tasks(&parsed);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["task_id"], "t2");
+        assert_eq!(tasks[0]["priority"], 1);
         assert_eq!(parsed["ready_count"], 3);
         assert_eq!(parsed["blocked_count"], 0);
     }
@@ -96,7 +184,6 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
-        // t1 (P2), t2 (P1) depends on t1
         let p1 = json!({
             "event_type": "task_created",
             "task_id": "t1",
@@ -118,9 +205,9 @@ mod tests {
 
         let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let results = parsed["results"].as_array().unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0]["task_id"], "t1"); // t2 is blocked
+        let tasks = collect_tasks(&parsed);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["task_id"], "t1");
         assert_eq!(parsed["ready_count"], 1);
         assert_eq!(parsed["blocked_count"], 1);
     }
@@ -141,7 +228,8 @@ mod tests {
 
         let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({ "k": 2 }), &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        assert_eq!(parsed["results"].as_array().unwrap().len(), 2);
+        let tasks = collect_tasks(&parsed);
+        assert_eq!(tasks.len(), 2);
     }
 
     #[test]
@@ -160,7 +248,6 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
-        // Create t1 (done), t2 depends on t1 (now ready)
         let p1 = json!({
             "event_type": "task_created",
             "task_id": "t1",
@@ -188,7 +275,8 @@ mod tests {
 
         let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let task = &parsed["results"][0];
+        let tasks = collect_tasks(&parsed);
+        let task = &tasks[0];
         assert_eq!(task["task_id"], "t2");
         assert_eq!(task["dependency_summary"]["total_deps"], 1);
         assert_eq!(task["dependency_summary"]["done_deps"], 1);
@@ -221,9 +309,88 @@ mod tests {
 
         let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let task = &parsed["results"][0];
+        let tasks = collect_tasks(&parsed);
+        let task = &tasks[0];
         let labels = task["labels"].as_array().unwrap();
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0], "critical");
+    }
+
+    #[test]
+    fn test_excludes_epics() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        // Create an epic and a regular task
+        let epic = json!({
+            "event_type": "task_created",
+            "task_id": "e1",
+            "payload": { "title": "Epic", "priority": 1, "task_type": "epic" }
+        });
+        let task = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Task", "priority": 2 }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &epic, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &task, &ctx));
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({ "k": 10 }), &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let tasks = collect_tasks(&parsed);
+        // Only the regular task, not the epic
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["task_id"], "t1");
+    }
+
+    #[test]
+    fn test_groups_by_parent_epic() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        // Create an epic parent
+        let epic = json!({
+            "event_type": "task_created",
+            "task_id": "e1",
+            "payload": { "title": "My Epic", "priority": 1, "task_type": "epic" }
+        });
+        // Create child tasks under the epic
+        let child1 = json!({
+            "event_type": "task_created",
+            "task_id": "c1",
+            "payload": { "title": "Child 1", "priority": 2, "parent_task_id": "e1" }
+        });
+        let child2 = json!({
+            "event_type": "task_created",
+            "task_id": "c2",
+            "payload": { "title": "Child 2", "priority": 2, "parent_task_id": "e1" }
+        });
+        // Create an orphan task (no parent epic)
+        let orphan = json!({
+            "event_type": "task_created",
+            "task_id": "o1",
+            "payload": { "title": "Orphan", "priority": 2 }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &epic, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &child1, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &child2, &ctx));
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &orphan, &ctx));
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({ "k": 10 }), &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let groups = parsed["results"].as_array().unwrap();
+
+        // Should have 2 groups: one for the epic's children, one for the orphan
+        assert_eq!(groups.len(), 2);
+
+        // Find the group with the epic
+        let epic_group = groups.iter().find(|g| !g["epic"].is_null()).unwrap();
+        assert_eq!(epic_group["epic"]["title"], "My Epic");
+        assert_eq!(epic_group["tasks"].as_array().unwrap().len(), 2);
+
+        // Find the null-epic group
+        let null_group = groups.iter().find(|g| g["epic"].is_null()).unwrap();
+        assert_eq!(null_group["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(null_group["tasks"][0]["task_id"], "o1");
     }
 }

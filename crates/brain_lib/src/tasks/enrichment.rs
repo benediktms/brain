@@ -2,6 +2,8 @@
 //!
 //! Eliminates duplication between MCP handlers and CLI commands.
 
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 
 use super::TaskStore;
@@ -98,19 +100,64 @@ pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
     task_json
 }
 
-/// Enrich a list of tasks with labels; also return ready/blocked aggregate counts.
+/// Enrich a list of tasks with pre-fetched labels; also return ready/blocked aggregate counts.
 ///
 /// Returns `(tasks_json, ready_count, blocked_count)`.
-pub fn enrich_task_list(store: &TaskStore, tasks: &[TaskRow]) -> (Vec<Value>, usize, usize) {
+pub fn enrich_task_list(
+    store: &TaskStore,
+    tasks: &[TaskRow],
+    labels_map: &HashMap<String, Vec<String>>,
+) -> (Vec<Value>, usize, usize) {
     let tasks_json: Vec<Value> = tasks
         .iter()
         .map(|task| {
-            let labels = store.get_task_labels(&task.task_id).unwrap_or_default();
+            let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
             task_row_to_json(task, labels)
         })
         .collect();
     let (ready_count, blocked_count) = store.count_ready_blocked().unwrap_or((0, 0));
     (tasks_json, ready_count, blocked_count)
+}
+
+/// Batch-enrich a list of tasks with labels, dependency summary, and note links.
+///
+/// Used by `task_next` for the selected top-k tasks. Batch-fetches labels in one
+/// query instead of N per-task queries.
+pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value> {
+    let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+    let labels_map = store.get_labels_for_tasks(&task_ids).unwrap_or_default();
+
+    tasks
+        .iter()
+        .map(|task| {
+            let dep_summary = store
+                .get_dependency_summary(&task.task_id)
+                .unwrap_or_else(|_| DependencySummary {
+                    total_deps: 0,
+                    done_deps: 0,
+                    blocking_task_ids: vec![],
+                });
+            let note_links = store.get_task_note_links(&task.task_id).unwrap_or_default();
+            let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
+
+            let mut task_json = task_row_to_json(task, labels);
+            if let Some(obj) = task_json.as_object_mut() {
+                obj.insert(
+                    "dependency_summary".into(),
+                    json!({
+                        "total_deps": dep_summary.total_deps,
+                        "done_deps": dep_summary.done_deps,
+                        "blocking_tasks": dep_summary.blocking_task_ids,
+                    }),
+                );
+                obj.insert(
+                    "linked_notes".into(),
+                    json!(note_links_to_json(&note_links)),
+                );
+            }
+            task_json
+        })
+        .collect()
 }
 
 #[cfg(test)]
