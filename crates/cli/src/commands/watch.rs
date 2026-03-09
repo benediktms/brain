@@ -218,8 +218,7 @@ pub async fn run(
     let clean = !force_shutdown && dropped_items == 0;
     info!(
         clean,
-        dropped_items,
-        "shutdown phase 5/5: shutdown complete"
+        dropped_items, "shutdown phase 5/5: shutdown complete"
     );
 
     Ok(ShutdownOutcome {

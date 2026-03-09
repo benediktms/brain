@@ -306,8 +306,7 @@ mod tests {
         // Data should still be readable
         let count: i64 = db
             .with_read_conn(|conn| {
-                let c =
-                    conn.query_row("SELECT COUNT(*) FROM ckpt_test", [], |row| row.get(0))?;
+                let c = conn.query_row("SELECT COUNT(*) FROM ckpt_test", [], |row| row.get(0))?;
                 Ok(c)
             })
             .unwrap();
