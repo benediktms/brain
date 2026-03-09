@@ -1,0 +1,10 @@
+{"event_id":"EVT-0001","task_id":"T1","timestamp":1700000001,"actor":"user","event_type":"task_created","event_version":1,"payload":{"description":"Core authentication logic","priority":1,"status":"open","task_type":"feature","title":"Implement auth module"}}
+{"event_id":"EVT-0002","task_id":"T2","timestamp":1700000002,"actor":"user","event_type":"task_created","event_version":1,"payload":{"priority":2,"status":"open","task_type":"task","title":"Write integration tests"}}
+{"event_id":"EVT-0003","task_id":"T3","timestamp":1700000003,"actor":"user","event_type":"task_created","event_version":1,"payload":{"priority":3,"status":"open","task_type":"task","title":"Deploy to staging"}}
+{"event_id":"EVT-0004","task_id":"T2","timestamp":1700000004,"actor":"user","event_type":"dependency_added","event_version":1,"payload":{"depends_on_task_id":"T1"}}
+{"event_id":"EVT-0005","task_id":"T3","timestamp":1700000005,"actor":"user","event_type":"dependency_added","event_version":1,"payload":{"depends_on_task_id":"T2"}}
+{"event_id":"EVT-0006","task_id":"T1","timestamp":1700000006,"actor":"user","event_type":"label_added","event_version":1,"payload":{"label":"core"}}
+{"event_id":"EVT-0007","task_id":"T2","timestamp":1700000007,"actor":"user","event_type":"label_added","event_version":1,"payload":{"label":"testing"}}
+{"event_id":"EVT-0008","task_id":"T2","timestamp":1700000008,"actor":"user","event_type":"comment_added","event_version":1,"payload":{"body":"Waiting for auth to be done"}}
+{"event_id":"EVT-0009","task_id":"T1","timestamp":1700000009,"actor":"user","event_type":"status_changed","event_version":1,"payload":{"new_status":"in_progress"}}
+{"event_id":"EVT-0010","task_id":"T1","timestamp":1700000010,"actor":"user","event_type":"status_changed","event_version":1,"payload":{"new_status":"done"}}

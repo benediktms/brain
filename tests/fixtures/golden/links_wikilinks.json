@@ -1,0 +1,30 @@
+{
+  "input_file": "wikilinks.md",
+  "links": [
+    {
+      "target": "headings",
+      "link_text": "headings",
+      "link_type": "Wiki"
+    },
+    {
+      "target": "frontmatter",
+      "link_text": "the LanceDB decision note",
+      "link_type": "Wiki"
+    },
+    {
+      "target": "headings",
+      "link_text": "headings",
+      "link_type": "Wiki"
+    },
+    {
+      "target": "tasks",
+      "link_text": "tasks",
+      "link_type": "Wiki"
+    },
+    {
+      "target": "simple.md",
+      "link_text": "the simple explanation",
+      "link_type": "Markdown"
+    }
+  ]
+}

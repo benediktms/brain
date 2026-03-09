@@ -1,0 +1,96 @@
+{
+  "input_file": "headings.md",
+  "chunker_version": 2,
+  "chunks": [
+    {
+      "ord": 0,
+      "content": "Vector embeddings are dense numerical representations of text that capture semantic meaning. Unlike keyword-based approaches where \"dog\" and \"canine\" are completely unrelated strings, an embedding model maps both words to nearby points in a high-dimensional space because they share meaning.",
+      "heading_path": "# Understanding Vector Embeddings",
+      "byte_start": 0,
+      "byte_end": 328,
+      "token_estimate": 73,
+      "chunk_hash": "3527fe8599cc4dd125ca281c3fde83ad616fa8003fed1b8c72bb76a21e74e911"
+    },
+    {
+      "ord": 1,
+      "content": "Transformer-based models like BERT read a sequence of tokens and produce a hidden state for each token. For sentence-level embeddings, we typically take the hidden state of the first token (the CLS token) as a summary of the entire input. The model is trained on large corpora so that semantically similar texts produce similar hidden states.",
+      "heading_path": "# Understanding Vector Embeddings > ## How Embedding Models Work",
+      "byte_start": 328,
+      "byte_end": 702,
+      "token_estimate": 86,
+      "chunk_hash": "ace70e35e39039008a9b69de9a8a90e0d04f78df0ebcce646e1e1bf19e0e08e8"
+    },
+    {
+      "ord": 2,
+      "content": "The CLS token is a special token prepended to every input sequence. During pre-training, the model learns to aggregate sentence-level information into this position. After the forward pass, extracting the CLS hidden state gives us a fixed-size vector regardless of input length.",
+      "heading_path": "# Understanding Vector Embeddings > ## How Embedding Models Work > ### The Role of the CLS Token",
+      "byte_start": 702,
+      "byte_end": 1013,
+      "token_estimate": 70,
+      "chunk_hash": "bf4808b6403577dc30430308c974ac291f7aefacb0ae575c83ea39698c4717ae"
+    },
+    {
+      "ord": 3,
+      "content": "General-purpose BERT embeddings are not optimal for similarity search out of the box. Models like BGE-small-en-v1.5 are fine-tuned on retrieval tasks using contrastive learning: the model is trained to push embeddings of relevant query-document pairs closer together and irrelevant pairs further apart.",
+      "heading_path": "# Understanding Vector Embeddings > ## How Embedding Models Work > ### Fine-Tuning for Retrieval",
+      "byte_start": 1013,
+      "byte_end": 1348,
+      "token_estimate": 76,
+      "chunk_hash": "431f7c5442e11d5a1fcf5904575c586e286a488b3a4b70f6f11c2f7aa88cdf8c"
+    },
+    {
+      "ord": 4,
+      "content": "Once we have two vectors, we need a way to measure how close they are. The most common metrics are cosine similarity and dot product.",
+      "heading_path": "# Understanding Vector Embeddings > ## Similarity and Distance",
+      "byte_start": 1348,
+      "byte_end": 1511,
+      "token_estimate": 34,
+      "chunk_hash": "b1031f59772365dfc2c86481cf5cdafb6d0e820363b368c50222a36989137891"
+    },
+    {
+      "ord": 5,
+      "content": "Cosine similarity measures the angle between two vectors, ignoring their magnitude. It ranges from -1 (opposite) to 1 (identical direction). For normalized vectors (unit length), cosine similarity equals the dot product, which is cheaper to compute.",
+      "heading_path": "# Understanding Vector Embeddings > ## Similarity and Distance > ### Cosine Similarity",
+      "byte_start": 1511,
+      "byte_end": 1785,
+      "token_estimate": 63,
+      "chunk_hash": "506c3cd12e9e026459ca2c07c753e688cf3db5061de7618ec31544b3aaae1333"
+    },
+    {
+      "ord": 6,
+      "content": "L2 normalization projects every vector onto the unit hypersphere. After normalization, dot product and cosine similarity are equivalent. This saves compute at query time because dot product requires one fewer operation than explicit cosine. It also means all vectors are directly comparable regardless of the quirks of the embedding model's output scale.",
+      "heading_path": "# Understanding Vector Embeddings > ## Similarity and Distance > ### Why Normalize to Unit Length",
+      "byte_start": 1785,
+      "byte_end": 2175,
+      "token_estimate": 89,
+      "chunk_hash": "a5111d4cf61b6f1856e97be9cf3ed46f6bb3a2bf6f99ea9eab187fbb7bef7797"
+    },
+    {
+      "ord": 7,
+      "content": "BGE-small uses 384 dimensions, which is a good balance between expressiveness and efficiency. Higher dimensions capture more nuance but cost more memory and compute. For a personal knowledge base with tens of thousands of chunks, 384 dimensions are more than sufficient.",
+      "heading_path": "# Understanding Vector Embeddings > ## Practical Considerations > ### Dimensionality",
+      "byte_start": 2204,
+      "byte_end": 2496,
+      "token_estimate": 68,
+      "chunk_hash": "e90b2360585e42a13a763822e331497729384d60fa1ada213b39cedf247d0eb5"
+    },
+    {
+      "ord": 8,
+      "content": "Each 384-dimensional float32 vector occupies 1,536 bytes. For 100,000 chunks this totals roughly 150 megabytes of raw embedding data, well within laptop constraints.",
+      "heading_path": "# Understanding Vector Embeddings > ## Practical Considerations > ### Dimensionality > #### Storage Costs",
+      "byte_start": 2496,
+      "byte_end": 2683,
+      "token_estimate": 42,
+      "chunk_hash": "afa998f29f18764e6c0cd1c865629b8eeede51b1461e6dad66a367c850c10698"
+    },
+    {
+      "ord": 9,
+      "content": "With proper indexing, approximate nearest neighbor search over 100k vectors completes in under 50 milliseconds. Without an index, brute-force scan is still fast at this scale because modern CPUs handle SIMD dot products efficiently.",
+      "heading_path": "# Understanding Vector Embeddings > ## Practical Considerations > ### Dimensionality > #### Search Latency",
+      "byte_start": 2683,
+      "byte_end": 2937,
+      "token_estimate": 58,
+      "chunk_hash": "70f6320508d3fd7cf776dba7476d993986f482c2e4a91b6a7879a86bafcf5800"
+    }
+  ]
+}

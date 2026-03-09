@@ -1,0 +1,46 @@
+{
+  "tasks": [
+    {
+      "task_id": "T1",
+      "title": "Implement auth module",
+      "status": "done",
+      "priority": 1
+    },
+    {
+      "task_id": "T2",
+      "title": "Write integration tests",
+      "status": "open",
+      "priority": 2
+    },
+    {
+      "task_id": "T3",
+      "title": "Deploy to staging",
+      "status": "open",
+      "priority": 3
+    }
+  ],
+  "deps": [
+    {
+      "task_id": "T2",
+      "depends_on": "T1"
+    },
+    {
+      "task_id": "T3",
+      "depends_on": "T2"
+    }
+  ],
+  "ready_ids": [
+    "T2"
+  ],
+  "blocked_ids": [
+    "T3"
+  ],
+  "labels": {
+    "T2": [
+      "testing"
+    ],
+    "T1": [
+      "core"
+    ]
+  }
+}
