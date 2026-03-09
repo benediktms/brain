@@ -9,307 +9,77 @@ mod task_get;
 mod task_list;
 mod task_next;
 
-use serde_json::{Value, json};
+use std::future::Future;
+use std::pin::Pin;
+
+use serde_json::Value;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-/// Extract a required string parameter, returning a ToolCallResult error if missing.
-pub(super) fn require_str<'a>(params: &'a Value, name: &str) -> Result<&'a str, ToolCallResult> {
-    params
-        .get(name)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ToolCallResult::error(format!("Missing required parameter: {name}")))
+pub(super) const MEMORY_UNAVAILABLE: &str = "Memory tools are unavailable: embedding model not found. Run `brain setup-model` to download it.";
+
+/// Trait for MCP tool handlers. Each tool provides its name, JSON Schema
+/// definition, and an async `call` method that executes the tool logic.
+pub trait McpTool: Send + Sync {
+    /// Tool name as it appears in MCP (e.g. "tasks.apply_event").
+    fn name(&self) -> &'static str;
+
+    /// Tool definition including JSON Schema for input parameters.
+    fn definition(&self) -> ToolDefinition;
+
+    /// Execute the tool with the given parameters.
+    fn call<'a>(
+        &'a self,
+        params: Value,
+        ctx: &'a McpContext,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>>;
 }
 
-/// Extract a required JSON array parameter.
-pub(super) fn require_array<'a>(
-    params: &'a Value,
-    name: &str,
-) -> Result<&'a Vec<Value>, ToolCallResult> {
-    params
-        .get(name)
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| ToolCallResult::error(format!("Missing required parameter: {name}")))
+/// Registry of all available MCP tools.
+pub struct ToolRegistry {
+    tools: Vec<Box<dyn McpTool>>,
 }
 
-/// Extract an optional u64 parameter with a default value.
-pub(super) fn opt_u64(params: &Value, name: &str, default: u64) -> u64 {
-    params.get(name).and_then(|v| v.as_u64()).unwrap_or(default)
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// Extract an optional string parameter with a default value.
-pub(super) fn opt_str<'a>(params: &'a Value, name: &str, default: &'a str) -> &'a str {
-    params.get(name).and_then(|v| v.as_str()).unwrap_or(default)
-}
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self {
+            tools: vec![
+                Box::new(mem_search_minimal::MemSearchMinimal),
+                Box::new(mem_expand::MemExpand),
+                Box::new(mem_write_episode::MemWriteEpisode),
+                Box::new(mem_reflect::MemReflect),
+                Box::new(task_apply_event::TaskApplyEvent),
+                Box::new(task_get::TaskGet),
+                Box::new(task_list::TaskList),
+                Box::new(task_next::TaskNext),
+                Box::new(status::Status),
+            ],
+        }
+    }
 
-/// Return all available tool definitions.
-pub fn tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition {
-            name: "memory.search_minimal".into(),
-            description: "Search the knowledge base and return compact memory stubs within a token budget. Use this first to find relevant memories, then expand specific ones.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Natural language search query"
-                    },
-                    "intent": {
-                        "type": "string",
-                        "enum": ["lookup", "planning", "reflection", "synthesis", "auto"],
-                        "description": "Retrieval intent — controls ranking weight profile. Default: auto",
-                        "default": "auto"
-                    },
-                    "budget_tokens": {
-                        "type": "integer",
-                        "description": "Maximum tokens in response. Default: 800",
-                        "default": 800
-                    },
-                    "k": {
-                        "type": "integer",
-                        "description": "Maximum number of results. Default: 10",
-                        "default": 10
-                    }
-                },
-                "required": ["query"]
-            }),
-        },
-        ToolDefinition {
-            name: "memory.expand".into(),
-            description: "Expand memory stubs to full content. Pass memory_ids from search_minimal results.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "memory_ids": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Memory IDs to expand (from search_minimal results)"
-                    },
-                    "budget_tokens": {
-                        "type": "integer",
-                        "description": "Maximum tokens in response. Default: 2000",
-                        "default": 2000
-                    }
-                },
-                "required": ["memory_ids"]
-            }),
-        },
-        ToolDefinition {
-            name: "memory.write_episode".into(),
-            description: "Record an episode (goal, actions, outcome) to the knowledge base.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "goal": {
-                        "type": "string",
-                        "description": "What was the goal"
-                    },
-                    "actions": {
-                        "type": "string",
-                        "description": "What actions were taken"
-                    },
-                    "outcome": {
-                        "type": "string",
-                        "description": "What was the outcome"
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Tags for categorization"
-                    },
-                    "importance": {
-                        "type": "number",
-                        "description": "Importance score (0.0 to 1.0). Default: 1.0",
-                        "default": 1.0
-                    }
-                },
-                "required": ["goal", "actions", "outcome"]
-            }),
-        },
-        ToolDefinition {
-            name: "memory.reflect".into(),
-            description: "Retrieve source material for reflection. Returns relevant memories that the LLM can synthesize into a reflection, then call back to store.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "description": "Topic to reflect on"
-                    },
-                    "budget_tokens": {
-                        "type": "integer",
-                        "description": "Maximum tokens for source material. Default: 2000",
-                        "default": 2000
-                    }
-                },
-                "required": ["topic"]
-            }),
-        },
-        ToolDefinition {
-            name: "tasks.apply_event".into(),
-            description: "Apply an event to the task system. Creates, updates, or changes tasks via event sourcing. Returns the resulting task state and any newly unblocked task IDs.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "event_type": {
-                        "type": "string",
-                        "enum": ["task_created", "task_updated", "status_changed",
-                                 "dependency_added", "dependency_removed",
-                                 "note_linked", "note_unlinked",
-                                 "label_added", "label_removed", "comment_added",
-                                 "parent_set"],
-                        "description": "The type of task event to apply"
-                    },
-                    "task_id": {
-                        "type": "string",
-                        "description": "Task ID (full or prefix). Optional for task_created (auto-generates prefixed ULID). For other events, accepts full ID or a unique prefix (e.g. 'BRN-01JPH')."
-                    },
-                    "actor": {
-                        "type": "string",
-                        "description": "Who is performing this action. Default: 'mcp'",
-                        "default": "mcp"
-                    },
-                    "payload": {
-                        "type": "object",
-                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?, parent_task_id?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}. parent_set: {parent_task_id?} (null to clear). Timestamps (due_ts, defer_until) accept ISO 8601 strings (preferred, e.g. \"2026-03-15T00:00:00Z\") or Unix-seconds integers. Responses always return timestamps as ISO 8601 strings."
-                    }
-                },
-                "required": ["event_type", "payload"]
-            }),
-        },
-        ToolDefinition {
-            name: "tasks.get".into(),
-            description: "Get a single task by ID (full or prefix) with full details including relationships, comments, labels, and linked notes. Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "task_id": {
-                        "type": "string",
-                        "description": "The task ID to retrieve (full ID or unique prefix, e.g. 'BRN-01JPH')"
-                    },
-                    "expand": {
-                        "type": "array",
-                        "items": {
-                            "type": "string",
-                            "enum": ["parent", "children", "blocked_by", "blocks"]
-                        },
-                        "description": "Expand relationship stubs to full task objects"
-                    }
-                },
-                "required": ["task_id"]
-            }),
-        },
-        ToolDefinition {
-            name: "tasks.list".into(),
-            description: "List tasks filtered by status and optional field filters. Returns summary task objects (descriptions omitted by default — use tasks.get for full details). Results are sorted by priority and paginated.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": "string",
-                        "enum": ["open", "ready", "blocked", "done"],
-                        "description": "Filter tasks by status. 'open' (default): excludes done/cancelled. 'ready': no unresolved deps. 'blocked': has unresolved deps or blocked_reason. 'done': completed or cancelled tasks.",
-                        "default": "open"
-                    },
-                    "task_ids": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Fetch specific tasks by ID or prefix (ignores status filter). Unresolvable IDs are silently skipped."
-                    },
-                    "priority": {
-                        "type": "integer",
-                        "description": "Filter by exact priority (0=critical, 1=high, 2=medium, 3=low, 4=backlog)"
-                    },
-                    "task_type": {
-                        "type": "string",
-                        "description": "Filter by task type (task, bug, feature, epic)"
-                    },
-                    "assignee": {
-                        "type": "string",
-                        "description": "Filter by assignee"
-                    },
-                    "label": {
-                        "type": "string",
-                        "description": "Filter by label (exact match)"
-                    },
-                    "search": {
-                        "type": "string",
-                        "description": "Full-text search on title and description (FTS5 query syntax)"
-                    },
-                    "include_description": {
-                        "type": "boolean",
-                        "description": "Include task descriptions in output. Default: false (omitted to reduce response size).",
-                        "default": false
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of tasks to return. Default: 50. Response includes 'total' and 'has_more' for pagination.",
-                        "default": 50
-                    }
-                }
-            }),
-        },
-        ToolDefinition {
-            name: "tasks.next".into(),
-            description: "Get the next highest-priority ready task(s). Returns tasks with no unresolved dependencies, sorted by configurable policy. Includes dependency summary and linked notes for each task.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "policy": {
-                        "type": "string",
-                        "enum": ["priority", "due_date"],
-                        "description": "Sorting policy. 'priority' (default): by priority then due date. 'due_date': by due date then priority.",
-                        "default": "priority"
-                    },
-                    "k": {
-                        "type": "integer",
-                        "description": "Number of tasks to return. Default: 1",
-                        "default": 1
-                    }
-                }
-            }),
-        },
-        ToolDefinition {
-            name: "status".into(),
-            description: "Get runtime health metrics: indexing/query latency (p50/p95), stale hash prevention count, token usage, queue depth, LanceDB unoptimized rows, stuck files, and uptime.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
-    ]
-}
+    pub fn definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.iter().map(|t| t.definition()).collect()
+    }
 
-const MEMORY_UNAVAILABLE: &str = "Memory tools are unavailable: embedding model not found. Run `brain setup-model` to download it.";
-
-/// Dispatch a tool call to the appropriate handler.
-pub async fn dispatch_tool_call(name: &str, params: &Value, ctx: &McpContext) -> ToolCallResult {
-    match name {
-        "memory.search_minimal" | "memory.expand" | "memory.reflect" => {
-            if ctx.store.is_none() || ctx.embedder.is_none() {
-                return ToolCallResult::error(MEMORY_UNAVAILABLE.to_string());
-            }
-            match name {
-                "memory.search_minimal" => mem_search_minimal::handle(params, ctx).await,
-                "memory.expand" => mem_expand::handle(params, ctx).await,
-                "memory.reflect" => mem_reflect::handle(params, ctx).await,
-                _ => unreachable!(),
+    pub async fn dispatch(&self, name: &str, params: Value, ctx: &McpContext) -> ToolCallResult {
+        for tool in &self.tools {
+            if tool.name() == name {
+                return tool.call(params, ctx).await;
             }
         }
-        "memory.write_episode" => mem_write_episode::handle(params, ctx),
-        "tasks.apply_event" => task_apply_event::handle(params, ctx),
-        "tasks.get" => task_get::handle(params, ctx),
-        "tasks.list" => task_list::handle(params, ctx),
-        "tasks.next" => task_next::handle(params, ctx),
-        "status" => status::handle(ctx).await,
-        _ => ToolCallResult::error(format!("Unknown tool: {name}")),
+        ToolCallResult::error(format!("Unknown tool: {name}"))
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
@@ -318,7 +88,8 @@ mod tests {
 
     #[test]
     fn test_tool_definitions_valid() {
-        let defs = tool_definitions();
+        let registry = ToolRegistry::new();
+        let defs = registry.definitions();
         assert_eq!(defs.len(), 9);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
@@ -338,15 +109,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_dispatch_unknown_tool() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
-        let result = rt.block_on(dispatch_tool_call("nonexistent", &json!({}), &ctx));
+    #[tokio::test]
+    async fn test_dispatch_unknown_tool() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry.dispatch("nonexistent", json!({}), &ctx).await;
         assert_eq!(result.is_error, Some(true));
     }
 
-    pub(super) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
+    pub(in crate::mcp) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
         let tmp = tempfile::TempDir::new().unwrap();
         let sqlite_path = tmp.path().join("test.db");
         let lance_path = tmp.path().join("test_lance");

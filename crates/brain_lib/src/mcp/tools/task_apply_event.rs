@@ -1,87 +1,102 @@
+use std::future::Future;
+use std::pin::Pin;
+
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::mcp::McpContext;
-use crate::mcp::protocol::ToolCallResult;
+use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{EventType, TaskCreatedPayload, TaskEvent, TaskStatus, new_task_id};
-
 use crate::utils::{parse_timestamp, task_row_to_json};
 
-pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    use super::{opt_str, require_str};
-    // Parse event_type
-    let event_type_str = match require_str(params, "event_type") {
-        Ok(s) => s,
-        Err(e) => return e,
-    };
+use super::McpTool;
 
-    let event_type: EventType = match serde_json::from_value(json!(event_type_str)) {
-        Ok(et) => et,
-        Err(_) => {
-            return ToolCallResult::error(format!(
-                "Invalid event_type: '{event_type_str}'. Must be one of: task_created, \
-                 task_updated, status_changed, dependency_added, dependency_removed, \
-                 note_linked, note_unlinked, label_added, label_removed, comment_added, \
-                 parent_set, external_id_added, external_id_removed"
-            ));
-        }
-    };
+#[derive(Deserialize)]
+struct Params {
+    event_type: String,
+    task_id: Option<String>,
+    #[serde(default = "default_actor")]
+    actor: String,
+    payload: serde_json::Map<String, Value>,
+}
 
-    // Parse payload
-    let payload = match params.get("payload") {
-        Some(p) if p.is_object() => p.clone(),
-        Some(_) => return ToolCallResult::error("Parameter 'payload' must be an object"),
-        None => return ToolCallResult::error("Missing required parameter: payload"),
-    };
+fn default_actor() -> String {
+    "mcp".into()
+}
 
-    // Parse task_id: auto-generate for task_created, resolve prefix for others
-    let task_id = match params.get("task_id").and_then(|v| v.as_str()) {
-        Some(id) if id.len() > 256 => {
-            return ToolCallResult::error("task_id exceeds maximum length of 256 characters");
-        }
-        Some(id) => {
-            if event_type == EventType::TaskCreated {
-                id.to_string()
-            } else {
-                // Resolve prefix for non-create events
-                match ctx.tasks.resolve_task_id(id) {
-                    Ok(resolved) => resolved,
-                    Err(e) => {
-                        return ToolCallResult::error(format!("Failed to resolve task_id: {e}"));
+pub(super) struct TaskApplyEvent;
+
+impl TaskApplyEvent {
+    fn execute(&self, raw_params: Value, ctx: &McpContext) -> ToolCallResult {
+        let params: Params = match serde_json::from_value(raw_params) {
+            Ok(p) => p,
+            Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+        };
+
+        // Parse event_type
+        let event_type: EventType = match serde_json::from_value(json!(params.event_type)) {
+            Ok(et) => et,
+            Err(_) => {
+                return ToolCallResult::error(format!(
+                    "Invalid event_type: '{}'. Must be one of: task_created, \
+                     task_updated, status_changed, dependency_added, dependency_removed, \
+                     note_linked, note_unlinked, label_added, label_removed, comment_added, \
+                     parent_set, external_id_added, external_id_removed",
+                    params.event_type
+                ));
+            }
+        };
+
+        // Parse task_id: auto-generate for task_created, resolve prefix for others
+        let task_id = match params.task_id.as_deref() {
+            Some(id) if id.len() > 256 => {
+                return ToolCallResult::error("task_id exceeds maximum length of 256 characters");
+            }
+            Some(id) => {
+                if event_type == EventType::TaskCreated {
+                    id.to_string()
+                } else {
+                    // Resolve prefix for non-create events
+                    match ctx.tasks.resolve_task_id(id) {
+                        Ok(resolved) => resolved,
+                        Err(e) => {
+                            return ToolCallResult::error(format!(
+                                "Failed to resolve task_id: {e}"
+                            ));
+                        }
                     }
                 }
             }
-        }
-        None => {
-            if event_type == EventType::TaskCreated {
-                let prefix = match ctx.tasks.get_project_prefix() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return ToolCallResult::error(format!("Failed to get project prefix: {e}"));
-                    }
-                };
-                new_task_id(&prefix)
-            } else {
-                return ToolCallResult::error(
-                    "Missing required parameter: task_id (required for all event types except task_created)",
-                );
+            None => {
+                if event_type == EventType::TaskCreated {
+                    let prefix = match ctx.tasks.get_project_prefix() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return ToolCallResult::error(format!(
+                                "Failed to get project prefix: {e}"
+                            ));
+                        }
+                    };
+                    new_task_id(&prefix)
+                } else {
+                    return ToolCallResult::error(
+                        "Missing required parameter: task_id (required for all event types except task_created)",
+                    );
+                }
             }
+        };
+
+        if params.actor.len() > 256 {
+            return ToolCallResult::error("actor exceeds maximum length of 256 characters");
         }
-    };
 
-    let actor_str = opt_str(params, "actor", "mcp");
-    if actor_str.len() > 256 {
-        return ToolCallResult::error("actor exceeds maximum length of 256 characters");
-    }
-    let actor = actor_str.to_string();
-
-    // Normalize timestamp fields from ISO 8601 strings to i64 Unix seconds
-    let payload = {
-        let mut p = payload;
+        // Normalize timestamp fields from ISO 8601 strings to i64 Unix seconds
+        let mut payload = Value::Object(params.payload);
         for field in &["defer_until", "due_ts"] {
-            if let Some(val) = p.get(*field).filter(|v| v.is_string()) {
+            if let Some(val) = payload.get(*field).filter(|v| v.is_string()) {
                 match parse_timestamp(val) {
-                    Some(ts) => p[*field] = json!(ts),
+                    Some(ts) => payload[*field] = json!(ts),
                     None => {
                         return ToolCallResult::error(format!(
                             "Invalid timestamp for '{field}': expected ISO 8601 string or integer"
@@ -90,17 +105,13 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 }
             }
         }
-        p
-    };
 
-    // Resolve depends_on_task_id and parent_task_id references in payload
-    let payload = {
-        let mut p = payload;
-        if let Some(dep_id) = p.get("depends_on_task_id").and_then(|v| v.as_str())
+        // Resolve depends_on_task_id and parent_task_id references in payload
+        if let Some(dep_id) = payload.get("depends_on_task_id").and_then(|v| v.as_str())
             && !dep_id.is_empty()
         {
             match ctx.tasks.resolve_task_id(dep_id) {
-                Ok(resolved) => p["depends_on_task_id"] = json!(resolved),
+                Ok(resolved) => payload["depends_on_task_id"] = json!(resolved),
                 Err(e) => {
                     return ToolCallResult::error(format!(
                         "Failed to resolve depends_on_task_id: {e}"
@@ -108,101 +119,160 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
                 }
             }
         }
-        if let Some(parent_id) = p.get("parent_task_id").and_then(|v| v.as_str())
+        if let Some(parent_id) = payload.get("parent_task_id").and_then(|v| v.as_str())
             && !parent_id.is_empty()
         {
             match ctx.tasks.resolve_task_id(parent_id) {
-                Ok(resolved) => p["parent_task_id"] = json!(resolved),
+                Ok(resolved) => payload["parent_task_id"] = json!(resolved),
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to resolve parent_task_id: {e}"));
                 }
             }
         }
-        p
-    };
 
-    // For task_created, apply domain defaults via serde round-trip through TaskCreatedPayload
-    let payload = if event_type == EventType::TaskCreated {
-        match serde_json::from_value::<TaskCreatedPayload>(payload) {
-            Ok(typed) => serde_json::to_value(typed).unwrap(),
-            Err(e) => {
-                return ToolCallResult::error(format!("Invalid task_created payload: {e}"));
+        // For task_created, apply domain defaults via serde round-trip through TaskCreatedPayload
+        let payload = if event_type == EventType::TaskCreated {
+            match serde_json::from_value::<TaskCreatedPayload>(payload) {
+                Ok(typed) => serde_json::to_value(typed).unwrap(),
+                Err(e) => {
+                    return ToolCallResult::error(format!("Invalid task_created payload: {e}"));
+                }
             }
+        } else {
+            payload
+        };
+
+        let event = TaskEvent::from_raw(task_id.clone(), params.actor, event_type.clone(), payload);
+
+        // Append (validates + writes JSONL + applies projection)
+        if let Err(e) = ctx.tasks.append(&event) {
+            return ToolCallResult::error(format!("Task event failed: {e}"));
         }
-    } else {
-        payload
-    };
 
-    let event = TaskEvent::from_raw(task_id.clone(), actor, event_type.clone(), payload);
+        // Fetch resulting task state
+        let task_json = match ctx.tasks.get_task(&task_id) {
+            Ok(Some(row)) => {
+                let labels = ctx.tasks.get_task_labels(&task_id).unwrap_or_default();
+                task_row_to_json(&row, labels)
+            }
+            Ok(None) => json!(null),
+            Err(e) => {
+                warn!(error = %e, "failed to fetch task after event");
+                json!(null)
+            }
+        };
 
-    // Append (validates + writes JSONL + applies projection)
-    if let Err(e) = ctx.tasks.append(&event) {
-        return ToolCallResult::error(format!("Task event failed: {e}"));
-    }
-
-    // Fetch resulting task state
-    let task_json = match ctx.tasks.get_task(&task_id) {
-        Ok(Some(row)) => {
-            let labels = ctx.tasks.get_task_labels(&task_id).unwrap_or_default();
-            task_row_to_json(&row, labels)
-        }
-        Ok(None) => json!(null),
-        Err(e) => {
-            warn!(error = %e, "failed to fetch task after event");
-            json!(null)
-        }
-    };
-
-    // Detect newly unblocked tasks after status_changed to done/cancelled
-    let unblocked_task_ids = if event_type == EventType::StatusChanged {
-        let new_status = event
-            .payload
-            .get("new_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if new_status == TaskStatus::Done.as_ref() || new_status == TaskStatus::Cancelled.as_ref() {
-            ctx.tasks.list_newly_unblocked(&task_id).unwrap_or_default()
+        // Detect newly unblocked tasks after status_changed to done/cancelled
+        let unblocked_task_ids = if event_type == EventType::StatusChanged {
+            let new_status = event
+                .payload
+                .get("new_status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if new_status == TaskStatus::Done.as_ref()
+                || new_status == TaskStatus::Cancelled.as_ref()
+            {
+                ctx.tasks.list_newly_unblocked(&task_id).unwrap_or_default()
+            } else {
+                vec![]
+            }
         } else {
             vec![]
+        };
+
+        let short_id = ctx
+            .tasks
+            .shortest_unique_prefix(&task_id)
+            .unwrap_or_else(|_| task_id.clone());
+
+        let response = json!({
+            "event_id": event.event_id,
+            "task_id": task_id,
+            "short_id": short_id,
+            "task": task_json,
+            "unblocked_task_ids": unblocked_task_ids,
+        });
+
+        ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+    }
+}
+
+impl McpTool for TaskApplyEvent {
+    fn name(&self) -> &'static str {
+        "tasks.apply_event"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().into(),
+            description: "Apply an event to the task system. Creates, updates, or changes tasks via event sourcing. Returns the resulting task state and any newly unblocked task IDs.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "event_type": {
+                        "type": "string",
+                        "enum": ["task_created", "task_updated", "status_changed",
+                                 "dependency_added", "dependency_removed",
+                                 "note_linked", "note_unlinked",
+                                 "label_added", "label_removed", "comment_added",
+                                 "parent_set"],
+                        "description": "The type of task event to apply"
+                    },
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (full or prefix). Optional for task_created (auto-generates prefixed ULID). For other events, accepts full ID or a unique prefix (e.g. 'BRN-01JPH')."
+                    },
+                    "actor": {
+                        "type": "string",
+                        "description": "Who is performing this action. Default: 'mcp'",
+                        "default": "mcp"
+                    },
+                    "payload": {
+                        "type": "object",
+                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?, parent_task_id?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}. parent_set: {parent_task_id?} (null to clear). Timestamps (due_ts, defer_until) accept ISO 8601 strings (preferred, e.g. \"2026-03-15T00:00:00Z\") or Unix-seconds integers. Responses always return timestamps as ISO 8601 strings."
+                    }
+                },
+                "required": ["event_type", "payload"]
+            }),
         }
-    } else {
-        vec![]
-    };
+    }
 
-    let short_id = ctx
-        .tasks
-        .shortest_unique_prefix(&task_id)
-        .unwrap_or_else(|_| task_id.clone());
-
-    let response = json!({
-        "event_id": event.event_id,
-        "task_id": task_id,
-        "short_id": short_id,
-        "task": task_json,
-        "unblocked_task_ids": unblocked_task_ids,
-    });
-
-    ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+    fn call<'a>(
+        &'a self,
+        params: Value,
+        ctx: &'a McpContext,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        Box::pin(std::future::ready(self.execute(params, ctx)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
 
-    use super::super::dispatch_tool_call;
+    use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
-    #[test]
-    fn test_create() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    async fn dispatch(
+        registry: &super::super::ToolRegistry,
+        name: &str,
+        params: Value,
+        ctx: &crate::mcp::McpContext,
+    ) -> crate::mcp::protocol::ToolCallResult {
+        registry.dispatch(name, params, ctx).await
+    }
+
+    #[tokio::test]
+    async fn test_create() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
             "task_id": "test-1",
             "payload": { "title": "My first task", "priority": 2 }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none(), "should succeed");
 
         let text = &result.content[0].text;
@@ -215,16 +285,16 @@ mod tests {
         assert_eq!(parsed["unblocked_task_ids"].as_array().unwrap().len(), 0);
     }
 
-    #[test]
-    fn test_auto_id() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_auto_id() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
             "payload": { "title": "Auto ID task" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none());
 
         let text = &result.content[0].text;
@@ -235,10 +305,10 @@ mod tests {
         assert_eq!(parsed["task"]["priority"], 4); // default
     }
 
-    #[test]
-    fn test_status_change() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_status_change() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         // Create task first
         let create = json!({
@@ -246,7 +316,7 @@ mod tests {
             "task_id": "t1",
             "payload": { "title": "Task" }
         });
-        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+        dispatch(&registry, "tasks.apply_event", create, &ctx).await;
 
         // Change status
         let update = json!({
@@ -254,17 +324,17 @@ mod tests {
             "task_id": "t1",
             "payload": { "new_status": "in_progress" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &update, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", update, &ctx).await;
         assert!(result.is_error.is_none());
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["task"]["status"], "in_progress");
     }
 
-    #[test]
-    fn test_unblocked() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_unblocked() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         // Create two tasks, t2 depends on t1
         for (id, title) in &[("t1", "Blocker"), ("t2", "Blocked")] {
@@ -273,7 +343,7 @@ mod tests {
                 "task_id": id,
                 "payload": { "title": title }
             });
-            rt.block_on(dispatch_tool_call("tasks.apply_event", &p, &ctx));
+            dispatch(&registry, "tasks.apply_event", p, &ctx).await;
         }
 
         let dep = json!({
@@ -281,7 +351,7 @@ mod tests {
             "task_id": "t2",
             "payload": { "depends_on_task_id": "t1" }
         });
-        rt.block_on(dispatch_tool_call("tasks.apply_event", &dep, &ctx));
+        dispatch(&registry, "tasks.apply_event", dep, &ctx).await;
 
         // Complete t1 — t2 should be unblocked
         let done = json!({
@@ -289,7 +359,7 @@ mod tests {
             "task_id": "t1",
             "payload": { "new_status": "done" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &done, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", done, &ctx).await;
         assert!(result.is_error.is_none());
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -298,10 +368,10 @@ mod tests {
         assert_eq!(unblocked[0], "t2");
     }
 
-    #[test]
-    fn test_cycle_rejected() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_cycle_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         // Create two tasks
         for (id, title) in &[("t1", "Task 1"), ("t2", "Task 2")] {
@@ -310,7 +380,7 @@ mod tests {
                 "task_id": id,
                 "payload": { "title": title }
             });
-            rt.block_on(dispatch_tool_call("tasks.apply_event", &p, &ctx));
+            dispatch(&registry, "tasks.apply_event", p, &ctx).await;
         }
 
         // t1 depends on t2
@@ -319,7 +389,7 @@ mod tests {
             "task_id": "t1",
             "payload": { "depends_on_task_id": "t2" }
         });
-        rt.block_on(dispatch_tool_call("tasks.apply_event", &dep1, &ctx));
+        dispatch(&registry, "tasks.apply_event", dep1, &ctx).await;
 
         // t2 depends on t1 — cycle!
         let dep2 = json!({
@@ -327,53 +397,53 @@ mod tests {
             "task_id": "t2",
             "payload": { "depends_on_task_id": "t1" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &dep2, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", dep2, &ctx).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("cycle"));
     }
 
-    #[test]
-    fn test_missing_event_type() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_missing_event_type() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({ "payload": { "title": "No event type" } });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert_eq!(result.is_error, Some(true));
     }
 
-    #[test]
-    fn test_invalid_event_type() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_invalid_event_type() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "bogus_event",
             "payload": { "title": "Bad type" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("Invalid event_type"));
     }
 
-    #[test]
-    fn test_missing_task_id_for_update() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_missing_task_id_for_update() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "status_changed",
             "payload": { "new_status": "done" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("task_id"));
     }
 
-    #[test]
-    fn test_with_type_and_assignee() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_with_type_and_assignee() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
@@ -385,7 +455,7 @@ mod tests {
                 "priority": 1
             }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none());
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -393,10 +463,10 @@ mod tests {
         assert_eq!(parsed["task"]["assignee"], "alice");
     }
 
-    #[test]
-    fn test_labels() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_labels() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         // Create task
         let create = json!({
@@ -404,7 +474,7 @@ mod tests {
             "task_id": "t1",
             "payload": { "title": "Labeled task" }
         });
-        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+        dispatch(&registry, "tasks.apply_event", create, &ctx).await;
 
         // Add labels
         let add1 = json!({
@@ -417,8 +487,8 @@ mod tests {
             "task_id": "t1",
             "payload": { "label": "backend" }
         });
-        rt.block_on(dispatch_tool_call("tasks.apply_event", &add1, &ctx));
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &add2, &ctx));
+        dispatch(&registry, "tasks.apply_event", add1, &ctx).await;
+        let result = dispatch(&registry, "tasks.apply_event", add2, &ctx).await;
         assert!(result.is_error.is_none());
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -433,24 +503,24 @@ mod tests {
             "task_id": "t1",
             "payload": { "label": "urgent" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &rm, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", rm, &ctx).await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let labels = parsed["task"]["labels"].as_array().unwrap();
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0], "backend");
     }
 
-    #[test]
-    fn test_comment() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_comment() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let create = json!({
             "event_type": "task_created",
             "task_id": "t1",
             "payload": { "title": "Commented task" }
         });
-        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+        dispatch(&registry, "tasks.apply_event", create, &ctx).await;
 
         let comment = json!({
             "event_type": "comment_added",
@@ -458,7 +528,7 @@ mod tests {
             "actor": "bob",
             "payload": { "body": "This needs review" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &comment, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", comment, &ctx).await;
         assert!(result.is_error.is_none());
 
         // Verify comment stored by fetching via TaskStore
@@ -468,25 +538,25 @@ mod tests {
         assert_eq!(comments[0].author, "bob");
     }
 
-    #[test]
-    fn test_default_task_type() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_default_task_type() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
             "task_id": "t1",
             "payload": { "title": "No explicit type" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["task"]["task_type"], "task");
     }
 
-    #[test]
-    fn test_iso8601_defer_until() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_iso8601_defer_until() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
@@ -496,7 +566,7 @@ mod tests {
                 "defer_until": "2026-12-01T00:00:00Z"
             }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none(), "should succeed");
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -508,10 +578,10 @@ mod tests {
         assert_eq!(row.defer_until, Some(1796083200));
     }
 
-    #[test]
-    fn test_integer_defer_until_backward_compat() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_integer_defer_until_backward_compat() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
@@ -521,7 +591,7 @@ mod tests {
                 "defer_until": 1796083200
             }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none(), "should succeed");
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -532,10 +602,10 @@ mod tests {
         assert_eq!(row.defer_until, Some(1796083200));
     }
 
-    #[test]
-    fn test_iso8601_due_ts() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_iso8601_due_ts() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
@@ -545,24 +615,24 @@ mod tests {
                 "due_ts": "2026-06-15T12:00:00Z"
             }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none());
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["task"]["due_ts"], "2026-06-15T12:00:00+00:00");
     }
 
-    #[test]
-    fn test_timestamps_returned_as_iso_strings() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_timestamps_returned_as_iso_strings() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
             "task_id": "t1",
             "payload": { "title": "Timestamp check" }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
 
         // created_at and updated_at should be ISO strings, not integers
@@ -576,10 +646,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_invalid_iso_timestamp_rejected() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_invalid_iso_timestamp_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         let params = json!({
             "event_type": "task_created",
@@ -589,7 +659,7 @@ mod tests {
                 "defer_until": "not-a-date"
             }
         });
-        let result = rt.block_on(dispatch_tool_call("tasks.apply_event", &params, &ctx));
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("Invalid timestamp"));
     }

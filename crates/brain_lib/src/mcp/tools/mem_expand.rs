@@ -1,82 +1,140 @@
+use std::future::Future;
+use std::pin::Pin;
+
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::error;
 
 use crate::mcp::McpContext;
-use crate::mcp::protocol::ToolCallResult;
+use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::QueryPipeline;
 
-pub(super) async fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    use super::{opt_u64, require_array};
-    let memory_ids: Vec<String> = match require_array(params, "memory_ids") {
-        Ok(arr) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect(),
-        Err(e) => return e,
-    };
+use super::McpTool;
 
-    let budget_tokens = opt_u64(params, "budget_tokens", 2000) as usize;
+#[derive(Deserialize)]
+struct Params {
+    memory_ids: Vec<String>,
+    #[serde(default = "default_budget")]
+    budget_tokens: u64,
+}
 
-    let store = ctx.store.as_ref().unwrap();
-    let embedder = ctx.embedder.as_ref().unwrap();
-    let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
-    let expand_result = match pipeline.expand(&memory_ids, budget_tokens).await {
-        Ok(r) => r,
-        Err(e) => {
-            error!(error = %e, "expand failed");
-            return ToolCallResult::error(format!("Expand failed: {e}"));
+fn default_budget() -> u64 {
+    2000
+}
+
+pub(super) struct MemExpand;
+
+impl McpTool for MemExpand {
+    fn name(&self) -> &'static str {
+        "memory.expand"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().into(),
+            description:
+                "Expand memory stubs to full content. Pass memory_ids from search_minimal results."
+                    .into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "memory_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Memory IDs to expand (from search_minimal results)"
+                    },
+                    "budget_tokens": {
+                        "type": "integer",
+                        "description": "Maximum tokens in response. Default: 2000",
+                        "default": 2000
+                    }
+                },
+                "required": ["memory_ids"]
+            }),
         }
-    };
+    }
 
-    ctx.metrics
-        .record_expand_tokens(expand_result.used_tokens_est);
+    fn call<'a>(
+        &'a self,
+        params: Value,
+        ctx: &'a McpContext,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(store) = ctx.store.as_ref() else {
+                return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
+            };
+            let Some(embedder) = ctx.embedder.as_ref() else {
+                return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
+            };
 
-    let memories_json: Vec<Value> = expand_result
-        .memories
-        .iter()
-        .map(|m| {
-            json!({
-                "memory_id": m.memory_id,
-                "content": m.content,
-                "file_path": m.file_path,
-                "heading_path": m.heading_path,
-                "byte_start": m.byte_start,
-                "byte_end": m.byte_end,
-                "truncated": m.truncated,
-            })
+            let params: Params = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            };
+
+            let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
+            let expand_result = match pipeline
+                .expand(&params.memory_ids, params.budget_tokens as usize)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    error!(error = %e, "expand failed");
+                    return ToolCallResult::error(format!("Expand failed: {e}"));
+                }
+            };
+
+            ctx.metrics
+                .record_expand_tokens(expand_result.used_tokens_est);
+
+            let memories_json: Vec<Value> = expand_result
+                .memories
+                .iter()
+                .map(|m| {
+                    json!({
+                        "memory_id": m.memory_id,
+                        "content": m.content,
+                        "file_path": m.file_path,
+                        "heading_path": m.heading_path,
+                        "byte_start": m.byte_start,
+                        "byte_end": m.byte_end,
+                        "truncated": m.truncated,
+                    })
+                })
+                .collect();
+
+            let response = json!({
+                "budget_tokens": expand_result.budget_tokens,
+                "used_tokens_est": expand_result.used_tokens_est,
+                "memories": memories_json
+            });
+
+            ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
         })
-        .collect();
-
-    let response = json!({
-        "budget_tokens": expand_result.budget_tokens,
-        "used_tokens_est": expand_result.used_tokens_est,
-        "memories": memories_json
-    });
-
-    ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::super::dispatch_tool_call;
+    use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
-    #[test]
-    fn test_missing_ids() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
-        let result = rt.block_on(dispatch_tool_call("memory.expand", &json!({}), &ctx));
+    #[tokio::test]
+    async fn test_missing_ids() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry.dispatch("memory.expand", json!({}), &ctx).await;
         assert_eq!(result.is_error, Some(true));
     }
 
-    #[test]
-    fn test_empty_ids() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_empty_ids() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
         let params = json!({ "memory_ids": [], "budget_tokens": 1000 });
-        let result = rt.block_on(dispatch_tool_call("memory.expand", &params, &ctx));
+        let result = registry.dispatch("memory.expand", params, &ctx).await;
         assert!(result.is_error.is_none());
 
         let text = &result.content[0].text;

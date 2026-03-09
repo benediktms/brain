@@ -21,7 +21,7 @@ use protocol::{
     InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ServerCapabilities,
     ServerInfo, ToolsCapability, ToolsListResult,
 };
-use tools::{dispatch_tool_call, tool_definitions};
+use tools::ToolRegistry;
 
 /// Shared context for MCP tool handlers.
 ///
@@ -45,6 +45,7 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
     let mut stdout = tokio::io::stdout();
     let reader = BufReader::new(stdin);
     let mut lines = reader.lines();
+    let registry = ToolRegistry::new();
 
     info!("MCP server starting");
 
@@ -61,7 +62,7 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
         debug!(line = %line, "received request");
 
         let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
-            Ok(req) => handle_request(req, &ctx).await,
+            Ok(req) => handle_request(req, &ctx, &registry).await,
             Err(e) => {
                 error!(error = %e, "invalid JSON-RPC request");
                 serde_json::to_string(&JsonRpcError::new(
@@ -94,7 +95,7 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
 }
 
 /// Handle a single JSON-RPC request and return the serialized response.
-async fn handle_request(req: JsonRpcRequest, ctx: &McpContext) -> String {
+async fn handle_request(req: JsonRpcRequest, ctx: &McpContext, registry: &ToolRegistry) -> String {
     let id = req.id.clone();
 
     match req.method.as_str() {
@@ -122,7 +123,7 @@ async fn handle_request(req: JsonRpcRequest, ctx: &McpContext) -> String {
         }
         "tools/list" => {
             let result = ToolsListResult {
-                tools: tool_definitions(),
+                tools: registry.definitions(),
             };
             serialize_response(&JsonRpcResponse::new(
                 id,
@@ -142,7 +143,7 @@ async fn handle_request(req: JsonRpcRequest, ctx: &McpContext) -> String {
                 .unwrap_or(Value::Object(serde_json::Map::new()));
 
             let call_start = std::time::Instant::now();
-            let result = dispatch_tool_call(tool_name, &arguments, ctx).await;
+            let result = registry.dispatch(tool_name, arguments, ctx).await;
             if matches!(
                 tool_name,
                 "memory.search_minimal" | "memory.expand" | "memory.reflect"
@@ -171,54 +172,21 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn call(method: &str, params: Value) -> String {
+    async fn call(method: &str, params: Value) -> String {
+        let (_dir, ctx) = tools::tests::create_test_context().await;
+        let registry = ToolRegistry::new();
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: Some(json!(1)),
             method: method.into(),
             params,
         };
-        // For tests that don't need context, use handle_request_sync
-        handle_request_sync(req)
+        handle_request(req, &ctx, &registry).await
     }
 
-    /// Sync wrapper for tests that only exercise non-tool methods.
-    fn handle_request_sync(req: JsonRpcRequest) -> String {
-        let id = req.id.clone();
-        match req.method.as_str() {
-            "initialize" => {
-                let result = InitializeResult {
-                    protocol_version: "2024-11-05".into(),
-                    capabilities: ServerCapabilities {
-                        tools: ToolsCapability {},
-                    },
-                    server_info: ServerInfo {
-                        name: "brain".into(),
-                        version: env!("CARGO_PKG_VERSION").into(),
-                    },
-                };
-                serialize_response(&JsonRpcResponse::new(
-                    id,
-                    serde_json::to_value(result).unwrap(),
-                ))
-            }
-            "notifications/initialized" => String::new(),
-            "tools/list" => {
-                let result = ToolsListResult {
-                    tools: tool_definitions(),
-                };
-                serialize_response(&JsonRpcResponse::new(
-                    id,
-                    serde_json::to_value(result).unwrap(),
-                ))
-            }
-            _ => serialize_error(&JsonRpcError::method_not_found(id, &req.method)),
-        }
-    }
-
-    #[test]
-    fn test_initialize() {
-        let resp = call("initialize", json!({}));
+    #[tokio::test]
+    async fn test_initialize() {
+        let resp = call("initialize", json!({})).await;
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         assert_eq!(parsed["jsonrpc"], "2.0");
@@ -228,9 +196,9 @@ mod tests {
         assert!(parsed["result"]["capabilities"]["tools"].is_object());
     }
 
-    #[test]
-    fn test_tools_list() {
-        let resp = call("tools/list", json!({}));
+    #[tokio::test]
+    async fn test_tools_list() {
+        let resp = call("tools/list", json!({})).await;
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
@@ -245,18 +213,18 @@ mod tests {
         assert!(names.contains(&"tasks.next"));
     }
 
-    #[test]
-    fn test_method_not_found() {
-        let resp = call("unknown/method", json!({}));
+    #[tokio::test]
+    async fn test_method_not_found() {
+        let resp = call("unknown/method", json!({})).await;
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         assert!(parsed["error"].is_object());
         assert_eq!(parsed["error"]["code"], -32601);
     }
 
-    #[test]
-    fn test_notification_no_response() {
-        let resp = call("notifications/initialized", json!({}));
+    #[tokio::test]
+    async fn test_notification_no_response() {
+        let resp = call("notifications/initialized", json!({})).await;
         assert!(resp.is_empty());
     }
 }
