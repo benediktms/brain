@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use tracing_subscriber::EnvFilter;
 
@@ -56,6 +56,7 @@ impl Intent {
         brain query \"async patterns\" Search for notes about async patterns\n  \
         brain watch ./notes          Watch and re-index on changes\n  \
         brain daemon start           Start background watcher\n  \
+        brain daemon install         Install as login service (launchd/systemd)\n  \
         brain mcp                    Start MCP server for agent integration\n\n\
         Use `brain <command> --help` for more details on each command."
 )]
@@ -172,9 +173,18 @@ enum Command {
     #[command(
         visible_alias = "d",
         long_about = "Manage the brain daemon (background watcher).\n\n\
-            The daemon runs the watcher as a background process using fork/setsid. \
+            The daemon runs the watcher as a background process. It can be started \
+            directly via fork/setsid (`start`/`stop`) or installed as a platform-native \
+            service that auto-starts on login (`install`/`uninstall`).\n\n\
             State is tracked via a PID file at ~/.brain/brain.pid and logs are \
-            written to ~/.brain/brain.log."
+            written to ~/.brain/brain.log.",
+        after_help = "EXAMPLES:\n  \
+            brain daemon start           Start daemon in background\n  \
+            brain daemon stop            Stop the running daemon\n  \
+            brain daemon status          Check daemon and service status\n  \
+            brain daemon install         Install as login service (launchd/systemd)\n  \
+            brain daemon install --dry-run  Preview the service definition\n  \
+            brain daemon uninstall       Remove the login service"
     )]
     Daemon {
         #[command(subcommand)]
@@ -552,10 +562,44 @@ enum DaemonAction {
         5 seconds for the process to exit. Cleans up the PID file afterward.")]
     Stop,
     /// Check if the daemon is running
-    #[command(long_about = "Check if the daemon is running.\n\n\
-        Reads the PID from ~/.brain/brain.pid and checks whether the process is \
-        alive. Cleans up stale PID files if the process is no longer running.")]
+    #[command(long_about = "Check daemon and service status.\n\n\
+        Shows the PID-based daemon status and, if a platform service is \
+        installed (launchd on macOS, systemd on Linux), its status as well.")]
     Status,
+    /// Install as a login service (auto-starts on login)
+    #[command(
+        long_about = "Install the brain watcher as a platform-native login service.\n\n\
+        On macOS: generates a launchd plist in ~/Library/LaunchAgents/ and loads it.\n\
+        On Linux: generates a systemd user unit in ~/.config/systemd/user/ and enables it.\n\n\
+        The service runs `brain watch` directly — the OS service manager handles \
+        process lifecycle, restart-on-failure, and startup-on-login.\n\n\
+        Must be run from a directory containing a .brain/brain.toml marker \
+        (or use --brain-root to specify the brain project)."
+    )]
+    Install {
+        /// Brain project root (defaults to discovering .brain/brain.toml from cwd)
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        brain_root: Option<PathBuf>,
+        /// Print the service definition without installing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove the login service
+    #[command(long_about = "Uninstall the platform-native login service.\n\n\
+        Stops and removes the launchd plist (macOS) or systemd unit (Linux) \
+        that was created by `brain daemon install`.")]
+    Uninstall {
+        /// Brain project root (defaults to discovering .brain/brain.toml from cwd)
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        brain_root: Option<PathBuf>,
+    },
+}
+
+/// Try to find the brain project root by walking up from cwd.
+/// Returns `Ok(Some(root))` if found, `Ok(None)` if no marker file exists.
+fn resolve_brain_root() -> Result<Option<PathBuf>> {
+    let cwd = std::env::current_dir()?;
+    Ok(brain_lib::config::find_brain_root(&cwd))
 }
 
 /// If the user didn't pass explicit `--model-dir` / `--lance-db` / `--sqlite-db`
@@ -677,7 +721,30 @@ async fn async_main(cli: Cli) -> Result<()> {
                     }
                 }
                 DaemonAction::Stop => daemon.stop()?,
-                DaemonAction::Status => daemon.status()?,
+                DaemonAction::Status => {
+                    daemon.status()?;
+                    // Also show service status if installed
+                    let brain_root = resolve_brain_root()?;
+                    if let Some(root) = brain_root {
+                        println!();
+                        commands::daemon_service::status(&root)?;
+                    }
+                }
+                DaemonAction::Install {
+                    brain_root,
+                    dry_run,
+                } => {
+                    let root = brain_root
+                        .or_else(|| resolve_brain_root().ok().flatten())
+                        .context("No brain found. Run from a directory with .brain/brain.toml or pass --brain-root.")?;
+                    commands::daemon_service::install(&root, dry_run)?;
+                }
+                DaemonAction::Uninstall { brain_root } => {
+                    let root = brain_root
+                        .or_else(|| resolve_brain_root().ok().flatten())
+                        .context("No brain found. Run from a directory with .brain/brain.toml or pass --brain-root.")?;
+                    commands::daemon_service::uninstall(&root)?;
+                }
             }
         }
         Command::Reindex { full, file } => match (full, file) {
@@ -1033,6 +1100,90 @@ mod tests {
                 action: DaemonAction::Status
             }
         ));
+    }
+
+    #[test]
+    fn parse_daemon_install() {
+        let cli = Cli::try_parse_from(["brain", "daemon", "install"]).unwrap();
+        match cli.command {
+            Command::Daemon {
+                action:
+                    DaemonAction::Install {
+                        brain_root,
+                        dry_run,
+                    },
+            } => {
+                assert!(brain_root.is_none());
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Daemon Install"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_install_dry_run() {
+        let cli = Cli::try_parse_from(["brain", "daemon", "install", "--dry-run"]).unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Install { dry_run, .. },
+            } => {
+                assert!(dry_run);
+            }
+            _ => panic!("expected Daemon Install"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_install_with_root() {
+        let cli = Cli::try_parse_from([
+            "brain",
+            "daemon",
+            "install",
+            "--brain-root",
+            "/tmp/myproject",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Install { brain_root, .. },
+            } => {
+                assert_eq!(brain_root, Some(PathBuf::from("/tmp/myproject")));
+            }
+            _ => panic!("expected Daemon Install"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_uninstall() {
+        let cli = Cli::try_parse_from(["brain", "daemon", "uninstall"]).unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Uninstall { brain_root },
+            } => {
+                assert!(brain_root.is_none());
+            }
+            _ => panic!("expected Daemon Uninstall"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_uninstall_with_root() {
+        let cli = Cli::try_parse_from([
+            "brain",
+            "daemon",
+            "uninstall",
+            "--brain-root",
+            "/tmp/myproject",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Uninstall { brain_root },
+            } => {
+                assert_eq!(brain_root, Some(PathBuf::from("/tmp/myproject")));
+            }
+            _ => panic!("expected Daemon Uninstall"),
+        }
     }
 
     #[test]

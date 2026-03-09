@@ -1,4 +1,5 @@
 pub mod daemon;
+pub mod daemon_service;
 pub mod doctor;
 pub mod hooks;
 pub mod import_beads;
