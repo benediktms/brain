@@ -1,11 +1,21 @@
 # brain
 
-## Build & Test
+## Task Runner
+
+This project uses [just](https://github.com/casey/just) as its task runner. Always prefer `just` recipes over raw commands (e.g., `just build` instead of `cargo build`).
+
+Run `just` with no arguments to list all available recipes.
+
+### Common recipes
 
 ```bash
-cargo build    # Build
-cargo test     # Test
-cargo clippy   # Lint
+just build        # Build
+just test         # Test (pass args: just test -- --nocapture)
+just lint         # Lint (fmt check + clippy)
+just fmt          # Format code
+just check        # cargo check
+just install      # Build release binary and symlink to ~/bin/brain
+just clean        # cargo clean
 ```
 
 ## Task Management
