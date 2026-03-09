@@ -114,6 +114,17 @@ impl Db {
             .map_err(|e| BrainCoreError::Database(format!("reader mutex poisoned: {e}")))?;
         f(&conn)
     }
+
+    /// Flush the WAL file to the main database and truncate it.
+    ///
+    /// This ensures all committed transactions are persisted to the main
+    /// database file, which is important during graceful shutdown.
+    pub fn wal_checkpoint(&self) -> Result<()> {
+        self.with_write_conn(|conn| {
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -261,6 +272,46 @@ mod tests {
             })
             .unwrap();
         assert_eq!(final_count, 200);
+    }
+
+    #[test]
+    fn test_wal_checkpoint() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("checkpoint.db");
+        let db = Db::open(&db_path).unwrap();
+
+        // Write some data so the WAL has content
+        db.with_write_conn(|conn| {
+            conn.execute(
+                "CREATE TABLE ckpt_test (id INTEGER PRIMARY KEY, val TEXT)",
+                [],
+            )
+            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            conn.execute("INSERT INTO ckpt_test (id, val) VALUES (1, 'hello')", [])
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Checkpoint should succeed and truncate the WAL
+        db.wal_checkpoint().unwrap();
+
+        // WAL file should be truncated (0 bytes)
+        let wal_path = db_path.with_extension("db-wal");
+        if wal_path.exists() {
+            let wal_size = std::fs::metadata(&wal_path).unwrap().len();
+            assert_eq!(wal_size, 0, "WAL should be truncated after checkpoint");
+        }
+
+        // Data should still be readable
+        let count: i64 = db
+            .with_read_conn(|conn| {
+                let c =
+                    conn.query_row("SELECT COUNT(*) FROM ckpt_test", [], |row| row.get(0))?;
+                Ok(c)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]
