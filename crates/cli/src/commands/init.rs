@@ -4,7 +4,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use brain_lib::config::{
-    BrainEntry, BrainToml, brain_home, load_global_config, save_brain_toml, save_global_config,
+    BrainEntry, BrainToml, brain_home, load_global_config, paths::normalize_note_paths,
+    save_brain_toml, save_global_config,
 };
 
 /// Initialize a new brain in the current (or given) directory.
@@ -54,16 +55,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
     // 4. Register in global config (~/.brain/config.toml)
     let mut global = load_global_config()?;
 
-    let abs_notes: Vec<PathBuf> = note_dirs
-        .iter()
-        .map(|p| {
-            if p.is_absolute() {
-                p.clone()
-            } else {
-                cwd.join(p)
-            }
-        })
-        .collect();
+    let abs_notes = normalize_note_paths(&note_dirs, &cwd)?;
 
     global.brains.insert(
         brain_name.clone(),

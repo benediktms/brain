@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
+use brain_lib::config::paths::normalize_note_paths_lenient;
 use brain_lib::prelude::*;
 use tracing::info;
 
@@ -15,14 +16,15 @@ pub async fn run(
     db_path: PathBuf,
     sqlite_path: PathBuf,
 ) -> Result<()> {
-    info!("starting brain watch on {}", notes_path.display());
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let note_dirs = normalize_note_paths_lenient(&[notes_path], &cwd);
+
+    info!("starting brain watch on {:?}", note_dirs);
 
     let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
 
     // Full scan on startup to catch offline changes
-    let stats = pipeline
-        .full_scan(std::slice::from_ref(&notes_path))
-        .await?;
+    let stats = pipeline.full_scan(&note_dirs).await?;
     info!(
         indexed = stats.indexed,
         skipped = stats.skipped,
@@ -35,7 +37,7 @@ pub async fn run(
 
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-    let _watcher = brain_lib::watcher::BrainWatcher::new(&[notes_path], tx)?;
+    let _watcher = brain_lib::watcher::BrainWatcher::new(&note_dirs, tx)?;
 
     info!("watching for changes... (press Ctrl+C to stop)");
 
