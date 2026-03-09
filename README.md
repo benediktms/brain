@@ -252,6 +252,7 @@ just changelog
 ## Further Reading
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Full technical architecture, sequence diagrams, storage design, mathematical foundations
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — Upgrading, backup, recovery, troubleshooting, performance tuning, model management
 - [docs/RESEARCH.md](docs/RESEARCH.md) — Research survey of agentic memory systems, retrieval design, token budget design
 - [MemGPT](https://arxiv.org/abs/2310.08560) — Virtual context management for long-running agents (Packer et al., 2023)
 - [Generative Agents](https://arxiv.org/abs/2304.03442) — Recency/relevance/importance scoring with reflective synthesis (Park et al., 2023)
