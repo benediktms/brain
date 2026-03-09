@@ -25,14 +25,18 @@ This project uses `brain` for task tracking. **Always use MCP tools for task ope
 ### MCP Tools (preferred for AI agents)
 
 When running as an MCP server (`brain mcp`), these tools are available:
-- `tasks_apply_event` — Create or update tasks via event sourcing
-- `tasks_list` — List tasks with filters (status: open/ready/blocked/done)
-- `tasks_get` — Get task details by ID (supports prefix matching)
-- `tasks_next` — Get next highest-priority ready tasks
-- `memory_search_minimal` — Search notes
-- `memory_expand` — Expand memory stubs to full content
-- `memory_write_episode` — Record episodes
-- `memory_reflect` — Retrieve source material for reflection
+
+**Task tools:**
+- `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
+- `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`. Supports `task_ids` array for batch lookup, `limit` for pagination, and `include_description` flag.
+- `tasks_get` — Get full task details including relationships, comments, labels, and linked notes. Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
+- `tasks_next` — Get highest-priority ready tasks sorted by priority then due date. Use for "what should I work on?" queries.
+
+**Memory tools:**
+- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy).
+- `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit.
+- `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
+- `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
 ### CLI Commands (for human terminal use)
 
