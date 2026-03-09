@@ -35,11 +35,23 @@ pub async fn run(params: QueryParams) -> Result<()> {
 
     let search_result = if params.verbose {
         pipeline
-            .search_with_scores(&params.query, &params.intent, params.budget, params.top_k)
+            .search_with_scores(
+                &params.query,
+                &params.intent,
+                params.budget,
+                params.top_k,
+                &[],
+            )
             .await?
     } else {
         pipeline
-            .search(&params.query, &params.intent, params.budget, params.top_k)
+            .search(
+                &params.query,
+                &params.intent,
+                params.budget,
+                params.top_k,
+                &[],
+            )
             .await?
     };
 

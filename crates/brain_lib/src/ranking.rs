@@ -132,6 +132,8 @@ pub struct CandidateSignals {
     pub heading_path: String,
     pub content: String,
     pub token_estimate: usize,
+    pub byte_start: usize,
+    pub byte_end: usize,
 }
 
 /// A ranked result with hybrid score and signal breakdown.
@@ -144,6 +146,8 @@ pub struct RankedResult {
     pub heading_path: String,
     pub content: String,
     pub token_estimate: usize,
+    pub byte_start: usize,
+    pub byte_end: usize,
 }
 
 /// Individual signal scores for debugging/introspection.
@@ -172,6 +176,12 @@ impl crate::retrieval::Expandable for RankedResult {
     }
     fn token_estimate(&self) -> usize {
         self.token_estimate
+    }
+    fn byte_start(&self) -> usize {
+        self.byte_start
+    }
+    fn byte_end(&self) -> usize {
+        self.byte_end
     }
 }
 
@@ -253,6 +263,8 @@ pub fn rank_candidates(
                 heading_path: c.heading_path.clone(),
                 content: c.content.clone(),
                 token_estimate: c.token_estimate,
+                byte_start: c.byte_start,
+                byte_end: c.byte_end,
             }
         })
         .collect();
@@ -300,6 +312,8 @@ mod tests {
             heading_path: String::new(),
             content: format!("content of {chunk_id}"),
             token_estimate: 20,
+            byte_start: 0,
+            byte_end: 0,
         }
     }
 
@@ -438,6 +452,8 @@ mod tests {
                 heading_path: String::new(),
                 content: "keyword content".into(),
                 token_estimate: 10,
+                byte_start: 0,
+                byte_end: 0,
             },
             CandidateSignals {
                 chunk_id: "recent".into(),
@@ -452,6 +468,8 @@ mod tests {
                 heading_path: String::new(),
                 content: "recent content".into(),
                 token_estimate: 10,
+                byte_start: 0,
+                byte_end: 0,
             },
         ];
 

@@ -74,6 +74,51 @@ fn first_meaningful_sentence(doc: &ParsedDocument) -> Option<String> {
     None
 }
 
+/// Generate a capsule from raw parts (for use in stub generation where we
+/// don't have a full `ParsedDocument`).
+///
+/// Assembles: title — first sentence — (no heading outline at chunk level).
+pub fn generate_stub_capsule(title: Option<&str>, content: &str) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(t) = title {
+        let t = t.trim();
+        if !t.is_empty() {
+            parts.push(t.to_string());
+        }
+    }
+
+    if let Some(sentence) = first_sentence_from_text(content) {
+        parts.push(sentence);
+    }
+
+    parts.join(" — ")
+}
+
+/// Extract the first meaningful sentence from raw text content.
+fn first_sentence_from_text(text: &str) -> Option<String> {
+    let content = text.trim();
+    if content.is_empty() {
+        return None;
+    }
+
+    let sentence = if let Some(pos) = content.find(". ") {
+        &content[..=pos]
+    } else if content.ends_with('.') {
+        content
+    } else {
+        let end = content.find('\n').unwrap_or_else(|| content.len().min(200));
+        &content[..end]
+    };
+
+    let sentence = sentence.trim();
+    if sentence.is_empty() {
+        None
+    } else {
+        Some(sentence.to_string())
+    }
+}
+
 /// Build a comma-separated outline of top-level headings.
 fn heading_outline(doc: &ParsedDocument) -> String {
     let headings: Vec<&str> = doc

@@ -307,6 +307,8 @@ fn golden_to_signals(candidates: &[GoldenRankingCandidate]) -> Vec<CandidateSign
             heading_path: String::new(),
             content: format!("content of {}", c.chunk_id),
             token_estimate: 20,
+            byte_start: 0,
+            byte_end: 0,
         })
         .collect()
 }

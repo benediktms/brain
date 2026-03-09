@@ -3,6 +3,7 @@
 /// Provides a two-tier API:
 /// - `search_minimal`: returns compact stubs within a token budget
 /// - `expand`: returns full content for selected memory IDs
+use crate::capsule::generate_stub_capsule;
 use crate::ranking::{RankedResult, SignalScores};
 use crate::tokens::estimate_tokens;
 
@@ -17,6 +18,8 @@ pub trait Expandable {
     fn file_path(&self) -> &str;
     fn heading_path(&self) -> &str;
     fn token_estimate(&self) -> usize;
+    fn byte_start(&self) -> usize;
+    fn byte_end(&self) -> usize;
 }
 
 /// A compact memory stub for search results.
@@ -75,6 +78,8 @@ pub struct ExpandableChunk {
     pub file_path: String,
     pub heading_path: String,
     pub token_estimate: usize,
+    pub byte_start: usize,
+    pub byte_end: usize,
 }
 
 impl Expandable for ExpandableChunk {
@@ -92,6 +97,12 @@ impl Expandable for ExpandableChunk {
     }
     fn token_estimate(&self) -> usize {
         self.token_estimate
+    }
+    fn byte_start(&self) -> usize {
+        self.byte_start
+    }
+    fn byte_end(&self) -> usize {
+        self.byte_end
     }
 }
 
@@ -164,8 +175,8 @@ pub fn expand_results<T: Expandable>(results: &[T], budget_tokens: usize) -> Exp
                     content: format!("{truncated_content}\n[truncated]"),
                     file_path: result.file_path().to_string(),
                     heading_path: result.heading_path().to_string(),
-                    byte_start: 0,
-                    byte_end: 0,
+                    byte_start: result.byte_start(),
+                    byte_end: result.byte_end(),
                     truncated: true,
                 });
                 used_tokens += actual_tokens;
@@ -178,8 +189,8 @@ pub fn expand_results<T: Expandable>(results: &[T], budget_tokens: usize) -> Exp
             content: result.content().to_string(),
             file_path: result.file_path().to_string(),
             heading_path: result.heading_path().to_string(),
-            byte_start: 0,
-            byte_end: 0,
+            byte_start: result.byte_start(),
+            byte_end: result.byte_end(),
             truncated: false,
         });
         used_tokens += content_tokens;
@@ -214,8 +225,8 @@ fn make_stub(result: &RankedResult) -> MemoryStub {
             .collect()
     };
 
-    // Summary: first two sentences
-    let summary_2sent = first_n_sentences(&result.content, 2);
+    // Summary: capsule-based (title + first sentence) for richer stubs
+    let summary_2sent = generate_stub_capsule(Some(&title), &result.content);
 
     let stub_tokens = estimate_tokens(&title) + estimate_tokens(&summary_2sent) + 5;
 
@@ -233,33 +244,6 @@ fn make_stub(result: &RankedResult) -> MemoryStub {
 
 fn estimate_stub_tokens(stub: &MemoryStub) -> usize {
     stub.token_estimate
-}
-
-fn first_n_sentences(text: &str, n: usize) -> String {
-    let mut count = 0;
-    let mut end = 0;
-
-    for (i, c) in text.char_indices() {
-        if (c == '.' || c == '!' || c == '?') && i + 1 < text.len() {
-            count += 1;
-            end = i + 1;
-            if count >= n {
-                break;
-            }
-        }
-    }
-
-    if count == 0 {
-        // No sentence boundary — take first 200 chars
-        let end = text
-            .char_indices()
-            .nth(200)
-            .map(|(i, _)| i)
-            .unwrap_or(text.len());
-        text[..end].trim().to_string()
-    } else {
-        text[..end].trim().to_string()
-    }
 }
 
 fn truncate_to_tokens(text: &str, max_tokens: usize) -> String {
@@ -300,6 +284,8 @@ mod tests {
             heading_path: format!("## {id}"),
             content: content.to_string(),
             token_estimate,
+            byte_start: 0,
+            byte_end: 0,
         }
     }
 
@@ -387,19 +373,6 @@ mod tests {
         let result = expand_results::<RankedResult>(&[], 1000);
         assert!(result.memories.is_empty());
         assert_eq!(result.used_tokens_est, 0);
-    }
-
-    #[test]
-    fn test_first_n_sentences() {
-        assert_eq!(
-            first_n_sentences("Hello world. Goodbye.", 1),
-            "Hello world."
-        );
-        assert_eq!(
-            first_n_sentences("First. Second. Third.", 2),
-            "First. Second."
-        );
-        assert_eq!(first_n_sentences("No period", 2), "No period");
     }
 
     #[test]

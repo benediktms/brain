@@ -64,8 +64,9 @@ impl<'a> QueryPipeline<'a> {
         intent: &str,
         budget_tokens: usize,
         k: usize,
+        query_tags: &[String],
     ) -> Result<SearchResult> {
-        let ranked = self.search_ranked(query, intent).await?;
+        let ranked = self.search_ranked(query, intent, query_tags).await?;
         Ok(pack_minimal(&ranked, budget_tokens, k, false))
     }
 
@@ -77,8 +78,9 @@ impl<'a> QueryPipeline<'a> {
         intent: &str,
         budget_tokens: usize,
         k: usize,
+        query_tags: &[String],
     ) -> Result<SearchResult> {
-        let ranked = self.search_ranked(query, intent).await?;
+        let ranked = self.search_ranked(query, intent, query_tags).await?;
         Ok(pack_minimal(&ranked, budget_tokens, k, true))
     }
 
@@ -87,6 +89,7 @@ impl<'a> QueryPipeline<'a> {
         &self,
         query: &str,
         intent: &str,
+        query_tags: &[String],
     ) -> Result<Vec<crate::ranking::RankedResult>> {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
@@ -138,6 +141,8 @@ impl<'a> QueryPipeline<'a> {
                     heading_path: String::new(),
                     content: vr.content.clone(),
                     token_estimate: estimate_tokens(&vr.content),
+                    byte_start: 0,
+                    byte_end: 0,
                 },
             );
         }
@@ -161,6 +166,8 @@ impl<'a> QueryPipeline<'a> {
                         heading_path: String::new(),
                         content: String::new(),
                         token_estimate: 0,
+                        byte_start: 0,
+                        byte_end: 0,
                     },
                 );
             }
@@ -204,6 +211,8 @@ impl<'a> QueryPipeline<'a> {
                     candidate.heading_path = row.heading_path.clone();
                     candidate.content = row.content.clone();
                     candidate.token_estimate = row.token_estimate;
+                    candidate.byte_start = row.byte_start;
+                    candidate.byte_end = row.byte_end;
                     candidate.backlink_count = *backlinks.get(&row.file_id).unwrap_or(&0);
                     candidate.max_backlinks = max_bl;
 
@@ -221,7 +230,7 @@ impl<'a> QueryPipeline<'a> {
             .collect();
 
         // 6. Rank
-        Ok(rank_candidates(&candidate_vec, &weights, &[]))
+        Ok(rank_candidates(&candidate_vec, &weights, query_tags))
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.
@@ -246,6 +255,8 @@ impl<'a> QueryPipeline<'a> {
                 file_path: row.file_path.clone(),
                 heading_path: row.heading_path.clone(),
                 token_estimate: row.token_estimate,
+                byte_start: row.byte_start,
+                byte_end: row.byte_end,
             })
             .collect();
 
@@ -261,7 +272,7 @@ impl<'a> QueryPipeline<'a> {
             .unwrap_or_default();
 
         let search_result = self
-            .search(&topic, "reflection", budget_tokens / 2, 5)
+            .search(&topic, "reflection", budget_tokens / 2, 5, &[])
             .await?;
 
         Ok(ReflectResult {

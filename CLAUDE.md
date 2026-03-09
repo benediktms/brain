@@ -37,8 +37,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
 **Memory tools:**
-- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy).
-- `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit.
+- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
+- `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
@@ -100,3 +100,14 @@ When working on tasks:
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog
 - **Task types**: task, bug, feature, epic
 - **Statuses**: open, in_progress, blocked, done, cancelled
+
+## Keeping CLAUDE.md in sync
+
+This file is the canonical reference for AI agents working on this codebase. When making changes that affect the documented surface area, **update this file as part of the same commit**:
+
+- **MCP tool changes** (new tools, renamed tools, new/changed parameters, changed return shapes) → update the **MCP Tools** section above
+- **CLI command changes** (new subcommands, changed flags, removed commands) → update the **CLI Commands** section above
+- **Task runner changes** (new/renamed `just` recipes) → update the **Common recipes** section above
+- **Workflow or convention changes** (new statuses, priority scale changes, new task types) → update the **Conventions** / **Workflow** sections above
+
+If unsure whether a change warrants a docs update, err on the side of updating — stale docs cause more harm than verbose docs.
