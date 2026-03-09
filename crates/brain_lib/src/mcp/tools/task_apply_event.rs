@@ -7,7 +7,9 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::events::{EventType, TaskCreatedPayload, TaskEvent, TaskStatus, new_task_id};
+use crate::tasks::events::{
+    EventType, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
+};
 use crate::utils::{parse_timestamp, task_row_to_json};
 
 use super::McpTool;
@@ -103,6 +105,15 @@ impl TaskApplyEvent {
                         ));
                     }
                 }
+            }
+        }
+
+        // Validate task_type if provided
+        if let Some(tt) = payload.get("task_type").and_then(|v| v.as_str()) {
+            if tt.parse::<TaskType>().is_err() {
+                return ToolCallResult::error(format!(
+                    "Invalid task_type: '{tt}'. Must be one of: task, bug, feature, epic, spike"
+                ));
             }
         }
 
@@ -229,7 +240,7 @@ impl McpTool for TaskApplyEvent {
                     },
                     "payload": {
                         "type": "object",
-                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?, parent_task_id?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}. parent_set: {parent_task_id?} (null to clear). Timestamps (due_ts, defer_until) accept ISO 8601 strings (preferred, e.g. \"2026-03-15T00:00:00Z\") or Unix-seconds integers. Responses always return timestamps as ISO 8601 strings."
+                        "description": "Event-type-specific fields. task_created: {title, description?, priority?, due_ts?, task_type?, assignee?, defer_until?, parent_task_id?}. task_updated: {title?, description?, priority?, due_ts?, blocked_reason?, task_type?, assignee?, defer_until?}. status_changed: {new_status}. dependency_added/removed: {depends_on_task_id}. note_linked/unlinked: {chunk_id}. label_added/removed: {label}. comment_added: {body}. parent_set: {parent_task_id?} (null to clear). task_type must be one of: task, bug, feature, epic, spike. Timestamps (due_ts, defer_until) accept ISO 8601 strings (preferred, e.g. \"2026-03-15T00:00:00Z\") or Unix-seconds integers. Responses always return timestamps as ISO 8601 strings."
                     }
                 },
                 "required": ["event_type", "payload"]
@@ -551,6 +562,39 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["task"]["task_type"], "task");
+    }
+
+    #[tokio::test]
+    async fn test_invalid_task_type_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Bad type", "task_type": "story" }
+        });
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("Invalid task_type"));
+        assert!(result.content[0].text.contains("story"));
+    }
+
+    #[tokio::test]
+    async fn test_valid_spike_task_type() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let params = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Spike task", "task_type": "spike" }
+        });
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
+        assert!(result.is_error.is_none(), "spike should be a valid task type");
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["task"]["task_type"], "spike");
     }
 
     #[tokio::test]

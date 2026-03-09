@@ -17,6 +17,8 @@ pub fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
             priority       INTEGER NOT NULL DEFAULT 4 CHECK(priority BETWEEN 0 AND 4),
             blocked_reason TEXT,
             due_ts         INTEGER,
+            task_type      TEXT NOT NULL DEFAULT 'task'
+                           CHECK(task_type IN ('task','bug','feature','epic','spike')),
             created_at     INTEGER NOT NULL,
             updated_at     INTEGER NOT NULL
         );

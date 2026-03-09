@@ -20,7 +20,7 @@ pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
         "priority": row.priority,
         "blocked_reason": row.blocked_reason,
         "due_ts": ts_to_json(row.due_ts),
-        "task_type": row.task_type,
+        "task_type": row.task_type.as_str(),
         "assignee": row.assignee,
         "defer_until": ts_to_json(row.defer_until),
         "parent_task_id": row.parent_task_id,
@@ -180,6 +180,7 @@ pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::events::TaskType;
 
     fn make_comment(id: &str, author: &str, body: &str, ts: i64) -> TaskComment {
         TaskComment {
@@ -263,7 +264,7 @@ mod tests {
             priority: 2,
             blocked_reason: None,
             due_ts: None,
-            task_type: "task".to_string(),
+            task_type: TaskType::Task,
             assignee: None,
             defer_until: None,
             parent_task_id: None,
@@ -292,7 +293,7 @@ mod tests {
             priority: 1,
             blocked_reason: None,
             due_ts: None,
-            task_type: "task".to_string(),
+            task_type: TaskType::Task,
             assignee: None,
             defer_until: None,
             parent_task_id: None,

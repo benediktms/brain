@@ -9,6 +9,28 @@ use crate::commands::daemon::Daemon;
 mod commands;
 pub mod markdown_table;
 
+/// Valid task types for CLI arguments.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum TaskTypeArg {
+    Task,
+    Bug,
+    Feature,
+    Epic,
+    Spike,
+}
+
+impl From<TaskTypeArg> for brain_lib::tasks::events::TaskType {
+    fn from(arg: TaskTypeArg) -> Self {
+        match arg {
+            TaskTypeArg::Task => Self::Task,
+            TaskTypeArg::Bug => Self::Bug,
+            TaskTypeArg::Feature => Self::Feature,
+            TaskTypeArg::Epic => Self::Epic,
+            TaskTypeArg::Spike => Self::Spike,
+        }
+    }
+}
+
 /// Ranking intent profiles for hybrid search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Intent {
@@ -319,9 +341,9 @@ enum TasksAction {
         #[arg(long, default_value = "2")]
         priority: i32,
 
-        /// Task type (e.g. task, bug, feature)
+        /// Task type (task, bug, feature, epic, spike)
         #[arg(long, value_name = "TYPE", default_value = "task")]
-        task_type: String,
+        task_type: TaskTypeArg,
 
         /// Assignee
         #[arg(long)]
@@ -342,9 +364,9 @@ enum TasksAction {
         #[arg(long)]
         priority: Option<i32>,
 
-        /// Filter by task type
+        /// Filter by task type (task, bug, feature, epic, spike)
         #[arg(long, value_name = "TYPE")]
-        task_type: Option<String>,
+        task_type: Option<TaskTypeArg>,
 
         /// Filter by assignee
         #[arg(long)]
@@ -402,9 +424,9 @@ enum TasksAction {
         #[arg(long)]
         priority: Option<i32>,
 
-        /// New task type
+        /// New task type (task, bug, feature, epic, spike)
         #[arg(long, value_name = "TYPE")]
-        task_type: Option<String>,
+        task_type: Option<TaskTypeArg>,
 
         /// New assignee
         #[arg(long)]
@@ -989,7 +1011,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                             title,
                             description,
                             priority,
-                            task_type,
+                            task_type: task_type.into(),
                             assignee,
                             parent,
                         },
@@ -1010,7 +1032,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                     let params = ListParams {
                         status,
                         priority,
-                        task_type,
+                        task_type: task_type.map(Into::into),
                         assignee,
                         label,
                         search,
@@ -1042,7 +1064,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                             description,
                             status,
                             priority,
-                            task_type,
+                            task_type: task_type.map(Into::into),
                             assignee,
                             blocked_reason,
                         },

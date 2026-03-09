@@ -101,7 +101,7 @@ When working on tasks:
 ### Conventions
 
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog
-- **Task types**: task, bug, feature, epic
+- **Task types**: task, bug, feature, epic, spike
 - **Statuses**: open, in_progress, blocked, done, cancelled
 
 ## Keeping AGENTS.md in sync

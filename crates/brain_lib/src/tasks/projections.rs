@@ -32,7 +32,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                     p.status.as_ref(),
                     p.priority,
                     p.due_ts,
-                    p.task_type.as_deref().unwrap_or("task"),
+                    p.task_type.unwrap_or_default().as_str(),
                     p.assignee,
                     p.defer_until,
                     p.parent_task_id,
@@ -72,9 +72,9 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                 set_cols.push("blocked_reason");
                 params.push(SqlValue::Text(blocked_reason.clone()));
             }
-            if let Some(ref task_type) = p.task_type {
+            if let Some(task_type) = p.task_type {
                 set_cols.push("task_type");
-                params.push(SqlValue::Text(task_type.clone()));
+                params.push(SqlValue::Text(task_type.as_str().to_string()));
             }
             if let Some(ref assignee) = p.assignee {
                 set_cols.push("assignee");

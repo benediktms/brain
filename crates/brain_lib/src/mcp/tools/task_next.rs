@@ -9,6 +9,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::enrich_task_summaries;
+use crate::tasks::events::TaskType;
 
 use super::McpTool;
 
@@ -99,7 +100,7 @@ impl TaskNext {
                     .get_task(parent_id)
                     .ok()
                     .flatten()
-                    .filter(|t| t.task_type == "epic")
+                    .filter(|t| t.task_type == TaskType::Epic)
                     .map(|t| {
                         let short_id = ctx
                             .tasks

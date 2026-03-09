@@ -41,7 +41,7 @@ pub struct CreateParams {
     pub title: String,
     pub description: Option<String>,
     pub priority: i32,
-    pub task_type: String,
+    pub task_type: TaskType,
     pub assignee: Option<String>,
     pub parent: Option<String>,
 }
@@ -49,7 +49,7 @@ pub struct CreateParams {
 pub struct ListParams {
     pub status: Option<String>,
     pub priority: Option<i32>,
-    pub task_type: Option<String>,
+    pub task_type: Option<TaskType>,
     pub assignee: Option<String>,
     pub label: Option<String>,
     pub search: Option<String>,
@@ -65,7 +65,7 @@ pub struct UpdateParams {
     pub description: Option<String>,
     pub status: Option<String>,
     pub priority: Option<i32>,
-    pub task_type: Option<String>,
+    pub task_type: Option<TaskType>,
     pub assignee: Option<String>,
     pub blocked_reason: Option<String>,
 }
@@ -114,7 +114,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
             priority: params.priority,
             status: TaskStatus::Open,
             due_ts: None,
-            task_type: Some(params.task_type.clone()),
+            task_type: Some(params.task_type),
             assignee: params.assignee.clone(),
             defer_until: None,
             parent_task_id: parent.clone(),
@@ -135,7 +135,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
         println!("Created task {task_id}");
         println!("  Title: {}", params.title);
         println!("  Priority: {}", priority_label(params.priority));
-        println!("  Type: {}", params.task_type);
+        println!("  Type: {}", params.task_type.as_str());
         if let Some(ref a) = params.assignee {
             println!("  Assignee: {a}");
         }
@@ -297,7 +297,7 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             table.add_row(vec![
                 priority_label(t.priority).to_string(),
                 t.status.clone(),
-                t.task_type.clone(),
+                t.task_type.as_str().to_string(),
                 t.assignee.as_deref().unwrap_or("-").to_string(),
                 display_id,
                 t.title.clone(),
@@ -350,7 +350,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
 
     let filter = brain_lib::tasks::queries::TaskFilter {
         priority: params.priority,
-        task_type: params.task_type.clone(),
+        task_type: params.task_type,
         assignee: params.assignee.clone(),
         label: params.label.clone(),
         search: params.search.clone(),
@@ -476,7 +476,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
                 table.add_row(vec![
                     priority_label(t.priority).to_string(),
                     t.status.clone(),
-                    t.task_type.clone(),
+                    t.task_type.as_str().to_string(),
                     t.assignee.as_deref().unwrap_or("-").to_string(),
                     display_id,
                     t.title.clone(),
@@ -508,7 +508,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
                 table.add_row(vec![
                     priority_label(t.priority).to_string(),
                     t.status.clone(),
-                    t.task_type.clone(),
+                    t.task_type.as_str().to_string(),
                     t.assignee.as_deref().unwrap_or("-").to_string(),
                     display_id,
                     t.title.clone(),

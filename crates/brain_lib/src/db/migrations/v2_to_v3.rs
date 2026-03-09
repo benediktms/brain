@@ -10,7 +10,7 @@ pub fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
         BEGIN;
 
         -- New scalar columns on tasks
-        ALTER TABLE tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'task';
+        -- task_type already defined in v1 CREATE TABLE
         ALTER TABLE tasks ADD COLUMN assignee TEXT;
         ALTER TABLE tasks ADD COLUMN defer_until INTEGER;
 
