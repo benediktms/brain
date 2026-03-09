@@ -218,7 +218,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 
 **Task tools:**
 - `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
-- `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`. Supports `task_ids` array for batch lookup, `limit` for pagination, and `include_description` flag.
+- `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`. Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description).
 - `tasks_get` — Get full task details including relationships, comments, labels, and linked notes. Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
 - `tasks_next` — Get highest-priority ready tasks sorted by priority then due date. Use for "what should I work on?" queries.
 
@@ -235,6 +235,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 brain tasks ready              # Show tasks with no blockers
 brain tasks list               # List all tasks
 brain tasks list --status=open # Filter by status
+brain tasks list --search "query" # Full-text search
+brain tasks list --priority 1 --label urgent # Combined filters
 brain tasks show <id>          # Detailed task view
 
 # Creating & updating
