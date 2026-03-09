@@ -653,15 +653,28 @@ async fn async_main(cli: Cli) -> Result<()> {
             .await?
         }
         Command::Watch { notes_path } => {
-            commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
+            let outcome =
+                commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
+                    .await?;
+            if !outcome.clean {
+                std::process::exit(1);
+            }
         }
         Command::Daemon { action } => {
             let daemon = Daemon::new()?;
             match action {
                 DaemonAction::Start { notes_path } => {
                     // Child process after fork — run watch directly.
-                    commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
-                        .await?;
+                    let outcome = commands::watch::run(
+                        notes_path,
+                        cli.model_dir,
+                        cli.lance_db,
+                        cli.sqlite_db,
+                    )
+                    .await?;
+                    if !outcome.clean {
+                        std::process::exit(1);
+                    }
                 }
                 DaemonAction::Stop => daemon.stop()?,
                 DaemonAction::Status => daemon.status()?,
