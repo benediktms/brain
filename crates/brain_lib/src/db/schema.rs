@@ -71,7 +71,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
 ///
 /// Called on every `init_schema` open, outside the migration transaction,
 /// because FTS5 DDL has SQLite transaction limitations.
-fn ensure_fts5(conn: &Connection) -> Result<()> {
+pub(crate) fn ensure_fts5(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
             content,

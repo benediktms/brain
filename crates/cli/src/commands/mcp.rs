@@ -42,7 +42,7 @@ pub async fn run(model_dir: PathBuf, lance_db: PathBuf, sqlite_db: PathBuf) -> R
         Err(e) => {
             info!("embedding model unavailable ({e}), starting in tasks-only mode");
             let db = brain_lib::db::Db::open(&sqlite_db)?;
-            let tasks_db = brain_lib::db::Db::open(&sqlite_db)?;
+            let tasks_db = db.clone();
             let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db)?;
             tasks.rebuild_projections()?;
 

@@ -258,11 +258,20 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
 
 /// Rebuild all projection tables from a full event sequence.
 ///
-/// Wraps everything in a single transaction for atomicity.
+/// Drops FTS task triggers before the bulk delete to avoid content-sync
+/// deletes on a potentially corrupt index, then rebuilds the FTS index
+/// and re-creates triggers after commit.
 pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
+    // Drop FTS triggers to avoid content-sync deletes on potentially corrupt index
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS tasks_fts_insert;
+         DROP TRIGGER IF EXISTS tasks_fts_delete;
+         DROP TRIGGER IF EXISTS tasks_fts_update;",
+    )?;
+
     let tx = conn.unchecked_transaction()?;
 
-    // Clear in FK-safe order
+    // Clear in FK-safe order (no FTS triggers fire now)
     tx.execute_batch(
         "DELETE FROM task_events;
          DELETE FROM task_comments;
@@ -278,6 +287,13 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
     }
 
     tx.commit()?;
+
+    // Rebuild FTS index from content table (must be outside transaction)
+    conn.execute("INSERT INTO fts_tasks(fts_tasks) VALUES('rebuild')", [])?;
+
+    // Re-create triggers
+    crate::db::schema::ensure_fts5(conn)?;
+
     Ok(())
 }
 
@@ -518,5 +534,42 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count2, 2);
+    }
+
+    #[test]
+    fn test_rebuild_survives_corrupt_fts_index() {
+        let conn = setup();
+
+        // Insert tasks so FTS has content
+        let events = vec![
+            make_created_event("t1", "Alpha searchable task", 1),
+            make_created_event("t2", "Beta findable task", 2),
+        ];
+        rebuild(&conn, &events).unwrap();
+
+        // Corrupt the FTS index by deleting shadow table data
+        conn.execute_batch("DELETE FROM fts_tasks_data;").unwrap();
+
+        // Rebuild must succeed despite corrupt FTS index
+        rebuild(&conn, &events).unwrap();
+
+        // Verify FTS search works after rebuild
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_tasks WHERE fts_tasks MATCH 'searchable'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_tasks WHERE fts_tasks MATCH 'findable'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
