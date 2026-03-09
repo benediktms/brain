@@ -8,7 +8,28 @@ use serde_json::{Value, json};
 
 use super::TaskStore;
 use super::queries::{DependencySummary, TaskComment, TaskNoteLink, TaskRow};
-use crate::utils::{task_row_to_json, ts_to_iso};
+use crate::utils::{ts_to_iso, ts_to_json};
+
+/// Serialize a `TaskRow` and its labels into a JSON object with ISO timestamps.
+pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
+    json!({
+        "task_id": row.task_id,
+        "title": row.title,
+        "description": row.description,
+        "status": row.status,
+        "priority": row.priority,
+        "blocked_reason": row.blocked_reason,
+        "due_ts": ts_to_json(row.due_ts),
+        "task_type": row.task_type,
+        "assignee": row.assignee,
+        "defer_until": ts_to_json(row.defer_until),
+        "parent_task_id": row.parent_task_id,
+        "child_seq": row.child_seq,
+        "labels": labels,
+        "created_at": ts_to_json(Some(row.created_at)),
+        "updated_at": ts_to_json(Some(row.updated_at)),
+    })
+}
 
 /// Convert a slice of comments to a JSON array.
 pub fn comments_to_json(comments: &[TaskComment]) -> Vec<Value> {
@@ -70,6 +91,28 @@ pub fn children_stubs_to_json(children: &[TaskRow]) -> Vec<Value> {
         .collect()
 }
 
+/// Attach `dependency_summary` and `linked_notes` fields onto an existing task JSON object.
+///
+/// Shared by `enrich_task_summary` and `enrich_task_summaries` to avoid duplicating
+/// the JSON construction logic.
+fn attach_summary_fields(
+    task_json: &mut Value,
+    dep_summary: &DependencySummary,
+    note_links: &[TaskNoteLink],
+) {
+    if let Some(obj) = task_json.as_object_mut() {
+        obj.insert(
+            "dependency_summary".into(),
+            json!({
+                "total_deps": dep_summary.total_deps,
+                "done_deps": dep_summary.done_deps,
+                "blocking_task_ids": dep_summary.blocking_task_ids,
+            }),
+        );
+        obj.insert("linked_notes".into(), json!(note_links_to_json(note_links)));
+    }
+}
+
 /// Enrich a single task with dependency_summary and linked_notes (used by task_next).
 pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
     let dep_summary = store
@@ -83,20 +126,7 @@ pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
     let labels = store.get_task_labels(&task.task_id).unwrap_or_default();
 
     let mut task_json = task_row_to_json(task, labels);
-    if let Some(obj) = task_json.as_object_mut() {
-        obj.insert(
-            "dependency_summary".into(),
-            json!({
-                "total_deps": dep_summary.total_deps,
-                "done_deps": dep_summary.done_deps,
-                "blocking_tasks": dep_summary.blocking_task_ids,
-            }),
-        );
-        obj.insert(
-            "linked_notes".into(),
-            json!(note_links_to_json(&note_links)),
-        );
-    }
+    attach_summary_fields(&mut task_json, &dep_summary, &note_links);
     task_json
 }
 
@@ -141,20 +171,7 @@ pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value>
             let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
 
             let mut task_json = task_row_to_json(task, labels);
-            if let Some(obj) = task_json.as_object_mut() {
-                obj.insert(
-                    "dependency_summary".into(),
-                    json!({
-                        "total_deps": dep_summary.total_deps,
-                        "done_deps": dep_summary.done_deps,
-                        "blocking_tasks": dep_summary.blocking_task_ids,
-                    }),
-                );
-                obj.insert(
-                    "linked_notes".into(),
-                    json!(note_links_to_json(&note_links)),
-                );
-            }
+            attach_summary_fields(&mut task_json, &dep_summary, &note_links);
             task_json
         })
         .collect()
@@ -262,5 +279,41 @@ mod tests {
         assert_eq!(result[0]["priority"], 2);
         // Stubs should NOT have description or other full fields
         assert!(result[0].get("description").is_none());
+    }
+
+    #[test]
+    fn test_attach_summary_fields_key_names() {
+        use crate::tasks::queries::TaskRow;
+        let row = TaskRow {
+            task_id: "t1".to_string(),
+            title: "Test".to_string(),
+            description: None,
+            status: "open".to_string(),
+            priority: 1,
+            blocked_reason: None,
+            due_ts: None,
+            task_type: "task".to_string(),
+            assignee: None,
+            defer_until: None,
+            parent_task_id: None,
+            child_seq: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let dep = make_dep_summary(2, 1, vec!["blocker".to_string()]);
+        let links = vec![make_note_link("c1", "/file.md")];
+
+        let mut json = task_row_to_json(&row, vec![]);
+        attach_summary_fields(&mut json, &dep, &links);
+
+        // Verify key names are consistent
+        let ds = &json["dependency_summary"];
+        assert_eq!(ds["total_deps"], 2);
+        assert_eq!(ds["done_deps"], 1);
+        assert_eq!(ds["blocking_task_ids"][0], "blocker");
+
+        let ln = json["linked_notes"].as_array().unwrap();
+        assert_eq!(ln.len(), 1);
+        assert_eq!(ln[0]["chunk_id"], "c1");
     }
 }

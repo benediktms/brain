@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(task["dependency_summary"]["total_deps"], 1);
         assert_eq!(task["dependency_summary"]["done_deps"], 1);
         assert_eq!(
-            task["dependency_summary"]["blocking_tasks"]
+            task["dependency_summary"]["blocking_task_ids"]
                 .as_array()
                 .unwrap()
                 .len(),
