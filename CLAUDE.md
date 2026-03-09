@@ -76,6 +76,8 @@ When working on tasks:
 2. **While working**: Add comments via `tasks_apply_event` (comment_added) for significant decisions or blockers
 3. **On completion**: Close the task via `tasks_apply_event` (status_changed to `done`)
 
+**Important**: Always close tasks when work is complete. If the brain MCP server is unavailable, fall back to the CLI: `brain tasks close <id>`
+
 ### Conventions
 
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog
