@@ -1,11 +1,10 @@
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
-
 use anyhow::{Context, Result, bail};
 use brain_lib::config::{
-    BrainEntry, BrainToml, brain_home, load_global_config, save_brain_toml, save_global_config,
+    BrainEntry, BrainToml, brain_home, load_global_config, paths::normalize_note_paths,
+    save_brain_toml, save_global_config,
 };
+use std::fs;
+use std::path::PathBuf;
 
 /// Initialize a new brain in the current (or given) directory.
 pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Result<()> {
@@ -54,16 +53,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
     // 4. Register in global config (~/.brain/config.toml)
     let mut global = load_global_config()?;
 
-    let abs_notes: Vec<PathBuf> = note_dirs
-        .iter()
-        .map(|p| {
-            if p.is_absolute() {
-                p.clone()
-            } else {
-                cwd.join(p)
-            }
-        })
-        .collect();
+    let abs_notes = normalize_note_paths(&note_dirs, &cwd)?;
 
     global.brains.insert(
         brain_name.clone(),
@@ -74,10 +64,11 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
     );
     save_global_config(&global)?;
 
-    // 5. Create ~/.brain/brains/<name>/
+    // 5. Create ~/.brain/brains/<name>/ with restrictive permissions
     let home = brain_home()?;
     let brains_dir = home.join("brains").join(&brain_name);
-    fs::create_dir_all(&brains_dir)?;
+    brain_lib::fs_permissions::ensure_private_dir(&brains_dir)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // 6. Upsert CLAUDE.md (unless --no-claude-md)
     if !no_claude_md {
@@ -124,7 +115,12 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
     }
 
     // 7. Register brain MCP server in Claude Code (user scope)
-    register_claude_mcp_server();
+    let brain_bin = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "brain".into());
+    if let Err(e) = super::mcp_setup::register_claude(&brain_bin, false) {
+        eprintln!("Warning: {e}");
+    }
 
     // 8. Print success
     let display_notes: Vec<String> = note_dirs.iter().map(|p| p.display().to_string()).collect();
@@ -187,46 +183,39 @@ make test      # Test
     String::new()
 }
 
-fn register_claude_mcp_server() {
-    // Use the absolute path of the current binary so the MCP server works
-    // regardless of Claude Code's PATH.
-    let brain_bin = std::env::current_exe()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "brain".into());
-
-    // Remove first in case it already exists (claude mcp add rejects duplicates).
-    let _ = Command::new("claude")
-        .args(["mcp", "remove", "brain", "--scope", "user"])
-        .output();
-
-    let status = Command::new("claude")
-        .args([
-            "mcp", "add", "--scope", "user", "brain", "--", &brain_bin, "mcp",
-        ])
-        .status();
-
-    match status {
-        Ok(s) if s.success() => println!("Registered brain MCP server in Claude Code"),
-        Ok(_) => eprintln!("Warning: failed to register brain MCP server (claude mcp add failed)"),
-        Err(_) => eprintln!("Warning: 'claude' CLI not found, skipping MCP server registration"),
-    }
-}
-
 const BRAIN_SECTION_START: &str = "<!-- brain:start -->";
 const BRAIN_SECTION_END: &str = "<!-- brain:end -->";
 
 const BRAIN_SECTION_TEMPLATE: &str = r#"<!-- brain:start -->
 {build_section}## Task Management
 
-This project uses `brain` for task tracking. Use the CLI or MCP tools.
+This project uses `brain` for task tracking. **Always use MCP tools for task operations** — they provide structured responses and are the canonical interface for AI agents. CLI commands exist for human terminal use only.
 
-### CLI Commands
+### MCP Tools (preferred for AI agents)
+
+When running as an MCP server (`brain mcp`), these tools are available:
+
+**Task tools:**
+- `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
+- `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`. Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description).
+- `tasks_get` — Get full task details including relationships, comments, labels, and linked notes. Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
+- `tasks_next` — Get highest-priority ready tasks sorted by priority then due date. Use for "what should I work on?" queries.
+
+**Memory tools:**
+- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy).
+- `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit.
+- `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
+- `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
+
+### CLI Commands (for human terminal use)
 
 ```bash
 # Finding work
 brain tasks ready              # Show tasks with no blockers
 brain tasks list               # List all tasks
 brain tasks list --status=open # Filter by status
+brain tasks list --search "query" # Full-text search
+brain tasks list --priority 1 --label urgent # Combined filters
 brain tasks show <id>          # Detailed task view
 
 # Creating & updating
@@ -242,31 +231,19 @@ brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
 ```
 
-### MCP Tools
-
-When running as an MCP server (`brain mcp`), these tools are available:
-- `tasks_apply_event` — Create or update tasks via event sourcing
-- `tasks_list` — List tasks with filters
-- `tasks_get` — Get task details
-- `tasks_next` — Get next highest-priority ready tasks
-- `memory_search_minimal` — Search notes
-- `memory_expand` — Expand memory stubs to full content
-- `memory_write_episode` — Record episodes
-- `memory_reflect` — Retrieve source material for reflection
-
 ### Finding Work
 
 When the user asks what to work on next (e.g., "what's next?", "what should I work on?", "next task", "any work?"), always check brain tasks first:
-1. Run `brain tasks ready` to show unblocked tasks sorted by priority
+1. Use `tasks_next` MCP tool to get unblocked tasks sorted by priority
 2. Present the top candidates with their ID, title, priority, and type
 3. If a task has dependencies, briefly note what's blocking it
 
 ### Workflow
 
 When working on tasks:
-1. **Before starting**: Mark the task `in_progress` via `tasks_apply_event` (status_changed) or `brain tasks update <id> --status=in_progress`
-2. **While working**: Add comments for significant decisions or blockers
-3. **On completion**: Close the task via `tasks_apply_event` (status_changed to `done`) or `brain tasks close <id>`
+1. **Before starting**: Mark the task `in_progress` via `tasks_apply_event` (status_changed)
+2. **While working**: Add comments via `tasks_apply_event` (comment_added) for significant decisions or blockers
+3. **On completion**: Close the task via `tasks_apply_event` (status_changed to `done`)
 
 ### Conventions
 

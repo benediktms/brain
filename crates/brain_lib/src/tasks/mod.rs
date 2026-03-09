@@ -63,6 +63,60 @@ impl TaskStore {
             .with_write_conn(|conn| projections::rebuild(conn, &all_events))
     }
 
+    /// Rewrite all task IDs in the event log from `old_prefix` to `new_prefix`.
+    ///
+    /// Backs up `events.jsonl` to `events.jsonl.bak`, rewrites all task ID
+    /// references (top-level `task_id` and any task IDs in payloads), then
+    /// rebuilds the SQLite projection.
+    ///
+    /// Returns the number of events rewritten.
+    pub fn rewrite_prefix(&self, old_prefix: &str, new_prefix: &str) -> Result<usize> {
+        let all_events = events::read_all_events(&self.events_path)?;
+        if all_events.is_empty() {
+            return Ok(0);
+        }
+
+        // Back up the original event log
+        let backup_path = self.events_path.with_extension("jsonl.bak");
+        std::fs::copy(&self.events_path, &backup_path)?;
+
+        let old_pat = format!("{old_prefix}-");
+        let new_pat = format!("{new_prefix}-");
+
+        let mut rewritten = Vec::with_capacity(all_events.len());
+        for mut event in all_events {
+            // Replace in top-level task_id
+            if event.task_id.starts_with(&old_pat) {
+                event.task_id = format!("{new_pat}{}", &event.task_id[old_pat.len()..]);
+            }
+            // Replace task ID references in payload values
+            rewrite_task_ids_in_value(&mut event.payload, &old_pat, &new_pat);
+            rewritten.push(event);
+        }
+
+        // Write to temp file, then rename for atomicity
+        let tmp_path = self.events_path.with_extension("jsonl.tmp");
+        {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&tmp_path)?;
+            for event in &rewritten {
+                let mut line = serde_json::to_string(event)
+                    .map_err(|e| BrainCoreError::TaskEvent(format!("serialize: {e}")))?;
+                line.push('\n');
+                file.write_all(line.as_bytes())?;
+            }
+            file.flush()?;
+            file.sync_data()?;
+        }
+        std::fs::rename(&tmp_path, &self.events_path)?;
+
+        // Rebuild SQLite projection from rewritten events
+        self.rebuild_projections()?;
+
+        let count = rewritten.len();
+        Ok(count)
+    }
+
     /// List tasks that are ready to work on (no unresolved deps, not blocked).
     pub fn list_ready(&self) -> Result<Vec<queries::TaskRow>> {
         self.db.with_read_conn(queries::list_ready)
@@ -177,6 +231,12 @@ impl TaskStore {
     /// List all (task_id, label) pairs (bulk load for export).
     pub fn list_all_labels(&self) -> Result<Vec<(String, String)>> {
         self.db.with_read_conn(queries::list_all_labels)
+    }
+
+    /// Full-text search on task title and description.
+    pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<String>> {
+        self.db
+            .with_read_conn(|conn| queries::search_tasks_fts(conn, query, limit))
     }
 
     /// Resolve a task ID from an exact match or unique prefix.
@@ -309,6 +369,28 @@ impl TaskStore {
             }
         }
         Ok(())
+    }
+}
+
+/// Recursively replace task ID prefixes in a JSON value.
+fn rewrite_task_ids_in_value(value: &mut serde_json::Value, old_pat: &str, new_pat: &str) {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.starts_with(old_pat) {
+                *s = format!("{new_pat}{}", &s[old_pat.len()..]);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                rewrite_task_ids_in_value(v, old_pat, new_pat);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                rewrite_task_ids_in_value(v, old_pat, new_pat);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -511,5 +593,74 @@ mod tests {
             let task = store.get_task("t1").unwrap().unwrap();
             assert_eq!(task.title, "Persisted");
         }
+    }
+
+    #[test]
+    fn test_rewrite_prefix() {
+        let (dir, store) = setup();
+
+        // Create tasks with OLD- prefix
+        store
+            .append(&created_event("OLD-001", "Task 1", 2))
+            .unwrap();
+        store
+            .append(&created_event("OLD-002", "Task 2", 1))
+            .unwrap();
+
+        // Add a dependency (payload contains task ID reference)
+        let dep_event = TaskEvent::new(
+            "OLD-002",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
+                depends_on_task_id: "OLD-001".to_string(),
+            },
+        );
+        store.append(&dep_event).unwrap();
+
+        // Rewrite OLD -> NEW
+        let count = store.rewrite_prefix("OLD", "NEW").unwrap();
+        assert_eq!(count, 3);
+
+        // Verify tasks are now under the new prefix
+        let task1 = store.get_task("NEW-001").unwrap();
+        assert!(task1.is_some(), "task should exist with NEW- prefix");
+        assert_eq!(task1.unwrap().title, "Task 1");
+
+        let task2 = store.get_task("NEW-002").unwrap();
+        assert!(task2.is_some());
+
+        // Old prefix should no longer exist
+        assert!(store.get_task("OLD-001").unwrap().is_none());
+
+        // Verify the dependency was rewritten too
+        let blocked = store.list_blocked().unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].task_id, "NEW-002");
+
+        // Verify backup was created
+        let backup = dir.path().join("tasks").join("events.jsonl.bak");
+        assert!(backup.exists());
+    }
+
+    #[test]
+    fn test_rewrite_prefix_empty_log() {
+        let (_dir, store) = setup();
+        let count = store.rewrite_prefix("OLD", "NEW").unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_rewrite_prefix_no_match() {
+        let (_dir, store) = setup();
+        store.append(&created_event("AAA-001", "Task", 2)).unwrap();
+
+        // Rewrite a prefix that doesn't match — events still rewritten (count=1) but IDs unchanged
+        let count = store.rewrite_prefix("ZZZ", "NEW").unwrap();
+        assert_eq!(count, 1);
+
+        // Original task should still exist
+        let task = store.get_task("AAA-001").unwrap();
+        assert!(task.is_some());
     }
 }

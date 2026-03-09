@@ -1,6 +1,10 @@
-export BRAIN_MODEL_DIR := env("BRAIN_MODEL_DIR", env("HOME", "") + "/.brain/models/bge-small-en-v1.5")
-export BRAIN_DB := env("BRAIN_DB", "./.brain/lancedb")
-export BRAIN_SQLITE_DB := env("BRAIN_SQLITE_DB", "./.brain/brain.db")
+brain_name := env("BRAIN_NAME", file_name(justfile_directory()))
+brain_home := env("BRAIN_HOME", env("HOME", "") + "/.brain")
+brain_data := brain_home / "brains" / brain_name
+
+export BRAIN_MODEL_DIR := env("BRAIN_MODEL_DIR", brain_home / "models/bge-small-en-v1.5")
+export BRAIN_DB := env("BRAIN_DB", brain_data / "lancedb")
+export BRAIN_SQLITE_DB := env("BRAIN_SQLITE_DB", brain_data / "brain.db")
 
 bin := "./target/debug/brain"
 

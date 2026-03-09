@@ -62,10 +62,9 @@ pub fn get_or_init_project_prefix(conn: &Connection, brain_dir: &Path) -> Result
         // Invalid stored prefix, fall through to regenerate
     }
 
-    // Derive from the parent directory of .brain/
+    // Derive from the brain data directory name (e.g. ~/.brain/brains/<name>/)
     let name = brain_dir
-        .parent()
-        .and_then(|p| p.file_name())
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("BRN");
 
@@ -83,7 +82,7 @@ pub fn get_or_init_project_prefix(conn: &Connection, brain_dir: &Path) -> Result
 /// 4. Two segments: first letter of each + first consonant of longer segment
 /// 5. Single word: first char + next consonants (skip AEIOU)
 /// 6. Uppercase, pad to 3 chars if needed
-fn generate_prefix(name: &str) -> String {
+pub fn generate_prefix(name: &str) -> String {
     let segments: Vec<&str> = name
         .split(['-', '_', ' '])
         .filter(|s| !s.is_empty())
@@ -283,7 +282,8 @@ mod tests {
     #[test]
     fn test_get_or_init_project_prefix() {
         let conn = setup();
-        let brain_dir = Path::new("/home/user/brain-02/.brain");
+        // brain_dir is the data directory: ~/.brain/brains/<name>/
+        let brain_dir = Path::new("/home/user/.brain/brains/brain-02");
         let prefix = get_or_init_project_prefix(&conn, brain_dir).unwrap();
         assert_eq!(prefix, "BRN");
 
@@ -293,9 +293,9 @@ mod tests {
     }
 
     #[test]
-    fn test_get_or_init_uses_parent_dir_name() {
+    fn test_get_or_init_uses_data_dir_name() {
         let conn = setup();
-        let brain_dir = Path::new("/projects/my-cool-project/.brain");
+        let brain_dir = Path::new("/home/user/.brain/brains/my-cool-project");
         let prefix = get_or_init_project_prefix(&conn, brain_dir).unwrap();
         assert_eq!(prefix, "MCP");
     }
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn test_manual_override() {
         let conn = setup();
-        let brain_dir = Path::new("/projects/whatever/.brain");
+        let brain_dir = Path::new("/home/user/.brain/brains/whatever");
 
         // Auto-generate first
         let _ = get_or_init_project_prefix(&conn, brain_dir).unwrap();
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn test_invalid_stored_prefix_is_regenerated() {
         let conn = setup();
-        let brain_dir = Path::new("/projects/brain/.brain");
+        let brain_dir = Path::new("/home/user/.brain/brains/brain");
 
         // Store an invalid prefix (too short)
         set_meta(&conn, "project_prefix", "AB").unwrap();

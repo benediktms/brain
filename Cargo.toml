@@ -19,6 +19,7 @@ blake3 = "1"
 ulid = "1"
 chrono = "0.4"
 criterion = { version = "0.5", features = ["async_tokio"] }
+proptest = "1"
 toml = "0.8"
 dirs = "6"
 

@@ -1,7 +1,7 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 use tracing::warn;
 
-use crate::tasks::queries::TaskRow;
+pub use crate::tasks::enrichment::task_row_to_json;
 
 /// Normalize content for deterministic hashing:
 /// - Strip trailing whitespace per line
@@ -40,27 +40,6 @@ pub fn ts_to_json(ts: Option<i64>) -> Value {
         Some(t) => Value::String(ts_to_iso(t)),
         None => Value::Null,
     }
-}
-
-/// Serialize a `TaskRow` and its labels into a JSON object with ISO timestamps.
-pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
-    json!({
-        "task_id": row.task_id,
-        "title": row.title,
-        "description": row.description,
-        "status": row.status,
-        "priority": row.priority,
-        "blocked_reason": row.blocked_reason,
-        "due_ts": ts_to_json(row.due_ts),
-        "task_type": row.task_type,
-        "assignee": row.assignee,
-        "defer_until": ts_to_json(row.defer_until),
-        "parent_task_id": row.parent_task_id,
-        "child_seq": row.child_seq,
-        "labels": labels,
-        "created_at": ts_to_json(Some(row.created_at)),
-        "updated_at": ts_to_json(Some(row.updated_at)),
-    })
 }
 
 /// Accept an ISO 8601 string or an integer from JSON and normalize to `i64` Unix seconds.

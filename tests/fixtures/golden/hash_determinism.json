@@ -1,0 +1,32 @@
+{
+  "cases": [
+    {
+      "input": "",
+      "expected_hash": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    },
+    {
+      "input": "hello world",
+      "expected_hash": "d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24"
+    },
+    {
+      "input": "hello   \nworld\n",
+      "expected_hash": "205eee3a67dde1a72e376f21dc98b892a2ba2e255e70c5bab16a94bf842e6be2"
+    },
+    {
+      "input": "hello\r\nworld\r\n",
+      "expected_hash": "205eee3a67dde1a72e376f21dc98b892a2ba2e255e70c5bab16a94bf842e6be2"
+    },
+    {
+      "input": "\n\n\n",
+      "expected_hash": "5896d7c81fa3a2eee0aa6139c752d40a1408b7e083aa940d1ece11d61d6c0e3e"
+    },
+    {
+      "input": "  ",
+      "expected_hash": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    },
+    {
+      "input": "日本語テスト",
+      "expected_hash": "af8099f2ced958798cc2e6afd580955d49af7bc49a3de6836d52229cea2836f8"
+    }
+  ]
+}

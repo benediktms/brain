@@ -1,44 +1,75 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use rusqlite::OptionalExtension;
+use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
-use crate::mcp::protocol::ToolCallResult;
+use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-pub(super) async fn handle(ctx: &McpContext) -> ToolCallResult {
-    let mut snapshot = ctx.metrics.snapshot();
+use super::McpTool;
 
-    // Enrich with stuck-file count from SQLite
-    let stuck_count = ctx
-        .db
-        .with_read_conn(|conn| {
-            let count: u64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
-                    [],
-                    |row| row.get(0),
-                )
-                .optional()?
+pub(super) struct Status;
+
+impl McpTool for Status {
+    fn name(&self) -> &'static str {
+        "status"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().into(),
+            description: "Get runtime health metrics: indexing/query latency (p50/p95), stale hash prevention count, token usage, queue depth, LanceDB unoptimized rows, stuck files, and uptime.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        _params: Value,
+        ctx: &'a McpContext,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        Box::pin(async move {
+            let mut snapshot = ctx.metrics.snapshot();
+
+            // Enrich with stuck-file count from SQLite
+            let stuck_count = ctx
+                .db
+                .with_read_conn(|conn| {
+                    let count: u64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .optional()?
+                        .unwrap_or(0);
+                    Ok(count)
+                })
                 .unwrap_or(0);
-            Ok(count)
+
+            snapshot.dual_store_stuck_files = stuck_count;
+
+            ToolCallResult::text(serde_json::to_string_pretty(&snapshot).unwrap_or_default())
         })
-        .unwrap_or(0);
-
-    snapshot.dual_store_stuck_files = stuck_count;
-
-    ToolCallResult::text(serde_json::to_string_pretty(&snapshot).unwrap_or_default())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::super::dispatch_tool_call;
+    use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
-    #[test]
-    fn test_status_returns_valid_json_with_all_fields() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
-        let result = rt.block_on(dispatch_tool_call("status", &json!({}), &ctx));
+    #[tokio::test]
+    async fn test_status_returns_valid_json_with_all_fields() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry.dispatch("status", json!({}), &ctx).await;
         assert!(result.is_error.is_none(), "status should not error");
 
         let text = &result.content[0].text;

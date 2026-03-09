@@ -11,6 +11,7 @@ use brain_lib::tasks::enrichment::{
     note_links_to_json,
 };
 use brain_lib::tasks::events::{self, *};
+use brain_lib::tasks::queries::{TaskFilter, apply_filters};
 use brain_lib::utils::task_row_to_json;
 
 use crate::markdown_table::MarkdownTable;
@@ -50,8 +51,11 @@ pub struct ListParams {
     pub priority: Option<i32>,
     pub task_type: Option<String>,
     pub assignee: Option<String>,
+    pub label: Option<String>,
+    pub search: Option<String>,
     pub ready: bool,
     pub blocked: bool,
+    pub include_description: bool,
 }
 
 pub struct UpdateParams {
@@ -157,33 +161,47 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         ctx.store.list_all()?
     };
 
-    // Apply client-side filters
+    // FTS pre-filter
+    let fts_ids = if let Some(ref query) = params.search {
+        let ids = ctx.store.search_fts(query, 1000)?;
+        Some(
+            ids.into_iter()
+                .collect::<std::collections::HashSet<String>>(),
+        )
+    } else {
+        None
+    };
+
+    // Build filter (status is handled separately via list_ready/list_blocked/list_all)
+    let filter = TaskFilter {
+        priority: params.priority,
+        task_type: params.task_type.clone(),
+        assignee: params.assignee.clone(),
+        label: params.label.clone(),
+        search: params.search.clone(),
+    };
+
+    // Pre-filter by status (not part of TaskFilter since it's handled by the base query)
     let tasks: Vec<_> = tasks
         .into_iter()
         .filter(|t| {
-            if let Some(ref s) = params.status
-                && t.status != *s
-            {
-                return false;
+            if let Some(ref s) = params.status {
+                t.status == *s
+            } else {
+                true
             }
-            if let Some(p) = params.priority
-                && t.priority != p
-            {
-                return false;
-            }
-            if let Some(ref tt) = params.task_type
-                && t.task_type != *tt
-            {
-                return false;
-            }
-            if let Some(ref a) = params.assignee
-                && t.assignee.as_deref() != Some(a.as_str())
-            {
-                return false;
-            }
-            true
         })
         .collect();
+
+    // Batch-fetch labels if label filter is active
+    let labels_map = if filter.label.is_some() {
+        let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+        ctx.store.get_labels_for_tasks(&task_ids).ok()
+    } else {
+        None
+    };
+
+    let tasks = apply_filters(tasks, &filter, fts_ids.as_ref(), labels_map.as_ref());
 
     if ctx.json {
         let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
@@ -191,7 +209,15 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             .store
             .get_labels_for_tasks(&task_ids)
             .unwrap_or_default();
-        let (items, ready_count, blocked_count) = enrich_task_list(&ctx.store, &tasks, &labels_map);
+        let (mut items, ready_count, blocked_count) =
+            enrich_task_list(&ctx.store, &tasks, &labels_map);
+        if !params.include_description {
+            for item in &mut items {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.remove("description");
+                }
+            }
+        }
         let out = json!({
             "tasks": items,
             "count": tasks.len(),

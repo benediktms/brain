@@ -10,7 +10,7 @@ pub const CHUNKER_VERSION: u32 = 2;
 const MAX_CHUNK_TOKENS: usize = 400;
 
 /// A chunk of text extracted from a Markdown file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Chunk {
     /// 0-indexed position within the source file.
     pub ord: usize,

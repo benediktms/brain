@@ -2,7 +2,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// A link extracted from a Markdown document.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Link {
     /// The target path or URL.
     pub target: String,
@@ -12,7 +12,7 @@ pub struct Link {
     pub link_type: LinkType,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LinkType {
     /// `[[target]]` or `[[target|display]]`
     Wiki,

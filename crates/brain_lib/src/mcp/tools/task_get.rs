@@ -1,16 +1,21 @@
 use std::collections::HashSet;
 use std::fmt;
-use std::str::FromStr;
+use std::future::Future;
+use std::pin::Pin;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::error;
 
 use crate::mcp::McpContext;
-use crate::mcp::protocol::ToolCallResult;
+use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
 use crate::utils::task_row_to_json;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use super::McpTool;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum ExpandField {
     Parent,
     Children,
@@ -29,38 +34,11 @@ impl fmt::Display for ExpandField {
     }
 }
 
-impl FromStr for ExpandField {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "parent" => Ok(Self::Parent),
-            "children" => Ok(Self::Children),
-            "blocked_by" => Ok(Self::BlockedBy),
-            "blocks" => Ok(Self::Blocks),
-            other => Err(format!(
-                "unknown expand value '{other}', valid values: \
-                 [\"parent\", \"children\", \"blocked_by\", \"blocks\"]"
-            )),
-        }
-    }
-}
-
-fn parse_expand(params: &Value) -> Result<HashSet<ExpandField>, String> {
-    let Some(arr) = params.get("expand") else {
-        return Ok(HashSet::new());
-    };
-    let Some(arr) = arr.as_array() else {
-        return Err("'expand' must be an array".into());
-    };
-    let mut set = HashSet::new();
-    for v in arr {
-        let Some(s) = v.as_str() else {
-            return Err("expand items must be strings".into());
-        };
-        set.insert(s.parse::<ExpandField>()?);
-    }
-    Ok(set)
+#[derive(Deserialize)]
+struct Params {
+    task_id: String,
+    #[serde(default)]
+    expand: HashSet<ExpandField>,
 }
 
 /// Build a compact stub: `{task_id, title}`.
@@ -68,217 +46,268 @@ fn task_stub(task_id: &str, title: &str) -> Value {
     json!({ "task_id": task_id, "title": title })
 }
 
-/// Build a full task JSON with labels.
+/// Build a full task JSON with labels but without description (expanded relations
+/// omit descriptions to keep responses concise — use `tasks.get` on the specific
+/// task to retrieve its full description).
 fn expanded_task(task_id: &str, ctx: &McpContext) -> Value {
     let Some(row) = ctx.tasks.get_task(task_id).ok().flatten() else {
         return task_stub(task_id, "(not found)");
     };
     let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
-    task_row_to_json(&row, labels)
+    let mut json = task_row_to_json(&row, labels);
+    if let Some(obj) = json.as_object_mut() {
+        obj.remove("description");
+    }
+    json
 }
 
-pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
-    use super::require_str;
-    // 1. Extract and resolve task_id
-    let raw_id = match require_str(params, "task_id") {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
-    let task_id = match ctx.tasks.resolve_task_id(raw_id) {
-        Ok(id) => id,
-        Err(e) => return ToolCallResult::error(format!("Failed to resolve task_id: {e}")),
-    };
+pub(super) struct TaskGet;
 
-    // 2. Parse expand
-    let expand = match parse_expand(params) {
-        Ok(e) => e,
-        Err(msg) => return ToolCallResult::error(msg),
-    };
+impl TaskGet {
+    fn execute(&self, params: Value, ctx: &McpContext) -> ToolCallResult {
+        let params: Params = match serde_json::from_value(params) {
+            Ok(p) => p,
+            Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+        };
 
-    // 3. Get task
-    let task_id = task_id.as_str();
-    let task = match ctx.tasks.get_task(task_id) {
-        Ok(Some(t)) => t,
-        Ok(None) => return ToolCallResult::error(format!("Task not found: {task_id}")),
-        Err(e) => {
-            error!(error = %e, task_id, "failed to get task");
-            return ToolCallResult::error(format!("Failed to get task: {e}"));
+        // 1. Resolve task_id
+        let task_id = match ctx.tasks.resolve_task_id(&params.task_id) {
+            Ok(id) => id,
+            Err(e) => return ToolCallResult::error(format!("Failed to resolve task_id: {e}")),
+        };
+
+        // 2. Get task
+        let task_id = task_id.as_str();
+        let task = match ctx.tasks.get_task(task_id) {
+            Ok(Some(t)) => t,
+            Ok(None) => return ToolCallResult::error(format!("Task not found: {task_id}")),
+            Err(e) => {
+                error!(error = %e, task_id, "failed to get task");
+                return ToolCallResult::error(format!("Failed to get task: {e}"));
+            }
+        };
+
+        // 3. Fetch enrichment data
+        let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
+        let external_ids = ctx.tasks.get_external_ids(task_id).unwrap_or_default();
+
+        let comments = ctx.tasks.get_task_comments(task_id).unwrap_or_default();
+        let comments_json = comments_to_json(&comments);
+
+        let dep_summary = ctx
+            .tasks
+            .get_dependency_summary(task_id)
+            .unwrap_or_else(|_| crate::tasks::queries::DependencySummary {
+                total_deps: 0,
+                done_deps: 0,
+                blocking_task_ids: vec![],
+            });
+
+        let note_links = ctx.tasks.get_task_note_links(task_id).unwrap_or_default();
+        let linked_notes_json = note_links_to_json(&note_links);
+
+        let children = ctx.tasks.get_children(task_id).unwrap_or_default();
+        let blocks = ctx.tasks.get_tasks_blocking(task_id).unwrap_or_default();
+
+        // 4. Build parent field
+        let parent_json = if params.expand.contains(&ExpandField::Parent) {
+            task.parent_task_id
+                .as_deref()
+                .map(|pid| expanded_task(pid, ctx))
+                .unwrap_or(Value::Null)
+        } else {
+            task.parent_task_id
+                .as_deref()
+                .map(|pid| {
+                    ctx.tasks
+                        .get_task(pid)
+                        .ok()
+                        .flatten()
+                        .map(|t| task_stub(&t.task_id, &t.title))
+                        .unwrap_or_else(|| task_stub(pid, "(not found)"))
+                })
+                .unwrap_or(Value::Null)
+        };
+
+        // 5. Build children field
+        let children_json: Vec<Value> = if params.expand.contains(&ExpandField::Children) {
+            children
+                .iter()
+                .map(|c| {
+                    let labels = ctx.tasks.get_task_labels(&c.task_id).unwrap_or_default();
+                    let mut json = task_row_to_json(c, labels);
+                    if let Some(obj) = json.as_object_mut() {
+                        obj.remove("description");
+                    }
+                    json
+                })
+                .collect()
+        } else {
+            children
+                .iter()
+                .map(|c| task_stub(&c.task_id, &c.title))
+                .collect()
+        };
+
+        // 6. Build blocked_by field (tasks this depends on that aren't done)
+        let blocked_by_json: Vec<Value> = if params.expand.contains(&ExpandField::BlockedBy) {
+            dep_summary
+                .blocking_task_ids
+                .iter()
+                .map(|id| expanded_task(id, ctx))
+                .collect()
+        } else {
+            dep_summary
+                .blocking_task_ids
+                .iter()
+                .filter_map(|id| {
+                    ctx.tasks
+                        .get_task(id)
+                        .ok()
+                        .flatten()
+                        .map(|t| task_stub(&t.task_id, &t.title))
+                })
+                .collect()
+        };
+
+        // 7. Build blocks field (reverse deps)
+        let blocks_json: Vec<Value> = if params.expand.contains(&ExpandField::Blocks) {
+            blocks
+                .iter()
+                .map(|b| {
+                    let labels = ctx.tasks.get_task_labels(&b.task_id).unwrap_or_default();
+                    let mut json = task_row_to_json(b, labels);
+                    if let Some(obj) = json.as_object_mut() {
+                        obj.remove("description");
+                    }
+                    json
+                })
+                .collect()
+        } else {
+            blocks
+                .iter()
+                .map(|b| task_stub(&b.task_id, &b.title))
+                .collect()
+        };
+
+        // 8. Build base task JSON
+        let short_id = ctx
+            .tasks
+            .shortest_unique_prefix(task_id)
+            .unwrap_or_else(|_| task_id.to_string());
+        let mut task_json = task_row_to_json(&task, labels);
+        if let Some(obj) = task_json.as_object_mut() {
+            obj.insert("short_id".into(), json!(short_id));
+            obj.insert("parent".into(), parent_json);
+            obj.insert("children".into(), json!(children_json));
+            obj.insert("blocked_by".into(), json!(blocked_by_json));
+            obj.insert("blocks".into(), json!(blocks_json));
+            obj.insert("comments".into(), json!(comments_json));
+            obj.insert("linked_notes".into(), json!(linked_notes_json));
+            obj.insert(
+                "external_ids".into(),
+                json!(
+                    external_ids
+                        .iter()
+                        .map(|e| json!({
+                            "source": e.source,
+                            "external_id": e.external_id,
+                            "external_url": e.external_url,
+                            "imported_at": e.imported_at,
+                        }))
+                        .collect::<Vec<_>>()
+                ),
+            );
+            obj.insert(
+                "dependency_summary".into(),
+                dep_summary_to_json(&dep_summary),
+            );
         }
-    };
 
-    // 4. Fetch enrichment data
-    let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
-    let external_ids = ctx.tasks.get_external_ids(task_id).unwrap_or_default();
+        ToolCallResult::text(serde_json::to_string_pretty(&task_json).unwrap_or_default())
+    }
+}
 
-    let comments = ctx.tasks.get_task_comments(task_id).unwrap_or_default();
-    let comments_json = comments_to_json(&comments);
-
-    let dep_summary = ctx
-        .tasks
-        .get_dependency_summary(task_id)
-        .unwrap_or_else(|_| crate::tasks::queries::DependencySummary {
-            total_deps: 0,
-            done_deps: 0,
-            blocking_task_ids: vec![],
-        });
-
-    let note_links = ctx.tasks.get_task_note_links(task_id).unwrap_or_default();
-    let linked_notes_json = note_links_to_json(&note_links);
-
-    let children = ctx.tasks.get_children(task_id).unwrap_or_default();
-    let blocks = ctx.tasks.get_tasks_blocking(task_id).unwrap_or_default();
-
-    // 5. Build parent field
-    let parent_json = if expand.contains(&ExpandField::Parent) {
-        task.parent_task_id
-            .as_deref()
-            .map(|pid| expanded_task(pid, ctx))
-            .unwrap_or(Value::Null)
-    } else {
-        task.parent_task_id
-            .as_deref()
-            .map(|pid| {
-                ctx.tasks
-                    .get_task(pid)
-                    .ok()
-                    .flatten()
-                    .map(|t| task_stub(&t.task_id, &t.title))
-                    .unwrap_or_else(|| task_stub(pid, "(not found)"))
-            })
-            .unwrap_or(Value::Null)
-    };
-
-    // 6. Build children field
-    let children_json: Vec<Value> = if expand.contains(&ExpandField::Children) {
-        children
-            .iter()
-            .map(|c| {
-                let labels = ctx.tasks.get_task_labels(&c.task_id).unwrap_or_default();
-                task_row_to_json(c, labels)
-            })
-            .collect()
-    } else {
-        children
-            .iter()
-            .map(|c| task_stub(&c.task_id, &c.title))
-            .collect()
-    };
-
-    // 7. Build blocked_by field (tasks this depends on that aren't done)
-    let blocked_by_json: Vec<Value> = if expand.contains(&ExpandField::BlockedBy) {
-        dep_summary
-            .blocking_task_ids
-            .iter()
-            .map(|id| expanded_task(id, ctx))
-            .collect()
-    } else {
-        dep_summary
-            .blocking_task_ids
-            .iter()
-            .filter_map(|id| {
-                ctx.tasks
-                    .get_task(id)
-                    .ok()
-                    .flatten()
-                    .map(|t| task_stub(&t.task_id, &t.title))
-            })
-            .collect()
-    };
-
-    // 8. Build blocks field (reverse deps)
-    let blocks_json: Vec<Value> = if expand.contains(&ExpandField::Blocks) {
-        blocks
-            .iter()
-            .map(|b| {
-                let labels = ctx.tasks.get_task_labels(&b.task_id).unwrap_or_default();
-                task_row_to_json(b, labels)
-            })
-            .collect()
-    } else {
-        blocks
-            .iter()
-            .map(|b| task_stub(&b.task_id, &b.title))
-            .collect()
-    };
-
-    // 9. Build base task JSON
-    let short_id = ctx
-        .tasks
-        .shortest_unique_prefix(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
-    let mut task_json = task_row_to_json(&task, labels);
-    if let Some(obj) = task_json.as_object_mut() {
-        obj.insert("short_id".into(), json!(short_id));
-        obj.insert("parent".into(), parent_json);
-        obj.insert("children".into(), json!(children_json));
-        obj.insert("blocked_by".into(), json!(blocked_by_json));
-        obj.insert("blocks".into(), json!(blocks_json));
-        obj.insert("comments".into(), json!(comments_json));
-        obj.insert("linked_notes".into(), json!(linked_notes_json));
-        obj.insert(
-            "external_ids".into(),
-            json!(
-                external_ids
-                    .iter()
-                    .map(|e| json!({
-                        "source": e.source,
-                        "external_id": e.external_id,
-                        "external_url": e.external_url,
-                        "imported_at": e.imported_at,
-                    }))
-                    .collect::<Vec<_>>()
-            ),
-        );
-        obj.insert(
-            "dependency_summary".into(),
-            dep_summary_to_json(&dep_summary),
-        );
+impl McpTool for TaskGet {
+    fn name(&self) -> &'static str {
+        "tasks.get"
     }
 
-    ToolCallResult::text(serde_json::to_string_pretty(&task_json).unwrap_or_default())
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().into(),
+            description: "Get a single task by ID (full or prefix) with full details including relationships, comments, labels, and linked notes. Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The task ID to retrieve (full ID or unique prefix, e.g. 'BRN-01JPH')"
+                    },
+                    "expand": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["parent", "children", "blocked_by", "blocks"]
+                        },
+                        "description": "Expand relationship stubs to full task objects"
+                    }
+                },
+                "required": ["task_id"]
+            }),
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        params: Value,
+        ctx: &'a McpContext,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        Box::pin(std::future::ready(self.execute(params, ctx)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
 
-    use super::super::dispatch_tool_call;
+    use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
-    fn apply(rt: &tokio::runtime::Runtime, ctx: &crate::mcp::McpContext, params: Value) {
-        rt.block_on(dispatch_tool_call("tasks.apply_event", &params, ctx));
+    async fn apply(registry: &ToolRegistry, ctx: &crate::mcp::McpContext, params: Value) {
+        registry.dispatch("tasks.apply_event", params, ctx).await;
     }
 
-    #[test]
-    fn test_get_found_with_stubs() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_get_found_with_stubs() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         // Create parent and child
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "parent",
                 "payload": { "title": "Parent", "priority": 1 }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "child",
                 "payload": { "title": "Child", "priority": 2, "parent_task_id": "parent" }
             }),
-        );
+        )
+        .await;
 
-        let result = rt.block_on(dispatch_tool_call(
-            "tasks.get",
-            &json!({ "task_id": "parent" }),
-            &ctx,
-        ));
+        let result = registry
+            .dispatch("tasks.get", json!({ "task_id": "parent" }), &ctx)
+            .await;
         assert!(result.is_error.is_none());
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -300,84 +329,90 @@ mod tests {
         assert!(parsed["dependency_summary"].is_object());
     }
 
-    #[test]
-    fn test_get_not_found() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_get_not_found() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
-        let result = rt.block_on(dispatch_tool_call(
-            "tasks.get",
-            &json!({ "task_id": "nonexistent" }),
-            &ctx,
-        ));
+        let result = registry
+            .dispatch("tasks.get", json!({ "task_id": "nonexistent" }), &ctx)
+            .await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("no task found"));
     }
 
-    #[test]
-    fn test_get_expand_parent() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_get_expand_parent() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "p1",
                 "payload": { "title": "Parent", "priority": 1 }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "c1",
                 "payload": { "title": "Child", "priority": 2, "parent_task_id": "p1" }
             }),
-        );
+        )
+        .await;
 
-        let result = rt.block_on(dispatch_tool_call(
-            "tasks.get",
-            &json!({ "task_id": "c1", "expand": ["parent"] }),
-            &ctx,
-        ));
+        let result = registry
+            .dispatch(
+                "tasks.get",
+                json!({ "task_id": "c1", "expand": ["parent"] }),
+                &ctx,
+            )
+            .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         // Expanded parent has full fields
         assert_eq!(parsed["parent"]["task_id"], "p1");
         assert_eq!(parsed["parent"]["status"], "open");
     }
 
-    #[test]
-    fn test_get_expand_children() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_get_expand_children() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "p1",
                 "payload": { "title": "Parent", "priority": 1 }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "c1",
                 "payload": { "title": "Child", "priority": 2, "parent_task_id": "p1" }
             }),
-        );
+        )
+        .await;
 
-        let result = rt.block_on(dispatch_tool_call(
-            "tasks.get",
-            &json!({ "task_id": "p1", "expand": ["children"] }),
-            &ctx,
-        ));
+        let result = registry
+            .dispatch(
+                "tasks.get",
+                json!({ "task_id": "p1", "expand": ["children"] }),
+                &ctx,
+            )
+            .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let children = parsed["children"].as_array().unwrap();
         assert_eq!(children.len(), 1);
@@ -386,44 +421,49 @@ mod tests {
         assert_eq!(children[0]["status"], "open");
     }
 
-    #[test]
-    fn test_get_expand_blocked_by() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_get_expand_blocked_by() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "blocker",
                 "payload": { "title": "Blocker", "priority": 1 }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "blocked",
                 "payload": { "title": "Blocked", "priority": 2 }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "dependency_added",
                 "task_id": "blocked",
                 "payload": { "depends_on_task_id": "blocker" }
             }),
-        );
+        )
+        .await;
 
-        let result = rt.block_on(dispatch_tool_call(
-            "tasks.get",
-            &json!({ "task_id": "blocked", "expand": ["blocked_by"] }),
-            &ctx,
-        ));
+        let result = registry
+            .dispatch(
+                "tasks.get",
+                json!({ "task_id": "blocked", "expand": ["blocked_by"] }),
+                &ctx,
+            )
+            .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let blocked_by = parsed["blocked_by"].as_array().unwrap();
         assert_eq!(blocked_by.len(), 1);
@@ -431,44 +471,45 @@ mod tests {
         assert_eq!(blocked_by[0]["status"], "open");
     }
 
-    #[test]
-    fn test_get_includes_comments_and_labels() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_get_includes_comments_and_labels() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "t1",
                 "payload": { "title": "Task", "priority": 1 }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "label_added",
                 "task_id": "t1",
                 "payload": { "label": "urgent" }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "comment_added",
                 "task_id": "t1",
                 "payload": { "body": "A comment" }
             }),
-        );
+        )
+        .await;
 
-        let result = rt.block_on(dispatch_tool_call(
-            "tasks.get",
-            &json!({ "task_id": "t1" }),
-            &ctx,
-        ));
+        let result = registry
+            .dispatch("tasks.get", json!({ "task_id": "t1" }), &ctx)
+            .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let labels = parsed["labels"].as_array().unwrap();
         assert_eq!(labels, &[json!("urgent")]);
@@ -478,44 +519,92 @@ mod tests {
         assert!(comments[0].get("created_at").is_some());
     }
 
-    #[test]
-    fn test_get_blocks_reverse_deps() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+    #[tokio::test]
+    async fn test_expand_omits_descriptions() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
 
         apply(
-            &rt,
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "epic",
+                "payload": { "title": "Epic", "description": "Epic description", "priority": 1 }
+            }),
+        )
+        .await;
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "child1",
+                "payload": { "title": "Child 1", "description": "Child 1 long description", "priority": 2, "parent_task_id": "epic" }
+            }),
+        )
+        .await;
+
+        // Primary task keeps its description
+        let result = registry
+            .dispatch(
+                "tasks.get",
+                json!({ "task_id": "epic", "expand": ["children"] }),
+                &ctx,
+            )
+            .await;
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["description"], "Epic description");
+
+        // Expanded children omit descriptions
+        let children = parsed["children"].as_array().unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0]["title"], "Child 1");
+        assert!(
+            children[0].get("description").is_none(),
+            "expanded children should omit description"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_blocks_reverse_deps() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        apply(
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "blocker",
                 "payload": { "title": "Blocker", "priority": 1 }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "task_created",
                 "task_id": "waiting",
                 "payload": { "title": "Waiting", "priority": 2 }
             }),
-        );
+        )
+        .await;
         apply(
-            &rt,
+            &registry,
             &ctx,
             json!({
                 "event_type": "dependency_added",
                 "task_id": "waiting",
                 "payload": { "depends_on_task_id": "blocker" }
             }),
-        );
+        )
+        .await;
 
-        let result = rt.block_on(dispatch_tool_call(
-            "tasks.get",
-            &json!({ "task_id": "blocker" }),
-            &ctx,
-        ));
+        let result = registry
+            .dispatch("tasks.get", json!({ "task_id": "blocker" }), &ctx)
+            .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let blocks = parsed["blocks"].as_array().unwrap();
         assert_eq!(blocks.len(), 1);

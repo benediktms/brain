@@ -1,4 +1,5 @@
 pub mod daemon;
+pub mod daemon_service;
 pub mod doctor;
 pub mod hooks;
 pub mod import_beads;
@@ -6,6 +7,7 @@ pub mod index;
 pub mod init;
 pub mod list;
 pub mod mcp;
+pub mod mcp_setup;
 pub mod query;
 pub mod reindex;
 pub mod tasks;

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use tracing_subscriber::EnvFilter;
 
@@ -56,11 +56,12 @@ impl Intent {
         brain query \"async patterns\" Search for notes about async patterns\n  \
         brain watch ./notes          Watch and re-index on changes\n  \
         brain daemon start           Start background watcher\n  \
+        brain daemon install         Install as login service (launchd/systemd)\n  \
         brain mcp                    Start MCP server for agent integration\n\n\
         Use `brain <command> --help` for more details on each command."
 )]
 struct Cli {
-    /// Path to a local BGE model directory (run scripts/setup-model.sh to download)
+    /// Path to a local BGE model directory (see README for download instructions)
     #[arg(
         long,
         global = true,
@@ -172,9 +173,18 @@ enum Command {
     #[command(
         visible_alias = "d",
         long_about = "Manage the brain daemon (background watcher).\n\n\
-            The daemon runs the watcher as a background process using fork/setsid. \
+            The daemon runs the watcher as a background process. It can be started \
+            directly via fork/setsid (`start`/`stop`) or installed as a platform-native \
+            service that auto-starts on login (`install`/`uninstall`).\n\n\
             State is tracked via a PID file at ~/.brain/brain.pid and logs are \
-            written to ~/.brain/brain.log."
+            written to ~/.brain/brain.log.",
+        after_help = "EXAMPLES:\n  \
+            brain daemon start           Start daemon in background\n  \
+            brain daemon stop            Stop the running daemon\n  \
+            brain daemon status          Check daemon and service status\n  \
+            brain daemon install         Install as login service (launchd/systemd)\n  \
+            brain daemon install --dry-run  Preview the service definition\n  \
+            brain daemon uninstall       Remove the login service"
     )]
     Daemon {
         #[command(subcommand)]
@@ -193,7 +203,10 @@ enum Command {
         - tasks_apply_event      Create or update tasks via event sourcing\n  \
         - tasks_next             Get the next highest-priority ready task(s)"
     )]
-    Mcp,
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
 
     /// Force re-index files (clears content hashes, re-embeds everything)
     Reindex {
@@ -334,6 +347,14 @@ enum TasksAction {
         #[arg(long)]
         assignee: Option<String>,
 
+        /// Filter by label (exact match)
+        #[arg(long)]
+        label: Option<String>,
+
+        /// Full-text search on title and description
+        #[arg(long)]
+        search: Option<String>,
+
         /// Show only ready tasks (no blockers)
         #[arg(long)]
         ready: bool,
@@ -341,6 +362,10 @@ enum TasksAction {
         /// Show only blocked tasks
         #[arg(long)]
         blocked: bool,
+
+        /// Include task descriptions in JSON output (omitted by default)
+        #[arg(long)]
+        include_description: bool,
     },
 
     /// Show details for a specific task
@@ -499,8 +524,8 @@ enum ConfigAction {
         /// Configuration key (e.g. "prefix")
         key: String,
 
-        /// Value to set
-        value: String,
+        /// Value to set (omit to auto-derive for prefix)
+        value: Option<String>,
     },
 
     /// Get a configuration value
@@ -508,6 +533,28 @@ enum ConfigAction {
         /// Configuration key (e.g. "prefix")
         key: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum McpAction {
+    /// Configure brain as an MCP server for an editor or agent framework
+    Setup {
+        /// Target to configure (claude, cursor, vscode)
+        target: McpTarget,
+        /// Print the config without writing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum McpTarget {
+    /// Claude Code (~/.claude/settings.json)
+    Claude,
+    /// Cursor (~/.cursor/mcp.json)
+    Cursor,
+    /// VS Code (.vscode/settings.json)
+    Vscode,
 }
 
 #[derive(Subcommand)]
@@ -540,10 +587,44 @@ enum DaemonAction {
         5 seconds for the process to exit. Cleans up the PID file afterward.")]
     Stop,
     /// Check if the daemon is running
-    #[command(long_about = "Check if the daemon is running.\n\n\
-        Reads the PID from ~/.brain/brain.pid and checks whether the process is \
-        alive. Cleans up stale PID files if the process is no longer running.")]
+    #[command(long_about = "Check daemon and service status.\n\n\
+        Shows the PID-based daemon status and, if a platform service is \
+        installed (launchd on macOS, systemd on Linux), its status as well.")]
     Status,
+    /// Install as a login service (auto-starts on login)
+    #[command(
+        long_about = "Install the brain watcher as a platform-native login service.\n\n\
+        On macOS: generates a launchd plist in ~/Library/LaunchAgents/ and loads it.\n\
+        On Linux: generates a systemd user unit in ~/.config/systemd/user/ and enables it.\n\n\
+        The service runs `brain watch` directly — the OS service manager handles \
+        process lifecycle, restart-on-failure, and startup-on-login.\n\n\
+        Must be run from a directory containing a .brain/brain.toml marker \
+        (or use --brain-root to specify the brain project)."
+    )]
+    Install {
+        /// Brain project root (defaults to discovering .brain/brain.toml from cwd)
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        brain_root: Option<PathBuf>,
+        /// Print the service definition without installing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove the login service
+    #[command(long_about = "Uninstall the platform-native login service.\n\n\
+        Stops and removes the launchd plist (macOS) or systemd unit (Linux) \
+        that was created by `brain daemon install`.")]
+    Uninstall {
+        /// Brain project root (defaults to discovering .brain/brain.toml from cwd)
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        brain_root: Option<PathBuf>,
+    },
+}
+
+/// Try to find the brain project root by walking up from cwd.
+/// Returns `Ok(Some(root))` if found, `Ok(None)` if no marker file exists.
+fn resolve_brain_root() -> Result<Option<PathBuf>> {
+    let cwd = std::env::current_dir()?;
+    Ok(brain_lib::config::find_brain_root(&cwd))
 }
 
 /// If the user didn't pass explicit `--model-dir` / `--lance-db` / `--sqlite-db`
@@ -614,6 +695,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             .init();
     }
 
+    // Warn if ~/.brain has overly broad permissions.
+    let _ = brain_lib::config::check_brain_home_permissions();
+
     match cli.command {
         Command::Index { notes_path } => {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
@@ -638,18 +722,54 @@ async fn async_main(cli: Cli) -> Result<()> {
             .await?
         }
         Command::Watch { notes_path } => {
-            commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
+            let outcome =
+                commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
+                    .await?;
+            if !outcome.clean {
+                std::process::exit(1);
+            }
         }
         Command::Daemon { action } => {
             let daemon = Daemon::new()?;
             match action {
                 DaemonAction::Start { notes_path } => {
                     // Child process after fork — run watch directly.
-                    commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
-                        .await?;
+                    let outcome = commands::watch::run(
+                        notes_path,
+                        cli.model_dir,
+                        cli.lance_db,
+                        cli.sqlite_db,
+                    )
+                    .await?;
+                    if !outcome.clean {
+                        std::process::exit(1);
+                    }
                 }
                 DaemonAction::Stop => daemon.stop()?,
-                DaemonAction::Status => daemon.status()?,
+                DaemonAction::Status => {
+                    daemon.status()?;
+                    // Also show service status if installed
+                    let brain_root = resolve_brain_root()?;
+                    if let Some(root) = brain_root {
+                        println!();
+                        commands::daemon_service::status(&root)?;
+                    }
+                }
+                DaemonAction::Install {
+                    brain_root,
+                    dry_run,
+                } => {
+                    let root = brain_root
+                        .or_else(|| resolve_brain_root().ok().flatten())
+                        .context("No brain found. Run from a directory with .brain/brain.toml or pass --brain-root.")?;
+                    commands::daemon_service::install(&root, dry_run)?;
+                }
+                DaemonAction::Uninstall { brain_root } => {
+                    let root = brain_root
+                        .or_else(|| resolve_brain_root().ok().flatten())
+                        .context("No brain found. Run from a directory with .brain/brain.toml or pass --brain-root.")?;
+                    commands::daemon_service::uninstall(&root)?;
+                }
             }
         }
         Command::Reindex { full, file } => match (full, file) {
@@ -674,9 +794,14 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::Doctor { notes_path } => {
             commands::doctor::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
-        Command::Mcp => {
-            commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
-        }
+        Command::Mcp { action } => match action {
+            None => {
+                commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
+            }
+            Some(McpAction::Setup { target, dry_run }) => {
+                commands::mcp_setup::run(target, dry_run)?;
+            }
+        },
         Command::Hooks { action } => match action {
             HooksAction::Install { dry_run } => {
                 commands::hooks::install(dry_run)?;
@@ -701,39 +826,75 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::Remove { name, purge } => {
             commands::list::run_remove(&name, purge)?;
         }
-        Command::Config { action } => {
-            let db = brain_lib::db::Db::open(&cli.sqlite_db)?;
-            db.with_write_conn(|conn| match action {
-                ConfigAction::Set { key, value } => match key.as_str() {
-                    "prefix" => {
-                        let upper = value.to_ascii_uppercase();
-                        if upper.len() != 3 || !upper.chars().all(|c| c.is_ascii_uppercase()) {
-                            return Err(brain_lib::error::BrainCoreError::Config(format!(
-                                "prefix must be exactly 3 uppercase ASCII letters, got: {value}"
-                            )));
+        Command::Config { action } => match action {
+            ConfigAction::Set { key, value } if key == "prefix" => {
+                let brain_dir = cli.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
+
+                // Get the old prefix and compute the new one
+                let db = brain_lib::db::Db::open(&cli.sqlite_db)?;
+                let (old_prefix, new_prefix) = db.with_write_conn(|conn| {
+                    let old = brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
+
+                    let new = match value {
+                        Some(v) => {
+                            let upper = v.to_ascii_uppercase();
+                            if upper.len() != 3 || !upper.chars().all(|c| c.is_ascii_uppercase()) {
+                                return Err(brain_lib::error::BrainCoreError::Config(format!(
+                                    "prefix must be exactly 3 uppercase ASCII letters, got: {v}"
+                                )));
+                            }
+                            upper
                         }
-                        brain_lib::db::meta::set_meta(conn, "project_prefix", &upper)?;
-                        println!("Set project prefix to {upper}");
-                        Ok(())
+                        None => {
+                            let name = brain_dir
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("BRN");
+                            brain_lib::db::meta::generate_prefix(name)
+                        }
+                    };
+
+                    brain_lib::db::meta::set_meta(conn, "project_prefix", &new)?;
+                    Ok((old, new))
+                })?;
+                drop(db);
+
+                if old_prefix == new_prefix {
+                    println!("Prefix is already {new_prefix}");
+                } else {
+                    // Rewrite task IDs in the event log
+                    let tasks_dir = brain_dir.join("tasks");
+                    let db2 = brain_lib::db::Db::open(&cli.sqlite_db)?;
+                    let store = brain_lib::tasks::TaskStore::new(&tasks_dir, db2)?;
+                    let count = store.rewrite_prefix(&old_prefix, &new_prefix)?;
+                    println!("Rewrote {count} events: {old_prefix} → {new_prefix}");
+                }
+            }
+            action => {
+                let db = brain_lib::db::Db::open(&cli.sqlite_db)?;
+                db.with_write_conn(|conn| match action {
+                    ConfigAction::Set { key, .. } => {
+                        let other = key.as_str();
+                        Err(brain_lib::error::BrainCoreError::Config(format!(
+                            "unknown config key: {other}. Known keys: prefix"
+                        )))
                     }
-                    other => Err(brain_lib::error::BrainCoreError::Config(format!(
-                        "unknown config key: {other}. Known keys: prefix"
-                    ))),
-                },
-                ConfigAction::Get { key } => match key.as_str() {
-                    "prefix" => {
-                        let brain_dir = cli.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
-                        let prefix =
-                            brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
-                        println!("{prefix}");
-                        Ok(())
-                    }
-                    other => Err(brain_lib::error::BrainCoreError::Config(format!(
-                        "unknown config key: {other}. Known keys: prefix"
-                    ))),
-                },
-            })?;
-        }
+                    ConfigAction::Get { key } => match key.as_str() {
+                        "prefix" => {
+                            let brain_dir =
+                                cli.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
+                            let prefix =
+                                brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
+                            println!("{prefix}");
+                            Ok(())
+                        }
+                        other => Err(brain_lib::error::BrainCoreError::Config(format!(
+                            "unknown config key: {other}. Known keys: prefix"
+                        ))),
+                    },
+                })?;
+            }
+        },
         Command::Tasks {
             json,
             markdown: _,
@@ -768,8 +929,11 @@ async fn async_main(cli: Cli) -> Result<()> {
                     priority,
                     task_type,
                     assignee,
+                    label,
+                    search,
                     ready,
                     blocked,
+                    include_description,
                 } => {
                     commands::tasks::run::list(
                         &ctx,
@@ -778,8 +942,11 @@ async fn async_main(cli: Cli) -> Result<()> {
                             priority,
                             task_type,
                             assignee,
+                            label,
+                            search,
                             ready,
                             blocked,
+                            include_description,
                         },
                     )?;
                 }
@@ -860,8 +1027,11 @@ async fn async_main(cli: Cli) -> Result<()> {
                             priority: None,
                             task_type: None,
                             assignee: None,
+                            label: None,
+                            search: None,
                             ready: true,
                             blocked: false,
+                            include_description: false,
                         },
                     )?;
                 }
@@ -873,8 +1043,11 @@ async fn async_main(cli: Cli) -> Result<()> {
                             priority: None,
                             task_type: None,
                             assignee: None,
+                            label: None,
+                            search: None,
                             ready: false,
                             blocked: true,
+                            include_description: false,
                         },
                     )?;
                 }
@@ -996,9 +1169,126 @@ mod tests {
     }
 
     #[test]
+    fn parse_daemon_install() {
+        let cli = Cli::try_parse_from(["brain", "daemon", "install"]).unwrap();
+        match cli.command {
+            Command::Daemon {
+                action:
+                    DaemonAction::Install {
+                        brain_root,
+                        dry_run,
+                    },
+            } => {
+                assert!(brain_root.is_none());
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Daemon Install"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_install_dry_run() {
+        let cli = Cli::try_parse_from(["brain", "daemon", "install", "--dry-run"]).unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Install { dry_run, .. },
+            } => {
+                assert!(dry_run);
+            }
+            _ => panic!("expected Daemon Install"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_install_with_root() {
+        let cli = Cli::try_parse_from([
+            "brain",
+            "daemon",
+            "install",
+            "--brain-root",
+            "/tmp/myproject",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Install { brain_root, .. },
+            } => {
+                assert_eq!(brain_root, Some(PathBuf::from("/tmp/myproject")));
+            }
+            _ => panic!("expected Daemon Install"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_uninstall() {
+        let cli = Cli::try_parse_from(["brain", "daemon", "uninstall"]).unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Uninstall { brain_root },
+            } => {
+                assert!(brain_root.is_none());
+            }
+            _ => panic!("expected Daemon Uninstall"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_uninstall_with_root() {
+        let cli = Cli::try_parse_from([
+            "brain",
+            "daemon",
+            "uninstall",
+            "--brain-root",
+            "/tmp/myproject",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Uninstall { brain_root },
+            } => {
+                assert_eq!(brain_root, Some(PathBuf::from("/tmp/myproject")));
+            }
+            _ => panic!("expected Daemon Uninstall"),
+        }
+    }
+
+    #[test]
     fn parse_mcp() {
         let cli = Cli::try_parse_from(["brain", "mcp"]).unwrap();
-        assert!(matches!(cli.command, Command::Mcp));
+        assert!(matches!(cli.command, Command::Mcp { action: None }));
+    }
+
+    #[test]
+    fn parse_mcp_setup_claude() {
+        let cli = Cli::try_parse_from(["brain", "mcp", "setup", "claude"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Mcp {
+                action: Some(McpAction::Setup { dry_run: false, .. })
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_mcp_setup_cursor_dry_run() {
+        let cli = Cli::try_parse_from(["brain", "mcp", "setup", "cursor", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Mcp {
+                action: Some(McpAction::Setup { dry_run: true, .. })
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_mcp_setup_vscode() {
+        let cli = Cli::try_parse_from(["brain", "mcp", "setup", "vscode"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Mcp {
+                action: Some(McpAction::Setup { dry_run: false, .. })
+            }
+        ));
     }
 
     // ── Alias parsing ───────────────────────────────────────────────
@@ -1055,13 +1345,24 @@ mod tests {
 
     #[test]
     fn global_args_have_defaults() {
+        // Env vars (e.g. BRAIN_MODEL_DIR from justfile) may override clap
+        // defaults, so we only assert the path suffixes are correct.
         let cli = Cli::try_parse_from(["brain", "mcp"]).unwrap();
-        assert_eq!(
-            cli.model_dir,
-            PathBuf::from("./.brain/models/bge-small-en-v1.5")
+        let model_str = cli.model_dir.to_string_lossy();
+        let lance_str = cli.lance_db.to_string_lossy();
+        let sqlite_str = cli.sqlite_db.to_string_lossy();
+        assert!(
+            model_str.ends_with("models/bge-small-en-v1.5"),
+            "unexpected model_dir: {model_str}"
         );
-        assert_eq!(cli.lance_db, PathBuf::from("./.brain/lancedb"));
-        assert_eq!(cli.sqlite_db, PathBuf::from("./.brain/brain.db"));
+        assert!(
+            lance_str.ends_with("lancedb"),
+            "unexpected lance_db: {lance_str}"
+        );
+        assert!(
+            sqlite_str.ends_with("brain.db"),
+            "unexpected sqlite_db: {sqlite_str}"
+        );
     }
 
     // ── Edge cases ──────────────────────────────────────────────────

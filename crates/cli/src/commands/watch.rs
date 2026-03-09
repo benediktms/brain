@@ -2,11 +2,29 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
+use brain_lib::config::paths::normalize_note_paths_lenient;
 use brain_lib::prelude::*;
 use tracing::info;
 
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
 use tokio::signal::unix::SignalKind;
+
+/// Outcome of the watch shutdown sequence.
+#[allow(dead_code)]
+pub struct ShutdownOutcome {
+    /// Whether shutdown completed all phases cleanly.
+    pub clean: bool,
+    /// Number of work-queue items that were not processed.
+    pub dropped_items: usize,
+}
+
+/// Why the event loop exited.
+enum ShutdownReason {
+    /// The watcher channel closed (watcher dropped or errored).
+    ChannelClosed,
+    /// Received SIGINT (Ctrl+C) or SIGTERM.
+    Signal,
+}
 
 /// Watch a directory for changes and re-index incrementally.
 pub async fn run(
@@ -14,15 +32,16 @@ pub async fn run(
     model_dir: PathBuf,
     db_path: PathBuf,
     sqlite_path: PathBuf,
-) -> Result<()> {
-    info!("starting brain watch on {}", notes_path.display());
+) -> Result<ShutdownOutcome> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let note_dirs = normalize_note_paths_lenient(&[notes_path], &cwd);
+
+    info!("starting brain watch on {:?}", note_dirs);
 
     let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
 
     // Full scan on startup to catch offline changes
-    let stats = pipeline
-        .full_scan(std::slice::from_ref(&notes_path))
-        .await?;
+    let stats = pipeline.full_scan(&note_dirs).await?;
     info!(
         indexed = stats.indexed,
         skipped = stats.skipped,
@@ -35,7 +54,7 @@ pub async fn run(
 
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-    let _watcher = brain_lib::watcher::BrainWatcher::new(&[notes_path], tx)?;
+    let _watcher = brain_lib::watcher::BrainWatcher::new(&note_dirs, tx)?;
 
     info!("watching for changes... (press Ctrl+C to stop)");
 
@@ -56,7 +75,7 @@ pub async fn run(
         .expect("failed to register SIGUSR1 handler");
 
     // Event loop: batch-drain, coalesce, and dispatch
-    loop {
+    let shutdown_reason = loop {
         // Update queue depth + lancedb pending rows at top of each iteration
         pipeline.metrics().set_queue_depth(rx.len() as u64);
         pipeline
@@ -103,7 +122,7 @@ pub async fn run(
                     }
                     None => {
                         info!("watcher channel closed, shutting down");
-                        break;
+                        break ShutdownReason::ChannelClosed;
                     }
                 }
             }
@@ -113,13 +132,11 @@ pub async fn run(
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("received Ctrl+C, shutting down");
-                pipeline.store().optimizer().force_optimize().await;
-                break;
+                break ShutdownReason::Signal;
             }
             _ = sigterm.recv() => {
                 info!("received SIGTERM, shutting down");
-                pipeline.store().optimizer().force_optimize().await;
-                break;
+                break ShutdownReason::Signal;
             }
             _ = sigusr1.recv() => {
                 let mut snapshot = pipeline.metrics().snapshot();
@@ -131,7 +148,125 @@ pub async fn run(
                 eprintln!("{}", serde_json::to_string_pretty(&snapshot).unwrap_or_default());
             }
         }
+    };
+
+    // ── Shutdown sequence ──────────────────────────────────────────
+
+    // Phase 1: Stop watcher — no new events enter the channel.
+    info!("shutdown phase 1/5: stopping file watcher");
+    drop(_watcher);
+
+    // Phase 2: Drain pending work (signal shutdown only).
+    let mut dropped_items: usize = 0;
+    let mut force_shutdown = false;
+
+    if matches!(shutdown_reason, ShutdownReason::Signal) {
+        info!("shutdown phase 2/5: draining pending work queue (10s timeout)");
+
+        // Collect any remaining channel events into the work queue.
+        while let Ok(evt) = rx.try_recv() {
+            work_queue.push(evt);
+        }
+
+        if !work_queue.is_empty() {
+            let queued = work_queue.len();
+            info!(queued, "processing remaining queued items");
+
+            // Race drain processing against a second Ctrl+C for force-shutdown.
+            let drain_result = tokio::select! {
+                result = drain_with_timeout(&pipeline, &mut work_queue, Duration::from_secs(10)) => {
+                    result
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    info!("received second Ctrl+C, force-shutting down");
+                    force_shutdown = true;
+                    Err(work_queue.len())
+                }
+            };
+
+            match drain_result {
+                Ok(processed) => {
+                    info!(processed, "drain complete");
+                }
+                Err(remaining) => {
+                    dropped_items = remaining;
+                    tracing::warn!(dropped_items, "drain incomplete, items dropped");
+                }
+            }
+        } else {
+            info!("no pending items to drain");
+        }
+    } else {
+        info!("shutdown phase 2/5: channel closed, skipping drain");
     }
 
-    Ok(())
+    if !force_shutdown {
+        // Phase 3: SQLite WAL checkpoint.
+        info!("shutdown phase 3/5: checkpointing SQLite WAL");
+        if let Err(e) = pipeline.db().wal_checkpoint() {
+            tracing::warn!(error = %e, "WAL checkpoint failed");
+        }
+
+        // Phase 4: LanceDB optimize.
+        info!("shutdown phase 4/5: optimizing LanceDB");
+        pipeline.store().optimizer().force_optimize().await;
+    } else {
+        info!("shutdown phases 3-5: skipped (force shutdown)");
+    }
+
+    // Phase 5: Done.
+    let clean = !force_shutdown && dropped_items == 0;
+    info!(
+        clean,
+        dropped_items, "shutdown phase 5/5: shutdown complete"
+    );
+
+    Ok(ShutdownOutcome {
+        clean,
+        dropped_items,
+    })
+}
+
+/// Drain remaining work-queue items through the pipeline within a timeout.
+///
+/// Returns `Ok(processed_count)` on success, or `Err(remaining_count)` if the
+/// timeout expires before all items are processed.
+async fn drain_with_timeout(
+    pipeline: &IndexPipeline,
+    work_queue: &mut WorkQueue,
+    timeout: Duration,
+) -> std::result::Result<usize, usize> {
+    let result = tokio::time::timeout(timeout, async {
+        let (renames, index_paths, delete_paths) = work_queue.drain_batch();
+        let mut processed = 0;
+
+        for (from, to) in &renames {
+            if let Err(e) = pipeline.rename_file(from, to).await {
+                tracing::warn!(error = %e, "error handling rename during drain");
+            }
+            processed += 1;
+        }
+
+        for p in &delete_paths {
+            if let Err(e) = pipeline.delete_file(p).await {
+                tracing::warn!(error = %e, "error handling delete during drain");
+            }
+            processed += 1;
+        }
+
+        if !index_paths.is_empty() {
+            if let Err(e) = pipeline.index_files_batch(&index_paths).await {
+                tracing::warn!(error = %e, "error in batch index during drain");
+            }
+            processed += index_paths.len();
+        }
+
+        processed
+    })
+    .await;
+
+    match result {
+        Ok(processed) => Ok(processed),
+        Err(_) => Err(work_queue.len()),
+    }
 }

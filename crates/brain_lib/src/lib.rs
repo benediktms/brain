@@ -5,6 +5,7 @@ pub mod db;
 pub mod doctor;
 pub mod embedder;
 pub mod error;
+pub mod fs_permissions;
 pub mod hash_gate;
 pub mod links;
 pub mod mcp;

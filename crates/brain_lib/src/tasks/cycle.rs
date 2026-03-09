@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use rusqlite::Connection;
 
 use crate::error::{BrainCoreError, Result};
@@ -8,8 +6,9 @@ use crate::error::{BrainCoreError, Result};
 ///
 /// Returns `Ok(())` if safe, or `Err(TaskCycle(...))` if it would create a cycle.
 ///
-/// Algorithm: iterative DFS from `depends_on` following existing "depends on" edges.
-/// If we reach `task_id`, a cycle exists.
+/// Algorithm: recursive CTE traversal from `depends_on` following existing "depends on"
+/// edges in the database. If `task_id` is reachable from `depends_on`, a cycle exists.
+/// This avoids loading the full edge set into memory.
 pub fn check_cycle(conn: &Connection, task_id: &str, depends_on: &str) -> Result<()> {
     // Self-loop is always a cycle
     if task_id == depends_on {
@@ -18,37 +17,25 @@ pub fn check_cycle(conn: &Connection, task_id: &str, depends_on: &str) -> Result
         )));
     }
 
-    // Load the adjacency list: for each task, what does it depend on?
-    let mut adj: HashMap<String, Vec<String>> = HashMap::new();
-    let mut stmt = conn.prepare("SELECT task_id, depends_on FROM task_deps")?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    for row in rows {
-        let (tid, dep) = row?;
-        adj.entry(tid).or_default().push(dep);
-    }
+    // Use a recursive CTE to walk from `depends_on` through all reachable nodes,
+    // then check if `task_id` is among them.
+    let found: bool = conn.query_row(
+        "WITH RECURSIVE reachable(tid) AS (
+             SELECT ?1
+             UNION
+             SELECT d.depends_on
+             FROM task_deps d
+             JOIN reachable r ON d.task_id = r.tid
+         )
+         SELECT EXISTS(SELECT 1 FROM reachable WHERE tid = ?2)",
+        rusqlite::params![depends_on, task_id],
+        |row| row.get(0),
+    )?;
 
-    // Iterative DFS from `depends_on` following "depends on" edges
-    let mut visited = HashSet::new();
-    let mut stack = vec![depends_on.to_string()];
-
-    while let Some(current) = stack.pop() {
-        if current == task_id {
-            return Err(BrainCoreError::TaskCycle(format!(
-                "adding {task_id} -> {depends_on} would create a cycle"
-            )));
-        }
-        if !visited.insert(current.clone()) {
-            continue;
-        }
-        if let Some(deps) = adj.get(&current) {
-            for dep in deps {
-                if !visited.contains(dep) {
-                    stack.push(dep.clone());
-                }
-            }
-        }
+    if found {
+        return Err(BrainCoreError::TaskCycle(format!(
+            "adding {task_id} -> {depends_on} would create a cycle"
+        )));
     }
 
     Ok(())

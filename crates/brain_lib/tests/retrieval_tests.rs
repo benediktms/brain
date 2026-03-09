@@ -17,7 +17,7 @@ use brain_lib::embedder::{Embed, MockEmbedder};
 use brain_lib::error::BrainCoreError;
 use brain_lib::links::{LinkType, extract_links};
 use brain_lib::mcp::McpContext;
-use brain_lib::mcp::tools::dispatch_tool_call;
+use brain_lib::mcp::tools::ToolRegistry;
 use brain_lib::parser::parse_document;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::ranking::{
@@ -501,7 +501,10 @@ async fn test_mcp_write_episode_and_retrieve() {
         "importance": 0.9
     });
 
-    let result = dispatch_tool_call("memory.write_episode", &write_params, &ctx).await;
+    let registry = ToolRegistry::new();
+    let result = registry
+        .dispatch("memory.write_episode", write_params.clone(), &ctx)
+        .await;
     assert!(result.is_error.is_none(), "write_episode should succeed");
 
     let text = &result.content[0].text;
@@ -571,7 +574,10 @@ async fn test_mcp_search_minimal_returns_results() {
         "k": 5
     });
 
-    let result = dispatch_tool_call("memory.search_minimal", &params, &ctx).await;
+    let registry = ToolRegistry::new();
+    let result = registry
+        .dispatch("memory.search_minimal", params.clone(), &ctx)
+        .await;
     assert!(result.is_error.is_none(), "search should not error");
 
     let text = &result.content[0].text;
@@ -644,7 +650,10 @@ async fn test_mcp_expand_returns_full_content() {
         "budget_tokens": 2000
     });
 
-    let result = dispatch_tool_call("memory.expand", &params, &ctx).await;
+    let registry = ToolRegistry::new();
+    let result = registry
+        .dispatch("memory.expand", params.clone(), &ctx)
+        .await;
     assert!(result.is_error.is_none(), "expand should not error");
 
     let text = &result.content[0].text;
@@ -665,6 +674,8 @@ async fn test_mcp_expand_returns_full_content() {
 async fn test_mcp_reflect_returns_sources() {
     let (ctx, _tmp) = setup_mcp().await;
 
+    let registry = ToolRegistry::new();
+
     // Write some episodes first
     for i in 0..3 {
         let params = json!({
@@ -674,12 +685,16 @@ async fn test_mcp_reflect_returns_sources() {
             "tags": ["test"],
             "importance": 0.8
         });
-        dispatch_tool_call("memory.write_episode", &params, &ctx).await;
+        registry
+            .dispatch("memory.write_episode", params.clone(), &ctx)
+            .await;
     }
 
     // Reflect
     let params = json!({ "topic": "test progress", "budget_tokens": 2000 });
-    let result = dispatch_tool_call("memory.reflect", &params, &ctx).await;
+    let result = registry
+        .dispatch("memory.reflect", params.clone(), &ctx)
+        .await;
     assert!(result.is_error.is_none(), "reflect should not error");
 
     let text = &result.content[0].text;

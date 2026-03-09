@@ -61,6 +61,30 @@ brain daemon start
 
 `just setup-model` downloads BGE-small-en-v1.5 weights (~130MB). `brain init` creates the brain configuration and performs the initial index. `brain daemon start` launches the daemon and registers it to auto-start on login (launchd on macOS, systemd on Linux).
 
+### Model Cache
+
+brain uses [BGE-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) for embeddings. The model is downloaded once and verified via BLAKE3 checksums at every startup.
+
+```
+~/.brain/models/bge-small-en-v1.5/
+  config.json          BERT config (hidden_size=384)
+  tokenizer.json       WordPiece tokenizer
+  model.safetensors    Model weights (~130MB, memory-mapped)
+```
+
+**Download the model** (choose one):
+
+```sh
+# Option 1: Run the setup script directly (requires curl + installs HuggingFace CLI if needed)
+curl -sSL https://raw.githubusercontent.com/benediktms/brain/master/scripts/setup-model.sh | bash
+
+# Option 2: If you have the HuggingFace CLI already installed
+hf download BAAI/bge-small-en-v1.5 config.json tokenizer.json model.safetensors \
+  --local-dir ~/.brain/models/bge-small-en-v1.5
+```
+
+Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is corrupted or swapped, brain will report a checksum mismatch with expected and actual hashes — re-download the model to fix.
+
 ### Connect to an AI agent
 
 ```json
@@ -228,6 +252,7 @@ just changelog
 ## Further Reading
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Full technical architecture, sequence diagrams, storage design, mathematical foundations
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — Upgrading, backup, recovery, troubleshooting, performance tuning, model management
 - [docs/RESEARCH.md](docs/RESEARCH.md) — Research survey of agentic memory systems, retrieval design, token budget design
 - [MemGPT](https://arxiv.org/abs/2310.08560) — Virtual context management for long-running agents (Packer et al., 2023)
 - [Generative Agents](https://arxiv.org/abs/2304.03442) — Recency/relevance/importance scoring with reflective synthesis (Park et al., 2023)

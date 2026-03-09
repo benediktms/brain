@@ -1,0 +1,66 @@
+{
+  "candidates": [
+    {
+      "chunk_id": "vector_king",
+      "sim_vector": 0.95,
+      "bm25": 0.1,
+      "age_seconds": 3600.0,
+      "backlink_count": 1,
+      "max_backlinks": 10,
+      "importance": 0.5
+    },
+    {
+      "chunk_id": "keyword_king",
+      "sim_vector": 0.1,
+      "bm25": 0.95,
+      "age_seconds": 86400.0,
+      "backlink_count": 2,
+      "max_backlinks": 10,
+      "importance": 0.5
+    },
+    {
+      "chunk_id": "link_hub",
+      "sim_vector": 0.4,
+      "bm25": 0.3,
+      "age_seconds": 172800.0,
+      "backlink_count": 10,
+      "max_backlinks": 10,
+      "importance": 0.5
+    },
+    {
+      "chunk_id": "recent_gem",
+      "sim_vector": 0.2,
+      "bm25": 0.2,
+      "age_seconds": 60.0,
+      "backlink_count": 0,
+      "max_backlinks": 10,
+      "importance": 2.0
+    }
+  ],
+  "expected_orders": {
+    "lookup": [
+      "keyword_king",
+      "link_hub",
+      "recent_gem",
+      "vector_king"
+    ],
+    "reflection": [
+      "recent_gem",
+      "keyword_king",
+      "vector_king",
+      "link_hub"
+    ],
+    "planning": [
+      "link_hub",
+      "vector_king",
+      "keyword_king",
+      "recent_gem"
+    ],
+    "synthesis": [
+      "vector_king",
+      "link_hub",
+      "recent_gem",
+      "keyword_king"
+    ]
+  }
+}

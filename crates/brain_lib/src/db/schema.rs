@@ -3,12 +3,13 @@ use rusqlite::Connection;
 use super::migrations::{
     migrate_v0_to_v1, migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5,
     migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
+    migrate_v10_to_v11,
 };
 use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-pub(crate) const SCHEMA_VERSION: i32 = 10;
+pub(crate) const SCHEMA_VERSION: i32 = 11;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -53,6 +54,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
             7 => migrate_v7_to_v8(conn)?,
             8 => migrate_v8_to_v9(conn)?,
             9 => migrate_v9_to_v10(conn)?,
+            10 => migrate_v10_to_v11(conn)?,
             other => {
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",
@@ -69,7 +71,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
 ///
 /// Called on every `init_schema` open, outside the migration transaction,
 /// because FTS5 DDL has SQLite transaction limitations.
-fn ensure_fts5(conn: &Connection) -> Result<()> {
+pub(crate) fn ensure_fts5(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
             content,
@@ -97,6 +99,42 @@ fn ensure_fts5(conn: &Connection) -> Result<()> {
         "CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE OF content ON chunks BEGIN
             INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.rowid, old.content);
             INSERT INTO fts_chunks(rowid, content) VALUES (new.rowid, new.content);
+        END",
+        [],
+    )?;
+
+    // ── FTS5 for tasks (title + description) ────────────────────
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_tasks USING fts5(
+            title, description,
+            content=tasks,
+            content_rowid=rowid
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS tasks_fts_insert AFTER INSERT ON tasks BEGIN
+            INSERT INTO fts_tasks(rowid, title, description)
+            VALUES (new.rowid, new.title, COALESCE(new.description, ''));
+        END",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS tasks_fts_delete AFTER DELETE ON tasks BEGIN
+            INSERT INTO fts_tasks(fts_tasks, rowid, title, description)
+            VALUES ('delete', old.rowid, old.title, COALESCE(old.description, ''));
+        END",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS tasks_fts_update AFTER UPDATE OF title, description ON tasks BEGIN
+            INSERT INTO fts_tasks(fts_tasks, rowid, title, description)
+            VALUES ('delete', old.rowid, old.title, COALESCE(old.description, ''));
+            INSERT INTO fts_tasks(rowid, title, description)
+            VALUES (new.rowid, new.title, COALESCE(new.description, ''));
         END",
         [],
     )?;
