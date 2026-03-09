@@ -49,4 +49,9 @@ mkdir -p "$MODEL_DIR"
     config.json tokenizer.json model.safetensors \
     --local-dir "$MODEL_DIR"
 
+if command -v b3sum &>/dev/null; then
+    echo "==> BLAKE3 checksums:"
+    b3sum "$MODEL_DIR"/config.json "$MODEL_DIR"/tokenizer.json "$MODEL_DIR"/model.safetensors
+fi
+
 echo "==> Model ready at $MODEL_DIR"

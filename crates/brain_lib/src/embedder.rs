@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::Path;
 
 use candle_core::{Device, Tensor};
@@ -7,6 +8,61 @@ use tokenizers::Tokenizer;
 use tracing::info;
 
 use crate::error::BrainCoreError;
+
+/// Expected BLAKE3 checksums for BGE-small-en-v1.5 model artifacts.
+/// Computed against the pinned HuggingFace revision downloaded by `scripts/setup-model.sh`.
+const EXPECTED_CHECKSUMS: &[(&str, &str)] = &[
+    (
+        "config.json",
+        "a2dadabd189ddc5bffa8db91d3ee1b0872c35b09db2488efab23ae5c1d93cd60",
+    ),
+    (
+        "tokenizer.json",
+        "6e933bf59db40b8b2a0de480fe5006662770757e1e1671eb7e48ff6a5f00b0b4",
+    ),
+    (
+        "model.safetensors",
+        "6588b38fa23ad13648a2678bc8cd8733bf4be79ba12ac6dfa1368d33d80e8fc7",
+    ),
+];
+
+/// Verify BLAKE3 checksums of model artifacts against expected values.
+///
+/// Uses streaming reads (64KB buffer) to avoid loading the full ~130MB
+/// safetensors file into memory. Returns `Ok(())` if all checksums match,
+/// or an `Embedding` error with the first mismatch details.
+fn verify_checksums(model_dir: &Path, expected: &[(&str, &str)]) -> crate::error::Result<()> {
+    for &(filename, expected_hex) in expected {
+        let path = model_dir.join(filename);
+        let mut file = std::fs::File::open(&path).map_err(|e| {
+            BrainCoreError::Embedding(format!(
+                "failed to read {filename} for checksum verification: {e}"
+            ))
+        })?;
+
+        let mut hasher = blake3::Hasher::new();
+        let mut buf = [0u8; 65536];
+        loop {
+            let n = file
+                .read(&mut buf)
+                .map_err(|e| BrainCoreError::Embedding(format!("error reading {filename}: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+
+        let actual_hex = hasher.finalize().to_hex().to_string();
+        if actual_hex != expected_hex {
+            return Err(BrainCoreError::Embedding(format!(
+                "checksum mismatch for {filename}: expected {expected_hex}, got {actual_hex}. \
+                 Delete {} and re-download with scripts/setup-model.sh",
+                model_dir.display(),
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Trait for embedding text into vectors.
 pub trait Embed: Send + Sync {
@@ -24,8 +80,19 @@ pub struct Embedder {
 impl Embedder {
     /// Load BGE-small-en-v1.5 from a local directory.
     ///
-    /// The directory must contain `config.json`, `tokenizer.json`, and
-    /// `model.safetensors`. Use `scripts/setup-model.sh` to download them.
+    /// The directory must contain the following artifacts (downloaded by
+    /// `scripts/setup-model.sh`):
+    ///
+    /// ```text
+    /// ~/.brain/models/bge-small-en-v1.5/
+    ///   config.json          BERT config (hidden_size=384)
+    ///   tokenizer.json       WordPiece tokenizer
+    ///   model.safetensors    Model weights (~130MB, memory-mapped)
+    /// ```
+    ///
+    /// All files are verified against hardcoded BLAKE3 checksums before
+    /// loading. The `model.safetensors` file is memory-mapped via `unsafe`
+    /// into the process address space, so integrity verification is critical.
     pub fn load(model_dir: &Path) -> crate::error::Result<Self> {
         let device = Device::Cpu;
 
@@ -45,6 +112,9 @@ impl Embedder {
                 )));
             }
         }
+
+        verify_checksums(model_dir, EXPECTED_CHECKSUMS)?;
+        info!("model checksums verified");
 
         let config_str = std::fs::read_to_string(&config_path)
             .map_err(|e| BrainCoreError::Embedding(format!("failed to read config.json: {e}")))?;
@@ -260,4 +330,45 @@ fn mock_embedding(text: &str) -> Vec<f32> {
     }
 
     embedding
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn verify_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected = &[("config.json", "abcd1234")];
+        let err = verify_checksums(dir.path(), expected).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed to read"), "got: {msg}");
+        assert!(msg.contains("config.json"), "got: {msg}");
+    }
+
+    #[test]
+    fn verify_wrong_checksum() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.json"), b"hello").unwrap();
+        let expected = &[(
+            "config.json",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )];
+        let err = verify_checksums(dir.path(), expected).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("checksum mismatch"), "got: {msg}");
+        assert!(msg.contains("config.json"), "got: {msg}");
+    }
+
+    #[test]
+    fn verify_correct_checksums() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = b"test content for checksum";
+        fs::write(dir.path().join("data.bin"), content).unwrap();
+
+        let expected_hash = blake3::hash(content).to_hex().to_string();
+        let expected = vec![("data.bin", expected_hash.as_str())];
+        verify_checksums(dir.path(), &expected).unwrap();
+    }
 }

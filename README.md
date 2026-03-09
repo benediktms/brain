@@ -61,6 +61,30 @@ brain daemon start
 
 `just setup-model` downloads BGE-small-en-v1.5 weights (~130MB). `brain init` creates the brain configuration and performs the initial index. `brain daemon start` launches the daemon and registers it to auto-start on login (launchd on macOS, systemd on Linux).
 
+### Model Cache
+
+brain uses [BGE-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) for embeddings. The model is downloaded once and verified via BLAKE3 checksums at every startup.
+
+```
+~/.brain/models/bge-small-en-v1.5/
+  config.json          BERT config (hidden_size=384)
+  tokenizer.json       WordPiece tokenizer
+  model.safetensors    Model weights (~130MB, memory-mapped)
+```
+
+**Download the model** (choose one):
+
+```sh
+# Option 1: Run the setup script directly (requires curl + installs HuggingFace CLI if needed)
+curl -sSL https://raw.githubusercontent.com/benediktms/brain/master/scripts/setup-model.sh | bash
+
+# Option 2: If you have the HuggingFace CLI already installed
+hf download BAAI/bge-small-en-v1.5 config.json tokenizer.json model.safetensors \
+  --local-dir ~/.brain/models/bge-small-en-v1.5
+```
+
+Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is corrupted or swapped, brain will report a checksum mismatch with expected and actual hashes — re-download the model to fix.
+
 ### Connect to an AI agent
 
 ```json
