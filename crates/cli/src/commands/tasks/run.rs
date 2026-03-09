@@ -186,7 +186,12 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         .collect();
 
     if ctx.json {
-        let (items, ready_count, blocked_count) = enrich_task_list(&ctx.store, &tasks);
+        let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+        let labels_map = ctx
+            .store
+            .get_labels_for_tasks(&task_ids)
+            .unwrap_or_default();
+        let (items, ready_count, blocked_count) = enrich_task_list(&ctx.store, &tasks, &labels_map);
         let out = json!({
             "tasks": items,
             "count": tasks.len(),

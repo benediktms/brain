@@ -12,19 +12,19 @@ const DEFAULT_LIMIT: u64 = 50;
 
 #[derive(Debug, Clone, Copy)]
 enum StatusFilter {
-    All,
     Open,
     Ready,
     Blocked,
+    Done,
 }
 
 impl fmt::Display for StatusFilter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::All => write!(f, "all"),
             Self::Open => write!(f, "open"),
             Self::Ready => write!(f, "ready"),
             Self::Blocked => write!(f, "blocked"),
+            Self::Done => write!(f, "done"),
         }
     }
 }
@@ -34,13 +34,13 @@ impl FromStr for StatusFilter {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "all" => Ok(Self::All),
             "open" => Ok(Self::Open),
             "ready" => Ok(Self::Ready),
             "blocked" => Ok(Self::Blocked),
+            "done" => Ok(Self::Done),
             other => Err(format!(
                 "unknown status filter '{other}', valid values: \
-                 [\"all\", \"open\", \"ready\", \"blocked\"]"
+                 [\"open\", \"ready\", \"blocked\", \"done\"]"
             )),
         }
     }
@@ -66,10 +66,10 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     };
 
     let tasks = match status {
-        StatusFilter::All => ctx.tasks.list_all(),
         StatusFilter::Open => ctx.tasks.list_open(),
         StatusFilter::Ready => ctx.tasks.list_ready(),
         StatusFilter::Blocked => ctx.tasks.list_blocked(),
+        StatusFilter::Done => ctx.tasks.list_done(),
     };
 
     let tasks = match tasks {
@@ -120,10 +120,16 @@ fn build_response(
         tasks
     };
 
-    let (mut tasks_json, ready_count, blocked_count) = enrich_task_list(&ctx.tasks, capped);
+    // Batch-fetch labels for displayed tasks (eliminates N+1 queries)
+    let task_ids: Vec<&str> = capped.iter().map(|t| t.task_id.as_str()).collect();
+    let labels_map = ctx
+        .tasks
+        .get_labels_for_tasks(&task_ids)
+        .unwrap_or_default();
+    let (mut tasks_json, ready_count, blocked_count) =
+        enrich_task_list(&ctx.tasks, capped, &labels_map);
 
-    // Add short_id to each task, and optionally strip descriptions
-    let short_ids = ctx.tasks.shortest_unique_prefixes().unwrap_or_default();
+    // Add short_id per task using O(log n) index seeks (replaces loading all IDs)
     for task_val in &mut tasks_json {
         if let Some(obj) = task_val.as_object_mut() {
             if let Some(tid) = obj
@@ -131,7 +137,10 @@ fn build_response(
                 .and_then(|v| v.as_str())
                 .map(String::from)
             {
-                let short = short_ids.get(tid.as_str()).cloned().unwrap_or(tid);
+                let short = ctx
+                    .tasks
+                    .shortest_unique_prefix(&tid)
+                    .unwrap_or_else(|_| tid.clone());
                 obj.insert("short_id".into(), json!(short));
             }
             if !include_description {
@@ -165,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_all() {
+    fn test_list_done() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
@@ -187,20 +196,40 @@ mod tests {
                 "payload": { "title": "Task 2", "priority": 1 }
             }),
         );
+        // Mark t1 as done
+        apply(
+            &rt,
+            &ctx,
+            json!({
+                "event_type": "status_changed",
+                "task_id": "t1",
+                "payload": { "new_status": "done" }
+            }),
+        );
+
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({ "status": "done" }),
+            &ctx,
+        ));
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["task_id"], "t1");
+    }
+
+    #[test]
+    fn test_list_all_returns_error() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 
         let result = rt.block_on(dispatch_tool_call(
             "tasks.list",
             &json!({ "status": "all" }),
             &ctx,
         ));
-        assert!(result.is_error.is_none());
-
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        assert_eq!(parsed["count"], 2);
-        assert_eq!(parsed["ready_count"], 2);
-        assert_eq!(parsed["blocked_count"], 0);
-        let tasks = parsed["tasks"].as_array().unwrap();
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
@@ -243,14 +272,15 @@ mod tests {
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "Open task");
 
-        // Explicit "all" should return both
+        // Explicit "done" should return only done tasks
         let result = rt.block_on(dispatch_tool_call(
             "tasks.list",
-            &json!({ "status": "all" }),
+            &json!({ "status": "done" }),
             &ctx,
         ));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        assert_eq!(parsed["count"], 2);
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["title"], "Done task");
     }
 
     #[test]
@@ -429,10 +459,10 @@ mod tests {
             }),
         );
 
-        // List all — count is 3 (all), ready_count 2, blocked_count 1
+        // List open — count is 3 (all open), ready_count 2, blocked_count 1
         let result = rt.block_on(dispatch_tool_call(
             "tasks.list",
-            &json!({ "status": "all" }),
+            &json!({ "status": "open" }),
             &ctx,
         ));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -491,7 +521,7 @@ mod tests {
         // Limit to 2
         let result = rt.block_on(dispatch_tool_call(
             "tasks.list",
-            &json!({ "status": "all", "limit": 2 }),
+            &json!({ "status": "open", "limit": 2 }),
             &ctx,
         ));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -502,7 +532,7 @@ mod tests {
         // No limit override — uses default (50), all 5 fit
         let result = rt.block_on(dispatch_tool_call(
             "tasks.list",
-            &json!({ "status": "all" }),
+            &json!({ "status": "open" }),
             &ctx,
         ));
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
