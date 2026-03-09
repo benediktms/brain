@@ -1222,6 +1222,39 @@ mod tests {
         assert!(matches!(cli.command, Command::Mcp { action: None }));
     }
 
+    #[test]
+    fn parse_mcp_setup_claude() {
+        let cli = Cli::try_parse_from(["brain", "mcp", "setup", "claude"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Mcp {
+                action: Some(McpAction::Setup { dry_run: false, .. })
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_mcp_setup_cursor_dry_run() {
+        let cli = Cli::try_parse_from(["brain", "mcp", "setup", "cursor", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Mcp {
+                action: Some(McpAction::Setup { dry_run: true, .. })
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_mcp_setup_vscode() {
+        let cli = Cli::try_parse_from(["brain", "mcp", "setup", "vscode"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Mcp {
+                action: Some(McpAction::Setup { dry_run: false, .. })
+            }
+        ));
+    }
+
     // ── Alias parsing ───────────────────────────────────────────────
 
     #[test]

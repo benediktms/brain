@@ -5,6 +5,8 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
+use crate::McpTarget;
+
 /// Register brain as a Claude Code MCP server (user scope).
 ///
 /// Calls `claude mcp remove brain` then `claude mcp add` so the entry is
@@ -65,9 +67,13 @@ fn setup_cursor(brain_bin: &str, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-/// Set up brain as an MCP server for VS Code (.vscode/settings.json).
+/// Set up brain as an MCP server for VS Code (.vscode/settings.json in the
+/// project root). Walks up from CWD to find a git repo root; falls back to CWD.
 fn setup_vscode(brain_bin: &str, dry_run: bool) -> Result<()> {
-    let config_path = Path::new(".vscode").join("settings.json");
+    let project_root = find_git_root().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    });
+    let config_path = project_root.join(".vscode").join("settings.json");
 
     let entry = json!({
         "mcp": {
@@ -137,7 +143,18 @@ fn deep_merge(base: &mut Value, overlay: &Value) {
     }
 }
 
-use crate::McpTarget;
+/// Walk up from CWD to find the nearest directory containing `.git`.
+fn find_git_root() -> Option<std::path::PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if dir.join(".git").exists() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
 
 /// Entry point for `brain mcp setup <target>`.
 pub fn run(target: McpTarget, dry_run: bool) -> Result<()> {
