@@ -203,7 +203,7 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "tasks.list".into(),
-            description: "List tasks filtered by status. Returns summary task objects (descriptions omitted by default — use tasks.get for full details). Results are sorted by priority and paginated.".into(),
+            description: "List tasks filtered by status and optional field filters. Returns summary task objects (descriptions omitted by default — use tasks.get for full details). Results are sorted by priority and paginated.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -217,6 +217,26 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Fetch specific tasks by ID or prefix (ignores status filter). Unresolvable IDs are silently skipped."
+                    },
+                    "priority": {
+                        "type": "integer",
+                        "description": "Filter by exact priority (0=critical, 1=high, 2=medium, 3=low, 4=backlog)"
+                    },
+                    "task_type": {
+                        "type": "string",
+                        "description": "Filter by task type (task, bug, feature, epic)"
+                    },
+                    "assignee": {
+                        "type": "string",
+                        "description": "Filter by assignee"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Filter by label (exact match)"
+                    },
+                    "search": {
+                        "type": "string",
+                        "description": "Full-text search on title and description (FTS5 query syntax)"
                     },
                     "include_description": {
                         "type": "boolean",

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -7,6 +8,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 use crate::tasks::enrichment::enrich_task_list;
+use crate::tasks::queries::{TaskFilter, apply_filters};
 
 const DEFAULT_LIMIT: u64 = 50;
 
@@ -60,9 +62,46 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
         return handle_batch(&task_ids, include_description, limit, ctx);
     }
 
+    // Parse per-field filters
+    let filter = TaskFilter {
+        priority: params
+            .get("priority")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32),
+        task_type: params
+            .get("task_type")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        assignee: params
+            .get("assignee")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        label: params
+            .get("label")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        search: params
+            .get("search")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    };
+
     let status = match super::opt_str(params, "status", "open").parse::<StatusFilter>() {
         Ok(s) => s,
         Err(msg) => return ToolCallResult::error(msg),
+    };
+
+    // FTS pre-filter: get matching task_ids
+    let fts_ids = if let Some(ref query) = filter.search {
+        match ctx.tasks.search_fts(query, 1000) {
+            Ok(ids) => Some(ids.into_iter().collect::<HashSet<String>>()),
+            Err(e) => {
+                error!(error = %e, "FTS search failed");
+                return ToolCallResult::error(format!("Full-text search failed: {e}"));
+            }
+        }
+    } else {
+        None
     };
 
     let tasks = match status {
@@ -78,6 +117,21 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
             error!(error = %e, %status, "failed to list tasks");
             return ToolCallResult::error(format!("Failed to list tasks: {e}"));
         }
+    };
+
+    // Apply per-field filters if any are set
+    let tasks = if !filter.is_empty() {
+        // Batch-fetch labels if label filter is active
+        let labels_map = if filter.label.is_some() {
+            let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+            ctx.tasks.get_labels_for_tasks(&task_ids).ok()
+        } else {
+            None
+        };
+
+        apply_filters(tasks, &filter, fts_ids.as_ref(), labels_map.as_ref())
+    } else {
+        tasks
     };
 
     build_response(&tasks, include_description, limit, ctx)
@@ -502,7 +556,281 @@ mod tests {
     }
 
     #[test]
-    fn test_list_limit() {
+    fn test_filter_by_priority() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "High", "priority": 1}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "Medium", "priority": 2}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t3", "payload": {"title": "High too", "priority": 1}}),
+        );
+
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"priority": 1}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 2);
+        let titles: Vec<&str> = parsed["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["title"].as_str().unwrap())
+            .collect();
+        assert!(titles.contains(&"High"));
+        assert!(titles.contains(&"High too"));
+    }
+
+    #[test]
+    fn test_filter_by_task_type() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Bug fix", "priority": 1, "task_type": "bug"}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "Feature", "priority": 2, "task_type": "feature"}}),
+        );
+
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"task_type": "bug"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["title"], "Bug fix");
+    }
+
+    #[test]
+    fn test_filter_by_assignee() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Alice task", "priority": 1, "assignee": "alice"}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "Bob task", "priority": 2, "assignee": "bob"}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t3", "payload": {"title": "Unassigned", "priority": 2}}),
+        );
+
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"assignee": "alice"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["title"], "Alice task");
+    }
+
+    #[test]
+    fn test_filter_by_label() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Labeled", "priority": 1}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "No label", "priority": 2}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "label_added", "task_id": "t1", "payload": {"label": "urgent"}}),
+        );
+
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"label": "urgent"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["title"], "Labeled");
+    }
+
+    #[test]
+    fn test_filter_label_no_match() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Task", "priority": 1}}),
+        );
+
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"label": "nonexistent"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 0);
+    }
+
+    #[test]
+    fn test_combined_status_priority_type() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "P1 bug", "priority": 1, "task_type": "bug"}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "P2 bug", "priority": 2, "task_type": "bug"}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t3", "payload": {"title": "P1 feature", "priority": 1, "task_type": "feature"}}),
+        );
+        // Close t1 so it's done
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "status_changed", "task_id": "t1", "payload": {"new_status": "done"}}),
+        );
+
+        // Open + P1 + bug = nothing (t1 is done)
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"status": "open", "priority": 1, "task_type": "bug"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 0);
+
+        // Open + P2 + bug = t2
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"status": "open", "priority": 2, "task_type": "bug"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["title"], "P2 bug");
+    }
+
+    #[test]
+    fn test_fts_search() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Implement filtering", "priority": 1}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "Fix database bug", "priority": 2}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t3", "payload": {"title": "Add search feature", "description": "Full text filtering support", "priority": 2}}),
+        );
+
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"search": "filtering"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 2); // t1 (title) + t3 (description)
+        let ids: Vec<&str> = parsed["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["task_id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&"t1"));
+        assert!(ids.contains(&"t3"));
+    }
+
+    #[test]
+    fn test_fts_search_combined_with_status() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Fix permissions bug", "priority": 1}}),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "Permissions audit", "priority": 2}}),
+        );
+        // Close t1
+        apply(
+            &rt,
+            &ctx,
+            json!({"event_type": "status_changed", "task_id": "t1", "payload": {"new_status": "done"}}),
+        );
+
+        // Search "permissions" in open tasks only
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"search": "permissions", "status": "open"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["task_id"], "t2");
+
+        // Search "permissions" in done tasks
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.list",
+            &json!({"search": "permissions", "status": "done"}),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["task_id"], "t1");
+    }
+
+    #[test]
+    fn test_limit() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_dir, ctx) = rt.block_on(async { create_test_context().await });
 

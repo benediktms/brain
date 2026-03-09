@@ -334,6 +334,14 @@ enum TasksAction {
         #[arg(long)]
         assignee: Option<String>,
 
+        /// Filter by label (exact match)
+        #[arg(long)]
+        label: Option<String>,
+
+        /// Full-text search on title and description
+        #[arg(long)]
+        search: Option<String>,
+
         /// Show only ready tasks (no blockers)
         #[arg(long)]
         ready: bool,
@@ -772,6 +780,8 @@ async fn async_main(cli: Cli) -> Result<()> {
                     priority,
                     task_type,
                     assignee,
+                    label,
+                    search,
                     ready,
                     blocked,
                     include_description,
@@ -783,6 +793,8 @@ async fn async_main(cli: Cli) -> Result<()> {
                             priority,
                             task_type,
                             assignee,
+                            label,
+                            search,
                             ready,
                             blocked,
                             include_description,
@@ -866,6 +878,8 @@ async fn async_main(cli: Cli) -> Result<()> {
                             priority: None,
                             task_type: None,
                             assignee: None,
+                            label: None,
+                            search: None,
                             ready: true,
                             blocked: false,
                             include_description: false,
@@ -880,6 +894,8 @@ async fn async_main(cli: Cli) -> Result<()> {
                             priority: None,
                             task_type: None,
                             assignee: None,
+                            label: None,
+                            search: None,
                             ready: false,
                             blocked: true,
                             include_description: false,
