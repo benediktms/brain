@@ -828,26 +828,20 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Config { action } => match action {
             ConfigAction::Set { key, value } if key == "prefix" => {
-                let brain_dir =
-                    cli.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
+                let brain_dir = cli.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
 
                 // Get the old prefix and compute the new one
                 let db = brain_lib::db::Db::open(&cli.sqlite_db)?;
                 let (old_prefix, new_prefix) = db.with_write_conn(|conn| {
-                    let old =
-                        brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
+                    let old = brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
 
                     let new = match value {
                         Some(v) => {
                             let upper = v.to_ascii_uppercase();
-                            if upper.len() != 3
-                                || !upper.chars().all(|c| c.is_ascii_uppercase())
-                            {
-                                return Err(brain_lib::error::BrainCoreError::Config(
-                                    format!(
-                                        "prefix must be exactly 3 uppercase ASCII letters, got: {v}"
-                                    ),
-                                ));
+                            if upper.len() != 3 || !upper.chars().all(|c| c.is_ascii_uppercase()) {
+                                return Err(brain_lib::error::BrainCoreError::Config(format!(
+                                    "prefix must be exactly 3 uppercase ASCII letters, got: {v}"
+                                )));
                             }
                             upper
                         }
@@ -871,12 +865,9 @@ async fn async_main(cli: Cli) -> Result<()> {
                     // Rewrite task IDs in the event log
                     let tasks_dir = brain_dir.join("tasks");
                     let db2 = brain_lib::db::Db::open(&cli.sqlite_db)?;
-                    let store =
-                        brain_lib::tasks::TaskStore::new(&tasks_dir, db2)?;
+                    let store = brain_lib::tasks::TaskStore::new(&tasks_dir, db2)?;
                     let count = store.rewrite_prefix(&old_prefix, &new_prefix)?;
-                    println!(
-                        "Rewrote {count} events: {old_prefix} → {new_prefix}"
-                    );
+                    println!("Rewrote {count} events: {old_prefix} → {new_prefix}");
                 }
             }
             action => {
@@ -889,22 +880,16 @@ async fn async_main(cli: Cli) -> Result<()> {
                     },
                     ConfigAction::Get { key } => match key.as_str() {
                         "prefix" => {
-                            let brain_dir = cli
-                                .sqlite_db
-                                .parent()
-                                .unwrap_or(std::path::Path::new("."));
+                            let brain_dir =
+                                cli.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
                             let prefix =
-                                brain_lib::db::meta::get_or_init_project_prefix(
-                                    conn, brain_dir,
-                                )?;
+                                brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
                             println!("{prefix}");
                             Ok(())
                         }
-                        other => Err(brain_lib::error::BrainCoreError::Config(
-                            format!(
-                                "unknown config key: {other}. Known keys: prefix"
-                            ),
-                        )),
+                        other => Err(brain_lib::error::BrainCoreError::Config(format!(
+                            "unknown config key: {other}. Known keys: prefix"
+                        ))),
                     },
                 })?;
             }

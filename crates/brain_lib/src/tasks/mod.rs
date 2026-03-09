@@ -653,9 +653,7 @@ mod tests {
     #[test]
     fn test_rewrite_prefix_no_match() {
         let (_dir, store) = setup();
-        store
-            .append(&created_event("AAA-001", "Task", 2))
-            .unwrap();
+        store.append(&created_event("AAA-001", "Task", 2)).unwrap();
 
         // Rewrite a prefix that doesn't match — events still rewritten (count=1) but IDs unchanged
         let count = store.rewrite_prefix("ZZZ", "NEW").unwrap();
