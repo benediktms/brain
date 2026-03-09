@@ -66,10 +66,11 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_claude_md: bool) -> Res
     );
     save_global_config(&global)?;
 
-    // 5. Create ~/.brain/brains/<name>/
+    // 5. Create ~/.brain/brains/<name>/ with restrictive permissions
     let home = brain_home()?;
     let brains_dir = home.join("brains").join(&brain_name);
-    fs::create_dir_all(&brains_dir)?;
+    brain_lib::fs_permissions::ensure_private_dir(&brains_dir)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // 6. Upsert CLAUDE.md (unless --no-claude-md)
     if !no_claude_md {

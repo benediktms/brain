@@ -14,7 +14,7 @@ impl Daemon {
         let home = dirs::home_dir()
             .context("could not determine home directory")?
             .join(".brain");
-        fs::create_dir_all(&home)?;
+        brain_lib::fs_permissions::ensure_private_dir(&home).map_err(|e| anyhow::anyhow!("{e}"))?;
         let pid_path = home.join("brain.pid");
         let log_path = home.join("brain.log");
         Ok(Self { pid_path, log_path })

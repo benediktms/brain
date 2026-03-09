@@ -626,6 +626,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             .init();
     }
 
+    // Warn if ~/.brain has overly broad permissions.
+    let _ = brain_lib::config::check_brain_home_permissions();
+
     match cli.command {
         Command::Index { notes_path } => {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?

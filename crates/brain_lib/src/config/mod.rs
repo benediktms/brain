@@ -75,12 +75,21 @@ pub fn load_global_config() -> Result<GlobalConfig> {
 /// Persist the global config to disk, creating parent directories as needed.
 pub fn save_global_config(cfg: &GlobalConfig) -> Result<()> {
     let home = brain_home()?;
-    std::fs::create_dir_all(&home).map_err(BrainCoreError::Io)?;
+    crate::fs_permissions::ensure_private_dir(&home)?;
     let path = home.join("config.toml");
     let text = toml::to_string_pretty(cfg)
         .map_err(|e| BrainCoreError::Config(format!("failed to serialize config: {e}")))?;
     std::fs::write(&path, text).map_err(BrainCoreError::Io)?;
     Ok(())
+}
+
+/// Check `~/.brain` permissions at startup.
+///
+/// Warns if the brain home directory exists with overly broad permissions.
+/// Returns `true` if permissions are OK (or the directory doesn't exist yet).
+pub fn check_brain_home_permissions() -> Result<bool> {
+    let home = brain_home()?;
+    crate::fs_permissions::check_dir_permissions(&home)
 }
 
 /// Load a project-local `brain.toml`.
