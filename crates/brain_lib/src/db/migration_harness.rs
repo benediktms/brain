@@ -15,6 +15,7 @@ use rusqlite::Connection;
 use super::migrations::{
     migrate_v0_to_v1, migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5,
     migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
+    migrate_v10_to_v11,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -41,6 +42,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             7 => migrate_v7_to_v8(&conn).unwrap(),
             8 => migrate_v8_to_v9(&conn).unwrap(),
             9 => migrate_v9_to_v10(&conn).unwrap(),
+            10 => migrate_v10_to_v11(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -163,6 +165,9 @@ const EXPECTED_TRIGGERS: &[&str] = &[
     "chunks_fts_delete",
     "chunks_fts_insert",
     "chunks_fts_update",
+    "tasks_fts_delete",
+    "tasks_fts_insert",
+    "tasks_fts_update",
 ];
 
 fn assert_schema_version(conn: &Connection, expected: i32) {
@@ -218,9 +223,18 @@ fn assert_fts5_exists(conn: &Connection) {
         .unwrap();
     assert!(count > 0, "fts_chunks virtual table should exist");
 
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'fts_tasks'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(count > 0, "fts_tasks virtual table should exist");
+
     let triggers: Vec<String> = conn
         .prepare(
-            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'chunks_fts_%' ORDER BY name",
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND (name LIKE 'chunks_fts_%' OR name LIKE 'tasks_fts_%') ORDER BY name",
         )
         .unwrap()
         .query_map([], |row| row.get(0))
@@ -494,6 +508,92 @@ fn migrate_from_v9_to_current() {
         has_index,
         "idx_tasks_status_priority should exist after v9→v10"
     );
+}
+
+#[test]
+fn migrate_from_v10_to_current() {
+    let conn = snapshot_at_version(10);
+    seed_v1_data(&conn);
+    seed_v2_data(&conn);
+    seed_v3_data(&conn);
+
+    init_schema(&conn).unwrap();
+    assert_full_invariants(&conn);
+
+    // v10→v11 adds fts_tasks — verify it exists and indexes existing tasks
+    // Rebuild FTS content since triggers only fire on new inserts
+    conn.execute("INSERT INTO fts_tasks(fts_tasks) VALUES('rebuild')", [])
+        .unwrap();
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fts_tasks WHERE fts_tasks MATCH 'bug'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "FTS5 should find 'Fix bug' task title");
+}
+
+#[test]
+fn fts_tasks_triggers_insert_update_delete() {
+    let conn = snapshot_at_version(SCHEMA_VERSION);
+    init_schema(&conn).unwrap();
+
+    // Insert a task — trigger should populate fts_tasks
+    conn.execute(
+        "INSERT INTO tasks (task_id, title, description, status, priority, task_type, created_at, updated_at)
+         VALUES ('ft1', 'Search filtering', 'implement FTS5', 'open', 2, 'task', 1000, 1000)",
+        [],
+    )
+    .unwrap();
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fts_tasks WHERE fts_tasks MATCH 'filtering'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "insert trigger should index the task");
+
+    // Update title — trigger should update fts_tasks
+    conn.execute(
+        "UPDATE tasks SET title = 'Updated title' WHERE task_id = 'ft1'",
+        [],
+    )
+    .unwrap();
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fts_tasks WHERE fts_tasks MATCH 'filtering'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "old title should be removed from FTS");
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fts_tasks WHERE fts_tasks MATCH 'Updated'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "new title should be in FTS");
+
+    // Delete the task — trigger should clean up fts_tasks
+    conn.execute("DELETE FROM tasks WHERE task_id = 'ft1'", [])
+        .unwrap();
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM fts_tasks WHERE fts_tasks MATCH 'Updated'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "deleted task should be removed from FTS");
 }
 
 // ─── Snapshot fixture on disk ────────────────────────────────────
