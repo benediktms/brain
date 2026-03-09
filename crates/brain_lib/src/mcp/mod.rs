@@ -202,12 +202,14 @@ mod tests {
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 11);
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"memory.search_minimal"));
         assert!(names.contains(&"memory.expand"));
         assert!(names.contains(&"tasks.apply_event"));
+        assert!(names.contains(&"tasks.labels_batch"));
+        assert!(names.contains(&"tasks.deps_batch"));
         assert!(names.contains(&"tasks.get"));
         assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));

@@ -424,6 +424,20 @@ pub fn get_labels_for_tasks(
     Ok(map)
 }
 
+/// Get all task IDs that have a given label.
+pub fn get_task_ids_with_label(conn: &Connection, label: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT task_id FROM task_labels WHERE label = ?1")?;
+    let rows = stmt.query_map([label], |row| row.get::<_, String>(0))?;
+    crate::db::collect_rows(rows)
+}
+
+/// Get all dependency targets for a task (what it depends on).
+pub fn get_deps_for_task(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT depends_on FROM task_deps WHERE task_id = ?1")?;
+    let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
+    crate::db::collect_rows(rows)
+}
+
 /// An external ID reference for a task.
 #[derive(Debug, Clone)]
 pub struct ExternalIdRow {

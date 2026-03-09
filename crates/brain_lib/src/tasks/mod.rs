@@ -233,6 +233,32 @@ impl TaskStore {
         self.db.with_read_conn(queries::list_all_labels)
     }
 
+    /// Append a batch of events, collecting individual results.
+    ///
+    /// Each event is individually validated/written/applied. Errors on one event
+    /// do not abort subsequent events (partial-success semantics).
+    pub fn append_batch(
+        &self,
+        events: &[TaskEvent],
+    ) -> Vec<std::result::Result<(), anyhow::Error>> {
+        events
+            .iter()
+            .map(|e| self.append(e).map_err(|e| anyhow::anyhow!("{e}")))
+            .collect()
+    }
+
+    /// Get all task IDs that have a given label.
+    pub fn get_task_ids_with_label(&self, label: &str) -> Result<Vec<String>> {
+        self.db
+            .with_read_conn(|conn| queries::get_task_ids_with_label(conn, label))
+    }
+
+    /// Get all dependency targets for a task (what it depends on).
+    pub fn get_deps_for_task(&self, task_id: &str) -> Result<Vec<String>> {
+        self.db
+            .with_read_conn(|conn| queries::get_deps_for_task(conn, task_id))
+    }
+
     /// Full-text search on task title and description.
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<String>> {
         self.db

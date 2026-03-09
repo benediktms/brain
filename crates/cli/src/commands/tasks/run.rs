@@ -760,3 +760,383 @@ pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str) -> Result<()> {
 
     Ok(())
 }
+
+// ── batch label operations ──────────────────────────────────
+
+fn batch_label_op(
+    ctx: &TaskCtx,
+    task_ids: &[String],
+    label: &str,
+    event_type: EventType,
+    action_name: &str,
+) -> Result<()> {
+    let events: Vec<TaskEvent> = task_ids
+        .iter()
+        .map(|raw_id| {
+            let resolved = ctx.store.resolve_task_id(raw_id)?;
+            Ok(TaskEvent::new(
+                &resolved,
+                "cli",
+                event_type.clone(),
+                &LabelPayload {
+                    label: label.to_string(),
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let results = ctx.store.append_batch(&events);
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for (i, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(()) => succeeded.push(&events[i].task_id),
+            Err(e) => failed.push((&events[i].task_id, e)),
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "succeeded": succeeded,
+            "failed": failed.iter().map(|(id, e)| json!({"task_id": id, "error": format!("{e}")})).collect::<Vec<_>>(),
+            "summary": { "succeeded": succeeded.len(), "failed": failed.len() },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        for tid in &succeeded {
+            println!("{action_name} label \"{label}\" on task {tid}");
+        }
+        for (tid, e) in &failed {
+            println!("Failed on task {tid}: {e}");
+        }
+        println!("{} succeeded, {} failed", succeeded.len(), failed.len());
+    }
+
+    Ok(())
+}
+
+pub fn label_batch_add(ctx: &TaskCtx, task_ids: &[String], label: &str) -> Result<()> {
+    batch_label_op(ctx, task_ids, label, EventType::LabelAdded, "Added")
+}
+
+pub fn label_batch_remove(ctx: &TaskCtx, task_ids: &[String], label: &str) -> Result<()> {
+    batch_label_op(ctx, task_ids, label, EventType::LabelRemoved, "Removed")
+}
+
+pub fn label_rename(ctx: &TaskCtx, old_label: &str, new_label: &str) -> Result<()> {
+    let task_ids = ctx.store.get_task_ids_with_label(old_label)?;
+
+    if task_ids.is_empty() {
+        if ctx.json {
+            let out = json!({
+                "succeeded": [],
+                "failed": [],
+                "summary": { "succeeded": 0, "failed": 0 },
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("No tasks found with label \"{old_label}\"");
+        }
+        return Ok(());
+    }
+
+    let mut events = Vec::new();
+    for tid in &task_ids {
+        events.push(TaskEvent::new(
+            tid,
+            "cli",
+            EventType::LabelRemoved,
+            &LabelPayload {
+                label: old_label.to_string(),
+            },
+        ));
+        events.push(TaskEvent::new(
+            tid,
+            "cli",
+            EventType::LabelAdded,
+            &LabelPayload {
+                label: new_label.to_string(),
+            },
+        ));
+    }
+
+    let results = ctx.store.append_batch(&events);
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for (i, tid) in task_ids.iter().enumerate() {
+        let remove_ok = results[i * 2].is_ok();
+        let add_ok = results[i * 2 + 1].is_ok();
+        if remove_ok && add_ok {
+            succeeded.push(tid);
+        } else {
+            failed.push(tid);
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "succeeded": succeeded,
+            "failed": failed,
+            "summary": { "succeeded": succeeded.len(), "failed": failed.len() },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "Renamed label \"{old_label}\" to \"{new_label}\" on {} task(s) ({} failed)",
+            succeeded.len(),
+            failed.len()
+        );
+    }
+
+    Ok(())
+}
+
+pub fn label_purge(ctx: &TaskCtx, label: &str) -> Result<()> {
+    let task_ids = ctx.store.get_task_ids_with_label(label)?;
+
+    if task_ids.is_empty() {
+        if ctx.json {
+            let out = json!({
+                "succeeded": [],
+                "failed": [],
+                "summary": { "succeeded": 0, "failed": 0 },
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("No tasks found with label \"{label}\"");
+        }
+        return Ok(());
+    }
+
+    let events: Vec<TaskEvent> = task_ids
+        .iter()
+        .map(|tid| {
+            TaskEvent::new(
+                tid,
+                "cli",
+                EventType::LabelRemoved,
+                &LabelPayload {
+                    label: label.to_string(),
+                },
+            )
+        })
+        .collect();
+
+    let results = ctx.store.append_batch(&events);
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for (i, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(()) => succeeded.push(&task_ids[i]),
+            Err(e) => failed.push((&task_ids[i], e)),
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "succeeded": succeeded,
+            "failed": failed.iter().map(|(id, e)| json!({"task_id": id, "error": format!("{e}")})).collect::<Vec<_>>(),
+            "summary": { "succeeded": succeeded.len(), "failed": failed.len() },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "Purged label \"{label}\" from {} task(s) ({} failed)",
+            succeeded.len(),
+            failed.len()
+        );
+    }
+
+    Ok(())
+}
+
+// ── batch dep operations ────────────────────────────────────
+
+pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
+    if task_ids.len() < 2 {
+        bail!("chain requires at least 2 task IDs");
+    }
+
+    // Resolve all IDs first
+    let resolved: Vec<String> = task_ids
+        .iter()
+        .map(|id| ctx.store.resolve_task_id(id))
+        .collect::<brain_lib::error::Result<Vec<_>>>()?;
+
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for i in 1..resolved.len() {
+        let task_id = &resolved[i];
+        let depends_on = &resolved[i - 1];
+
+        let event = TaskEvent::new(
+            task_id,
+            "cli",
+            EventType::DependencyAdded,
+            &DependencyPayload {
+                depends_on_task_id: depends_on.clone(),
+            },
+        );
+
+        match ctx.store.append(&event) {
+            Ok(()) => {
+                succeeded.push((task_id.clone(), depends_on.clone()));
+                if !ctx.json {
+                    println!("{task_id} depends on {depends_on}");
+                }
+            }
+            Err(e) => {
+                failed.push((task_id.clone(), depends_on.clone(), format!("{e}")));
+                if !ctx.json {
+                    println!("Failed: {task_id} -> {depends_on}: {e}");
+                }
+            }
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "succeeded": succeeded.iter().map(|(t, d)| json!({"task_id": t, "depends_on": d})).collect::<Vec<_>>(),
+            "failed": failed.iter().map(|(t, d, e)| json!({"task_id": t, "depends_on": d, "error": e})).collect::<Vec<_>>(),
+            "summary": { "succeeded": succeeded.len(), "failed": failed.len() },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "Chain: {} edges added, {} failed",
+            succeeded.len(),
+            failed.len()
+        );
+    }
+
+    Ok(())
+}
+
+pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result<()> {
+    let source_resolved = ctx.store.resolve_task_id(source)?;
+
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for raw_id in dependents {
+        let dep_id = match ctx.store.resolve_task_id(raw_id) {
+            Ok(id) => id,
+            Err(e) => {
+                failed.push((raw_id.clone(), format!("{e}")));
+                if !ctx.json {
+                    println!("Failed to resolve {raw_id}: {e}");
+                }
+                continue;
+            }
+        };
+
+        let event = TaskEvent::new(
+            &dep_id,
+            "cli",
+            EventType::DependencyAdded,
+            &DependencyPayload {
+                depends_on_task_id: source_resolved.clone(),
+            },
+        );
+
+        match ctx.store.append(&event) {
+            Ok(()) => {
+                succeeded.push(dep_id.clone());
+                if !ctx.json {
+                    println!("{dep_id} depends on {source_resolved}");
+                }
+            }
+            Err(e) => {
+                failed.push((dep_id, format!("{e}")));
+                if !ctx.json {
+                    println!("Failed: {raw_id} -> {source_resolved}: {e}");
+                }
+            }
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "source": source_resolved,
+            "succeeded": succeeded,
+            "failed": failed.iter().map(|(id, e)| json!({"task_id": id, "error": e})).collect::<Vec<_>>(),
+            "summary": { "succeeded": succeeded.len(), "failed": failed.len() },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "Fan: {} dependents added to {source_resolved}, {} failed",
+            succeeded.len(),
+            failed.len()
+        );
+    }
+
+    Ok(())
+}
+
+pub fn dep_clear(ctx: &TaskCtx, task_id: &str) -> Result<()> {
+    let resolved = ctx.store.resolve_task_id(task_id)?;
+    let deps = ctx.store.get_deps_for_task(&resolved)?;
+
+    if deps.is_empty() {
+        if ctx.json {
+            let out = json!({
+                "task_id": resolved,
+                "succeeded": [],
+                "failed": [],
+                "summary": { "succeeded": 0, "failed": 0 },
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("No dependencies found for task {resolved}");
+        }
+        return Ok(());
+    }
+
+    let events: Vec<TaskEvent> = deps
+        .iter()
+        .map(|dep| {
+            TaskEvent::new(
+                &resolved,
+                "cli",
+                EventType::DependencyRemoved,
+                &DependencyPayload {
+                    depends_on_task_id: dep.clone(),
+                },
+            )
+        })
+        .collect();
+
+    let results = ctx.store.append_batch(&events);
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+
+    for (i, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(()) => succeeded.push(&deps[i]),
+            Err(e) => failed.push((&deps[i], e)),
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "task_id": resolved,
+            "succeeded": succeeded,
+            "failed": failed.iter().map(|(id, e)| json!({"depends_on": id, "error": format!("{e}")})).collect::<Vec<_>>(),
+            "summary": { "succeeded": succeeded.len(), "failed": failed.len() },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "Cleared {} dependencies from task {resolved} ({} failed)",
+            succeeded.len(),
+            failed.len()
+        );
+    }
+
+    Ok(())
+}
