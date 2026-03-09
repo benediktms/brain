@@ -296,6 +296,8 @@ fn test_hybrid_ranking_signal_combination() {
             heading_path: String::new(),
             content: "keyword content".into(),
             token_estimate: 10,
+            byte_start: 0,
+            byte_end: 0,
         },
         CandidateSignals {
             chunk_id: "vector_champ".into(),
@@ -310,6 +312,8 @@ fn test_hybrid_ranking_signal_combination() {
             heading_path: String::new(),
             content: "vector content".into(),
             token_estimate: 10,
+            byte_start: 0,
+            byte_end: 0,
         },
         CandidateSignals {
             chunk_id: "fresh_one".into(),
@@ -324,6 +328,8 @@ fn test_hybrid_ranking_signal_combination() {
             heading_path: String::new(),
             content: "fresh content".into(),
             token_estimate: 10,
+            byte_start: 0,
+            byte_end: 0,
         },
     ];
 
@@ -384,6 +390,8 @@ fn test_search_minimal_budget_compliance() {
                 heading_path: format!("## Section {i}"),
                 content,
                 token_estimate: tokens,
+                byte_start: 0,
+                byte_end: 0,
             }
         })
         .collect();
@@ -424,6 +432,8 @@ fn test_expand_truncates_correctly() {
         heading_path: "## Long".into(),
         content: long_content.clone(),
         token_estimate: estimate_tokens(&long_content),
+        byte_start: 0,
+        byte_end: 0,
     }];
 
     // Budget smaller than the content

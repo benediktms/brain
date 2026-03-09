@@ -19,6 +19,8 @@ struct Params {
     budget_tokens: u64,
     #[serde(default = "default_k")]
     k: u64,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 fn default_intent() -> String {
@@ -64,6 +66,11 @@ impl McpTool for MemSearchMinimal {
                         "type": "integer",
                         "description": "Maximum number of results. Default: 10",
                         "default": 10
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional tags to boost results matching these tags via Jaccard similarity. Pass as a JSON array, e.g. [\"rust\", \"memory\"]"
                     }
                 },
                 "required": ["query"]
@@ -96,6 +103,7 @@ impl McpTool for MemSearchMinimal {
                     &params.intent,
                     params.budget_tokens as usize,
                     params.k as usize,
+                    &params.tags,
                 )
                 .await
             {
