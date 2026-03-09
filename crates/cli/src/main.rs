@@ -366,6 +366,10 @@ enum TasksAction {
         /// Include task descriptions in JSON output (omitted by default)
         #[arg(long)]
         include_description: bool,
+
+        /// Group output by a field (currently supports: label)
+        #[arg(long)]
+        group_by: Option<String>,
     },
 
     /// Show details for a specific task
@@ -473,6 +477,9 @@ enum TasksAction {
 
     /// Show project task statistics
     Stats,
+
+    /// List all labels with counts
+    Labels,
 }
 
 #[derive(Subcommand)]
@@ -992,21 +999,21 @@ async fn async_main(cli: Cli) -> Result<()> {
                     ready,
                     blocked,
                     include_description,
+                    group_by,
                 } => {
-                    commands::tasks::run::list(
-                        &ctx,
-                        &ListParams {
-                            status,
-                            priority,
-                            task_type,
-                            assignee,
-                            label,
-                            search,
-                            ready,
-                            blocked,
-                            include_description,
-                        },
-                    )?;
+                    let params = ListParams {
+                        status,
+                        priority,
+                        task_type,
+                        assignee,
+                        label,
+                        search,
+                        ready,
+                        blocked,
+                        include_description,
+                        group_by,
+                    };
+                    commands::tasks::run::list(&ctx, &params)?;
                 }
                 TasksAction::Show { id } => {
                     commands::tasks::run::show(&ctx, &id)?;
@@ -1114,6 +1121,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                             ready: true,
                             blocked: false,
                             include_description: false,
+                            group_by: None,
                         },
                     )?;
                 }
@@ -1130,11 +1138,15 @@ async fn async_main(cli: Cli) -> Result<()> {
                             ready: false,
                             blocked: true,
                             include_description: false,
+                            group_by: None,
                         },
                     )?;
                 }
                 TasksAction::Stats => {
                     commands::tasks::run::stats(&ctx)?;
+                }
+                TasksAction::Labels => {
+                    commands::tasks::run::labels(&ctx)?;
                 }
             }
         }

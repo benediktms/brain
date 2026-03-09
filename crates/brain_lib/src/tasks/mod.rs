@@ -233,6 +233,11 @@ impl TaskStore {
         self.db.with_read_conn(queries::list_all_labels)
     }
 
+    /// Get all labels with counts and associated task IDs.
+    pub fn label_summary(&self) -> Result<Vec<queries::LabelSummary>> {
+        self.db.with_read_conn(queries::label_summary)
+    }
+
     /// Append a batch of events, collecting individual results.
     ///
     /// Each event is individually validated/written/applied. Errors on one event

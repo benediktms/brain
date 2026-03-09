@@ -548,6 +548,34 @@ pub fn list_all_labels(conn: &Connection) -> Result<Vec<(String, String)>> {
     crate::db::collect_rows(rows)
 }
 
+/// Summary of a label: name, count, and associated task IDs.
+#[derive(Debug, Clone)]
+pub struct LabelSummary {
+    pub label: String,
+    pub count: usize,
+    pub task_ids: Vec<String>,
+}
+
+/// Get all labels with counts and associated task IDs, sorted by count descending.
+pub fn label_summary(conn: &Connection) -> Result<Vec<LabelSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT label, COUNT(*) as cnt, GROUP_CONCAT(task_id) as task_ids \
+         FROM task_labels GROUP BY label ORDER BY cnt DESC, label ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let label: String = row.get(0)?;
+        let count: usize = row.get::<_, i64>(1)? as usize;
+        let task_ids_str: String = row.get(2)?;
+        let task_ids: Vec<String> = task_ids_str.split(',').map(|s| s.to_string()).collect();
+        Ok(LabelSummary {
+            label,
+            count,
+            task_ids,
+        })
+    })?;
+    crate::db::collect_rows(rows)
+}
+
 /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
 pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<TaskRow>> {
     let sql = format!(
