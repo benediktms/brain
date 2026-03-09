@@ -179,6 +179,12 @@ impl TaskStore {
         self.db.with_read_conn(queries::list_all_labels)
     }
 
+    /// Full-text search on task title and description.
+    pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<String>> {
+        self.db
+            .with_read_conn(|conn| queries::search_tasks_fts(conn, query, limit))
+    }
+
     /// Resolve a task ID from an exact match or unique prefix.
     pub fn resolve_task_id(&self, input: &str) -> Result<String> {
         self.db
