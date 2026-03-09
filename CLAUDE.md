@@ -20,9 +20,21 @@ just clean        # cargo clean
 
 ## Task Management
 
-This project uses `brain` for task tracking. Use the CLI or MCP tools.
+This project uses `brain` for task tracking. **Always use MCP tools for task operations** — they provide structured responses and are the canonical interface for AI agents. CLI commands exist for human terminal use only.
 
-### CLI Commands
+### MCP Tools (preferred for AI agents)
+
+When running as an MCP server (`brain mcp`), these tools are available:
+- `tasks_apply_event` — Create or update tasks via event sourcing
+- `tasks_list` — List tasks with filters (status: open/ready/blocked/done)
+- `tasks_get` — Get task details by ID (supports prefix matching)
+- `tasks_next` — Get next highest-priority ready tasks
+- `memory_search_minimal` — Search notes
+- `memory_expand` — Expand memory stubs to full content
+- `memory_write_episode` — Record episodes
+- `memory_reflect` — Retrieve source material for reflection
+
+### CLI Commands (for human terminal use)
 
 ```bash
 # Finding work
@@ -44,31 +56,19 @@ brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
 ```
 
-### MCP Tools
-
-When running as an MCP server (`brain mcp`), these tools are available:
-- `tasks_apply_event` — Create or update tasks via event sourcing
-- `tasks_list` — List tasks with filters
-- `tasks_get` — Get task details
-- `tasks_next` — Get next highest-priority ready tasks
-- `memory_search_minimal` — Search notes
-- `memory_expand` — Expand memory stubs to full content
-- `memory_write_episode` — Record episodes
-- `memory_reflect` — Retrieve source material for reflection
-
 ### Finding Work
 
 When the user asks what to work on next (e.g., "what's next?", "what should I work on?", "next task", "any work?"), always check brain tasks first:
-1. Run `brain tasks ready` to show unblocked tasks sorted by priority
+1. Use `tasks_next` MCP tool to get unblocked tasks sorted by priority
 2. Present the top candidates with their ID, title, priority, and type
 3. If a task has dependencies, briefly note what's blocking it
 
 ### Workflow
 
 When working on tasks:
-1. **Before starting**: Mark the task `in_progress` via `tasks_apply_event` (status_changed) or `brain tasks update <id> --status=in_progress`
-2. **While working**: Add comments for significant decisions or blockers
-3. **On completion**: Close the task via `tasks_apply_event` (status_changed to `done`) or `brain tasks close <id>`
+1. **Before starting**: Mark the task `in_progress` via `tasks_apply_event` (status_changed)
+2. **While working**: Add comments via `tasks_apply_event` (comment_added) for significant decisions or blockers
+3. **On completion**: Close the task via `tasks_apply_event` (status_changed to `done`)
 
 ### Conventions
 
