@@ -873,11 +873,12 @@ async fn async_main(cli: Cli) -> Result<()> {
             action => {
                 let db = brain_lib::db::Db::open(&cli.sqlite_db)?;
                 db.with_write_conn(|conn| match action {
-                    ConfigAction::Set { key, .. } => match key.as_str() {
-                        other => Err(brain_lib::error::BrainCoreError::Config(format!(
+                    ConfigAction::Set { key, .. } => {
+                        let other = key.as_str();
+                        Err(brain_lib::error::BrainCoreError::Config(format!(
                             "unknown config key: {other}. Known keys: prefix"
-                        ))),
-                    },
+                        )))
+                    }
                     ConfigAction::Get { key } => match key.as_str() {
                         "prefix" => {
                             let brain_dir =
