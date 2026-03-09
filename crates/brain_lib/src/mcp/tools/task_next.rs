@@ -43,19 +43,21 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
     // Build enriched task JSON with batch label fetching
     let mut results_json = enrich_task_summaries(&ctx.tasks, &selected);
 
-    // Add short_id to each task (supports dot notation for epic children)
+    // Add short_id and strip description from each task
     for task_val in &mut results_json {
-        if let Some(obj) = task_val.as_object_mut()
-            && let Some(tid) = obj
+        if let Some(obj) = task_val.as_object_mut() {
+            if let Some(tid) = obj
                 .get("task_id")
                 .and_then(|v| v.as_str())
                 .map(String::from)
-        {
-            let short = ctx
-                .tasks
-                .shortest_unique_prefix(&tid)
-                .unwrap_or_else(|_| tid.clone());
-            obj.insert("short_id".into(), json!(short));
+            {
+                let short = ctx
+                    .tasks
+                    .shortest_unique_prefix(&tid)
+                    .unwrap_or_else(|_| tid.clone());
+                obj.insert("short_id".into(), json!(short));
+            }
+            obj.remove("description");
         }
     }
 
@@ -392,5 +394,27 @@ mod tests {
         let null_group = groups.iter().find(|g| g["epic"].is_null()).unwrap();
         assert_eq!(null_group["tasks"].as_array().unwrap().len(), 1);
         assert_eq!(null_group["tasks"][0]["task_id"], "o1");
+    }
+
+    #[test]
+    fn test_omits_description() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        let create = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Task", "description": "A long description", "priority": 1 }
+        });
+        rt.block_on(dispatch_tool_call("tasks.apply_event", &create, &ctx));
+
+        let result = rt.block_on(dispatch_tool_call("tasks.next", &json!({}), &ctx));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let tasks = collect_tasks(&parsed);
+        assert_eq!(tasks.len(), 1);
+        assert!(
+            tasks[0].get("description").is_none(),
+            "tasks_next should omit description to reduce context pollution"
+        );
     }
 }
