@@ -341,6 +341,10 @@ enum TasksAction {
         /// Show only blocked tasks
         #[arg(long)]
         blocked: bool,
+
+        /// Include task descriptions in JSON output (omitted by default)
+        #[arg(long)]
+        include_description: bool,
     },
 
     /// Show details for a specific task
@@ -770,6 +774,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                     assignee,
                     ready,
                     blocked,
+                    include_description,
                 } => {
                     commands::tasks::run::list(
                         &ctx,
@@ -780,6 +785,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                             assignee,
                             ready,
                             blocked,
+                            include_description,
                         },
                     )?;
                 }
@@ -862,6 +868,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                             assignee: None,
                             ready: true,
                             blocked: false,
+                            include_description: false,
                         },
                     )?;
                 }
@@ -875,6 +882,7 @@ async fn async_main(cli: Cli) -> Result<()> {
                             assignee: None,
                             ready: false,
                             blocked: true,
+                            include_description: false,
                         },
                     )?;
                 }

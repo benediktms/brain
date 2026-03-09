@@ -52,6 +52,7 @@ pub struct ListParams {
     pub assignee: Option<String>,
     pub ready: bool,
     pub blocked: bool,
+    pub include_description: bool,
 }
 
 pub struct UpdateParams {
@@ -191,7 +192,15 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             .store
             .get_labels_for_tasks(&task_ids)
             .unwrap_or_default();
-        let (items, ready_count, blocked_count) = enrich_task_list(&ctx.store, &tasks, &labels_map);
+        let (mut items, ready_count, blocked_count) =
+            enrich_task_list(&ctx.store, &tasks, &labels_map);
+        if !params.include_description {
+            for item in &mut items {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.remove("description");
+                }
+            }
+        }
         let out = json!({
             "tasks": items,
             "count": tasks.len(),
