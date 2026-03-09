@@ -9,8 +9,17 @@ use tracing::info;
 
 use crate::error::BrainCoreError;
 
+/// User-facing instructions for downloading the embedding model.
+pub const MODEL_DOWNLOAD_HINT: &str = "\
+To download the model, either run the setup script:\n\
+  curl -sSL https://raw.githubusercontent.com/benediktms/brain/master/scripts/setup-model.sh | bash\n\
+Or install the HuggingFace CLI manually:\n\
+  pip install huggingface_hub\n\
+  hf download BAAI/bge-small-en-v1.5 config.json tokenizer.json model.safetensors \
+--local-dir ~/.brain/models/bge-small-en-v1.5";
+
 /// Expected BLAKE3 checksums for BGE-small-en-v1.5 model artifacts.
-/// Computed against the pinned HuggingFace revision downloaded by `scripts/setup-model.sh`.
+/// Computed against the pinned HuggingFace revision of BAAI/bge-small-en-v1.5.
 const EXPECTED_CHECKSUMS: &[(&str, &str)] = &[
     (
         "config.json",
@@ -56,7 +65,7 @@ fn verify_checksums(model_dir: &Path, expected: &[(&str, &str)]) -> crate::error
         if actual_hex != expected_hex {
             return Err(BrainCoreError::Embedding(format!(
                 "checksum mismatch for {filename}: expected {expected_hex}, got {actual_hex}. \
-                 Delete {} and re-download with scripts/setup-model.sh",
+                 Delete {} and re-download the model.\n{MODEL_DOWNLOAD_HINT}",
                 model_dir.display(),
             )));
         }
@@ -80,8 +89,7 @@ pub struct Embedder {
 impl Embedder {
     /// Load BGE-small-en-v1.5 from a local directory.
     ///
-    /// The directory must contain the following artifacts (downloaded by
-    /// `scripts/setup-model.sh`):
+    /// The directory must contain the following artifacts:
     ///
     /// ```text
     /// ~/.brain/models/bge-small-en-v1.5/
@@ -107,7 +115,7 @@ impl Embedder {
         ] {
             if !path.exists() {
                 return Err(BrainCoreError::Embedding(format!(
-                    "missing {name} in {} — run scripts/setup-model.sh to download",
+                    "missing {name} in {}.\n{MODEL_DOWNLOAD_HINT}",
                     model_dir.display(),
                 )));
             }

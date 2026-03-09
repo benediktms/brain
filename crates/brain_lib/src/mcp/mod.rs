@@ -27,7 +27,7 @@ use tools::ToolRegistry;
 ///
 /// `store` and `embedder` are optional — they require the embedding model to
 /// be downloaded. When absent, task tools still work but memory/search tools
-/// return an error asking the user to run `brain setup-model`.
+/// return an error asking the user to download the model via the HuggingFace CLI.
 pub struct McpContext {
     pub db: Db,
     pub store: Option<StoreReader>,

@@ -17,7 +17,12 @@ use serde_json::Value;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-pub(super) const MEMORY_UNAVAILABLE: &str = "Memory tools are unavailable: embedding model not found. Run `brain setup-model` to download it.";
+pub(super) const MEMORY_UNAVAILABLE: &str = "Memory tools are unavailable: embedding model not found.\n\
+To download the model, either run the setup script:\n  \
+curl -sSL https://raw.githubusercontent.com/benediktms/brain/master/scripts/setup-model.sh | bash\n\
+Or install the HuggingFace CLI manually:\n  \
+pip install huggingface_hub\n  \
+hf download BAAI/bge-small-en-v1.5 config.json tokenizer.json model.safetensors --local-dir ~/.brain/models/bge-small-en-v1.5";
 
 /// Trait for MCP tool handlers. Each tool provides its name, JSON Schema
 /// definition, and an async `call` method that executes the tool logic.

@@ -61,7 +61,7 @@ impl Intent {
         Use `brain <command> --help` for more details on each command."
 )]
 struct Cli {
-    /// Path to a local BGE model directory (run scripts/setup-model.sh to download)
+    /// Path to a local BGE model directory (see README for download instructions)
     #[arg(
         long,
         global = true,
@@ -203,7 +203,10 @@ enum Command {
         - tasks_apply_event      Create or update tasks via event sourcing\n  \
         - tasks_next             Get the next highest-priority ready task(s)"
     )]
-    Mcp,
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
 
     /// Force re-index files (clears content hashes, re-embeds everything)
     Reindex {
@@ -533,6 +536,28 @@ enum ConfigAction {
 }
 
 #[derive(Subcommand)]
+pub enum McpAction {
+    /// Configure brain as an MCP server for an editor or agent framework
+    Setup {
+        /// Target to configure (claude, cursor, vscode)
+        target: McpTarget,
+        /// Print the config without writing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum McpTarget {
+    /// Claude Code (~/.claude/settings.json)
+    Claude,
+    /// Cursor (~/.cursor/mcp.json)
+    Cursor,
+    /// VS Code (.vscode/settings.json)
+    Vscode,
+}
+
+#[derive(Subcommand)]
 enum HooksAction {
     /// Install brain hooks into Claude Code settings
     Install {
@@ -769,9 +794,14 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::Doctor { notes_path } => {
             commands::doctor::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
-        Command::Mcp => {
-            commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
-        }
+        Command::Mcp { action } => match action {
+            None => {
+                commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
+            }
+            Some(McpAction::Setup { target, dry_run }) => {
+                commands::mcp_setup::run(target, dry_run)?;
+            }
+        },
         Command::Hooks { action } => match action {
             HooksAction::Install { dry_run } => {
                 commands::hooks::install(dry_run)?;
@@ -1189,7 +1219,7 @@ mod tests {
     #[test]
     fn parse_mcp() {
         let cli = Cli::try_parse_from(["brain", "mcp"]).unwrap();
-        assert!(matches!(cli.command, Command::Mcp));
+        assert!(matches!(cli.command, Command::Mcp { action: None }));
     }
 
     // ── Alias parsing ───────────────────────────────────────────────
