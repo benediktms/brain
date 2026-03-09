@@ -901,6 +901,7 @@ dependencies = [
  "dirs",
  "libc",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml",
  "tracing",

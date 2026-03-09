@@ -72,66 +72,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
 
     // 6. Upsert AGENTS.md (unless --no-agents-md)
     if !no_agents_md {
-        let agents_md_path = cwd.join("AGENTS.md");
-        let build_section = detect_build_section(&cwd);
-        let brain_section = BRAIN_SECTION_TEMPLATE
-            .replace("{brain_name}", &brain_name)
-            .replace("{build_section}", &build_section);
-
-        if agents_md_path.exists() {
-            let existing = fs::read_to_string(&agents_md_path)?;
-            if existing.contains(BRAIN_SECTION_START) {
-                // Replace existing brain section.
-                let start = existing.find(BRAIN_SECTION_START).unwrap();
-                let end = existing
-                    .find(BRAIN_SECTION_END)
-                    .map(|i| i + BRAIN_SECTION_END.len())
-                    .unwrap_or(existing.len());
-                let mut updated = String::with_capacity(existing.len());
-                updated.push_str(&existing[..start]);
-                updated.push_str(&brain_section);
-                // Skip any trailing newline after the old end marker.
-                let rest = &existing[end..];
-                let rest = rest.strip_prefix('\n').unwrap_or(rest);
-                updated.push_str(rest);
-                fs::write(&agents_md_path, updated)?;
-                println!("Updated brain section in AGENTS.md");
-            } else {
-                // Append brain section.
-                let mut content = existing;
-                if !content.ends_with('\n') {
-                    content.push('\n');
-                }
-                content.push('\n');
-                content.push_str(&brain_section);
-                fs::write(&agents_md_path, content)?;
-                println!("Appended brain section to AGENTS.md");
-            }
-        } else {
-            let content = format!("# {brain_name}\n\n{brain_section}");
-            fs::write(&agents_md_path, content)?;
-            println!("Generated AGENTS.md");
-        }
-
-        // Also generate a thin CLAUDE.md bridge if it doesn't exist or has old brain content.
-        let claude_md_path = cwd.join("CLAUDE.md");
-        let bridge_content = format!(
-            "# {brain_name}\n\n\
-             Read [AGENTS.md](./AGENTS.md) for project instructions — it is the canonical reference for all AI agents.\n\n\
-             <!-- Additional Claude Code-specific instructions below if needed -->\n"
-        );
-        if claude_md_path.exists() {
-            let existing = fs::read_to_string(&claude_md_path)?;
-            if existing.contains(BRAIN_SECTION_START) {
-                // Old-style CLAUDE.md with brain content — replace with bridge.
-                fs::write(&claude_md_path, &bridge_content)?;
-                println!("Replaced CLAUDE.md with bridge to AGENTS.md");
-            }
-            // Otherwise leave existing CLAUDE.md untouched.
-        } else {
-            fs::write(&claude_md_path, &bridge_content)?;
-            println!("Generated CLAUDE.md (bridge to AGENTS.md)");
-        }
+        upsert_agent_docs(&cwd, &brain_name)?;
     }
 
     // 7. Register brain MCP server in Claude Code (user scope)
@@ -148,6 +89,83 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         "Brain \"{brain_name}\" initialized. Note directories: {:?}",
         display_notes
     );
+
+    Ok(())
+}
+
+/// Generate or update AGENTS.md and a bridge CLAUDE.md in the given directory.
+pub fn upsert_agent_docs(cwd: &std::path::Path, brain_name: &str) -> Result<()> {
+    let agents_md_path = cwd.join("AGENTS.md");
+    let build_section = detect_build_section(cwd);
+    let brain_section = BRAIN_SECTION_TEMPLATE
+        .replace("{brain_name}", brain_name)
+        .replace("{build_section}", &build_section);
+
+    if agents_md_path.exists() {
+        let existing = fs::read_to_string(&agents_md_path)?;
+        if existing.contains(BRAIN_SECTION_START) {
+            // Replace existing brain section.
+            let start = existing.find(BRAIN_SECTION_START).unwrap();
+            let end = existing
+                .find(BRAIN_SECTION_END)
+                .map(|i| i + BRAIN_SECTION_END.len())
+                .unwrap_or(existing.len());
+            let mut updated = String::with_capacity(existing.len());
+            updated.push_str(&existing[..start]);
+            updated.push_str(&brain_section);
+            // Skip any trailing newline after the old end marker.
+            let rest = &existing[end..];
+            let rest = rest.strip_prefix('\n').unwrap_or(rest);
+            updated.push_str(rest);
+            fs::write(&agents_md_path, updated)?;
+            println!("Updated brain section in AGENTS.md");
+        } else {
+            // Append brain section.
+            let mut content = existing;
+            if !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push('\n');
+            content.push_str(&brain_section);
+            fs::write(&agents_md_path, content)?;
+            println!("Appended brain section to AGENTS.md");
+        }
+    } else {
+        let content = format!("# {brain_name}\n\n{brain_section}");
+        fs::write(&agents_md_path, content)?;
+        println!("Generated AGENTS.md");
+    }
+
+    // Also generate a thin CLAUDE.md bridge if it doesn't exist or has old brain content.
+    let claude_md_path = cwd.join("CLAUDE.md");
+    let bridge_ref = "Read [AGENTS.md](./AGENTS.md) for project instructions — it is the canonical reference for all AI agents.\n".to_string();
+    if claude_md_path.exists() {
+        let existing = fs::read_to_string(&claude_md_path)?;
+        if existing.contains(BRAIN_SECTION_START) {
+            // Replace the brain section with the bridge reference, preserving surrounding content.
+            let start = existing.find(BRAIN_SECTION_START).unwrap();
+            let end = existing
+                .find(BRAIN_SECTION_END)
+                .map(|i| i + BRAIN_SECTION_END.len())
+                .unwrap_or(existing.len());
+            let mut updated = String::with_capacity(existing.len());
+            updated.push_str(&existing[..start]);
+            updated.push_str(&bridge_ref);
+            let rest = &existing[end..];
+            let rest = rest.strip_prefix('\n').unwrap_or(rest);
+            updated.push_str(rest);
+            fs::write(&claude_md_path, updated)?;
+            println!("Replaced brain section in CLAUDE.md with bridge to AGENTS.md");
+        }
+        // Otherwise leave existing CLAUDE.md untouched.
+    } else {
+        let content = format!(
+            "# {brain_name}\n\n{bridge_ref}\n\
+             <!-- Additional Claude Code-specific instructions below if needed -->\n"
+        );
+        fs::write(&claude_md_path, content)?;
+        println!("Generated CLAUDE.md (bridge to AGENTS.md)");
+    }
 
     Ok(())
 }
@@ -263,6 +281,9 @@ brain tasks label purge old-label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Agent docs
+brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
 ```
 
 ### Finding Work
@@ -286,3 +307,238 @@ When working on tasks:
 - **Statuses**: open, in_progress, blocked, done, cancelled
 <!-- brain:end -->
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn agents_md_created_from_scratch() {
+        let dir = tempdir().unwrap();
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let content = fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+        assert!(content.starts_with("# test-brain"));
+        assert!(content.contains(BRAIN_SECTION_START));
+        assert!(content.contains(BRAIN_SECTION_END));
+        assert!(content.contains("## Task Management"));
+    }
+
+    #[test]
+    fn agents_md_preserves_content_before_markers() {
+        let dir = tempdir().unwrap();
+        let agents_path = dir.path().join("AGENTS.md");
+
+        let preamble = "# My Project\n\nCustom instructions here.\n\n";
+        let old_brain = "<!-- brain:start -->\nold content\n<!-- brain:end -->\n";
+        let initial = format!("{preamble}{old_brain}");
+        fs::write(&agents_path, &initial).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let result = fs::read_to_string(&agents_path).unwrap();
+        assert!(result.starts_with(preamble), "preamble must be preserved");
+        assert!(result.contains(BRAIN_SECTION_START));
+        assert!(
+            result.contains("## Task Management"),
+            "new content must be present"
+        );
+        assert!(
+            !result.contains("old content"),
+            "old brain content must be replaced"
+        );
+    }
+
+    #[test]
+    fn agents_md_preserves_content_after_markers() {
+        let dir = tempdir().unwrap();
+        let agents_path = dir.path().join("AGENTS.md");
+
+        let old_brain = "<!-- brain:start -->\nold content\n<!-- brain:end -->\n";
+        let suffix = "\n## My Custom Section\n\nDo not delete this.\n";
+        let initial = format!("{old_brain}{suffix}");
+        fs::write(&agents_path, &initial).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let result = fs::read_to_string(&agents_path).unwrap();
+        assert!(
+            result.contains("## My Custom Section"),
+            "content after markers must be preserved"
+        );
+        assert!(
+            result.contains("Do not delete this."),
+            "content after markers must be preserved"
+        );
+        assert!(
+            result.contains("## Task Management"),
+            "new brain content must be present"
+        );
+    }
+
+    #[test]
+    fn agents_md_preserves_content_around_markers() {
+        let dir = tempdir().unwrap();
+        let agents_path = dir.path().join("AGENTS.md");
+
+        let before = "# Project\n\nBefore brain section.\n\n";
+        let old_brain = "<!-- brain:start -->\nold stuff\n<!-- brain:end -->\n";
+        let after = "\n## After Section\n\nKeep this too.\n";
+        fs::write(&agents_path, format!("{before}{old_brain}{after}")).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let result = fs::read_to_string(&agents_path).unwrap();
+        assert!(
+            result.starts_with(before),
+            "content before markers must be preserved"
+        );
+        assert!(
+            result.contains("## After Section"),
+            "content after markers must be preserved"
+        );
+        assert!(
+            result.contains("Keep this too."),
+            "content after markers must be preserved"
+        );
+        assert!(
+            result.contains("## Task Management"),
+            "new brain content must be present"
+        );
+    }
+
+    #[test]
+    fn agents_md_appends_when_no_markers() {
+        let dir = tempdir().unwrap();
+        let agents_path = dir.path().join("AGENTS.md");
+
+        let existing = "# Existing Project\n\nSome custom docs.\n";
+        fs::write(&agents_path, existing).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let result = fs::read_to_string(&agents_path).unwrap();
+        assert!(
+            result.starts_with("# Existing Project"),
+            "existing content must be preserved"
+        );
+        assert!(
+            result.contains("Some custom docs."),
+            "existing content must be preserved"
+        );
+        assert!(
+            result.contains(BRAIN_SECTION_START),
+            "brain section must be appended"
+        );
+    }
+
+    #[test]
+    fn claude_md_bridge_created_when_missing() {
+        let dir = tempdir().unwrap();
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let content = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+        assert!(
+            content.contains("AGENTS.md"),
+            "bridge must reference AGENTS.md"
+        );
+        assert!(
+            !content.contains(BRAIN_SECTION_START),
+            "bridge must not contain brain markers"
+        );
+    }
+
+    #[test]
+    fn claude_md_with_old_markers_replaced_by_bridge() {
+        let dir = tempdir().unwrap();
+        let claude_path = dir.path().join("CLAUDE.md");
+
+        let old_content = "# brain\n\n<!-- brain:start -->\nold task docs\n<!-- brain:end -->\n";
+        fs::write(&claude_path, old_content).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let result = fs::read_to_string(&claude_path).unwrap();
+        assert!(
+            result.contains("AGENTS.md"),
+            "must contain bridge reference"
+        );
+        assert!(
+            !result.contains("old task docs"),
+            "old brain content must be removed"
+        );
+        assert!(
+            result.contains("# brain"),
+            "content before markers must be preserved"
+        );
+    }
+
+    #[test]
+    fn claude_md_preserves_custom_content_around_old_markers() {
+        let dir = tempdir().unwrap();
+        let claude_path = dir.path().join("CLAUDE.md");
+
+        let before = "# My Project\n\nClaude-specific instructions.\n\n";
+        let markers = "<!-- brain:start -->\nold brain stuff\n<!-- brain:end -->\n";
+        let after = "\n## Custom Section\n\nKeep this Claude content.\n";
+        fs::write(&claude_path, format!("{before}{markers}{after}")).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let result = fs::read_to_string(&claude_path).unwrap();
+        assert!(
+            result.contains("Claude-specific instructions."),
+            "content before markers must be preserved"
+        );
+        assert!(
+            result.contains("Keep this Claude content."),
+            "content after markers must be preserved"
+        );
+        assert!(
+            result.contains("AGENTS.md"),
+            "bridge reference must be present"
+        );
+        assert!(
+            !result.contains("old brain stuff"),
+            "old brain content must be removed"
+        );
+    }
+
+    #[test]
+    fn claude_md_without_markers_left_untouched() {
+        let dir = tempdir().unwrap();
+        let claude_path = dir.path().join("CLAUDE.md");
+
+        let custom = "# My Project\n\nCustom Claude-specific instructions.\n";
+        fs::write(&claude_path, custom).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let result = fs::read_to_string(&claude_path).unwrap();
+        assert_eq!(
+            result, custom,
+            "CLAUDE.md without markers must be left untouched"
+        );
+    }
+
+    #[test]
+    fn repeated_upsert_is_idempotent() {
+        let dir = tempdir().unwrap();
+        let agents_path = dir.path().join("AGENTS.md");
+
+        let preamble = "# Project\n\nKeep this.\n\n";
+        fs::write(&agents_path, preamble).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+        let after_first = fs::read_to_string(&agents_path).unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+        let after_second = fs::read_to_string(&agents_path).unwrap();
+
+        assert_eq!(
+            after_first, after_second,
+            "repeated upsert must be idempotent"
+        );
+    }
+}

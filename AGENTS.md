@@ -77,6 +77,9 @@ brain tasks list --group-by label     # List tasks grouped by label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Agent docs
+brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
 ```
 
 ### Finding Work

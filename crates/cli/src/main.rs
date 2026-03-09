@@ -226,6 +226,9 @@ enum Command {
         older_than: u32,
     },
 
+    /// Regenerate AGENTS.md and bridge CLAUDE.md from the current brain config
+    Docs,
+
     /// Run health checks on the index
     Doctor {
         /// Path to the notes directory
@@ -875,6 +878,9 @@ async fn async_main(cli: Cli) -> Result<()> {
                 commands::hooks::status()?;
             }
         },
+        Command::Docs => {
+            commands::docs::run()?;
+        }
         Command::ImportBeads { path, dry_run } => {
             commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
         }
