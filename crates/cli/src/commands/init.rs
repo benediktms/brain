@@ -254,6 +254,13 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `memory_write_episode` — Record episodes
 - `memory_reflect` — Retrieve source material for reflection
 
+### Finding Work
+
+When the user asks what to work on next (e.g., "what's next?", "what should I work on?", "next task", "any work?"), always check brain tasks first:
+1. Run `brain tasks ready` to show unblocked tasks sorted by priority
+2. Present the top candidates with their ID, title, priority, and type
+3. If a task has dependencies, briefly note what's blocking it
+
 ### Workflow
 
 When working on tasks:
