@@ -1095,13 +1095,24 @@ mod tests {
 
     #[test]
     fn global_args_have_defaults() {
+        // Env vars (e.g. BRAIN_MODEL_DIR from justfile) may override clap
+        // defaults, so we only assert the path suffixes are correct.
         let cli = Cli::try_parse_from(["brain", "mcp"]).unwrap();
-        assert_eq!(
-            cli.model_dir,
-            PathBuf::from("./.brain/models/bge-small-en-v1.5")
+        let model_str = cli.model_dir.to_string_lossy();
+        let lance_str = cli.lance_db.to_string_lossy();
+        let sqlite_str = cli.sqlite_db.to_string_lossy();
+        assert!(
+            model_str.ends_with("models/bge-small-en-v1.5"),
+            "unexpected model_dir: {model_str}"
         );
-        assert_eq!(cli.lance_db, PathBuf::from("./.brain/lancedb"));
-        assert_eq!(cli.sqlite_db, PathBuf::from("./.brain/brain.db"));
+        assert!(
+            lance_str.ends_with("lancedb"),
+            "unexpected lance_db: {lance_str}"
+        );
+        assert!(
+            sqlite_str.ends_with("brain.db"),
+            "unexpected sqlite_db: {sqlite_str}"
+        );
     }
 
     // ── Edge cases ──────────────────────────────────────────────────

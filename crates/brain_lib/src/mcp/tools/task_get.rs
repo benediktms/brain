@@ -68,13 +68,19 @@ fn task_stub(task_id: &str, title: &str) -> Value {
     json!({ "task_id": task_id, "title": title })
 }
 
-/// Build a full task JSON with labels.
+/// Build a full task JSON with labels but without description (expanded relations
+/// omit descriptions to keep responses concise — use `tasks.get` on the specific
+/// task to retrieve its full description).
 fn expanded_task(task_id: &str, ctx: &McpContext) -> Value {
     let Some(row) = ctx.tasks.get_task(task_id).ok().flatten() else {
         return task_stub(task_id, "(not found)");
     };
     let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
-    task_row_to_json(&row, labels)
+    let mut json = task_row_to_json(&row, labels);
+    if let Some(obj) = json.as_object_mut() {
+        obj.remove("description");
+    }
+    json
 }
 
 pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
@@ -154,7 +160,11 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
             .iter()
             .map(|c| {
                 let labels = ctx.tasks.get_task_labels(&c.task_id).unwrap_or_default();
-                task_row_to_json(c, labels)
+                let mut json = task_row_to_json(c, labels);
+                if let Some(obj) = json.as_object_mut() {
+                    obj.remove("description");
+                }
+                json
             })
             .collect()
     } else {
@@ -191,7 +201,11 @@ pub(super) fn handle(params: &Value, ctx: &McpContext) -> ToolCallResult {
             .iter()
             .map(|b| {
                 let labels = ctx.tasks.get_task_labels(&b.task_id).unwrap_or_default();
-                task_row_to_json(b, labels)
+                let mut json = task_row_to_json(b, labels);
+                if let Some(obj) = json.as_object_mut() {
+                    obj.remove("description");
+                }
+                json
             })
             .collect()
     } else {
@@ -476,6 +490,49 @@ mod tests {
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0]["body"], "A comment");
         assert!(comments[0].get("created_at").is_some());
+    }
+
+    #[test]
+    fn test_expand_omits_descriptions() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_dir, ctx) = rt.block_on(async { create_test_context().await });
+
+        apply(
+            &rt,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "epic",
+                "payload": { "title": "Epic", "description": "Epic description", "priority": 1 }
+            }),
+        );
+        apply(
+            &rt,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "child1",
+                "payload": { "title": "Child 1", "description": "Child 1 long description", "priority": 2, "parent_task_id": "epic" }
+            }),
+        );
+
+        // Primary task keeps its description
+        let result = rt.block_on(dispatch_tool_call(
+            "tasks.get",
+            &json!({ "task_id": "epic", "expand": ["children"] }),
+            &ctx,
+        ));
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["description"], "Epic description");
+
+        // Expanded children omit descriptions
+        let children = parsed["children"].as_array().unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0]["title"], "Child 1");
+        assert!(
+            children[0].get("description").is_none(),
+            "expanded children should omit description"
+        );
     }
 
     #[test]
