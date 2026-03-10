@@ -11,8 +11,9 @@ A local-first personal knowledge base daemon that indexes Markdown notes into a 
 | 0 — POC               | Scaffolding, embedding model, vector store, CLI               | Done        |
 | 1 — MVP               | Incremental indexing, content hashing, file identity          | Done        |
 | 2 — Feature Complete  | Hybrid retrieval, MCP server, structured parsing, task system | Done        |
-| 3 — Hardening         | Batching, concurrency, observability, index optimization      | In Progress |
-| 4 — Release Candidate | Migrations, packaging, daemon lifecycle, test suite           | Planned     |
+| 3 — Hardening         | Batching, concurrency, observability, index optimization      | Done        |
+| 4 — Release Candidate | Migrations, packaging, daemon lifecycle, test suite           | Done        |
+| 5 — Post-RC           | Records domain, adaptive reranking, ML consolidation          | In Progress |
 
 ---
 
