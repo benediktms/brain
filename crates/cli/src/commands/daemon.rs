@@ -22,12 +22,30 @@ impl Daemon {
 
     /// Fork, setsid, redirect fds, write PID. Parent exits; child returns.
     pub fn start(&self) -> Result<()> {
-        if let Some(pid) = self.read_pid()? {
+        if let Some((pid, stored_mtime)) = self.read_pid_file()? {
             if self.is_alive(pid) {
-                bail!("Daemon already running (PID: {pid})");
+                let cur_mtime = current_exe_mtime().ok();
+                let is_stale = match (stored_mtime, cur_mtime) {
+                    (Some(stored), Some(cur)) => stored != cur,
+                    _ => false,
+                };
+                if is_stale {
+                    println!("Replacing stale daemon (PID: {pid}, binary changed)");
+                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                    for _ in 0..10 {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        if !self.is_alive(pid) {
+                            break;
+                        }
+                    }
+                    let _ = fs::remove_file(&self.pid_path);
+                } else {
+                    bail!("Daemon already running (PID: {pid})");
+                }
+            } else {
+                eprintln!("Removing stale PID file (PID {pid} is not running)");
+                fs::remove_file(&self.pid_path)?;
             }
-            eprintln!("Removing stale PID file (PID {pid} is not running)");
-            fs::remove_file(&self.pid_path)?;
         }
 
         let log_file = fs::OpenOptions::new()
@@ -46,7 +64,10 @@ impl Daemon {
                 self.redirect_fds(&log_file)?;
                 // Write PID from child (getpid is accurate post-setsid)
                 let child_pid = unsafe { libc::getpid() };
-                fs::write(&self.pid_path, child_pid.to_string())?;
+                let mtime_line = current_exe_mtime()
+                    .map(|m| format!("\n{m}"))
+                    .unwrap_or_default();
+                fs::write(&self.pid_path, format!("{child_pid}{mtime_line}"))?;
                 Ok(())
             }
             _parent => {
@@ -59,8 +80,8 @@ impl Daemon {
     }
 
     pub fn stop(&self) -> Result<()> {
-        let pid = match self.read_pid()? {
-            Some(pid) => pid,
+        let pid = match self.read_pid_file()? {
+            Some((pid, _)) => pid,
             None => {
                 println!("Daemon is not running");
                 return Ok(());
@@ -88,9 +109,20 @@ impl Daemon {
     }
 
     pub fn status(&self) -> Result<()> {
-        match self.read_pid()? {
-            Some(pid) if self.is_alive(pid) => println!("Daemon is running (PID: {pid})"),
-            Some(pid) => {
+        match self.read_pid_file()? {
+            Some((pid, stored_mtime)) if self.is_alive(pid) => {
+                let cur_mtime = current_exe_mtime().ok();
+                let is_stale = match (stored_mtime, cur_mtime) {
+                    (Some(stored), Some(cur)) => stored != cur,
+                    _ => false,
+                };
+                if is_stale {
+                    println!("Daemon is running (PID: {pid}, binary STALE)");
+                } else {
+                    println!("Daemon is running (PID: {pid})");
+                }
+            }
+            Some((pid, _)) => {
                 let _ = fs::remove_file(&self.pid_path);
                 println!("Daemon is not running (stale PID file for {pid})");
             }
@@ -110,9 +142,19 @@ impl Daemon {
         Ok(())
     }
 
-    fn read_pid(&self) -> Result<Option<u32>> {
+    fn read_pid_file(&self) -> Result<Option<(u32, Option<u64>)>> {
         match fs::read_to_string(&self.pid_path) {
-            Ok(c) => Ok(Some(c.trim().parse().context("invalid PID file")?)),
+            Ok(c) => {
+                let mut lines = c.trim().lines();
+                let pid: u32 = lines
+                    .next()
+                    .context("empty PID file")?
+                    .trim()
+                    .parse()
+                    .context("invalid PID in PID file")?;
+                let exe_mtime: Option<u64> = lines.next().and_then(|l| l.trim().parse().ok());
+                Ok(Some((pid, exe_mtime)))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -124,5 +166,63 @@ impl Daemon {
             return true;
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+}
+
+fn current_exe_mtime() -> Result<u64> {
+    let exe = std::env::current_exe().context("cannot determine executable path")?;
+    let meta = fs::metadata(&exe).context("cannot stat executable")?;
+    let mtime = meta.modified().context("cannot read executable mtime")?;
+    Ok(mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_pid_file_content(content: &str) -> Option<(u32, Option<u64>)> {
+        let mut lines = content.trim().lines();
+        let pid: u32 = lines.next()?.trim().parse().ok()?;
+        let exe_mtime: Option<u64> = lines.next().and_then(|l| l.trim().parse().ok());
+        Some((pid, exe_mtime))
+    }
+
+    #[test]
+    fn test_parse_old_format_pid_file() {
+        let content = "12345\n";
+        let result = parse_pid_file_content(content);
+        assert_eq!(result, Some((12345, None)));
+    }
+
+    #[test]
+    fn test_parse_extended_pid_file_format() {
+        let content = "12345\n1700000000\n";
+        let result = parse_pid_file_content(content);
+        assert_eq!(result, Some((12345, Some(1700000000))));
+    }
+
+    #[test]
+    fn test_parse_extended_pid_file_no_trailing_newline() {
+        let content = "42\n1234567890";
+        let result = parse_pid_file_content(content);
+        assert_eq!(result, Some((42, Some(1234567890))));
+    }
+
+    #[test]
+    fn test_current_exe_mtime_returns_reasonable_value() {
+        let mtime = current_exe_mtime().expect("should get exe mtime");
+        // The mtime should be after 2020-01-01 (Unix timestamp 1577836800)
+        assert!(
+            mtime > 1_577_836_800,
+            "mtime {mtime} looks unreasonably old"
+        );
+        // And before some far future date (year 2100 = Unix timestamp ~4102444800)
+        assert!(
+            mtime < 4_102_444_800,
+            "mtime {mtime} looks unreasonably far in the future"
+        );
     }
 }
