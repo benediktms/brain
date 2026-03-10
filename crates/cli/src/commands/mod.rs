@@ -1,3 +1,4 @@
+pub mod agent_schema;
 pub mod daemon;
 pub mod daemon_service;
 pub mod docs;
