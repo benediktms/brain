@@ -17,7 +17,7 @@ impl TaskLabelsSummary {
             Err(e) => return ToolCallResult::error(format!("Failed to query labels: {e}")),
         };
 
-        let prefixes = ctx.tasks.shortest_unique_prefixes().unwrap_or_default();
+        let prefixes = ctx.tasks.compact_ids().unwrap_or_default();
 
         let labels: Vec<Value> = summaries
             .into_iter()

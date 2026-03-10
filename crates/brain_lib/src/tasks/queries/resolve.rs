@@ -2,11 +2,9 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension};
 
+use super::listing::{get_task, task_exists};
 use crate::db::meta;
 use crate::error::{BrainCoreError, Result};
-use crate::tasks::events::TaskType;
-
-use super::listing::{get_task, task_exists};
 
 /// Minimum ULID prefix length (after project prefix + separator).
 const MIN_ULID_PREFIX_LEN: usize = 4;
@@ -110,7 +108,7 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
 }
 
 /// Core ULID-based prefix computation without dot notation.
-fn shortest_unique_prefix_ulid(conn: &Connection, task_id: &str) -> Result<String> {
+fn compact_id_ulid(conn: &Connection, task_id: &str) -> Result<String> {
     let prev: Option<String> = conn
         .query_row(
             "SELECT task_id FROM tasks WHERE task_id < ?1 ORDER BY task_id DESC LIMIT 1",
@@ -143,36 +141,30 @@ fn shortest_unique_prefix_ulid(conn: &Connection, task_id: &str) -> Result<Strin
     Ok(task_id[..min_len].to_string())
 }
 
-/// Compute the shortest unique prefix for a single task ID.
+/// Compute a compact display ID for a single task.
 ///
-/// Uses two O(log n) index seeks (predecessor + successor) instead of loading
-/// all task IDs. For epic children with `child_seq`, returns dot notation
-/// (e.g. "BRN-01KK7NY.3") when it's shorter than the ULID prefix.
-pub fn shortest_unique_prefix(conn: &Connection, task_id: &str) -> Result<String> {
-    let ulid_prefix = shortest_unique_prefix_ulid(conn, task_id)?;
-
-    // Check for dot notation: epic child with child_seq
+/// For tasks with a parent and `child_seq`, always returns dot notation
+/// (e.g. "BRN-01KK7NY.3"). Recurses through the parent chain so
+/// grandchildren get "BRN-XXX.1.2". For root tasks, uses the shortest
+/// unique ULID prefix via O(log n) index seeks.
+pub fn compact_id(conn: &Connection, task_id: &str) -> Result<String> {
+    // Dot notation for any child with parent + child_seq
     if let Some(task) = get_task(conn, task_id)?
         && let (Some(parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq)
-        && let Some(parent) = get_task(conn, parent_id)?
-        && parent.task_type == TaskType::Epic
     {
-        let parent_prefix = shortest_unique_prefix_ulid(conn, parent_id)?;
-        let dot_form = format!("{parent_prefix}.{seq}");
-        if dot_form.len() < ulid_prefix.len() {
-            return Ok(dot_form);
-        }
+        let parent_compact = compact_id(conn, parent_id)?;
+        return Ok(format!("{parent_compact}.{seq}"));
     }
 
-    Ok(ulid_prefix)
+    compact_id_ulid(conn, task_id)
 }
 
-/// Compute shortest unique prefixes for all tasks (batch, for list display).
+/// Compute compact display IDs for all tasks (batch, for list display).
 ///
-/// Loads all IDs sorted, compares neighbors. O(n log n).
-/// The prefix portion (e.g. "BRN-") is always shown in full; only the ULID
-/// portion gets truncated. Epic children get dot notation when shorter.
-pub fn shortest_unique_prefixes(conn: &Connection) -> Result<HashMap<String, String>> {
+/// Loads all IDs sorted, compares neighbors for ULID prefixes. Then applies
+/// dot notation for every child with `parent_task_id` + `child_seq`,
+/// processing parents before children so grandchild IDs resolve correctly.
+pub fn compact_ids(conn: &Connection) -> Result<HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT task_id FROM tasks ORDER BY task_id")?;
     let ids: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
@@ -204,24 +196,30 @@ pub fn shortest_unique_prefixes(conn: &Connection) -> Result<HashMap<String, Str
         result.insert(id.clone(), id[..prefix_len].to_string());
     }
 
-    // Apply dot notation for epic children (parent_prefix.child_seq when shorter)
-    let mut epic_stmt = conn.prepare(
-        "SELECT t.task_id, t.parent_task_id, t.child_seq
-         FROM tasks t
-         JOIN tasks p ON p.task_id = t.parent_task_id AND p.task_type = 'epic'
-         WHERE t.child_seq IS NOT NULL",
+    // Apply dot notation for all children with parent + child_seq.
+    // Process in parent-first order so transitive chains resolve correctly.
+    let mut child_stmt = conn.prepare(
+        "SELECT task_id, parent_task_id, child_seq
+         FROM tasks
+         WHERE parent_task_id IS NOT NULL AND child_seq IS NOT NULL
+         ORDER BY parent_task_id, child_seq",
     )?;
-    let epic_children: Vec<(String, String, i64)> = epic_stmt
+    let children: Vec<(String, String, i64)> = child_stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    for (child_id, parent_id, seq) in epic_children {
-        if let Some(parent_prefix) = result.get(&parent_id).cloned() {
-            let dot_form = format!("{parent_prefix}.{seq}");
-            if let Some(ulid_prefix) = result.get(&child_id)
-                && dot_form.len() < ulid_prefix.len()
-            {
-                result.insert(child_id, dot_form);
+    // Multiple passes to handle transitive chains (parent → child → grandchild).
+    // Each pass resolves one level of nesting; stop when no changes occur.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (child_id, parent_id, seq) in &children {
+            if let Some(parent_compact) = result.get(parent_id).cloned() {
+                let dot_form = format!("{parent_compact}.{seq}");
+                if result.get(child_id) != Some(&dot_form) {
+                    result.insert(child_id.clone(), dot_form);
+                    changed = true;
+                }
             }
         }
     }

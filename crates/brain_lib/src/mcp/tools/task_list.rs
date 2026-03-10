@@ -192,10 +192,7 @@ impl TaskList {
                     .and_then(|v| v.as_str())
                     .map(String::from)
                 {
-                    let short = ctx
-                        .tasks
-                        .shortest_unique_prefix(&tid)
-                        .unwrap_or_else(|_| tid.clone());
+                    let short = ctx.tasks.compact_id(&tid).unwrap_or_else(|_| tid.clone());
                     obj.insert("task_id".into(), json!(short));
                 }
                 if !include_description {

@@ -78,10 +78,7 @@ impl TaskNext {
                     .and_then(|v| v.as_str())
                     .map(String::from)
                 {
-                    let short = ctx
-                        .tasks
-                        .shortest_unique_prefix(&tid)
-                        .unwrap_or_else(|_| tid.clone());
+                    let short = ctx.tasks.compact_id(&tid).unwrap_or_else(|_| tid.clone());
                     obj.insert("task_id".into(), json!(short));
                 }
                 obj.remove("description");
@@ -104,7 +101,7 @@ impl TaskNext {
                     .map(|t| {
                         let short_id = ctx
                             .tasks
-                            .shortest_unique_prefix(&t.task_id)
+                            .compact_id(&t.task_id)
                             .unwrap_or_else(|_| t.task_id.clone());
                         json!({
                             "task_id": short_id,

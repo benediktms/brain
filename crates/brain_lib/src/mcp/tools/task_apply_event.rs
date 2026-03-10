@@ -246,11 +246,7 @@ impl TaskApplyEvent {
                     .list_newly_unblocked(&task_id)
                     .unwrap_or_default()
                     .iter()
-                    .map(|id| {
-                        ctx.tasks
-                            .shortest_unique_prefix(id)
-                            .unwrap_or_else(|_| id.clone())
-                    })
+                    .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
                     .collect()
             } else {
                 vec![]
@@ -261,7 +257,7 @@ impl TaskApplyEvent {
 
         let short_id = ctx
             .tasks
-            .shortest_unique_prefix(&task_id)
+            .compact_id(&task_id)
             .unwrap_or_else(|_| task_id.clone());
 
         let response = json!({

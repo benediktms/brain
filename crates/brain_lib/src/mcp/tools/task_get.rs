@@ -193,7 +193,7 @@ impl TaskGet {
         // 8. Build base task JSON
         let short_id = ctx
             .tasks
-            .shortest_unique_prefix(task_id)
+            .compact_id(task_id)
             .unwrap_or_else(|_| task_id.to_string());
         let mut task_json = task_row_to_json(&task, labels);
         if let Some(obj) = task_json.as_object_mut() {

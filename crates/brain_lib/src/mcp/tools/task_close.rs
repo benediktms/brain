@@ -83,15 +83,11 @@ impl TaskClose {
                 .list_newly_unblocked(&resolved)
                 .unwrap_or_default()
                 .iter()
-                .map(|id| {
-                    ctx.tasks
-                        .shortest_unique_prefix(id)
-                        .unwrap_or_else(|_| id.clone())
-                })
+                .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
                 .collect();
             let short_id = ctx
                 .tasks
-                .shortest_unique_prefix(&resolved)
+                .compact_id(&resolved)
                 .unwrap_or_else(|_| resolved.clone());
 
             total_unblocked += unblocked.len();
