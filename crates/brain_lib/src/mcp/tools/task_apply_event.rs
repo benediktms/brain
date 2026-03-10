@@ -233,7 +233,7 @@ impl TaskApplyEvent {
         };
 
         // Detect newly unblocked tasks after status_changed to done/cancelled
-        let unblocked_task_ids = if event_type == EventType::StatusChanged {
+        let unblocked_task_ids: Vec<String> = if event_type == EventType::StatusChanged {
             let new_status = event
                 .payload
                 .get("new_status")
@@ -242,7 +242,16 @@ impl TaskApplyEvent {
             if new_status == TaskStatus::Done.as_ref()
                 || new_status == TaskStatus::Cancelled.as_ref()
             {
-                ctx.tasks.list_newly_unblocked(&task_id).unwrap_or_default()
+                ctx.tasks
+                    .list_newly_unblocked(&task_id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|id| {
+                        ctx.tasks
+                            .shortest_unique_prefix(id)
+                            .unwrap_or_else(|_| id.clone())
+                    })
+                    .collect()
             } else {
                 vec![]
             }

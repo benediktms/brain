@@ -78,10 +78,17 @@ impl TaskClose {
                 continue;
             }
 
-            let unblocked = ctx
+            let unblocked: Vec<String> = ctx
                 .tasks
                 .list_newly_unblocked(&resolved)
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .iter()
+                .map(|id| {
+                    ctx.tasks
+                        .shortest_unique_prefix(id)
+                        .unwrap_or_else(|_| id.clone())
+                })
+                .collect();
             let short_id = ctx
                 .tasks
                 .shortest_unique_prefix(&resolved)
@@ -115,7 +122,7 @@ impl McpTool for TaskClose {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Close one or more tasks (set status to done). Returns closed tasks and any newly unblocked task IDs. Convenience shortcut for tasks.apply_event with status_changed.".into(),
+            description: "Close one or more tasks (set status to done). Returns closed tasks and any newly unblocked task IDs. Partial failures (e.g. invalid IDs) return a success response with separate 'closed' and 'failed' arrays. Convenience shortcut for tasks.apply_event with status_changed.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
