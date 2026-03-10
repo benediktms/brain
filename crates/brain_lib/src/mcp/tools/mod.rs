@@ -87,7 +87,35 @@ impl ToolRegistry {
                 return tool.call(params, ctx).await;
             }
         }
+
+        let normalized = normalize_tool_name(name);
+        if normalized != name {
+            for tool in &self.tools {
+                if tool.name() == normalized {
+                    return tool.call(params, ctx).await;
+                }
+            }
+        }
+
         ToolCallResult::error(format!("Unknown tool: {name}"))
+    }
+}
+
+fn normalize_tool_name(name: &str) -> &str {
+    match name {
+        "memory_search_minimal" => "memory.search_minimal",
+        "memory_expand" => "memory.expand",
+        "memory_write_episode" => "memory.write_episode",
+        "memory_reflect" => "memory.reflect",
+        "tasks_apply_event" => "tasks.apply_event",
+        "tasks_close" => "tasks.close",
+        "tasks_deps_batch" => "tasks.deps_batch",
+        "tasks_get" => "tasks.get",
+        "tasks_labels_batch" => "tasks.labels_batch",
+        "tasks_labels_summary" => "tasks.labels_summary",
+        "tasks_list" => "tasks.list",
+        "tasks_next" => "tasks.next",
+        _ => name,
     }
 }
 
@@ -122,12 +150,31 @@ pub(super) mod tests {
         }
     }
 
+    #[test]
+    fn test_normalize_tool_name() {
+        assert_eq!(normalize_tool_name("tasks_list"), "tasks.list");
+        assert_eq!(
+            normalize_tool_name("memory_search_minimal"),
+            "memory.search_minimal"
+        );
+        assert_eq!(normalize_tool_name("status"), "status");
+        assert_eq!(normalize_tool_name("tasks.list"), "tasks.list");
+    }
+
     #[tokio::test]
     async fn test_dispatch_unknown_tool() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
         let result = registry.dispatch("nonexistent", json!({}), &ctx).await;
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_underscore_alias() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry.dispatch("tasks_list", json!({}), &ctx).await;
+        assert_ne!(result.is_error, Some(true));
     }
 
     pub(in crate::mcp) async fn create_test_context() -> (tempfile::TempDir, McpContext) {

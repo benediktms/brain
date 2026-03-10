@@ -4,6 +4,7 @@ use brain_lib::config::{
     save_brain_toml, save_global_config,
 };
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Initialize a new brain in the current (or given) directory.
@@ -70,6 +71,10 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     brain_lib::fs_permissions::ensure_private_dir(&brains_dir)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    // Seed project_prefix at init time so first task IDs are stable and derived
+    // from init context (`--name` or current directory basename).
+    seed_project_prefix_if_missing(&brains_dir.join("brain.db"), &brain_name)?;
+
     // 6. Upsert AGENTS.md (unless --no-agents-md)
     if !no_agents_md {
         upsert_agent_docs(&cwd, &brain_name)?;
@@ -90,6 +95,18 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         display_notes
     );
 
+    Ok(())
+}
+
+fn seed_project_prefix_if_missing(db_path: &Path, seed_name: &str) -> Result<()> {
+    let db = brain_lib::db::Db::open(db_path)?;
+    db.with_write_conn(|conn| {
+        if brain_lib::db::meta::get_meta(conn, "project_prefix")?.is_none() {
+            let prefix = brain_lib::db::meta::generate_prefix(seed_name);
+            brain_lib::db::meta::set_meta(conn, "project_prefix", &prefix)?;
+        }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -549,5 +566,38 @@ mod tests {
             after_first, after_second,
             "repeated upsert must be idempotent"
         );
+    }
+
+    #[test]
+    fn seed_project_prefix_handles_complex_name() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("brain.db");
+        seed_project_prefix_if_missing(&db_path, "my-cool_project 2026").unwrap();
+
+        let db = brain_lib::db::Db::open(&db_path).unwrap();
+        let stored = db
+            .with_read_conn(|conn| brain_lib::db::meta::get_meta(conn, "project_prefix"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, "MCP");
+    }
+
+    #[test]
+    fn seed_project_prefix_does_not_override_existing_value() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("brain.db");
+        seed_project_prefix_if_missing(&db_path, "alpha-service").unwrap();
+
+        let db = brain_lib::db::Db::open(&db_path).unwrap();
+        db.with_write_conn(|conn| brain_lib::db::meta::set_meta(conn, "project_prefix", "XYZ"))
+            .unwrap();
+
+        seed_project_prefix_if_missing(&db_path, "beta-service").unwrap();
+
+        let stored = db
+            .with_read_conn(|conn| brain_lib::db::meta::get_meta(conn, "project_prefix"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, "XYZ");
     }
 }
