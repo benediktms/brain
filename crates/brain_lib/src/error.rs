@@ -32,6 +32,9 @@ pub enum BrainCoreError {
     #[error("record event error: {0}")]
     RecordEvent(String),
 
+    #[error("object store error: {0}")]
+    ObjectStore(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }

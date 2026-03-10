@@ -223,8 +223,14 @@ pub fn new_record_id(prefix: &str) -> String {
 
 /// Append a single event to the JSONL file.
 ///
+/// Creates the parent directory if it does not exist.
 /// Uses `O_APPEND` for atomic writes (events are well under PIPE_BUF).
 pub fn append_event(path: &Path, event: &RecordEvent) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| BrainCoreError::RecordEvent(format!("create parent dir: {e}")))?;
+    }
+
     let mut line = serde_json::to_string(event)
         .map_err(|e| BrainCoreError::RecordEvent(format!("serialize event: {e}")))?;
     line.push('\n');
@@ -243,6 +249,8 @@ pub fn append_event(path: &Path, event: &RecordEvent) -> Result<()> {
 }
 
 /// Read all events from a JSONL file. Skips empty or malformed lines.
+///
+/// Returns events in append order (oldest first).
 pub fn read_all_events(path: &Path) -> Result<Vec<RecordEvent>> {
     let file = match File::open(path) {
         Ok(f) => f,
@@ -268,6 +276,22 @@ pub fn read_all_events(path: &Path) -> Result<Vec<RecordEvent>> {
     }
 
     Ok(events)
+}
+
+/// Read all events for a specific record ID from a JSONL file.
+///
+/// Skips empty or malformed lines. Returns events in append order.
+pub fn read_events_for_record(path: &Path, record_id: &str) -> Result<Vec<RecordEvent>> {
+    let all = read_all_events(path)?;
+    Ok(all.into_iter().filter(|e| e.record_id == record_id).collect())
+}
+
+/// Count the total number of valid events in a JSONL file.
+///
+/// Skips empty or malformed lines (same as `read_all_events`).
+pub fn count_events(path: &Path) -> Result<usize> {
+    let all = read_all_events(path)?;
+    Ok(all.len())
 }
 
 #[cfg(test)]
@@ -468,5 +492,226 @@ mod tests {
         let json = serde_json::to_string(&cr).unwrap();
         // media_type should be absent when None (skip_serializing_if)
         assert!(!json.contains("media_type"));
+    }
+
+    // -- Integration tests --
+
+    #[test]
+    fn test_append_creates_parent_dir() {
+        let dir = TempDir::new().unwrap();
+        // Nested path whose intermediate directory does not yet exist.
+        let path = dir.path().join("nested").join("dir").join("events.jsonl");
+        assert!(!path.parent().unwrap().exists());
+
+        let ev = sample_created_event("r1");
+        append_event(&path, &ev).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_multiple_events_order_preserved() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        let ids = ["r1", "r2", "r3", "r4", "r5"];
+        for id in &ids {
+            append_event(&path, &sample_created_event(id)).unwrap();
+        }
+
+        let events = read_all_events(&path).unwrap();
+        assert_eq!(events.len(), ids.len());
+        for (i, id) in ids.iter().enumerate() {
+            assert_eq!(events[i].record_id, *id);
+        }
+    }
+
+    #[test]
+    fn test_empty_log_handling() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        // File does not exist yet — should return empty vec.
+        let events = read_all_events(&path).unwrap();
+        assert!(events.is_empty());
+
+        // Create an empty file — should still return empty vec.
+        std::fs::File::create(&path).unwrap();
+        let events = read_all_events(&path).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_read_events_for_record_filters_correctly() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        append_event(&path, &sample_created_event("r1")).unwrap();
+        append_event(&path, &sample_created_event("r2")).unwrap();
+        append_event(
+            &path,
+            &RecordEvent::new(
+                "r1",
+                "agent",
+                RecordEventType::TagAdded,
+                &TagPayload {
+                    tag: "x".to_string(),
+                },
+            ),
+        )
+        .unwrap();
+        append_event(&path, &sample_created_event("r3")).unwrap();
+
+        let r1_events = read_events_for_record(&path, "r1").unwrap();
+        assert_eq!(r1_events.len(), 2);
+        assert!(r1_events.iter().all(|e| e.record_id == "r1"));
+
+        let r2_events = read_events_for_record(&path, "r2").unwrap();
+        assert_eq!(r2_events.len(), 1);
+
+        let missing = read_events_for_record(&path, "r999").unwrap();
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_count_events() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        // Non-existent file → 0
+        assert_eq!(count_events(&path).unwrap(), 0);
+
+        for i in 0..5u8 {
+            append_event(&path, &sample_created_event(&format!("r{i}"))).unwrap();
+        }
+        assert_eq!(count_events(&path).unwrap(), 5);
+    }
+
+    #[test]
+    fn test_count_events_skips_malformed() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        append_event(&path, &sample_created_event("r1")).unwrap();
+
+        // Inject a corrupt line.
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{{corrupt}}").unwrap();
+        drop(file);
+
+        append_event(&path, &sample_created_event("r2")).unwrap();
+
+        // Corrupt line is skipped, so count should be 2.
+        assert_eq!(count_events(&path).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_all_event_types_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        // RecordCreated
+        append_event(&path, &sample_created_event("r1")).unwrap();
+
+        // RecordUpdated
+        append_event(
+            &path,
+            &RecordEvent::from_payload(
+                "r1",
+                "agent",
+                RecordUpdatedPayload {
+                    title: Some("Updated".to_string()),
+                    description: None,
+                },
+            ),
+        )
+        .unwrap();
+
+        // RecordArchived
+        append_event(
+            &path,
+            &RecordEvent::from_payload(
+                "r1",
+                "agent",
+                RecordArchivedPayload {
+                    reason: Some("superseded".to_string()),
+                },
+            ),
+        )
+        .unwrap();
+
+        // TagAdded / TagRemoved
+        for et in [RecordEventType::TagAdded, RecordEventType::TagRemoved] {
+            append_event(
+                &path,
+                &RecordEvent::new("r1", "agent", et, &TagPayload { tag: "t".to_string() }),
+            )
+            .unwrap();
+        }
+
+        // LinkAdded / LinkRemoved
+        for et in [RecordEventType::LinkAdded, RecordEventType::LinkRemoved] {
+            append_event(
+                &path,
+                &RecordEvent::new(
+                    "r1",
+                    "agent",
+                    et,
+                    &LinkPayload {
+                        task_id: Some("BRN-01XXX".to_string()),
+                        chunk_id: None,
+                    },
+                ),
+            )
+            .unwrap();
+        }
+
+        let events = read_all_events(&path).unwrap();
+        assert_eq!(events.len(), 7);
+
+        let types: Vec<_> = events.iter().map(|e| &e.event_type).collect();
+        assert_eq!(types[0], &RecordEventType::RecordCreated);
+        assert_eq!(types[1], &RecordEventType::RecordUpdated);
+        assert_eq!(types[2], &RecordEventType::RecordArchived);
+        assert_eq!(types[3], &RecordEventType::TagAdded);
+        assert_eq!(types[4], &RecordEventType::TagRemoved);
+        assert_eq!(types[5], &RecordEventType::LinkAdded);
+        assert_eq!(types[6], &RecordEventType::LinkRemoved);
+    }
+
+    #[test]
+    fn test_concurrent_appends_no_interleaving() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let path = Arc::new(dir.path().join("events.jsonl"));
+
+        let thread_count = 8usize;
+        let events_per_thread = 10usize;
+
+        let handles: Vec<_> = (0..thread_count)
+            .map(|t| {
+                let p = Arc::clone(&path);
+                thread::spawn(move || {
+                    for i in 0..events_per_thread {
+                        let id = format!("t{t}-r{i}");
+                        append_event(&p, &sample_created_event(&id)).unwrap();
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let events = read_all_events(&path).unwrap();
+        // All events must be present — no data loss from concurrent appends.
+        assert_eq!(events.len(), thread_count * events_per_thread);
+
+        // Every line must deserialize cleanly (no interleaved JSON corruption).
+        for ev in &events {
+            assert!(!ev.record_id.is_empty());
+        }
     }
 }

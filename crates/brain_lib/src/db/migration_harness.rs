@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use super::migrations::{
     migrate_v0_to_v1, migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5,
     migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
-    migrate_v10_to_v11,
+    migrate_v10_to_v11, migrate_v11_to_v12,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -43,6 +43,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             8 => migrate_v8_to_v9(&conn).unwrap(),
             9 => migrate_v9_to_v10(&conn).unwrap(),
             10 => migrate_v10_to_v11(&conn).unwrap(),
+            11 => migrate_v11_to_v12(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -142,6 +143,10 @@ const EXPECTED_TABLES: &[&str] = &[
     "task_comments",
     "brain_meta",
     "task_external_ids",
+    "records",
+    "record_tags",
+    "record_links",
+    "record_events",
 ];
 
 /// All named indexes that must exist at the current schema version.

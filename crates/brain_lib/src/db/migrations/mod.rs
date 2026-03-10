@@ -1,5 +1,6 @@
 mod v0_to_v1;
 mod v10_to_v11;
+mod v11_to_v12;
 mod v1_to_v2;
 mod v2_to_v3;
 mod v3_to_v4;
@@ -21,3 +22,4 @@ pub use v7_to_v8::migrate_v7_to_v8;
 pub use v8_to_v9::migrate_v8_to_v9;
 pub use v9_to_v10::migrate_v9_to_v10;
 pub use v10_to_v11::migrate_v10_to_v11;
+pub use v11_to_v12::migrate_v11_to_v12;
