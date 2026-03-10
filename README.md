@@ -43,24 +43,40 @@ brain is a Rust daemon that watches a directory of Markdown files, incrementally
 
 ---
 
-## Quick Start
+## Installation
 
-### Prerequisites
-
-- Rust toolchain (stable, edition 2024)
-- [just](https://github.com/casey/just) task runner
-
-### Setup
+### Homebrew (macOS)
 
 ```sh
-git clone <repo-url>
-cd brain-02
-just setup-model
+brew install benediktms/brain/brain
+```
+
+### Shell installer (macOS / Linux)
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/benediktms/brain/releases/latest/download/brain-installer.sh | sh
+```
+
+### From source
+
+Requires Rust (stable, edition 2024), [just](https://github.com/casey/just), and protobuf (`brew install protobuf` or `apt install protobuf-compiler`).
+
+```sh
+git clone https://github.com/benediktms/brain.git
+cd brain
+just install
+```
+
+---
+
+## Quick Start
+
+```sh
 brain init ~/notes
 brain daemon start
 ```
 
-`just setup-model` downloads BGE-small-en-v1.5 weights (~130MB). `brain init` creates the brain configuration and performs the initial index. `brain daemon start` launches the daemon and registers it to auto-start on login (launchd on macOS, systemd on Linux).
+`brain init` creates the brain configuration, downloads the embedding model (~130 MB on first run), and performs the initial index. `brain daemon start` launches the daemon and registers it to auto-start on login (launchd on macOS, systemd on Linux).
 
 ### Model Cache
 
