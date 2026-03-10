@@ -873,7 +873,7 @@ mod tests {
 
     #[test]
     fn test_lance_schema_version_is_positive() {
-        assert!(LANCE_SCHEMA_VERSION >= 1);
+        const _: () = assert!(LANCE_SCHEMA_VERSION >= 1);
     }
 
     #[tokio::test]

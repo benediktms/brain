@@ -254,7 +254,7 @@ mod tests {
                         })
                         .unwrap();
                     // Count should be between initial 100 and final 200
-                    assert!(count >= 100 && count <= 200, "unexpected count: {count}");
+                    assert!((100..=200).contains(&count), "unexpected count: {count}");
                 }
             }));
         }

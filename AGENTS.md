@@ -77,6 +77,9 @@ brain tasks list --group-by label     # List tasks grouped by label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Agent docs
+brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
 ```
 
 ### Finding Work
@@ -98,7 +101,7 @@ When working on tasks:
 ### Conventions
 
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog
-- **Task types**: task, bug, feature, epic
+- **Task types**: task, bug, feature, epic, spike
 - **Statuses**: open, in_progress, blocked, done, cancelled
 
 ## Keeping AGENTS.md in sync

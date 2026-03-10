@@ -9,7 +9,7 @@ use crate::error::{BrainCoreError, Result};
 use super::TaskStore;
 use super::events::{
     CommentPayload, DependencyPayload, EventType, ExternalIdPayload, LabelPayload,
-    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskStatus,
+    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType,
     TaskUpdatedPayload, new_task_id, now_ts,
 };
 
@@ -208,7 +208,10 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                 priority: issue.priority,
                 status: TaskStatus::Open,
                 due_ts: None,
-                task_type: issue.issue_type.clone(),
+                task_type: issue
+                    .issue_type
+                    .as_deref()
+                    .and_then(|s| s.parse::<TaskType>().ok()),
                 assignee: issue.owner.clone(),
                 defer_until: None,
                 parent_task_id: None, // Set in pass 2
@@ -529,7 +532,11 @@ pub fn import_beads_issues(
 
             // Field diffs → single TaskUpdated
             let new_desc = build_description(issue);
-            let beads_task_type = issue.issue_type.as_deref().unwrap_or("task");
+            let beads_task_type: TaskType = issue
+                .issue_type
+                .as_deref()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(TaskType::Task);
             let mut upd = TaskUpdatedPayload {
                 title: None,
                 description: None,
@@ -555,7 +562,7 @@ pub fn import_beads_issues(
                 has_field = true;
             }
             if beads_task_type != existing.task_type {
-                upd.task_type = Some(beads_task_type.to_string());
+                upd.task_type = Some(beads_task_type);
                 has_field = true;
             }
             if issue.owner != existing.assignee {
@@ -710,7 +717,10 @@ pub fn import_beads_issues(
                         priority: issue.priority,
                         status: TaskStatus::Open,
                         due_ts: None,
-                        task_type: issue.issue_type.clone(),
+                        task_type: issue
+                            .issue_type
+                            .as_deref()
+                            .and_then(|s| s.parse::<TaskType>().ok()),
                         assignee: issue.owner.clone(),
                         defer_until: None,
                         parent_task_id: None,
@@ -1187,7 +1197,7 @@ mod tests {
         import_beads_issues(&path, &store, false).unwrap();
 
         let t = get_by_beads_id(&store, "t1");
-        assert_eq!(t.task_type, "epic");
+        assert_eq!(t.task_type, TaskType::Epic);
     }
 
     // -- idempotent import tests --

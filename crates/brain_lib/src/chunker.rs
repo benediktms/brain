@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn test_byte_offsets_utf8_small_sections() {
         let text = "# Emoji 🧠\n\nContent with 🧠 brain emoji.\n\n## 日本語\n\nこんにちは世界。\n";
-        let doc = parse_document(&text);
+        let doc = parse_document(text);
         let chunks = chunk_document(&doc);
 
         assert!(!chunks.is_empty());
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn test_byte_offsets_content_matches_slice() {
         let text = "# Title\n\nFirst paragraph with é.\n\n## 日本\n\nSecond with 🧠.\n";
-        let doc = parse_document(&text);
+        let doc = parse_document(text);
         let chunks = chunk_document(&doc);
 
         for chunk in &chunks {
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn test_byte_offsets_crlf_basic() {
         let text = "# Title\r\n\r\nContent here.\r\n\r\n## Next\r\n\r\nMore content.\r\n";
-        let doc = parse_document(&text);
+        let doc = parse_document(text);
         let chunks = chunk_document(&doc);
 
         assert!(!chunks.is_empty());
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn test_byte_offsets_crlf_with_utf8() {
         let text = "# Título\r\n\r\nContenido con ñ y 🎉 celebración.\r\n\r\n## Sección\r\n\r\nMás texto aquí.\r\n";
-        let doc = parse_document(&text);
+        let doc = parse_document(text);
         let chunks = chunk_document(&doc);
 
         for chunk in &chunks {
@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn test_byte_offsets_no_overlap_between_chunks() {
         let text = "# A\n\nParagraph A content.\n\n## B\n\nParagraph B content.\n\n## C\n\nParagraph C content.\n";
-        let doc = parse_document(&text);
+        let doc = parse_document(text);
         let chunks = chunk_document(&doc);
 
         for window in chunks.windows(2) {

@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::db::meta;
 use crate::error::{BrainCoreError, Result};
 
-use super::events::TaskStatus;
+use super::events::{TaskStatus, TaskType};
 
 /// A row from the tasks projection table.
 #[derive(Debug, Clone)]
@@ -17,7 +17,7 @@ pub struct TaskRow {
     pub priority: i32,
     pub blocked_reason: Option<String>,
     pub due_ts: Option<i64>,
-    pub task_type: String,
+    pub task_type: TaskType,
     pub assignee: Option<String>,
     pub defer_until: Option<i64>,
     pub parent_task_id: Option<String>,
@@ -59,6 +59,7 @@ has_blocked_ancestor(tid) AS (
 ) ";
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
+    let task_type_str: String = row.get(7)?;
     Ok(TaskRow {
         task_id: row.get(0)?,
         title: row.get(1)?,
@@ -67,7 +68,7 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
         priority: row.get(4)?,
         blocked_reason: row.get(5)?,
         due_ts: row.get(6)?,
-        task_type: row.get(7)?,
+        task_type: task_type_str.parse().unwrap_or(TaskType::Task),
         assignee: row.get(8)?,
         defer_until: row.get(9)?,
         parent_task_id: row.get(10)?,
@@ -597,7 +598,7 @@ pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<TaskRo
 #[derive(Debug, Default)]
 pub struct TaskFilter {
     pub priority: Option<i32>,
-    pub task_type: Option<String>,
+    pub task_type: Option<TaskType>,
     pub assignee: Option<String>,
     pub label: Option<String>,
     pub search: Option<String>,
@@ -636,8 +637,8 @@ pub fn apply_filters(
             {
                 return false;
             }
-            if let Some(ref tt) = filter.task_type
-                && t.task_type != *tt
+            if let Some(tt) = filter.task_type
+                && t.task_type != tt
             {
                 return false;
             }
@@ -838,7 +839,7 @@ pub fn shortest_unique_prefix(conn: &Connection, task_id: &str) -> Result<String
     if let Some(task) = get_task(conn, task_id)?
         && let (Some(parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq)
         && let Some(parent) = get_task(conn, parent_id)?
-        && parent.task_type == "epic"
+        && parent.task_type == TaskType::Epic
     {
         let parent_prefix = shortest_unique_prefix_ulid(conn, parent_id)?;
         let dot_form = format!("{parent_prefix}.{seq}");
@@ -1473,7 +1474,7 @@ mod tests {
                 priority,
                 status: TaskStatus::Open,
                 due_ts: None,
-                task_type: Some("epic".to_string()),
+                task_type: Some(TaskType::Epic),
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,

@@ -1,6 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
@@ -90,6 +91,58 @@ impl std::str::FromStr for TaskStatus {
     }
 }
 
+/// Valid task types.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskType {
+    #[default]
+    Task,
+    Bug,
+    Feature,
+    Epic,
+    Spike,
+}
+
+impl TaskType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TaskType::Task => "task",
+            TaskType::Bug => "bug",
+            TaskType::Feature => "feature",
+            TaskType::Epic => "epic",
+            TaskType::Spike => "spike",
+        }
+    }
+}
+
+impl AsRef<str> for TaskType {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for TaskType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl FromStr for TaskType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "task" => Ok(TaskType::Task),
+            "bug" => Ok(TaskType::Bug),
+            "feature" => Ok(TaskType::Feature),
+            "epic" => Ok(TaskType::Epic),
+            "spike" => Ok(TaskType::Spike),
+            _ => Err(format!(
+                "invalid task type: '{s}'. Valid types: task, bug, feature, epic, spike"
+            )),
+        }
+    }
+}
+
 // -- Typed payloads --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,8 +156,8 @@ pub struct TaskCreatedPayload {
     pub status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due_ts: Option<i64>,
-    #[serde(default = "default_task_type", skip_serializing_if = "Option::is_none")]
-    pub task_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<TaskType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -115,10 +168,6 @@ pub struct TaskCreatedPayload {
 
 fn default_priority() -> i32 {
     4
-}
-
-fn default_task_type() -> Option<String> {
-    Some("task".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,7 +183,7 @@ pub struct TaskUpdatedPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_type: Option<String>,
+    pub task_type: Option<TaskType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

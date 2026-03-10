@@ -197,7 +197,10 @@ async fn test_full_scan_idempotent_no_duplicate_chunks() {
     write_md(&notes_dir, "b.md", "# Gamma\n\nAnother file.");
 
     // First scan
-    let stats1 = pipeline.full_scan(&[notes_dir.clone()]).await.unwrap();
+    let stats1 = pipeline
+        .full_scan(std::slice::from_ref(&notes_dir))
+        .await
+        .unwrap();
     assert_eq!(stats1.indexed, 2);
 
     let chunk_count_after_first: i64 = pipeline
@@ -237,7 +240,10 @@ async fn test_full_scan_detects_deletion() {
 
     let path = write_md(&notes_dir, "doomed.md", "# Doomed\n\nWill be removed.");
 
-    let stats = pipeline.full_scan(&[notes_dir.clone()]).await.unwrap();
+    let stats = pipeline
+        .full_scan(std::slice::from_ref(&notes_dir))
+        .await
+        .unwrap();
     assert_eq!(stats.indexed, 1);
 
     std::fs::remove_file(&path).unwrap();
@@ -271,7 +277,10 @@ async fn test_vacuum_purges_soft_deleted_files() {
     let path = write_md(&notes_dir, "old.md", "# Old\n\nWill be deleted.");
 
     // Index and then delete
-    pipeline.full_scan(&[notes_dir.clone()]).await.unwrap();
+    pipeline
+        .full_scan(std::slice::from_ref(&notes_dir))
+        .await
+        .unwrap();
     std::fs::remove_file(&path).unwrap();
     pipeline.full_scan(&[notes_dir]).await.unwrap();
 
@@ -345,7 +354,10 @@ async fn test_doctor_healthy_after_full_index() {
     write_md(&notes_dir, "a.md", "# Alpha\n\nContent of alpha.");
     write_md(&notes_dir, "b.md", "# Beta\n\nContent of beta.");
 
-    pipeline.full_scan(&[notes_dir.clone()]).await.unwrap();
+    pipeline
+        .full_scan(std::slice::from_ref(&notes_dir))
+        .await
+        .unwrap();
 
     let report = pipeline.doctor(&[notes_dir]).await.unwrap();
 
@@ -382,7 +394,10 @@ async fn test_doctor_returns_expected_check_names() {
     std::fs::create_dir_all(&notes_dir).unwrap();
 
     write_md(&notes_dir, "x.md", "# X\n\nSome content.");
-    pipeline.full_scan(&[notes_dir.clone()]).await.unwrap();
+    pipeline
+        .full_scan(std::slice::from_ref(&notes_dir))
+        .await
+        .unwrap();
 
     let report = pipeline.doctor(&[notes_dir]).await.unwrap();
 
@@ -413,7 +428,10 @@ async fn test_doctor_fts5_consistency_ok_after_index() {
         "fts.md",
         "# FTS Test\n\nThis content should appear in the FTS5 index.",
     );
-    pipeline.full_scan(&[notes_dir.clone()]).await.unwrap();
+    pipeline
+        .full_scan(std::slice::from_ref(&notes_dir))
+        .await
+        .unwrap();
 
     let report = pipeline.doctor(&[notes_dir]).await.unwrap();
 

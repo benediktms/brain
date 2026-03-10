@@ -10,6 +10,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::enrich_task_list;
+use crate::tasks::events::TaskType;
 use crate::tasks::queries::{TaskFilter, apply_filters};
 
 use super::McpTool;
@@ -75,9 +76,16 @@ impl TaskList {
         }
 
         // Parse per-field filters
+        let task_type = match params.task_type {
+            Some(ref s) => match s.parse::<TaskType>() {
+                Ok(tt) => Some(tt),
+                Err(e) => return ToolCallResult::error(e),
+            },
+            None => None,
+        };
         let filter = TaskFilter {
             priority: params.priority,
-            task_type: params.task_type,
+            task_type,
             assignee: params.assignee,
             label: params.label,
             search: params.search,
@@ -239,7 +247,7 @@ impl McpTool for TaskList {
                     },
                     "task_type": {
                         "type": "string",
-                        "description": "Filter by task type (task, bug, feature, epic)"
+                        "description": "Filter by task type (task, bug, feature, epic, spike)"
                     },
                     "assignee": {
                         "type": "string",
@@ -807,6 +815,18 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], "t1");
+    }
+
+    #[tokio::test]
+    async fn test_invalid_task_type_filter_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let result = registry
+            .dispatch("tasks.list", json!({"task_type": "story"}), &ctx)
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("invalid task type"));
     }
 
     #[tokio::test]

@@ -107,7 +107,7 @@ proptest! {
 
             std::fs::write(notes.join("a.md"), format!("# A\n\n{content_a}\n")).unwrap();
             std::fs::write(notes.join("b.md"), format!("# B\n\n{content_b}\n")).unwrap();
-            pipeline.full_scan(&[notes.clone()]).await.unwrap();
+            pipeline.full_scan(std::slice::from_ref(&notes)).await.unwrap();
 
             // Capture B's chunk hashes via a direct connection
             let db_path = tmp.path().join("brain.db");
