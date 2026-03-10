@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-03-10
+
+### Bug Fixes
+
+- Eliminate error swallowing across all tool handlers and enrichment layer
+- Rename cli package to brain for correct cargo-dist artifact naming (#41)
+- Retrieval polish wiring (#36)
+- Propagate ancestor blocked state to child tasks in ready/blocked queries
+- Hooks seup on init (#29)
+
+### Documentation
+
+- Add cross-task insights and planning references conventions (#40)
+- Update README status table — phases 3-4 done, add phase 5
+
+### Features
+
+- Auto-replace stale daemon when binary changes (#47)
+- Hide event_id and short_id from MCP/CLI output (#44)
+- Add label schema documentation and task creation guidelines
+- Add brain agent schema command and discriminated MCP inputSchema (#42)
+- Add fusion confidence metric for adaptive reranking (#39)
+- Add `brain docs` command to regenerate AGENTS.md (#38)
+- Add strict TaskType enum with spike variant (#37)
+- Batch label and dependency operations (#35)
+- Rc hardening and optimization (#34)
+- Initial task retrieval optimization (#32)
+- Add IVF-PQ vector index with auto-creation and nprobes support
+- Reduce tasks list mcp output (#31)
+- Determenistic chunking contract (#30)
+
+### Refactoring
+
+- Robustness, testability & idiomatic Rust (batch 1) (#48)
+- Extract shared task-listing helpers and eliminate panic paths
+- Add error-handling helpers and harden protocol serialization
+- Always use dot notation for child task IDs (#46)
+- Break up god files into role-focused modules (#45)
+- Migrate CLAUDE.md to AGENTS.md bridge pattern
+
 ## [0.1.2] - 2026-03-06
 
 ### Features
