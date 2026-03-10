@@ -5,7 +5,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use crate::McpTarget;
+use crate::cli::McpTarget;
 
 /// Register brain as a Claude Code MCP server (user scope).
 ///
