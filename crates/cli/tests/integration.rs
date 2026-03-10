@@ -46,15 +46,16 @@ fn init_cmd(project_dir: &std::path::Path, brain_home: &std::path::Path) -> Comm
 fn setup_brain() -> (TempDir, TempDir) {
     let project = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    init_cmd(project.path(), home.path())
-        .assert()
-        .success();
+    init_cmd(project.path(), home.path()).assert().success();
     (project, home)
 }
 
 /// Path to the sqlite DB that `brain init` creates inside `brain_home`.
 fn sqlite_db_path(brain_home: &std::path::Path) -> std::path::PathBuf {
-    brain_home.join("brains").join("test-brain").join("brain.db")
+    brain_home
+        .join("brains")
+        .join("test-brain")
+        .join("brain.db")
 }
 
 // ---------------------------------------------------------------------------
@@ -112,9 +113,7 @@ fn init_creates_brain_dir() {
     let project = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
 
-    init_cmd(project.path(), home.path())
-        .assert()
-        .success();
+    init_cmd(project.path(), home.path()).assert().success();
 
     // .brain/brain.toml should exist in the project dir
     assert!(project.path().join(".brain").join("brain.toml").is_file());
@@ -127,9 +126,7 @@ fn init_registers_brain_in_global_config() {
     let project = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
 
-    init_cmd(project.path(), home.path())
-        .assert()
-        .success();
+    init_cmd(project.path(), home.path()).assert().success();
 
     let config_path = home.path().join("config.toml");
     assert!(config_path.is_file(), "global config should be created");
@@ -145,7 +142,11 @@ fn init_creates_sqlite_db() {
     let (project, home) = setup_brain();
     let _ = project; // keep alive
     let db = sqlite_db_path(home.path());
-    assert!(db.is_file(), "sqlite db should be created at {}", db.display());
+    assert!(
+        db.is_file(),
+        "sqlite db should be created at {}",
+        db.display()
+    );
 }
 
 #[test]
@@ -154,9 +155,7 @@ fn init_fails_if_already_initialized() {
     let home = TempDir::new().unwrap();
 
     // First init succeeds
-    init_cmd(project.path(), home.path())
-        .assert()
-        .success();
+    init_cmd(project.path(), home.path()).assert().success();
 
     // Second init fails with a clear message
     init_cmd(project.path(), home.path())
