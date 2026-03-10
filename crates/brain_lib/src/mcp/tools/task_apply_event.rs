@@ -13,6 +13,7 @@ use crate::tasks::events::{
 use crate::utils::{parse_timestamp, task_row_to_json};
 
 use super::McpTool;
+use super::{Warning, inject_warnings, json_response, store_or_warn};
 
 /// Build the JSON Schema for `tasks.apply_event`.
 ///
@@ -94,6 +95,7 @@ impl TaskApplyEvent {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
+        let mut warnings: Vec<Warning> = Vec::new();
 
         // Parse event_type
         let event_type: EventType = match serde_json::from_value(json!(params.event_type)) {
@@ -222,7 +224,11 @@ impl TaskApplyEvent {
         // Fetch resulting task state
         let task_json = match ctx.tasks.get_task(&task_id) {
             Ok(Some(row)) => {
-                let labels = ctx.tasks.get_task_labels(&task_id).unwrap_or_default();
+                let labels = store_or_warn(
+                    ctx.tasks.get_task_labels(&task_id),
+                    "get_task_labels",
+                    &mut warnings,
+                );
                 task_row_to_json(&row, labels)
             }
             Ok(None) => json!(null),
@@ -238,16 +244,18 @@ impl TaskApplyEvent {
                 .payload
                 .get("new_status")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
+                .unwrap_or(""); // Type coercion: extracting string from JSON Value, not a store error
             if new_status == TaskStatus::Done.as_ref()
                 || new_status == TaskStatus::Cancelled.as_ref()
             {
-                ctx.tasks
-                    .list_newly_unblocked(&task_id)
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
-                    .collect()
+                store_or_warn(
+                    ctx.tasks.list_newly_unblocked(&task_id),
+                    "list_newly_unblocked",
+                    &mut warnings,
+                )
+                .iter()
+                .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
+                .collect()
             } else {
                 vec![]
             }
@@ -260,13 +268,14 @@ impl TaskApplyEvent {
             .compact_id(&task_id)
             .unwrap_or_else(|_| task_id.clone());
 
-        let response = json!({
+        let mut response = json!({
             "task_id": short_id,
             "task": task_json,
             "unblocked_task_ids": unblocked_task_ids,
         });
 
-        ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+        inject_warnings(&mut response, warnings);
+        json_response(&response)
     }
 }
 

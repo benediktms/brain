@@ -13,7 +13,7 @@ use crate::tasks::enrichment::enrich_task_list;
 use crate::tasks::events::TaskType;
 use crate::tasks::queries::{TaskFilter, apply_filters};
 
-use super::McpTool;
+use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,6 +168,7 @@ impl TaskList {
         limit: usize,
         ctx: &McpContext,
     ) -> ToolCallResult {
+        let mut warnings: Vec<Warning> = Vec::new();
         let total = tasks.len();
         let capped = if limit > 0 && total > limit {
             &tasks[..limit]
@@ -177,10 +178,11 @@ impl TaskList {
 
         // Batch-fetch labels for displayed tasks (eliminates N+1 queries)
         let task_ids: Vec<&str> = capped.iter().map(|t| t.task_id.as_str()).collect();
-        let labels_map = ctx
-            .tasks
-            .get_labels_for_tasks(&task_ids)
-            .unwrap_or_default();
+        let labels_map = store_or_warn(
+            ctx.tasks.get_labels_for_tasks(&task_ids),
+            "get_labels_for_tasks",
+            &mut warnings,
+        );
         let (mut tasks_json, ready_count, blocked_count) =
             enrich_task_list(&ctx.tasks, capped, &labels_map);
 
@@ -203,7 +205,7 @@ impl TaskList {
 
         let count = tasks_json.len();
         let has_more = limit > 0 && total > limit;
-        let response = json!({
+        let mut response = json!({
             "tasks": tasks_json,
             "count": count,
             "total": total,
@@ -211,7 +213,8 @@ impl TaskList {
             "ready_count": ready_count,
             "blocked_count": blocked_count,
         });
-        ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+        inject_warnings(&mut response, warnings);
+        json_response(&response)
     }
 }
 

@@ -8,7 +8,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{DependencyPayload, EventType, TaskEvent};
 
-use super::McpTool;
+use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct DepPair {
@@ -326,7 +326,7 @@ fn batch_response(succeeded: Vec<Value>, failed: Vec<Value>) -> ToolCallResult {
             "failed": failed.len(),
         },
     });
-    ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+    json_response(&response)
 }
 
 impl McpTool for TaskDepsBatch {

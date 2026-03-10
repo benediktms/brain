@@ -9,7 +9,7 @@ use crate::db::summaries::{Episode, store_episode};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-use super::McpTool;
+use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct Params {
@@ -52,7 +52,7 @@ impl MemWriteEpisode {
                     "tags": params.tags,
                     "importance": params.importance
                 });
-                ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+                json_response(&response)
             }
             Err(e) => {
                 error!(error = %e, "failed to store episode");

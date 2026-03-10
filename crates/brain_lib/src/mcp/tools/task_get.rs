@@ -10,9 +10,10 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
+use crate::tasks::queries::TaskRow;
 use crate::utils::task_row_to_json;
 
-use super::McpTool;
+use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,12 +50,8 @@ fn task_stub(task_id: &str, title: &str) -> Value {
 /// Build a full task JSON with labels but without description (expanded relations
 /// omit descriptions to keep responses concise — use `tasks.get` on the specific
 /// task to retrieve its full description).
-fn expanded_task(task_id: &str, ctx: &McpContext) -> Value {
-    let Some(row) = ctx.tasks.get_task(task_id).ok().flatten() else {
-        return task_stub(task_id, "(not found)");
-    };
-    let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
-    let mut json = task_row_to_json(&row, labels);
+fn expanded_task(row: &TaskRow, labels: Vec<String>) -> Value {
+    let mut json = task_row_to_json(row, labels);
     if let Some(obj) = json.as_object_mut() {
         obj.remove("description");
     }
@@ -65,6 +62,8 @@ pub(super) struct TaskGet;
 
 impl TaskGet {
     fn execute(&self, params: Value, ctx: &McpContext) -> ToolCallResult {
+        let mut warnings: Vec<Warning> = Vec::new();
+
         let params: Params = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
@@ -88,32 +87,74 @@ impl TaskGet {
         };
 
         // 3. Fetch enrichment data
-        let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
-        let external_ids = ctx.tasks.get_external_ids(task_id).unwrap_or_default();
+        let labels = store_or_warn(
+            ctx.tasks.get_task_labels(task_id),
+            "get_task_labels",
+            &mut warnings,
+        );
+        let external_ids = store_or_warn(
+            ctx.tasks.get_external_ids(task_id),
+            "get_external_ids",
+            &mut warnings,
+        );
 
-        let comments = ctx.tasks.get_task_comments(task_id).unwrap_or_default();
+        let comments = store_or_warn(
+            ctx.tasks.get_task_comments(task_id),
+            "get_task_comments",
+            &mut warnings,
+        );
         let comments_json = comments_to_json(&comments);
 
-        let dep_summary = ctx
-            .tasks
-            .get_dependency_summary(task_id)
-            .unwrap_or_else(|_| crate::tasks::queries::DependencySummary {
-                total_deps: 0,
-                done_deps: 0,
-                blocking_task_ids: vec![],
-            });
+        let dep_summary = match ctx.tasks.get_dependency_summary(task_id) {
+            Ok(summary) => summary,
+            Err(err) => {
+                warnings.push(Warning {
+                    source: "get_dependency_summary".to_string(),
+                    error: err.to_string(),
+                });
+                crate::tasks::queries::DependencySummary {
+                    total_deps: 0,
+                    done_deps: 0,
+                    blocking_task_ids: vec![],
+                }
+            }
+        };
 
-        let note_links = ctx.tasks.get_task_note_links(task_id).unwrap_or_default();
+        let note_links = store_or_warn(
+            ctx.tasks.get_task_note_links(task_id),
+            "get_task_note_links",
+            &mut warnings,
+        );
         let linked_notes_json = note_links_to_json(&note_links);
 
-        let children = ctx.tasks.get_children(task_id).unwrap_or_default();
-        let blocks = ctx.tasks.get_tasks_blocking(task_id).unwrap_or_default();
+        let children = store_or_warn(
+            ctx.tasks.get_children(task_id),
+            "get_children",
+            &mut warnings,
+        );
+        let blocks = store_or_warn(
+            ctx.tasks.get_tasks_blocking(task_id),
+            "get_tasks_blocking",
+            &mut warnings,
+        );
 
         // 4. Build parent field
         let parent_json = if params.expand.contains(&ExpandField::Parent) {
             task.parent_task_id
                 .as_deref()
-                .map(|pid| expanded_task(pid, ctx))
+                .map(|pid| {
+                    let Some(parent) =
+                        store_or_warn(ctx.tasks.get_task(pid), "get_task", &mut warnings)
+                    else {
+                        return task_stub(pid, "(not found)");
+                    };
+                    let parent_labels = store_or_warn(
+                        ctx.tasks.get_task_labels(pid),
+                        "get_task_labels",
+                        &mut warnings,
+                    );
+                    expanded_task(&parent, parent_labels)
+                })
                 .unwrap_or(Value::Null)
         } else {
             task.parent_task_id
@@ -134,7 +175,11 @@ impl TaskGet {
             children
                 .iter()
                 .map(|c| {
-                    let labels = ctx.tasks.get_task_labels(&c.task_id).unwrap_or_default();
+                    let labels = store_or_warn(
+                        ctx.tasks.get_task_labels(&c.task_id),
+                        "get_task_labels",
+                        &mut warnings,
+                    );
                     let mut json = task_row_to_json(c, labels);
                     if let Some(obj) = json.as_object_mut() {
                         obj.remove("description");
@@ -154,7 +199,19 @@ impl TaskGet {
             dep_summary
                 .blocking_task_ids
                 .iter()
-                .map(|id| expanded_task(id, ctx))
+                .map(|id| {
+                    let Some(blocking_task) =
+                        store_or_warn(ctx.tasks.get_task(id), "get_task", &mut warnings)
+                    else {
+                        return task_stub(id, "(not found)");
+                    };
+                    let blocking_labels = store_or_warn(
+                        ctx.tasks.get_task_labels(id),
+                        "get_task_labels",
+                        &mut warnings,
+                    );
+                    expanded_task(&blocking_task, blocking_labels)
+                })
                 .collect()
         } else {
             dep_summary
@@ -175,7 +232,11 @@ impl TaskGet {
             blocks
                 .iter()
                 .map(|b| {
-                    let labels = ctx.tasks.get_task_labels(&b.task_id).unwrap_or_default();
+                    let labels = store_or_warn(
+                        ctx.tasks.get_task_labels(&b.task_id),
+                        "get_task_labels",
+                        &mut warnings,
+                    );
                     let mut json = task_row_to_json(b, labels);
                     if let Some(obj) = json.as_object_mut() {
                         obj.remove("description");
@@ -224,7 +285,8 @@ impl TaskGet {
             );
         }
 
-        ToolCallResult::text(serde_json::to_string_pretty(&task_json).unwrap_or_default())
+        inject_warnings(&mut task_json, warnings);
+        json_response(&task_json)
     }
 }
 

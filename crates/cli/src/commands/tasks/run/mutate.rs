@@ -83,7 +83,13 @@ pub fn close(ctx: &TaskCtx, ids: &[String]) -> Result<()> {
         );
         ctx.store.append(&event)?;
 
-        let unblocked = ctx.store.list_newly_unblocked(&id).unwrap_or_default();
+        let unblocked = match ctx.store.list_newly_unblocked(&id) {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!("Failed to list newly unblocked tasks: {e}");
+                Default::default()
+            }
+        };
         all_unblocked.extend(unblocked.clone());
 
         if ctx.json {

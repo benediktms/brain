@@ -75,10 +75,13 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
 
     if ctx.json {
         let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
-        let labels_map = ctx
-            .store
-            .get_labels_for_tasks(&task_ids)
-            .unwrap_or_default();
+        let labels_map = match ctx.store.get_labels_for_tasks(&task_ids) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("Failed to get labels for tasks: {e}");
+                Default::default()
+            }
+        };
         let (mut items, ready_count, blocked_count) =
             enrich_task_list(&ctx.store, &tasks, &labels_map);
         if !params.include_description {
@@ -186,10 +189,13 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
 
     // Batch-fetch labels for all tasks
     let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
-    let labels_map = ctx
-        .store
-        .get_labels_for_tasks(&task_ids)
-        .unwrap_or_default();
+    let labels_map = match ctx.store.get_labels_for_tasks(&task_ids) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("Failed to get labels for tasks: {e}");
+            Default::default()
+        }
+    };
 
     let tasks = apply_filters(tasks, &filter, fts_ids.as_ref(), Some(&labels_map));
 

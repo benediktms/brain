@@ -11,7 +11,7 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::enrich_task_summaries;
 use crate::tasks::events::TaskType;
 
-use super::McpTool;
+use super::{McpTool, inject_warnings, json_response, store_or_warn};
 
 #[derive(Deserialize)]
 struct Params {
@@ -150,15 +150,21 @@ impl TaskNext {
             .collect();
 
         // Get aggregate counts
-        let (ready_count, blocked_count) = ctx.tasks.count_ready_blocked().unwrap_or((0, 0));
+        let mut warnings = Vec::new();
+        let (ready_count, blocked_count) = store_or_warn(
+            ctx.tasks.count_ready_blocked(),
+            "count_ready_blocked",
+            &mut warnings,
+        );
 
-        let response = json!({
+        let mut response = json!({
             "results": groups_json,
             "ready_count": ready_count,
             "blocked_count": blocked_count,
         });
 
-        ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+        inject_warnings(&mut response, warnings);
+        json_response(&response)
     }
 }
 

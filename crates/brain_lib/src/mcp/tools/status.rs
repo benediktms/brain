@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-use super::McpTool;
+use super::{McpTool, json_response};
 
 pub(super) struct Status;
 
@@ -36,24 +36,49 @@ impl McpTool for Status {
             let mut snapshot = ctx.metrics.snapshot();
 
             // Enrich with stuck-file count from SQLite
-            let stuck_count = ctx
-                .db
-                .with_read_conn(|conn| {
-                    let count: u64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
-                            [],
-                            |row| row.get(0),
-                        )
-                        .optional()?
-                        .unwrap_or(0);
-                    Ok(count)
-                })
-                .unwrap_or(0);
+            let stuck_file_count = match ctx.db.with_read_conn(|conn| {
+                let count: u64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0);
+                Ok(count)
+            }) {
+                Ok(count) => count,
+                Err(err) => {
+                    return ToolCallResult::error(format!(
+                        "Failed to read stuck file count: {err}"
+                    ));
+                }
+            };
 
-            snapshot.dual_store_stuck_files = stuck_count;
+            let stale_hash_count = match ctx.db.with_read_conn(|conn| {
+                let count: u64 = conn
+                    .query_row(
+                        "SELECT value FROM brain_meta WHERE key = 'stale_hashes_prevented'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .and_then(|v: String| v.parse::<u64>().ok())
+                    .unwrap_or(0);
+                Ok(count)
+            }) {
+                Ok(count) => count,
+                Err(err) => {
+                    return ToolCallResult::error(format!(
+                        "Failed to read stale hash count: {err}"
+                    ));
+                }
+            };
 
-            ToolCallResult::text(serde_json::to_string_pretty(&snapshot).unwrap_or_default())
+            snapshot.dual_store_stuck_files = stuck_file_count;
+            snapshot.stale_hashes_prevented = stale_hash_count;
+
+            json_response(&snapshot)
         })
     }
 }

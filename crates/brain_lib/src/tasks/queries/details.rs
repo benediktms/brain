@@ -6,7 +6,7 @@ use crate::tasks::events::TaskStatus;
 use super::ANCESTOR_BLOCKED_CTE;
 
 /// Summary of a task's dependency state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DependencySummary {
     pub total_deps: usize,
     pub done_deps: usize,

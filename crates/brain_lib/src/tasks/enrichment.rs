@@ -115,15 +115,39 @@ fn attach_summary_fields(
 
 /// Enrich a single task with dependency_summary and linked_notes (used by task_next).
 pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
-    let dep_summary = store
-        .get_dependency_summary(&task.task_id)
-        .unwrap_or_else(|_| DependencySummary {
-            total_deps: 0,
-            done_deps: 0,
-            blocking_task_ids: vec![],
-        });
-    let note_links = store.get_task_note_links(&task.task_id).unwrap_or_default();
-    let labels = store.get_task_labels(&task.task_id).unwrap_or_default();
+    let dep_summary = match store.get_dependency_summary(&task.task_id) {
+        Ok(dep_summary) => dep_summary,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to get_dependency_summary for {}: {}",
+                task.task_id,
+                err
+            );
+            DependencySummary {
+                total_deps: 0,
+                done_deps: 0,
+                blocking_task_ids: vec![],
+            }
+        }
+    };
+    let note_links = match store.get_task_note_links(&task.task_id) {
+        Ok(note_links) => note_links,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to get_task_note_links for {}: {}",
+                task.task_id,
+                err
+            );
+            Vec::default()
+        }
+    };
+    let labels = match store.get_task_labels(&task.task_id) {
+        Ok(labels) => labels,
+        Err(err) => {
+            tracing::warn!("Failed to get_task_labels for {}: {}", task.task_id, err);
+            Vec::default()
+        }
+    };
 
     let mut task_json = task_row_to_json(task, labels);
     attach_summary_fields(&mut task_json, &dep_summary, &note_links);
@@ -145,7 +169,13 @@ pub fn enrich_task_list(
             task_row_to_json(task, labels)
         })
         .collect();
-    let (ready_count, blocked_count) = store.count_ready_blocked().unwrap_or((0, 0));
+    let (ready_count, blocked_count) = match store.count_ready_blocked() {
+        Ok(counts) => counts,
+        Err(err) => {
+            tracing::warn!("Failed to count_ready_blocked: {}", err);
+            (0, 0)
+        }
+    };
     (tasks_json, ready_count, blocked_count)
 }
 
@@ -155,19 +185,43 @@ pub fn enrich_task_list(
 /// query instead of N per-task queries.
 pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value> {
     let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
-    let labels_map = store.get_labels_for_tasks(&task_ids).unwrap_or_default();
+    let labels_map = match store.get_labels_for_tasks(&task_ids) {
+        Ok(labels_map) => labels_map,
+        Err(err) => {
+            tracing::warn!("Failed to get_labels_for_tasks: {}", err);
+            HashMap::default()
+        }
+    };
 
     tasks
         .iter()
         .map(|task| {
-            let dep_summary = store
-                .get_dependency_summary(&task.task_id)
-                .unwrap_or_else(|_| DependencySummary {
-                    total_deps: 0,
-                    done_deps: 0,
-                    blocking_task_ids: vec![],
-                });
-            let note_links = store.get_task_note_links(&task.task_id).unwrap_or_default();
+            let dep_summary = match store.get_dependency_summary(&task.task_id) {
+                Ok(dep_summary) => dep_summary,
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to get_dependency_summary for {}: {}",
+                        task.task_id,
+                        err
+                    );
+                    DependencySummary {
+                        total_deps: 0,
+                        done_deps: 0,
+                        blocking_task_ids: vec![],
+                    }
+                }
+            };
+            let note_links = match store.get_task_note_links(&task.task_id) {
+                Ok(note_links) => note_links,
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to get_task_note_links for {}: {}",
+                        task.task_id,
+                        err
+                    );
+                    Vec::default()
+                }
+            };
             let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
 
             let mut task_json = task_row_to_json(task, labels);

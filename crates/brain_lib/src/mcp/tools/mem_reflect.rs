@@ -8,7 +8,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::QueryPipeline;
 
-use super::McpTool;
+use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct Params {
@@ -122,7 +122,7 @@ impl McpTool for MemReflect {
                 },
             });
 
-            ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+            json_response(&response)
         })
     }
 }

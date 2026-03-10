@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-use super::McpTool;
+use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 pub(super) struct TaskLabelsSummary;
 
@@ -17,7 +17,8 @@ impl TaskLabelsSummary {
             Err(e) => return ToolCallResult::error(format!("Failed to query labels: {e}")),
         };
 
-        let prefixes = ctx.tasks.compact_ids().unwrap_or_default();
+        let mut warnings: Vec<Warning> = Vec::new();
+        let prefixes = store_or_warn(ctx.tasks.compact_ids(), "compact_ids", &mut warnings);
 
         let labels: Vec<Value> = summaries
             .into_iter()
@@ -40,8 +41,9 @@ impl TaskLabelsSummary {
             })
             .collect();
 
-        let response = json!({ "labels": labels });
-        ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+        let mut response = json!({ "labels": labels });
+        inject_warnings(&mut response, warnings);
+        json_response(&response)
     }
 }
 

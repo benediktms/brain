@@ -8,7 +8,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
 
-use super::McpTool;
+use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 /// Accepts either a single string or an array of strings.
 #[derive(Deserialize)]
@@ -49,6 +49,7 @@ impl TaskClose {
         let mut closed = Vec::new();
         let mut failed = Vec::new();
         let mut total_unblocked = 0usize;
+        let mut warnings: Vec<Warning> = Vec::new();
 
         for raw_id in &ids {
             let resolved = match ctx.tasks.resolve_task_id(raw_id) {
@@ -78,13 +79,14 @@ impl TaskClose {
                 continue;
             }
 
-            let unblocked: Vec<String> = ctx
-                .tasks
-                .list_newly_unblocked(&resolved)
-                .unwrap_or_default()
-                .iter()
-                .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
-                .collect();
+            let unblocked: Vec<String> = store_or_warn(
+                ctx.tasks.list_newly_unblocked(&resolved),
+                "list_newly_unblocked",
+                &mut warnings,
+            )
+            .iter()
+            .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
+            .collect();
             let short_id = ctx
                 .tasks
                 .compact_id(&resolved)
@@ -97,7 +99,7 @@ impl TaskClose {
             }));
         }
 
-        let response = json!({
+        let mut response = json!({
             "closed": closed,
             "failed": failed,
             "summary": {
@@ -106,7 +108,8 @@ impl TaskClose {
                 "unblocked": total_unblocked,
             },
         });
-        ToolCallResult::text(serde_json::to_string_pretty(&response).unwrap_or_default())
+        inject_warnings(&mut response, warnings);
+        json_response(&response)
     }
 }
 
