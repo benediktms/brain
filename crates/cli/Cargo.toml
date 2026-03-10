@@ -1,5 +1,5 @@
 [package]
-name = "cli"
+name = "brain"
 version.workspace = true
 edition.workspace = true
 repository = "https://github.com/benediktms/brain"
