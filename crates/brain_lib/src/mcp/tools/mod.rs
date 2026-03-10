@@ -1,3 +1,4 @@
+mod helpers;
 /// MCP tool definitions and handlers.
 mod mem_expand;
 mod mem_reflect;
@@ -12,6 +13,8 @@ mod task_labels_batch;
 mod task_labels_summary;
 mod task_list;
 mod task_next;
+
+pub use helpers::*;
 
 use std::future::Future;
 use std::pin::Pin;

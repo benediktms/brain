@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::db::Db;
 use crate::embedder::Embed;
@@ -65,12 +65,8 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
             Ok(req) => handle_request(req, &ctx, &registry).await,
             Err(e) => {
                 error!(error = %e, "invalid JSON-RPC request");
-                serde_json::to_string(&JsonRpcError::new(
-                    None,
-                    -32700,
-                    format!("Parse error: {e}"),
-                ))
-                .unwrap_or_default()
+                r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#
+                    .to_string()
             }
         };
 
@@ -135,7 +131,10 @@ async fn handle_request(req: JsonRpcRequest, ctx: &McpContext, registry: &ToolRe
                 .params
                 .get("name")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
+                .unwrap_or_else(|| {
+                    warn!("MCP request missing tool name");
+                    ""
+                });
             let arguments = req
                 .params
                 .get("arguments")
@@ -160,11 +159,17 @@ async fn handle_request(req: JsonRpcRequest, ctx: &McpContext, registry: &ToolRe
 }
 
 fn serialize_response(resp: &JsonRpcResponse) -> String {
-    serde_json::to_string(resp).unwrap_or_default()
+    serde_json::to_string(resp).unwrap_or_else(|e| {
+        error!("Failed to serialize MCP response: {e}");
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal: response serialization failed"}}"#.to_string()
+    })
 }
 
 fn serialize_error(err: &JsonRpcError) -> String {
-    serde_json::to_string(err).unwrap_or_default()
+    serde_json::to_string(err).unwrap_or_else(|e| {
+        error!("Failed to serialize MCP error: {e}");
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal: error serialization failed"}}"#.to_string()
+    })
 }
 
 #[cfg(test)]
