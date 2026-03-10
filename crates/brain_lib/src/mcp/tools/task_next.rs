@@ -70,7 +70,7 @@ impl TaskNext {
         // Build enriched task JSON with batch label fetching
         let mut results_json = enrich_task_summaries(&ctx.tasks, &selected);
 
-        // Add short_id and strip description from each task
+        // Replace task_id with short form and strip description from each task
         for task_val in &mut results_json {
             if let Some(obj) = task_val.as_object_mut() {
                 if let Some(tid) = obj
@@ -82,7 +82,7 @@ impl TaskNext {
                         .tasks
                         .shortest_unique_prefix(&tid)
                         .unwrap_or_else(|_| tid.clone());
-                    obj.insert("short_id".into(), json!(short));
+                    obj.insert("task_id".into(), json!(short));
                 }
                 obj.remove("description");
             }
@@ -107,8 +107,7 @@ impl TaskNext {
                             .shortest_unique_prefix(&t.task_id)
                             .unwrap_or_else(|_| t.task_id.clone());
                         json!({
-                            "short_id": short_id,
-                            "task_id": t.task_id,
+                            "task_id": short_id,
                             "title": t.title,
                         })
                     });

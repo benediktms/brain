@@ -14,30 +14,12 @@ use crate::utils::{parse_timestamp, task_row_to_json};
 
 use super::McpTool;
 
-/// Shared JSON Schema fragment for timestamp fields that accept ISO 8601 strings
-/// or Unix-seconds integers.
-fn timestamp_schema(description: &str) -> Value {
-    json!({
-        "oneOf": [
-            { "type": "string", "description": "ISO 8601 datetime (e.g. \"2026-03-15T00:00:00Z\")" },
-            { "type": "integer", "description": "Unix seconds" }
-        ],
-        "description": description
-    })
-}
-
-/// Shared JSON Schema fragment for the `task_type` enum.
-fn task_type_schema() -> Value {
-    json!({
-        "type": "string",
-        "enum": ["task", "bug", "feature", "epic", "spike"]
-    })
-}
-
-/// Build the full discriminated JSON Schema for `tasks.apply_event`.
+/// Build the JSON Schema for `tasks.apply_event`.
 ///
-/// Uses `allOf` with `if/then` blocks keyed on `event_type` so that MCP clients
-/// (and agents) can validate per-event-type payloads at the schema level.
+/// Note: The Anthropic API does not support `oneOf`/`allOf`/`anyOf` at the
+/// top level of `input_schema`, so we use a flat schema with per-event-type
+/// payload fields documented in the description. Runtime validation is handled
+/// by serde deserialization.
 fn apply_event_schema() -> Value {
     let event_types = [
         "task_created",
@@ -53,132 +35,6 @@ fn apply_event_schema() -> Value {
         "parent_set",
         "external_id_added",
         "external_id_removed",
-    ];
-
-    // -- per-event payload schemas --
-
-    let task_created_payload = json!({
-        "type": "object",
-        "properties": {
-            "title": { "type": "string" },
-            "description": { "type": ["string", "null"] },
-            "priority": { "type": "integer", "minimum": 0, "maximum": 5, "default": 4 },
-            "status": { "type": "string", "enum": ["open", "in_progress", "blocked", "done", "cancelled"], "default": "open" },
-            "due_ts": timestamp_schema("Due date"),
-            "task_type": task_type_schema(),
-            "assignee": { "type": ["string", "null"] },
-            "defer_until": timestamp_schema("Defer until date"),
-            "parent_task_id": { "type": ["string", "null"] }
-        },
-        "required": ["title"],
-        "additionalProperties": false
-    });
-
-    let task_updated_payload = json!({
-        "type": "object",
-        "properties": {
-            "title": { "type": "string" },
-            "description": { "type": ["string", "null"] },
-            "priority": { "type": "integer", "minimum": 0, "maximum": 5 },
-            "due_ts": timestamp_schema("Due date"),
-            "blocked_reason": { "type": ["string", "null"] },
-            "task_type": task_type_schema(),
-            "assignee": { "type": ["string", "null"] },
-            "defer_until": timestamp_schema("Defer until date")
-        },
-        "additionalProperties": false
-    });
-
-    let status_changed_payload = json!({
-        "type": "object",
-        "properties": {
-            "new_status": {
-                "type": "string",
-                "enum": ["open", "in_progress", "blocked", "done", "cancelled"]
-            }
-        },
-        "required": ["new_status"],
-        "additionalProperties": false
-    });
-
-    let dependency_payload = json!({
-        "type": "object",
-        "properties": {
-            "depends_on_task_id": { "type": "string" }
-        },
-        "required": ["depends_on_task_id"],
-        "additionalProperties": false
-    });
-
-    let note_link_payload = json!({
-        "type": "object",
-        "properties": {
-            "chunk_id": { "type": "string" }
-        },
-        "required": ["chunk_id"],
-        "additionalProperties": false
-    });
-
-    let label_payload = json!({
-        "type": "object",
-        "properties": {
-            "label": { "type": "string" }
-        },
-        "required": ["label"],
-        "additionalProperties": false
-    });
-
-    let comment_payload = json!({
-        "type": "object",
-        "properties": {
-            "body": { "type": "string" }
-        },
-        "required": ["body"],
-        "additionalProperties": false
-    });
-
-    let parent_set_payload = json!({
-        "type": "object",
-        "properties": {
-            "parent_task_id": { "type": ["string", "null"], "description": "Parent task ID, or null to clear" }
-        },
-        "additionalProperties": false
-    });
-
-    let external_id_payload = json!({
-        "type": "object",
-        "properties": {
-            "source": { "type": "string" },
-            "external_id": { "type": "string" },
-            "external_url": { "type": ["string", "null"] }
-        },
-        "required": ["source", "external_id"],
-        "additionalProperties": false
-    });
-
-    // -- if/then blocks --
-
-    let if_then = |event_type: &str, payload_schema: Value| -> Value {
-        json!({
-            "if": { "properties": { "event_type": { "const": event_type } } },
-            "then": { "properties": { "payload": payload_schema } }
-        })
-    };
-
-    let all_of = vec![
-        if_then("task_created", task_created_payload),
-        if_then("task_updated", task_updated_payload),
-        if_then("status_changed", status_changed_payload),
-        if_then("dependency_added", dependency_payload.clone()),
-        if_then("dependency_removed", dependency_payload),
-        if_then("note_linked", note_link_payload.clone()),
-        if_then("note_unlinked", note_link_payload),
-        if_then("label_added", label_payload.clone()),
-        if_then("label_removed", label_payload),
-        if_then("comment_added", comment_payload),
-        if_then("parent_set", parent_set_payload),
-        if_then("external_id_added", external_id_payload.clone()),
-        if_then("external_id_removed", external_id_payload),
     ];
 
     json!({
@@ -200,11 +56,20 @@ fn apply_event_schema() -> Value {
             },
             "payload": {
                 "type": "object",
-                "description": "Event-type-specific payload. See allOf constraints for per-event-type field definitions. Timestamps (due_ts, defer_until) accept ISO 8601 strings (preferred) or Unix-seconds integers."
+                "description": "Event-type-specific payload object. Timestamps (due_ts, defer_until) accept ISO 8601 strings (preferred) or Unix-seconds integers.\n\n\
+                Per event_type payloads:\n\
+                - task_created: {title (required), description, priority (0-5, default 4), status (open|in_progress|blocked|done|cancelled, default open), due_ts, task_type (task|bug|feature|epic|spike), assignee, defer_until, parent_task_id}\n\
+                - task_updated: {title, description, priority, due_ts, blocked_reason, task_type, assignee, defer_until}\n\
+                - status_changed: {new_status (required, open|in_progress|blocked|done|cancelled)}\n\
+                - dependency_added/dependency_removed: {depends_on_task_id (required)}\n\
+                - note_linked/note_unlinked: {chunk_id (required)}\n\
+                - label_added/label_removed: {label (required)}\n\
+                - comment_added: {body (required)}\n\
+                - parent_set: {parent_task_id (string or null to clear)}\n\
+                - external_id_added/external_id_removed: {source (required), external_id (required), external_url}"
             }
         },
-        "required": ["event_type", "payload"],
-        "allOf": all_of
+        "required": ["event_type", "payload"]
     })
 }
 
@@ -368,7 +233,7 @@ impl TaskApplyEvent {
         };
 
         // Detect newly unblocked tasks after status_changed to done/cancelled
-        let unblocked_task_ids = if event_type == EventType::StatusChanged {
+        let unblocked_task_ids: Vec<String> = if event_type == EventType::StatusChanged {
             let new_status = event
                 .payload
                 .get("new_status")
@@ -377,7 +242,16 @@ impl TaskApplyEvent {
             if new_status == TaskStatus::Done.as_ref()
                 || new_status == TaskStatus::Cancelled.as_ref()
             {
-                ctx.tasks.list_newly_unblocked(&task_id).unwrap_or_default()
+                ctx.tasks
+                    .list_newly_unblocked(&task_id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|id| {
+                        ctx.tasks
+                            .shortest_unique_prefix(id)
+                            .unwrap_or_else(|_| id.clone())
+                    })
+                    .collect()
             } else {
                 vec![]
             }
@@ -391,9 +265,7 @@ impl TaskApplyEvent {
             .unwrap_or_else(|_| task_id.clone());
 
         let response = json!({
-            "event_id": event.event_id,
-            "task_id": task_id,
-            "short_id": short_id,
+            "task_id": short_id,
             "task": task_json,
             "unblocked_task_ids": unblocked_task_ids,
         });
@@ -456,7 +328,7 @@ mod tests {
         let text = &result.content[0].text;
         let parsed: Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["task_id"], "test-1");
-        assert!(parsed["event_id"].is_string());
+
         assert_eq!(parsed["task"]["title"], "My first task");
         assert_eq!(parsed["task"]["status"], "open");
         assert_eq!(parsed["task"]["priority"], 2);

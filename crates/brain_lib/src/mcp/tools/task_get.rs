@@ -197,7 +197,7 @@ impl TaskGet {
             .unwrap_or_else(|_| task_id.to_string());
         let mut task_json = task_row_to_json(&task, labels);
         if let Some(obj) = task_json.as_object_mut() {
-            obj.insert("short_id".into(), json!(short_id));
+            obj.insert("task_id".into(), json!(short_id));
             obj.insert("parent".into(), parent_json);
             obj.insert("children".into(), json!(children_json));
             obj.insert("blocked_by".into(), json!(blocked_by_json));
