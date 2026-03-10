@@ -256,7 +256,12 @@ impl TaskApplyEvent {
             payload
         };
 
-        let event = TaskEvent::from_raw(task_id.clone(), validated.actor, event_type.clone(), payload);
+        let event = TaskEvent::from_raw(
+            task_id.clone(),
+            validated.actor,
+            event_type.clone(),
+            payload,
+        );
 
         // Append (validates + writes JSONL + applies projection)
         if let Err(e) = ctx.tasks.append(&event) {
@@ -822,7 +827,11 @@ mod tests {
     #[test]
     fn unit_task_id_too_long() {
         let long_id = "a".repeat(257);
-        let params = make_params("status_changed", Some(&long_id), json!({"new_status": "done"}));
+        let params = make_params(
+            "status_changed",
+            Some(&long_id),
+            json!({"new_status": "done"}),
+        );
         let err = super::parse_and_validate_event(&params).unwrap_err();
         assert!(err.contains("task_id exceeds maximum length"), "got: {err}");
     }
@@ -830,7 +839,11 @@ mod tests {
     #[test]
     fn unit_task_id_exactly_256_ok() {
         let id_256 = "a".repeat(256);
-        let params = make_params("status_changed", Some(&id_256), json!({"new_status": "done"}));
+        let params = make_params(
+            "status_changed",
+            Some(&id_256),
+            json!({"new_status": "done"}),
+        );
         assert!(
             super::parse_and_validate_event(&params).is_ok(),
             "256-char task_id should be accepted"
@@ -860,11 +873,7 @@ mod tests {
     #[test]
     fn unit_valid_task_type_accepted() {
         for tt in &["task", "bug", "feature", "epic", "spike"] {
-            let params = make_params(
-                "task_created",
-                None,
-                json!({"title": "x", "task_type": tt}),
-            );
+            let params = make_params("task_created", None, json!({"title": "x", "task_type": tt}));
             assert!(
                 super::parse_and_validate_event(&params).is_ok(),
                 "task_type '{tt}' should be valid"

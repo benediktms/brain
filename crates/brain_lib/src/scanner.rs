@@ -104,7 +104,11 @@ mod tests {
         let paths = sorted_paths(results);
 
         // Should find a.md and visible/c.md — not b.md (hidden dir) or d.txt
-        assert_eq!(paths.len(), 2, "expected exactly 2 .md files, got: {paths:?}");
+        assert_eq!(
+            paths.len(),
+            2,
+            "expected exactly 2 .md files, got: {paths:?}"
+        );
 
         let names: Vec<&str> = paths
             .iter()
