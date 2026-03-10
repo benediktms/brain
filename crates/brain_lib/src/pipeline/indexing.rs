@@ -1,0 +1,323 @@
+use std::path::Path;
+
+use tracing::{info, instrument, warn};
+
+use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
+use crate::db::chunks::{ChunkMeta, get_chunk_hashes, replace_chunk_metadata};
+use crate::db::links::replace_links;
+use crate::hash_gate::HashGate;
+use crate::links::{Link, extract_links};
+use crate::parser::parse_document;
+
+use super::{IndexPipeline, ScanStats};
+
+/// Max chunks to accumulate before flushing an embedding wave.
+/// Caps memory at ~few MB of text + embeddings during large imports.
+const MAX_PENDING_CHUNKS: usize = 256;
+
+/// File that passed hash gate and is waiting for batch embedding.
+struct PendingFile {
+    file_id: String,
+    path_str: String,
+    hash: String,
+    chunks: Vec<Chunk>,
+    links: Vec<Link>,
+}
+
+/// Build ChunkMeta vec from chunks and file_id.
+fn build_chunk_metas(file_id: &str, chunks: &[Chunk]) -> Vec<ChunkMeta> {
+    chunks
+        .iter()
+        .map(|c| ChunkMeta {
+            chunk_id: format!("{file_id}:{}", c.ord),
+            chunk_ord: c.ord,
+            chunk_hash: c.chunk_hash.clone(),
+            chunker_version: CHUNKER_VERSION,
+            content: c.content.clone(),
+            heading_path: c.heading_path.clone(),
+            byte_start: c.byte_start,
+            byte_end: c.byte_end,
+            token_estimate: c.token_estimate,
+        })
+        .collect()
+}
+
+/// Check if new chunk hashes match stored chunk hashes (same count, same order).
+fn chunks_match_stored(chunks: &[Chunk], stored_hashes: &[String]) -> bool {
+    chunks.len() == stored_hashes.len()
+        && chunks
+            .iter()
+            .zip(stored_hashes.iter())
+            .all(|(c, stored)| c.chunk_hash == *stored)
+}
+
+impl IndexPipeline {
+    /// Index a single file. Returns true if it was actually re-indexed (not skipped).
+    #[instrument(skip(self))]
+    pub async fn index_file(&self, path: &Path) -> crate::error::Result<bool> {
+        let start = std::time::Instant::now();
+        let content = tokio::fs::read_to_string(path).await?;
+        let path_str = path.to_string_lossy().to_string();
+
+        let gate = HashGate::new(&self.db);
+        let verdict = gate.check(&path_str, &content)?;
+        if !verdict.should_index {
+            self.metrics.record_stale_hash_prevented();
+            return Ok(false);
+        }
+
+        gate.mark_in_progress(&verdict.file_id)?;
+
+        // Parse → Chunk → Extract links
+        let doc = parse_document(&content);
+        let chunks = chunk_document(&doc);
+        let links = extract_links(&content);
+
+        if chunks.is_empty() {
+            // Empty file — clear any existing chunks and links
+            self.store.delete_file_chunks(&verdict.file_id).await?;
+            self.db.with_write_conn(|conn| {
+                replace_chunk_metadata(conn, &verdict.file_id, &[])?;
+                replace_links(conn, &verdict.file_id, &[])?;
+                Ok(())
+            })?;
+            gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+            return Ok(true);
+        }
+
+        // Version-bump optimization: if chunk hashes are identical, skip embedding.
+        let stored_hashes = self
+            .db
+            .with_read_conn(|conn| get_chunk_hashes(conn, &verdict.file_id))?;
+
+        let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
+        self.db.with_write_conn(|conn| {
+            replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
+            replace_links(conn, &verdict.file_id, &links)?;
+            Ok(())
+        })?;
+
+        if chunks_match_stored(&chunks, &stored_hashes) {
+            gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+            self.metrics.record_index_latency(start.elapsed());
+            return Ok(true);
+        }
+
+        // Embed (in blocking task since it's CPU-intensive)
+        let texts_owned: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
+        let embeddings = crate::embedder::embed_batch_async(&self.embedder, texts_owned).await?;
+
+        // LanceDB: upsert
+        let chunk_pairs: Vec<(usize, &str)> =
+            chunks.iter().map(|c| (c.ord, c.content.as_str())).collect();
+        self.store
+            .upsert_chunks(&verdict.file_id, &path_str, &chunk_pairs, &embeddings)
+            .await?;
+
+        // Mark indexed (sets hash + state=indexed)
+        gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+
+        self.metrics.record_index_latency(start.elapsed());
+        Ok(true)
+    }
+
+    /// Batch-index multiple files. Groups chunks across files and flushes
+    /// in waves when the pending chunk count exceeds MAX_PENDING_CHUNKS.
+    #[instrument(skip(self))]
+    pub async fn index_files_batch(
+        &self,
+        paths: &[std::path::PathBuf],
+    ) -> crate::error::Result<ScanStats> {
+        let mut stats = ScanStats::default();
+        let mut pending: Vec<PendingFile> = Vec::new();
+        let mut total_chunks: usize = 0;
+
+        let gate = HashGate::new(&self.db);
+
+        for path in paths {
+            let content = match tokio::fs::read_to_string(path).await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(path = %path.display(), error = %e, "failed to read file in batch");
+                    self.metrics
+                        .indexing_errors
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    stats.errors += 1;
+                    continue;
+                }
+            };
+
+            let path_str = path.to_string_lossy().to_string();
+
+            let verdict = match gate.check(&path_str, &content) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(path = %path.display(), error = %e, "hash gate error in batch");
+                    self.metrics
+                        .indexing_errors
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    stats.errors += 1;
+                    continue;
+                }
+            };
+
+            if !verdict.should_index {
+                self.metrics.record_stale_hash_prevented();
+                stats.skipped += 1;
+                continue;
+            }
+
+            gate.mark_in_progress(&verdict.file_id)?;
+
+            let doc = parse_document(&content);
+            let chunks = chunk_document(&doc);
+            let links = extract_links(&content);
+
+            // Handle empty files immediately (no embedding needed)
+            if chunks.is_empty() {
+                self.store.delete_file_chunks(&verdict.file_id).await?;
+                self.db.with_write_conn(|conn| {
+                    replace_chunk_metadata(conn, &verdict.file_id, &[])?;
+                    replace_links(conn, &verdict.file_id, &[])?;
+                    Ok(())
+                })?;
+                gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+                stats.indexed += 1;
+                continue;
+            }
+
+            // Version-bump optimization: if chunk hashes are identical, skip embedding
+            let stored_hashes = self
+                .db
+                .with_read_conn(|conn| get_chunk_hashes(conn, &verdict.file_id))?;
+
+            if chunks_match_stored(&chunks, &stored_hashes) {
+                let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
+                self.db.with_write_conn(|conn| {
+                    replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
+                    replace_links(conn, &verdict.file_id, &links)?;
+                    Ok(())
+                })?;
+                gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+                stats.indexed += 1;
+                continue;
+            }
+
+            total_chunks += chunks.len();
+            pending.push(PendingFile {
+                file_id: verdict.file_id,
+                path_str,
+                hash: verdict.hash,
+                chunks,
+                links,
+            });
+
+            if total_chunks >= MAX_PENDING_CHUNKS {
+                info!(
+                    files = pending.len(),
+                    chunks = total_chunks,
+                    "flushing embedding wave"
+                );
+                self.flush_wave(&mut pending, &mut stats).await?;
+                total_chunks = 0;
+            }
+        }
+
+        if !pending.is_empty() {
+            info!(
+                files = pending.len(),
+                chunks = total_chunks,
+                "flushing final embedding wave"
+            );
+            self.flush_wave(&mut pending, &mut stats).await?;
+        }
+
+        info!(
+            indexed = stats.indexed,
+            skipped = stats.skipped,
+            errors = stats.errors,
+            "batch indexed"
+        );
+
+        Ok(stats)
+    }
+
+    /// Flush a wave of pending files: embed all chunks in one batch call,
+    /// then redistribute embeddings and upsert per-file.
+    #[instrument(skip_all)]
+    async fn flush_wave(
+        &self,
+        pending: &mut Vec<PendingFile>,
+        stats: &mut ScanStats,
+    ) -> crate::error::Result<()> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let mut all_texts: Vec<String> = Vec::new();
+        let mut offsets: Vec<(usize, usize)> = Vec::new();
+        for pf in pending.iter() {
+            let start = all_texts.len();
+            all_texts.extend(pf.chunks.iter().map(|c| c.content.clone()));
+            offsets.push((start, pf.chunks.len()));
+        }
+
+        info!(chunk_count = all_texts.len(), "embedding wave…");
+        let all_embeddings = crate::embedder::embed_batch_async(&self.embedder, all_texts).await?;
+        info!("embedding wave complete");
+
+        let gate = HashGate::new(&self.db);
+        let drained: Vec<PendingFile> = std::mem::take(pending);
+
+        for (pf, &(offset_start, chunk_count)) in drained.iter().zip(offsets.iter()) {
+            let file_start = std::time::Instant::now();
+            let file_embeddings = &all_embeddings[offset_start..offset_start + chunk_count];
+
+            let chunk_metas = build_chunk_metas(&pf.file_id, &pf.chunks);
+
+            let file_id = &pf.file_id;
+            let path_str = &pf.path_str;
+            let links = &pf.links;
+
+            match async {
+                self.db.with_write_conn(|conn| {
+                    replace_chunk_metadata(conn, file_id, &chunk_metas)?;
+                    replace_links(conn, file_id, links)?;
+                    Ok(())
+                })?;
+
+                let chunk_pairs: Vec<(usize, &str)> = pf
+                    .chunks
+                    .iter()
+                    .map(|c| (c.ord, c.content.as_str()))
+                    .collect();
+                self.store
+                    .upsert_chunks(file_id, path_str, &chunk_pairs, file_embeddings)
+                    .await?;
+
+                gate.mark_passed(file_id, &pf.hash)?;
+                Ok::<(), crate::error::BrainCoreError>(())
+            }
+            .await
+            {
+                Ok(()) => {
+                    self.metrics.record_index_latency(file_start.elapsed());
+                    stats.indexed += 1;
+                }
+                Err(e) => {
+                    warn!(
+                        path = %pf.path_str,
+                        error = %e,
+                        "failed to upsert file in batch"
+                    );
+                    self.metrics
+                        .indexing_errors
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    stats.errors += 1;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}

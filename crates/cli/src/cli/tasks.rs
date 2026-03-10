@@ -1,0 +1,293 @@
+use std::path::PathBuf;
+
+use clap::Subcommand;
+
+use super::TaskTypeArg;
+
+// ── task subcommands ────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub(crate) enum TasksAction {
+    /// Create a new task
+    Create {
+        /// Task title
+        #[arg(long)]
+        title: String,
+
+        /// Task description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Priority (0=critical, 1=high, 2=medium, 3=low, 4=backlog)
+        #[arg(long, default_value = "2")]
+        priority: i32,
+
+        /// Task type (task, bug, feature, epic, spike)
+        #[arg(long, value_name = "TYPE", default_value = "task")]
+        task_type: TaskTypeArg,
+
+        /// Assignee
+        #[arg(long)]
+        assignee: Option<String>,
+
+        /// Parent task ID
+        #[arg(long)]
+        parent: Option<String>,
+    },
+
+    /// List tasks with optional filters
+    List {
+        /// Filter by status (open, in_progress, blocked, done, cancelled)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Filter by priority (0-4)
+        #[arg(long)]
+        priority: Option<i32>,
+
+        /// Filter by task type (task, bug, feature, epic, spike)
+        #[arg(long, value_name = "TYPE")]
+        task_type: Option<TaskTypeArg>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assignee: Option<String>,
+
+        /// Filter by label (exact match)
+        #[arg(long)]
+        label: Option<String>,
+
+        /// Full-text search on title and description
+        #[arg(long)]
+        search: Option<String>,
+
+        /// Show only ready tasks (no blockers)
+        #[arg(long)]
+        ready: bool,
+
+        /// Show only blocked tasks
+        #[arg(long)]
+        blocked: bool,
+
+        /// Include task descriptions in JSON output (omitted by default)
+        #[arg(long)]
+        include_description: bool,
+
+        /// Group output by a field (currently supports: label)
+        #[arg(long)]
+        group_by: Option<String>,
+    },
+
+    /// Show details for a specific task
+    Show {
+        /// Task ID
+        id: String,
+    },
+
+    /// Update a task's fields or status
+    Update {
+        /// Task ID
+        id: String,
+
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// New status (open, in_progress, blocked, done, cancelled)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// New priority (0-4)
+        #[arg(long)]
+        priority: Option<i32>,
+
+        /// New task type (task, bug, feature, epic, spike)
+        #[arg(long, value_name = "TYPE")]
+        task_type: Option<TaskTypeArg>,
+
+        /// New assignee
+        #[arg(long)]
+        assignee: Option<String>,
+
+        /// Set blocked reason
+        #[arg(long)]
+        blocked_reason: Option<String>,
+    },
+
+    /// Manage task dependencies
+    Dep {
+        #[command(subcommand)]
+        action: DepAction,
+    },
+
+    /// Link a note (chunk) to a task
+    Link {
+        /// Task ID
+        task_id: String,
+
+        /// Chunk ID to link
+        chunk_id: String,
+    },
+
+    /// Unlink a note (chunk) from a task
+    Unlink {
+        /// Task ID
+        task_id: String,
+
+        /// Chunk ID to unlink
+        chunk_id: String,
+    },
+
+    /// Add a comment to a task
+    Comment {
+        /// Task ID
+        task_id: String,
+
+        /// Comment body
+        body: String,
+    },
+
+    /// Manage task labels
+    Label {
+        #[command(subcommand)]
+        action: LabelAction,
+    },
+
+    /// Export tasks to a file format (defaults to markdown)
+    Export {
+        /// Output format (currently only "markdown" is supported)
+        #[arg(default_value = "markdown")]
+        format: String,
+
+        /// Output directory
+        #[arg(long, default_value = ".brain/tasks/projections")]
+        dir: PathBuf,
+    },
+
+    /// Close one or more tasks (shorthand for update --status done)
+    Close {
+        /// Task IDs to close
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
+
+    /// Show ready tasks (no blockers)
+    Ready,
+
+    /// Show blocked tasks
+    Blocked,
+
+    /// Show project task statistics
+    Stats,
+
+    /// List all labels with counts
+    Labels,
+}
+
+// ── dependency subcommands ──────────────────────────────────
+
+#[derive(Subcommand)]
+pub(crate) enum DepAction {
+    /// Add a dependency (task depends on another)
+    Add {
+        /// Task that has the dependency
+        task_id: String,
+
+        /// Task it depends on
+        depends_on: String,
+    },
+
+    /// Remove a dependency
+    Remove {
+        /// Task that has the dependency
+        task_id: String,
+
+        /// Task it depended on
+        depends_on: String,
+    },
+
+    /// Create a sequential dependency chain (each task depends on the previous)
+    AddChain {
+        /// Task IDs in order (at least 2)
+        #[arg(required = true)]
+        task_ids: Vec<String>,
+    },
+
+    /// Make multiple tasks depend on a single source task
+    AddFan {
+        /// Source task (the one others depend on)
+        source: String,
+
+        /// Tasks that depend on the source (comma-separated)
+        #[arg(required = true, value_delimiter = ',')]
+        dependents: Vec<String>,
+    },
+
+    /// Remove all dependencies for a task
+    Clear {
+        /// Task ID
+        task_id: String,
+    },
+}
+
+// ── label subcommands ───────────────────────────────────────
+
+#[derive(Subcommand)]
+pub(crate) enum LabelAction {
+    /// Add a label to a task
+    Add {
+        /// Task ID
+        task_id: String,
+
+        /// Label to add
+        label: String,
+    },
+
+    /// Remove a label from a task
+    Remove {
+        /// Task ID
+        task_id: String,
+
+        /// Label to remove
+        label: String,
+    },
+
+    /// Add a label to multiple tasks at once
+    BatchAdd {
+        /// Comma-separated task IDs
+        #[arg(long, value_delimiter = ',')]
+        tasks: Vec<String>,
+
+        /// Label to add
+        label: String,
+    },
+
+    /// Remove a label from multiple tasks at once
+    BatchRemove {
+        /// Comma-separated task IDs
+        #[arg(long, value_delimiter = ',')]
+        tasks: Vec<String>,
+
+        /// Label to remove
+        label: String,
+    },
+
+    /// Rename a label across all tasks
+    Rename {
+        /// Current label name
+        old_label: String,
+
+        /// New label name
+        new_label: String,
+    },
+
+    /// Remove a label from all tasks
+    Purge {
+        /// Label to purge
+        label: String,
+    },
+}
