@@ -15,6 +15,8 @@ use tracing::{debug, error, info, warn};
 use crate::db::Db;
 use crate::embedder::{Embed, Embedder};
 use crate::metrics::Metrics;
+use crate::records::RecordStore;
+use crate::records::objects::ObjectStore;
 use crate::store::{Store, StoreReader};
 use crate::tasks::TaskStore;
 
@@ -34,6 +36,8 @@ pub struct McpContext {
     pub store: Option<StoreReader>,
     pub embedder: Option<Arc<dyn Embed>>,
     pub tasks: TaskStore,
+    pub records: RecordStore,
+    pub objects: ObjectStore,
     pub metrics: Arc<Metrics>,
 }
 
@@ -67,6 +71,19 @@ impl McpContext {
         let tasks = TaskStore::new(&tasks_dir, db.clone())?;
         tasks.rebuild_projections()?;
 
+        let records_dir = sqlite_db
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("records");
+        let records = RecordStore::new(&records_dir, db.clone())?;
+        records.rebuild_projections()?;
+
+        let objects_dir = sqlite_db
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("objects");
+        let objects = ObjectStore::new(&objects_dir)?;
+
         // Step 2: optionally load LanceDB + embedder. Failures are logged and
         // result in tasks-only mode — no hard error.
         let (store, embedder) = match Self::try_load_search_layer(model_dir, lance_db, &db).await {
@@ -84,6 +101,8 @@ impl McpContext {
             store,
             embedder,
             tasks,
+            records,
+            objects,
             metrics,
         }))
     }

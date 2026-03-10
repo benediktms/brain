@@ -373,6 +373,103 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Snapshots { json, action } => {
+            use commands::snapshots::run::{SaveParams, ListParams, SnapshotCtx};
+            let ctx = SnapshotCtx::new(&cli.sqlite_db, json)?;
+
+            match action {
+                SnapshotsAction::Save {
+                    title,
+                    file,
+                    stdin,
+                    description,
+                    task,
+                    tag,
+                    media_type,
+                } => {
+                    commands::snapshots::run::save(
+                        &ctx,
+                        SaveParams {
+                            title,
+                            file,
+                            stdin,
+                            description,
+                            task,
+                            tags: tag,
+                            media_type,
+                        },
+                    )?;
+                }
+                SnapshotsAction::List { tag, status, limit } => {
+                    commands::snapshots::run::list(
+                        &ctx,
+                        &ListParams { tag, status, limit },
+                    )?;
+                }
+                SnapshotsAction::Get { id } => {
+                    commands::snapshots::run::get(&ctx, &id)?;
+                }
+                SnapshotsAction::Restore { id, output } => {
+                    commands::snapshots::run::restore(&ctx, &id, output)?;
+                }
+                SnapshotsAction::Archive { id, reason } => {
+                    commands::snapshots::run::archive(&ctx, &id, reason)?;
+                }
+            }
+        }
+        Command::Artifacts { json, action } => {
+            use commands::artifacts::run::ArtifactCtx;
+            let ctx = ArtifactCtx::new(&cli.sqlite_db, json)?;
+
+            match action {
+                ArtifactsAction::Create {
+                    title,
+                    kind,
+                    file,
+                    stdin,
+                    description,
+                    task,
+                    tag,
+                    media_type,
+                } => {
+                    commands::artifacts::run::create(
+                        &ctx,
+                        commands::artifacts::run::CreateParams {
+                            title,
+                            kind,
+                            file,
+                            stdin,
+                            description,
+                            task,
+                            tags: tag,
+                            media_type,
+                        },
+                    )?;
+                }
+                ArtifactsAction::List {
+                    kind,
+                    tag,
+                    status,
+                    limit,
+                } => {
+                    commands::artifacts::run::list(
+                        &ctx,
+                        &commands::artifacts::run::ListParams {
+                            kind,
+                            tag,
+                            status,
+                            limit,
+                        },
+                    )?;
+                }
+                ArtifactsAction::Get { id } => {
+                    commands::artifacts::run::get(&ctx, &id)?;
+                }
+                ArtifactsAction::Archive { id, reason } => {
+                    commands::artifacts::run::archive(&ctx, &id, reason)?;
+                }
+            }
+        }
     }
 
     Ok(())

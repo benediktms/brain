@@ -1,5 +1,7 @@
 pub mod agent_schema;
+pub mod artifacts;
 pub mod config;
+
 pub mod daemon;
 pub mod daemon_service;
 pub mod docs;
@@ -13,6 +15,7 @@ pub mod mcp_setup;
 pub mod query;
 pub mod registry;
 pub mod reindex;
+pub mod snapshots;
 pub mod tasks;
 pub mod vacuum;
 pub mod watch;
