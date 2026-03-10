@@ -129,7 +129,10 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
     ctx.store.append(&event)?;
 
     if ctx.json {
-        let task = ctx.store.get_task(&task_id)?.unwrap();
+        let task = ctx
+            .store
+            .get_task(&task_id)?
+            .ok_or_else(|| anyhow::anyhow!("Task not found after creation: {task_id}"))?;
         let labels = ctx.store.get_task_labels(&task_id)?;
         let out = json!({
             "event_id": event.event_id,

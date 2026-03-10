@@ -1,24 +1,55 @@
 use anyhow::{Result, bail};
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 
 use brain_lib::tasks::enrichment::enrich_task_list;
-use brain_lib::tasks::queries::{TaskFilter, apply_filters};
+use brain_lib::tasks::queries::{TaskFilter, TaskRow, apply_filters};
 use brain_lib::utils::task_row_to_json;
 
 use crate::markdown_table::MarkdownTable;
 
 use super::{ListParams, TaskCtx, priority_label};
 
-// ── list ────────────────────────────────────────────────────
+enum LabelFetchMode {
+    OnlyWhenFiltering,
+    AlwaysWarnDefault,
+}
 
-pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
-    if let Some(ref group) = params.group_by {
-        if group == "label" {
-            return list_grouped_by_label(ctx, params);
-        }
-        bail!("Unknown --group-by value: \"{group}\". Supported: label");
+struct FilteredTasks {
+    tasks: Vec<TaskRow>,
+    labels_map: Option<HashMap<String, Vec<String>>>,
+}
+
+fn display_id(task_id: &str, short_ids: &HashMap<String, String>) -> String {
+    short_ids
+        .get(task_id)
+        .cloned()
+        .unwrap_or_else(|| task_id.to_string())
+}
+
+fn render_task_table<'a, I>(tasks: I, short_ids: &HashMap<String, String>)
+where
+    I: IntoIterator<Item = &'a TaskRow>,
+{
+    let mut table = MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
+    for t in tasks {
+        table.add_row(vec![
+            priority_label(t.priority).to_string(),
+            t.status.clone(),
+            t.task_type.as_str().to_string(),
+            t.assignee.as_deref().unwrap_or("-").to_string(),
+            display_id(&t.task_id, short_ids),
+            t.title.clone(),
+        ]);
     }
+    print!("{table}");
+}
 
+fn fetch_filtered_tasks(
+    ctx: &TaskCtx,
+    params: &ListParams,
+    label_fetch_mode: LabelFetchMode,
+) -> Result<FilteredTasks> {
     if params.ready && params.blocked {
         bail!("--ready and --blocked are mutually exclusive");
     }
@@ -31,18 +62,13 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         ctx.store.list_all()?
     };
 
-    // FTS pre-filter
     let fts_ids = if let Some(ref query) = params.search {
         let ids = ctx.store.search_fts(query, 1000)?;
-        Some(
-            ids.into_iter()
-                .collect::<std::collections::HashSet<String>>(),
-        )
+        Some(ids.into_iter().collect::<HashSet<String>>())
     } else {
         None
     };
 
-    // Build filter (status is handled separately via list_ready/list_blocked/list_all)
     let filter = TaskFilter {
         priority: params.priority,
         task_type: params.task_type,
@@ -51,7 +77,6 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         search: params.search.clone(),
     };
 
-    // Pre-filter by status (not part of TaskFilter since it's handled by the base query)
     let tasks: Vec<_> = tasks
         .into_iter()
         .filter(|t| {
@@ -63,15 +88,45 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         })
         .collect();
 
-    // Batch-fetch labels if label filter is active
-    let labels_map = if filter.label.is_some() {
-        let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
-        ctx.store.get_labels_for_tasks(&task_ids).ok()
-    } else {
-        None
+    let labels_map = match label_fetch_mode {
+        LabelFetchMode::OnlyWhenFiltering => {
+            if filter.label.is_some() {
+                let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+                ctx.store.get_labels_for_tasks(&task_ids).ok()
+            } else {
+                None
+            }
+        }
+        LabelFetchMode::AlwaysWarnDefault => {
+            let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+            let labels_map = match ctx.store.get_labels_for_tasks(&task_ids) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("Failed to get labels for tasks: {e}");
+                    Default::default()
+                }
+            };
+            Some(labels_map)
+        }
     };
 
     let tasks = apply_filters(tasks, &filter, fts_ids.as_ref(), labels_map.as_ref());
+
+    Ok(FilteredTasks { tasks, labels_map })
+}
+
+// ── list ────────────────────────────────────────────────────
+
+pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
+    if let Some(ref group) = params.group_by {
+        if group == "label" {
+            return list_grouped_by_label(ctx, params);
+        }
+        bail!("Unknown --group-by value: \"{group}\". Supported: label");
+    }
+
+    let FilteredTasks { tasks, .. } =
+        fetch_filtered_tasks(ctx, params, LabelFetchMode::OnlyWhenFiltering)?;
 
     if ctx.json {
         let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
@@ -106,25 +161,7 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
 
         let short_ids = ctx.store.compact_ids()?;
 
-        let mut table =
-            MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
-
-        for t in &tasks {
-            let display_id = short_ids
-                .get(&t.task_id)
-                .cloned()
-                .unwrap_or_else(|| t.task_id.clone());
-            table.add_row(vec![
-                priority_label(t.priority).to_string(),
-                t.status.clone(),
-                t.task_type.as_str().to_string(),
-                t.assignee.as_deref().unwrap_or("-").to_string(),
-                display_id,
-                t.title.clone(),
-            ]);
-        }
-
-        print!("{table}");
+        render_task_table(&tasks, &short_ids);
 
         // Blank line separates the table from the summary so markdown renderers
         // (e.g. glow) don't treat the summary as a table row.
@@ -145,62 +182,12 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
 fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
     use std::collections::BTreeMap;
 
-    if params.ready && params.blocked {
-        bail!("--ready and --blocked are mutually exclusive");
-    }
-
-    let tasks = if params.ready {
-        ctx.store.list_ready()?
-    } else if params.blocked {
-        ctx.store.list_blocked()?
-    } else {
-        ctx.store.list_all()?
-    };
-
-    // FTS pre-filter
-    let fts_ids = if let Some(ref query) = params.search {
-        let ids = ctx.store.search_fts(query, 1000)?;
-        Some(
-            ids.into_iter()
-                .collect::<std::collections::HashSet<String>>(),
-        )
-    } else {
-        None
-    };
-
-    let filter = brain_lib::tasks::queries::TaskFilter {
-        priority: params.priority,
-        task_type: params.task_type,
-        assignee: params.assignee.clone(),
-        label: params.label.clone(),
-        search: params.search.clone(),
-    };
-
-    let tasks: Vec<_> = tasks
-        .into_iter()
-        .filter(|t| {
-            if let Some(ref s) = params.status {
-                t.status == *s
-            } else {
-                true
-            }
-        })
-        .collect();
-
-    // Batch-fetch labels for all tasks
-    let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
-    let labels_map = match ctx.store.get_labels_for_tasks(&task_ids) {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!("Failed to get labels for tasks: {e}");
-            Default::default()
-        }
-    };
-
-    let tasks = apply_filters(tasks, &filter, fts_ids.as_ref(), Some(&labels_map));
+    let FilteredTasks { tasks, labels_map } =
+        fetch_filtered_tasks(ctx, params, LabelFetchMode::AlwaysWarnDefault)?;
+    let labels_map = labels_map.unwrap_or_default();
 
     // Group tasks by label
-    let mut groups: BTreeMap<String, Vec<&brain_lib::tasks::queries::TaskRow>> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Vec<&TaskRow>> = BTreeMap::new();
     let mut unlabeled = Vec::new();
 
     for task in &tasks {
@@ -229,10 +216,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
                         let labels = labels_map.get(&t.task_id).cloned().unwrap_or_default();
                         let mut j = task_row_to_json(t, labels);
                         if let Some(obj) = j.as_object_mut() {
-                            let short = short_ids
-                                .get(&t.task_id)
-                                .cloned()
-                                .unwrap_or_else(|| t.task_id.clone());
+                            let short = display_id(&t.task_id, &short_ids);
                             obj.insert("short_id".into(), json!(short));
                             if !params.include_description {
                                 obj.remove("description");
@@ -252,10 +236,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
                     let labels = labels_map.get(&t.task_id).cloned().unwrap_or_default();
                     let mut j = task_row_to_json(t, labels);
                     if let Some(obj) = j.as_object_mut() {
-                        let short = short_ids
-                            .get(&t.task_id)
-                            .cloned()
-                            .unwrap_or_else(|| t.task_id.clone());
+                        let short = display_id(&t.task_id, &short_ids);
                         obj.insert("short_id".into(), json!(short));
                         if !params.include_description {
                             obj.remove("description");
@@ -280,46 +261,14 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         for (label, group_tasks) in &groups {
             println!("## {label}");
             println!();
-            let mut table =
-                MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
-            for t in group_tasks {
-                let display_id = short_ids
-                    .get(&t.task_id)
-                    .cloned()
-                    .unwrap_or_else(|| t.task_id.clone());
-                table.add_row(vec![
-                    priority_label(t.priority).to_string(),
-                    t.status.clone(),
-                    t.task_type.as_str().to_string(),
-                    t.assignee.as_deref().unwrap_or("-").to_string(),
-                    display_id,
-                    t.title.clone(),
-                ]);
-            }
-            print!("{table}");
+            render_task_table(group_tasks.iter().copied(), &short_ids);
             println!();
         }
 
         if !unlabeled.is_empty() {
             println!("## (unlabeled)");
             println!();
-            let mut table =
-                MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
-            for t in &unlabeled {
-                let display_id = short_ids
-                    .get(&t.task_id)
-                    .cloned()
-                    .unwrap_or_else(|| t.task_id.clone());
-                table.add_row(vec![
-                    priority_label(t.priority).to_string(),
-                    t.status.clone(),
-                    t.task_type.as_str().to_string(),
-                    t.assignee.as_deref().unwrap_or("-").to_string(),
-                    display_id,
-                    t.title.clone(),
-                ]);
-            }
-            print!("{table}");
+            render_task_table(unlabeled.iter().copied(), &short_ids);
             println!();
         }
 

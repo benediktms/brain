@@ -93,7 +93,10 @@ pub fn close(ctx: &TaskCtx, ids: &[String]) -> Result<()> {
         all_unblocked.extend(unblocked.clone());
 
         if ctx.json {
-            let task = ctx.store.get_task(&id)?.unwrap();
+            let task = ctx
+                .store
+                .get_task(&id)?
+                .ok_or_else(|| anyhow::anyhow!("Task not found after close: {id}"))?;
             let labels = ctx.store.get_task_labels(&id)?;
             closed.push(json!({
                 "task": task_row_to_json(&task, labels),

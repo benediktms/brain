@@ -267,7 +267,10 @@ impl StoreReader {
 impl Store {
     /// Open or create a LanceDB store at the given directory.
     pub async fn open_or_create(db_path: &Path) -> crate::error::Result<Self> {
-        let db = lancedb::connect(db_path.to_str().unwrap_or(".brain/lancedb"))
+        let db_path_str = db_path.to_str().ok_or_else(|| {
+            BrainCoreError::VectorDb("LanceDB path contains non-UTF-8 characters".to_string())
+        })?;
+        let db = lancedb::connect(db_path_str)
             .execute()
             .await
             .map_err(|e| BrainCoreError::VectorDb(format!("failed to connect: {e}")))?;
@@ -285,7 +288,7 @@ impl Store {
                 .map_err(|e| BrainCoreError::VectorDb(format!("failed to open table: {e}")))?
         } else {
             let schema = chunks_schema();
-            let empty_batch = empty_record_batch(&schema);
+            let empty_batch = empty_record_batch(&schema)?;
             let batches = RecordBatchIterator::new(vec![Ok(empty_batch)], Arc::new(schema));
             db.create_table("chunks", Box::new(batches))
                 .execute()
@@ -331,7 +334,7 @@ impl Store {
             .map_err(|e| BrainCoreError::VectorDb(format!("failed to drop chunks table: {e}")))?;
 
         let schema = chunks_schema();
-        let empty_batch = empty_record_batch(&schema);
+        let empty_batch = empty_record_batch(&schema)?;
         let batches = RecordBatchIterator::new(vec![Ok(empty_batch)], Arc::new(schema));
         let table = self
             .db
@@ -641,7 +644,7 @@ fn chunks_schema() -> Schema {
     ])
 }
 
-fn empty_record_batch(schema: &Schema) -> RecordBatch {
+fn empty_record_batch(schema: &Schema) -> crate::error::Result<RecordBatch> {
     RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
@@ -658,7 +661,7 @@ fn empty_record_batch(schema: &Schema) -> RecordBatch {
             ),
         ],
     )
-    .expect("empty batch should be valid")
+    .map_err(|e| BrainCoreError::VectorDb(format!("failed to build empty record batch: {e}")))
 }
 
 /// Validate that a file_id is safe to interpolate into a LanceDB filter expression.
@@ -735,7 +738,7 @@ mod tests {
             .await
             .unwrap();
         let schema = chunks_schema();
-        let empty_batch = empty_record_batch(&schema);
+        let empty_batch = empty_record_batch(&schema).unwrap();
         let batches = RecordBatchIterator::new(vec![Ok(empty_batch)], Arc::new(schema));
         let table = db
             .create_table("chunks", Box::new(batches))

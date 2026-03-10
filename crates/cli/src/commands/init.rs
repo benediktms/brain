@@ -120,9 +120,8 @@ pub fn upsert_agent_docs(cwd: &std::path::Path, brain_name: &str) -> Result<()> 
 
     if agents_md_path.exists() {
         let existing = fs::read_to_string(&agents_md_path)?;
-        if existing.contains(BRAIN_SECTION_START) {
+        if let Some(start) = existing.find(BRAIN_SECTION_START) {
             // Replace existing brain section.
-            let start = existing.find(BRAIN_SECTION_START).unwrap();
             let end = existing
                 .find(BRAIN_SECTION_END)
                 .map(|i| i + BRAIN_SECTION_END.len())
@@ -158,9 +157,8 @@ pub fn upsert_agent_docs(cwd: &std::path::Path, brain_name: &str) -> Result<()> 
     let bridge_ref = "Read [AGENTS.md](./AGENTS.md) for project instructions — it is the canonical reference for all AI agents.\n".to_string();
     if claude_md_path.exists() {
         let existing = fs::read_to_string(&claude_md_path)?;
-        if existing.contains(BRAIN_SECTION_START) {
+        if let Some(start) = existing.find(BRAIN_SECTION_START) {
             // Replace the brain section with the bridge reference, preserving surrounding content.
-            let start = existing.find(BRAIN_SECTION_START).unwrap();
             let end = existing
                 .find(BRAIN_SECTION_END)
                 .map(|i| i + BRAIN_SECTION_END.len())
