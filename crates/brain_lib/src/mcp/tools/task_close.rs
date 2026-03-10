@@ -89,8 +89,7 @@ impl TaskClose {
 
             total_unblocked += unblocked.len();
             closed.push(json!({
-                "task_id": resolved,
-                "short_id": short_id,
+                "task_id": short_id,
                 "unblocked_task_ids": unblocked,
             }));
         }

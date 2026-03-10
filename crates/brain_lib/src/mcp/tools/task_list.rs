@@ -184,7 +184,7 @@ impl TaskList {
         let (mut tasks_json, ready_count, blocked_count) =
             enrich_task_list(&ctx.tasks, capped, &labels_map);
 
-        // Add short_id per task using O(log n) index seeks (replaces loading all IDs)
+        // Replace task_id with shortest unique prefix for compact display
         for task_val in &mut tasks_json {
             if let Some(obj) = task_val.as_object_mut() {
                 if let Some(tid) = obj
@@ -196,7 +196,7 @@ impl TaskList {
                         .tasks
                         .shortest_unique_prefix(&tid)
                         .unwrap_or_else(|_| tid.clone());
-                    obj.insert("short_id".into(), json!(short));
+                    obj.insert("task_id".into(), json!(short));
                 }
                 if !include_description {
                     obj.remove("description");

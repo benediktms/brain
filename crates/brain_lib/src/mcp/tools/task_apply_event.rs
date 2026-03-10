@@ -391,9 +391,7 @@ impl TaskApplyEvent {
             .unwrap_or_else(|_| task_id.clone());
 
         let response = json!({
-            "event_id": event.event_id,
-            "task_id": task_id,
-            "short_id": short_id,
+            "task_id": short_id,
             "task": task_json,
             "unblocked_task_ids": unblocked_task_ids,
         });
@@ -456,7 +454,7 @@ mod tests {
         let text = &result.content[0].text;
         let parsed: Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["task_id"], "test-1");
-        assert!(parsed["event_id"].is_string());
+
         assert_eq!(parsed["task"]["title"], "My first task");
         assert_eq!(parsed["task"]["status"], "open");
         assert_eq!(parsed["task"]["priority"], 2);
