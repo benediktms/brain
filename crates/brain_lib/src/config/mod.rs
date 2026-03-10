@@ -173,11 +173,7 @@ mod tests {
     fn make_brain_marker(dir: &Path, name: &str) {
         let brain_dir = dir.join(".brain");
         fs::create_dir_all(&brain_dir).unwrap();
-        fs::write(
-            brain_dir.join("brain.toml"),
-            format!("name = \"{name}\"\n"),
-        )
-        .unwrap();
+        fs::write(brain_dir.join("brain.toml"), format!("name = \"{name}\"\n")).unwrap();
     }
 
     // -----------------------------------------------------------------------
@@ -273,10 +269,9 @@ mod tests {
         make_brain_marker(tmp.path(), "my-brain");
         let fake_home = TempDir::new().unwrap();
 
-        let result =
-            resolve_brain_paths_with_home(tmp.path(), fake_home.path())
-                .unwrap()
-                .unwrap();
+        let result = resolve_brain_paths_with_home(tmp.path(), fake_home.path())
+            .unwrap()
+            .unwrap();
 
         let home = fake_home.path();
         assert_eq!(
@@ -308,10 +303,9 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
 
         let fake_home = TempDir::new().unwrap();
-        let result =
-            resolve_brain_paths_with_home(&deep, fake_home.path())
-                .unwrap()
-                .unwrap();
+        let result = resolve_brain_paths_with_home(&deep, fake_home.path())
+            .unwrap()
+            .unwrap();
 
         // Should use the inner brain name, not outer
         assert!(

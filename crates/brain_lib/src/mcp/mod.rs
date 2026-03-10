@@ -5,6 +5,7 @@
 pub mod protocol;
 pub mod tools;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -12,9 +13,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info, warn};
 
 use crate::db::Db;
-use crate::embedder::Embed;
+use crate::embedder::{Embed, Embedder};
 use crate::metrics::Metrics;
-use crate::store::StoreReader;
+use crate::store::{Store, StoreReader};
 use crate::tasks::TaskStore;
 
 use protocol::{
@@ -34,6 +35,86 @@ pub struct McpContext {
     pub embedder: Option<Arc<dyn Embed>>,
     pub tasks: TaskStore,
     pub metrics: Arc<Metrics>,
+}
+
+impl McpContext {
+    /// Bootstrap an MCP context with layered initialization.
+    ///
+    /// Always opens SQLite and creates a TaskStore (lightweight, reliable).
+    /// Then optionally attempts to open LanceDB and load the embedder — if
+    /// either fails the server still starts in tasks-only mode without
+    /// memory/search tool support.
+    ///
+    /// This avoids the old approach of going through `IndexPipeline::new()`
+    /// which always loads all three components before falling back.
+    pub async fn bootstrap(
+        model_dir: &Path,
+        lance_db: &Path,
+        sqlite_db: &Path,
+    ) -> crate::error::Result<Arc<Self>> {
+        // Step 1: always open SQLite and build TaskStore (required).
+        let db = tokio::task::spawn_blocking({
+            let sqlite_db = sqlite_db.to_path_buf();
+            move || Db::open(&sqlite_db)
+        })
+        .await
+        .map_err(|e| crate::error::BrainCoreError::Database(format!("spawn_blocking: {e}")))??;
+
+        let tasks_dir = sqlite_db
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("tasks");
+        let tasks = TaskStore::new(&tasks_dir, db.clone())?;
+        tasks.rebuild_projections()?;
+
+        // Step 2: optionally load LanceDB + embedder. Failures are logged and
+        // result in tasks-only mode — no hard error.
+        let (store, embedder) = match Self::try_load_search_layer(model_dir, lance_db, &db).await {
+            Ok((s, e)) => (Some(s), Some(e)),
+            Err(err) => {
+                info!("embedding model unavailable ({err}), starting in tasks-only mode");
+                (None, None)
+            }
+        };
+
+        let metrics = Arc::new(Metrics::new());
+
+        Ok(Arc::new(Self {
+            db,
+            store,
+            embedder,
+            tasks,
+            metrics,
+        }))
+    }
+
+    /// Attempt to open the LanceDB store and load the embedder.
+    ///
+    /// Returns both as a pair on success. Any error causes the entire search
+    /// layer to be skipped — we don't want a partially-loaded state.
+    async fn try_load_search_layer(
+        model_dir: &Path,
+        lance_db: &Path,
+        db: &Db,
+    ) -> crate::error::Result<(StoreReader, Arc<dyn Embed>)> {
+        let mut store = Store::open_or_create(lance_db).await?;
+
+        // Perform schema version check (same logic as IndexPipeline::new).
+        crate::pipeline::ensure_schema_version(db, &mut store).await?;
+
+        let embedder: Arc<dyn Embed> = {
+            let model_dir = model_dir.to_path_buf();
+            let e = tokio::task::spawn_blocking(move || Embedder::load(&model_dir))
+                .await
+                .map_err(|e| {
+                    crate::error::BrainCoreError::Embedding(format!("spawn_blocking: {e}"))
+                })??;
+            Arc::new(e)
+        };
+
+        let store_reader = StoreReader::from_store(&store);
+        Ok((store_reader, embedder))
+    }
 }
 
 /// Run the MCP server, reading JSON-RPC from stdin and writing to stdout.

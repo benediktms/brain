@@ -1,4 +1,5 @@
 pub mod agent_schema;
+pub mod config;
 pub mod daemon;
 pub mod daemon_service;
 pub mod docs;
@@ -7,11 +8,10 @@ pub mod hooks;
 pub mod import_beads;
 pub mod index;
 pub mod init;
-pub mod config;
-pub mod registry;
 pub mod mcp;
 pub mod mcp_setup;
 pub mod query;
+pub mod registry;
 pub mod reindex;
 pub mod tasks;
 pub mod vacuum;
