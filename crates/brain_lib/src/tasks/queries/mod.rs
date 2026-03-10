@@ -497,35 +497,35 @@ mod tests {
         assert_eq!(resolved, "t1");
     }
 
-    // -- Shortest unique prefix tests --
+    // -- Compact ID tests --
 
     #[test]
-    fn test_shortest_unique_single_task() {
+    fn test_compact_id_single_task() {
         let conn = setup();
         create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Only task", 2);
-        let prefixes = shortest_unique_prefixes(&conn).unwrap();
+        let prefixes = compact_ids(&conn).unwrap();
         let short = &prefixes["BRN-01JPHZS7VXQK4R3BGTHNED2P8M"];
         assert_eq!(short.len(), resolve::MIN_DISPLAY_PREFIX_LEN);
         assert_eq!(short, "BRN-01JP");
     }
 
     #[test]
-    fn test_shortest_unique_shared_prefix() {
+    fn test_compact_id_shared_prefix() {
         let conn = setup();
         create_task(&conn, "BRN-01JPHZAAAA", "Task A", 2);
         create_task(&conn, "BRN-01JPHZAAAB", "Task B", 2);
-        let prefixes = shortest_unique_prefixes(&conn).unwrap();
+        let prefixes = compact_ids(&conn).unwrap();
         // Must distinguish the last char
         assert_eq!(prefixes["BRN-01JPHZAAAA"], "BRN-01JPHZAAAA");
         assert_eq!(prefixes["BRN-01JPHZAAAB"], "BRN-01JPHZAAAB");
     }
 
     #[test]
-    fn test_shortest_unique_mixed_formats() {
+    fn test_compact_id_mixed_formats() {
         let conn = setup();
         create_task(&conn, "BRN-01JPHZ0001", "New format", 2);
         create_task(&conn, "t1", "Simple ID", 2);
-        let prefixes = shortest_unique_prefixes(&conn).unwrap();
+        let prefixes = compact_ids(&conn).unwrap();
         assert_eq!(prefixes.len(), 2);
         // Both should be present; "t1" is too short for MIN_DISPLAY_PREFIX_LEN
         // so it stays as "t1"
@@ -533,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn test_shortest_unique_prefix_singular_matches_batch() {
+    fn test_compact_id_singular_matches_batch() {
         let conn = setup();
         create_task(&conn, "BRN-01JPHZAAAA", "Task A", 2);
         create_task(&conn, "BRN-01JPHZAAAB", "Task B", 2);
@@ -541,9 +541,9 @@ mod tests {
 
         // The O(log n) singular version should produce the same results as the
         // O(n log n) batch version for each task.
-        let batch = shortest_unique_prefixes(&conn).unwrap();
+        let batch = compact_ids(&conn).unwrap();
         for (id, expected) in &batch {
-            let single = shortest_unique_prefix(&conn, id).unwrap();
+            let single = compact_id(&conn, id).unwrap();
             assert_eq!(&single, expected, "mismatch for {id}");
         }
     }

@@ -50,14 +50,8 @@ pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Task: {}", task.task_id);
-        if let (Some(parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq) {
-            let parent_short = ctx
-                .store
-                .shortest_unique_prefix(parent_id)
-                .unwrap_or_else(|_| parent_id.clone());
-            println!("Display ID: {parent_short}.{seq}");
-        }
+        let display_id = ctx.store.compact_id(&id).unwrap_or_else(|_| id.clone());
+        println!("Task: {display_id}");
         println!("Title: {}", task.title);
         println!("Status: {}", task.status);
         println!("Priority: {}", priority_label(task.priority));

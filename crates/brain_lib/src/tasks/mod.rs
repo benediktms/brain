@@ -276,15 +276,15 @@ impl TaskStore {
             .with_read_conn(|conn| queries::resolve_task_id(conn, input))
     }
 
-    /// Compute shortest unique prefixes for all tasks.
-    pub fn shortest_unique_prefixes(&self) -> Result<HashMap<String, String>> {
-        self.db.with_read_conn(queries::shortest_unique_prefixes)
+    /// Compute compact display IDs for all tasks (batch).
+    pub fn compact_ids(&self) -> Result<HashMap<String, String>> {
+        self.db.with_read_conn(queries::compact_ids)
     }
 
-    /// Compute shortest unique prefix for a single task.
-    pub fn shortest_unique_prefix(&self, task_id: &str) -> Result<String> {
+    /// Compute compact display ID for a single task.
+    pub fn compact_id(&self, task_id: &str) -> Result<String> {
         self.db
-            .with_read_conn(|conn| queries::shortest_unique_prefix(conn, task_id))
+            .with_read_conn(|conn| queries::compact_id(conn, task_id))
     }
 
     /// Get the project prefix, auto-generating from the brain directory name if needed.

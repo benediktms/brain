@@ -101,25 +101,16 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             return Ok(());
         }
 
-        let short_ids = ctx.store.shortest_unique_prefixes()?;
+        let short_ids = ctx.store.compact_ids()?;
 
         let mut table =
             MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
 
         for t in &tasks {
-            let display_id = if let (Some(parent_id), Some(seq)) = (&t.parent_task_id, t.child_seq)
-            {
-                let parent_short = short_ids
-                    .get(parent_id.as_str())
-                    .map(|s| s.as_str())
-                    .unwrap_or(parent_id);
-                format!("{parent_short}.{seq}")
-            } else {
-                short_ids
-                    .get(&t.task_id)
-                    .cloned()
-                    .unwrap_or_else(|| t.task_id.clone())
-            };
+            let display_id = short_ids
+                .get(&t.task_id)
+                .cloned()
+                .unwrap_or_else(|| t.task_id.clone());
             table.add_row(vec![
                 priority_label(t.priority).to_string(),
                 t.status.clone(),
@@ -222,7 +213,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
     }
 
     if ctx.json {
-        let short_ids = ctx.store.shortest_unique_prefixes()?;
+        let short_ids = ctx.store.compact_ids()?;
         let mut group_list: Vec<serde_json::Value> = groups
             .iter()
             .map(|(label, group_tasks)| {
@@ -278,7 +269,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             return Ok(());
         }
 
-        let short_ids = ctx.store.shortest_unique_prefixes()?;
+        let short_ids = ctx.store.compact_ids()?;
 
         for (label, group_tasks) in &groups {
             println!("## {label}");
@@ -286,19 +277,10 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             let mut table =
                 MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
             for t in group_tasks {
-                let display_id =
-                    if let (Some(parent_id), Some(seq)) = (&t.parent_task_id, t.child_seq) {
-                        let parent_short = short_ids
-                            .get(parent_id.as_str())
-                            .map(|s| s.as_str())
-                            .unwrap_or(parent_id);
-                        format!("{parent_short}.{seq}")
-                    } else {
-                        short_ids
-                            .get(&t.task_id)
-                            .cloned()
-                            .unwrap_or_else(|| t.task_id.clone())
-                    };
+                let display_id = short_ids
+                    .get(&t.task_id)
+                    .cloned()
+                    .unwrap_or_else(|| t.task_id.clone());
                 table.add_row(vec![
                     priority_label(t.priority).to_string(),
                     t.status.clone(),
@@ -318,19 +300,10 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             let mut table =
                 MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
             for t in &unlabeled {
-                let display_id =
-                    if let (Some(parent_id), Some(seq)) = (&t.parent_task_id, t.child_seq) {
-                        let parent_short = short_ids
-                            .get(parent_id.as_str())
-                            .map(|s| s.as_str())
-                            .unwrap_or(parent_id);
-                        format!("{parent_short}.{seq}")
-                    } else {
-                        short_ids
-                            .get(&t.task_id)
-                            .cloned()
-                            .unwrap_or_else(|| t.task_id.clone())
-                    };
+                let display_id = short_ids
+                    .get(&t.task_id)
+                    .cloned()
+                    .unwrap_or_else(|| t.task_id.clone());
                 table.add_row(vec![
                     priority_label(t.priority).to_string(),
                     t.status.clone(),
