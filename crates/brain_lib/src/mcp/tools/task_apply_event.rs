@@ -40,11 +40,19 @@ fn task_type_schema() -> Value {
 /// (and agents) can validate per-event-type payloads at the schema level.
 fn apply_event_schema() -> Value {
     let event_types = [
-        "task_created", "task_updated", "status_changed",
-        "dependency_added", "dependency_removed",
-        "note_linked", "note_unlinked",
-        "label_added", "label_removed", "comment_added",
-        "parent_set", "external_id_added", "external_id_removed",
+        "task_created",
+        "task_updated",
+        "status_changed",
+        "dependency_added",
+        "dependency_removed",
+        "note_linked",
+        "note_unlinked",
+        "label_added",
+        "label_removed",
+        "comment_added",
+        "parent_set",
+        "external_id_added",
+        "external_id_removed",
     ];
 
     // -- per-event payload schemas --
