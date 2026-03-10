@@ -139,6 +139,12 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
                 BrainCoreError::RecordEvent(format!("bad LinkRemoved payload: {e}"))
             })?;
 
+            if p.task_id.is_none() && p.chunk_id.is_none() {
+                return Err(BrainCoreError::RecordEvent(
+                    "LinkRemoved payload must have at least one of task_id or chunk_id".into(),
+                ));
+            }
+
             conn.execute(
                 "DELETE FROM record_links
                  WHERE record_id = ?1
@@ -158,7 +164,7 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
         rusqlite::params![
             event.event_id,
             event.record_id,
-            format!("{:?}", event.event_type),
+            serde_json::to_string(&event.event_type).unwrap_or_default().trim_matches('"'),
             event.timestamp,
             event.actor,
             payload_json,

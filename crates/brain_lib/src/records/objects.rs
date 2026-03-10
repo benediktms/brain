@@ -28,9 +28,17 @@ impl ObjectStore {
     }
 
     /// Return the filesystem path for a blob with the given hex hash.
-    fn blob_path(&self, hash: &str) -> PathBuf {
+    ///
+    /// Validates that the hash is exactly 64 lowercase hex characters to
+    /// prevent path traversal attacks.
+    fn blob_path(&self, hash: &str) -> Result<PathBuf> {
+        if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(BrainCoreError::ObjectStore(format!(
+                "invalid hash: expected 64 hex chars, got '{hash}'"
+            )));
+        }
         let prefix = &hash[..2];
-        self.root.join(prefix).join(hash)
+        Ok(self.root.join(prefix).join(hash))
     }
 
     /// Write `data` to the store and return a [`ContentRef`].
@@ -57,7 +65,7 @@ impl ObjectStore {
         let size = data.len() as u64;
 
         // Fast path: blob already exists — skip write (deduplication).
-        let dest = self.blob_path(&hex);
+        let dest = self.blob_path(&hex)?;
         if dest.exists() {
             return Ok(ContentRef::new(hex, size, media_type));
         }
@@ -86,7 +94,7 @@ impl ObjectStore {
     ///
     /// Returns [`BrainCoreError::ObjectStore`] if the blob does not exist.
     pub fn read(&self, hash: &str) -> Result<Vec<u8>> {
-        let path = self.blob_path(hash);
+        let path = self.blob_path(hash)?;
         std::fs::read(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 BrainCoreError::ObjectStore(format!(
@@ -100,14 +108,14 @@ impl ObjectStore {
 
     /// Return `true` if a blob with the given hash exists in the store.
     pub fn exists(&self, hash: &str) -> bool {
-        self.blob_path(hash).exists()
+        self.blob_path(hash).map(|p| p.exists()).unwrap_or(false)
     }
 
     /// Delete the blob identified by `hash`.
     ///
     /// Returns [`BrainCoreError::ObjectStore`] if the blob does not exist.
     pub fn delete(&self, hash: &str) -> Result<()> {
-        let path = self.blob_path(hash);
+        let path = self.blob_path(hash)?;
         std::fs::remove_file(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 BrainCoreError::ObjectStore(format!(
@@ -178,7 +186,7 @@ mod tests {
         assert_eq!(ref1.size, ref2.size);
 
         // There should still be exactly one file on disk (no duplicates).
-        let blob_path = store.blob_path(&ref1.hash);
+        let blob_path = store.blob_path(&ref1.hash).unwrap();
         assert!(blob_path.exists());
     }
 
