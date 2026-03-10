@@ -1,6 +1,7 @@
 pub mod events;
 pub mod objects;
 pub mod projections;
+pub mod queries;
 
 use std::path::PathBuf;
 
@@ -430,6 +431,42 @@ impl RecordStore {
         // Then update the SQLite projection
         self.db
             .with_write_conn(|conn| projections::apply_event(conn, event))
+    }
+
+    // -- Query methods --
+
+    pub fn get_record(&self, record_id: &str) -> Result<Option<queries::RecordRow>> {
+        self.db.with_read_conn(|conn| queries::get_record(conn, record_id))
+    }
+
+    pub fn list_records(&self, filter: &queries::RecordFilter) -> Result<Vec<queries::RecordRow>> {
+        self.db.with_read_conn(|conn| queries::list_records(conn, filter))
+    }
+
+    pub fn get_record_tags(&self, record_id: &str) -> Result<Vec<String>> {
+        self.db.with_read_conn(|conn| queries::get_record_tags(conn, record_id))
+    }
+
+    pub fn get_record_links(&self, record_id: &str) -> Result<Vec<queries::RecordLink>> {
+        self.db.with_read_conn(|conn| queries::get_record_links(conn, record_id))
+    }
+
+    pub fn resolve_record_id(&self, input: &str) -> Result<String> {
+        self.db.with_read_conn(|conn| queries::resolve_record_id(conn, input))
+    }
+
+    pub fn compact_record_id(&self, record_id: &str) -> Result<String> {
+        self.db.with_read_conn(|conn| queries::compact_record_id(conn, record_id))
+    }
+
+    pub fn compact_record_ids(&self) -> Result<std::collections::HashMap<String, String>> {
+        self.db.with_read_conn(queries::compact_record_ids)
+    }
+
+    pub fn get_project_prefix(&self) -> Result<String> {
+        self.db.with_read_conn(|conn| {
+            Ok(crate::db::meta::get_meta(conn, "project_prefix")?.unwrap_or_else(|| "BRN".to_string()))
+        })
     }
 }
 
