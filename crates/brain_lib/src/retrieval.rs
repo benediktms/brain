@@ -4,7 +4,7 @@
 /// - `search_minimal`: returns compact stubs within a token budget
 /// - `expand`: returns full content for selected memory IDs
 use crate::capsule::generate_stub_capsule;
-use crate::ranking::{RankedResult, SignalScores};
+use crate::ranking::{FusionConfidence, RankedResult, SignalScores};
 use crate::tokens::estimate_tokens;
 
 /// Trait for types that can be expanded to full memory content.
@@ -45,6 +45,9 @@ pub struct SearchResult {
     pub num_results: usize,
     pub total_available: usize,
     pub results: Vec<MemoryStub>,
+    /// Fusion confidence between vector and FTS retrieval paths.
+    /// Present when the search used hybrid retrieval.
+    pub fusion_confidence: Option<FusionConfidence>,
 }
 
 /// A fully expanded memory entry.
@@ -145,6 +148,7 @@ pub fn pack_minimal(
         num_results: results.len(),
         total_available,
         results,
+        fusion_confidence: None,
     }
 }
 
