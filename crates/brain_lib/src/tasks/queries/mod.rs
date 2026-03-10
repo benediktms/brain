@@ -65,15 +65,25 @@ has_blocked_ancestor(tid) AS (
 
 pub(super) fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
     let task_type_str: String = row.get(7)?;
+    let task_id: String = row.get(0)?;
+    let task_type = task_type_str.parse().unwrap_or_else(|e| {
+        tracing::warn!(
+            task_id = %task_id,
+            raw_value = %task_type_str,
+            error = %e,
+            "invalid task_type in database; defaulting to Task — possible schema or migration issue"
+        );
+        TaskType::Task
+    });
     Ok(TaskRow {
-        task_id: row.get(0)?,
+        task_id,
         title: row.get(1)?,
         description: row.get(2)?,
         status: row.get(3)?,
         priority: row.get(4)?,
         blocked_reason: row.get(5)?,
         due_ts: row.get(6)?,
-        task_type: task_type_str.parse().unwrap_or(TaskType::Task),
+        task_type,
         assignee: row.get(8)?,
         defer_until: row.get(9)?,
         parent_task_id: row.get(10)?,
@@ -787,5 +797,76 @@ mod tests {
             "child of unblocked parent should be ready"
         );
         assert!(ready_ids.contains(&"parent"));
+    }
+
+    // -- Invalid task_type handling tests --
+
+    /// Directly corrupt a task_type value in the DB (bypassing the CHECK constraint via
+    /// PRAGMA writable_schema / direct column update after disabling constraint checks)
+    /// and verify that row_to_task gracefully defaults to TaskType::Task instead of panicking.
+    ///
+    /// This scenario models external DB manipulation or future schema migrations where an
+    /// unknown task_type value could appear in the database.
+    #[test]
+    fn test_row_to_task_invalid_type_defaults_to_task() {
+        let conn = setup();
+        create_task(&conn, "t1", "Task 1", 2);
+
+        // Disable integrity enforcement, update the value, then re-enable.
+        // This simulates data corruption or a future migration that doesn't
+        // yet know about the CHECK constraint.
+        conn.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE tasks SET task_type = 'corrupted_type' WHERE task_id = 't1';
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+        .unwrap();
+
+        let task = get_task(&conn, "t1").unwrap().unwrap();
+        assert_eq!(
+            task.task_type,
+            TaskType::Task,
+            "invalid task_type should default to TaskType::Task"
+        );
+    }
+
+    /// Verify that the TaskType FromStr implementation correctly rejects unknown values.
+    /// This is the underlying mechanism that row_to_task relies on for its warn+default path.
+    #[test]
+    fn test_task_type_parse_rejects_unknown_values() {
+        let invalid_values = ["", "unknown", "corrupted_type", "TASK", "Task", "BUG"];
+        for s in &invalid_values {
+            let result: Result<TaskType, _> = s.parse();
+            assert!(result.is_err(), "'{s}' should fail to parse as TaskType");
+        }
+    }
+
+    /// Verify that all valid task_type values round-trip correctly through the DB.
+    #[test]
+    fn test_row_to_task_all_valid_types_roundtrip() {
+        let conn = setup();
+
+        let cases = [
+            ("t_task", "task", TaskType::Task),
+            ("t_bug", "bug", TaskType::Bug),
+            ("t_feature", "feature", TaskType::Feature),
+            ("t_epic", "epic", TaskType::Epic),
+            ("t_spike", "spike", TaskType::Spike),
+        ];
+
+        for (task_id, type_str, expected) in &cases {
+            create_task(&conn, task_id, "title", 2);
+            conn.execute(
+                "UPDATE tasks SET task_type = ?1 WHERE task_id = ?2",
+                rusqlite::params![type_str, task_id],
+            )
+            .unwrap();
+
+            let task = get_task(&conn, task_id).unwrap().unwrap();
+            assert_eq!(
+                &task.task_type, expected,
+                "task_type '{type_str}' should round-trip correctly"
+            );
+        }
     }
 }

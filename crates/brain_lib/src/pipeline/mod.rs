@@ -43,7 +43,7 @@ pub struct IndexPipeline {
 /// - **No stored version** (first run): just stamp, no rebuild needed.
 /// - **Stored but wrong/unparseable**: full rebuild + clear content hashes + stamp.
 /// - **Matches**: skip rebuild, but warn if the live schema diverges (safety net).
-async fn ensure_schema_version(db: &Db, store: &mut Store) -> crate::error::Result<()> {
+pub async fn ensure_schema_version(db: &Db, store: &mut Store) -> crate::error::Result<()> {
     let expected = crate::store::LANCE_SCHEMA_VERSION;
 
     let raw: Option<String> =

@@ -242,14 +242,12 @@ impl TaskStore {
     ///
     /// Each event is individually validated/written/applied. Errors on one event
     /// do not abort subsequent events (partial-success semantics).
-    pub fn append_batch(
-        &self,
-        events: &[TaskEvent],
-    ) -> Vec<std::result::Result<(), anyhow::Error>> {
-        events
-            .iter()
-            .map(|e| self.append(e).map_err(|e| anyhow::anyhow!("{e}")))
-            .collect()
+    ///
+    /// Returns domain errors (`BrainCoreError`) so callers can match on specific
+    /// variants (e.g. `TaskCycle`, `TaskEvent`). CLI callers can convert to
+    /// `anyhow::Error` via `?` since `BrainCoreError` implements `std::error::Error`.
+    pub fn append_batch(&self, events: &[TaskEvent]) -> Vec<Result<()>> {
+        events.iter().map(|e| self.append(e)).collect()
     }
 
     /// Get all task IDs that have a given label.

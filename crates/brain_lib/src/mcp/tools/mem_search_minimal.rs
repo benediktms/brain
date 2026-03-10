@@ -145,10 +145,64 @@ impl McpTool for MemSearchMinimal {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use std::sync::Arc;
+
+    use serde_json::{Value, json};
+
+    use crate::mcp::McpContext;
 
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
+
+    /// Build a context with store and embedder both absent (tasks-only mode).
+    async fn create_tasks_only_context() -> (tempfile::TempDir, McpContext) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sqlite_path = tmp.path().join("test.db");
+        let tasks_dir = tmp.path().join("tasks");
+
+        let db = crate::db::Db::open(&sqlite_path).unwrap();
+        let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
+        let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
+
+        (
+            tmp,
+            McpContext {
+                db,
+                store: None,
+                embedder: None,
+                tasks,
+                metrics: Arc::new(crate::metrics::Metrics::new()),
+            },
+        )
+    }
+
+    /// Build a context with store present but embedder absent.
+    async fn create_no_embedder_context() -> (tempfile::TempDir, McpContext) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sqlite_path = tmp.path().join("test.db");
+        let lance_path = tmp.path().join("test_lance");
+        let tasks_dir = tmp.path().join("tasks");
+
+        let db = crate::db::Db::open(&sqlite_path).unwrap();
+        let store = crate::store::Store::open_or_create(&lance_path)
+            .await
+            .unwrap();
+        let store_reader = crate::store::StoreReader::from_store(&store);
+        let _store = store;
+        let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
+        let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
+
+        (
+            tmp,
+            McpContext {
+                db,
+                store: Some(store_reader),
+                embedder: None,
+                tasks,
+                metrics: Arc::new(crate::metrics::Metrics::new()),
+            },
+        )
+    }
 
     #[tokio::test]
     async fn test_missing_query() {
@@ -158,5 +212,283 @@ mod tests {
             .dispatch("memory.search_minimal", json!({}), &ctx)
             .await;
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_memory_unavailable_no_store() {
+        let (_dir, ctx) = create_tasks_only_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "rust memory" }),
+                &ctx,
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0]
+                .text
+                .contains("Memory tools are unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_memory_unavailable_no_embedder() {
+        let (_dir, ctx) = create_no_embedder_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "rust memory" }),
+                &ctx,
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0]
+                .text
+                .contains("Memory tools are unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_query_succeeds() {
+        // An empty string is a valid query string — serde accepts it.
+        // With an empty index the search returns 0 results.
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch("memory.search_minimal", json!({ "query": "" }), &ctx)
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "empty query should not be a validation error; got: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_valid_minimal_uses_defaults() {
+        // Only query supplied — budget_tokens, k, intent, tags take their defaults.
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch("memory.search_minimal", json!({ "query": "hello" }), &ctx)
+            .await;
+        assert!(result.is_error.is_none(), "should succeed with defaults");
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["budget_tokens"], 800);
+        assert_eq!(parsed["result_count"], 0);
+        assert!(parsed["results"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_budget_tokens_parameter() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "budget_tokens": 200 }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["budget_tokens"], 200);
+    }
+
+    #[tokio::test]
+    async fn test_k_parameter() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        // k=1 is the tightest valid limit; with empty index still 0 results.
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "k": 1 }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["result_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_tags_parameter() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "tags": ["rust", "memory"] }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "tags array should be accepted; got: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_tags_array() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "tags": [] }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "empty tags array should be valid"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_intent_lookup() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "intent": "lookup" }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["intent_resolved"], "Lookup");
+    }
+
+    #[tokio::test]
+    async fn test_intent_planning() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "intent": "planning" }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["intent_resolved"], "Planning");
+    }
+
+    #[tokio::test]
+    async fn test_intent_reflection() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "intent": "reflection" }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["intent_resolved"], "Reflection");
+    }
+
+    #[tokio::test]
+    async fn test_intent_synthesis() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "intent": "synthesis" }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["intent_resolved"], "Synthesis");
+    }
+
+    #[tokio::test]
+    async fn test_intent_auto_maps_to_default() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "intent": "auto" }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        // "auto" does not match any named profile — falls through to Default.
+        assert_eq!(parsed["intent_resolved"], "Default");
+    }
+
+    #[tokio::test]
+    async fn test_response_shape() {
+        // Verify every expected top-level field is present in the response.
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "anything" }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert!(
+            parsed.get("budget_tokens").is_some(),
+            "missing budget_tokens"
+        );
+        assert!(
+            parsed.get("used_tokens_est").is_some(),
+            "missing used_tokens_est"
+        );
+        assert!(
+            parsed.get("intent_resolved").is_some(),
+            "missing intent_resolved"
+        );
+        assert!(parsed.get("result_count").is_some(), "missing result_count");
+        assert!(
+            parsed.get("total_available").is_some(),
+            "missing total_available"
+        );
+        assert!(parsed.get("results").is_some(), "missing results");
+        assert!(parsed["results"].is_array(), "results should be an array");
+    }
+
+    #[tokio::test]
+    async fn test_large_budget_tokens() {
+        // Very large budget_tokens should not cause an error.
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({ "query": "hello", "budget_tokens": 1_000_000 }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "large budget should be accepted; got: {}",
+            result.content[0].text
+        );
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["budget_tokens"], 1_000_000);
     }
 }

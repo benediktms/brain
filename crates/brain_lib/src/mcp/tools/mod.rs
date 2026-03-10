@@ -37,6 +37,14 @@ pub trait McpTool: Send + Sync {
     /// Tool name as it appears in MCP (e.g. "tasks.apply_event").
     fn name(&self) -> &'static str;
 
+    /// Underscore alias for the tool name (e.g. "tasks_apply_event").
+    ///
+    /// Derived automatically from [`name`] by replacing `.` with `_`.
+    /// Tools that have no `.` in their name return the same value as `name()`.
+    fn underscore_alias(&self) -> String {
+        self.name().replace('.', "_")
+    }
+
     /// Tool definition including JSON Schema for input parameters.
     fn definition(&self) -> ToolDefinition;
 
@@ -86,39 +94,12 @@ impl ToolRegistry {
 
     pub async fn dispatch(&self, name: &str, params: Value, ctx: &McpContext) -> ToolCallResult {
         for tool in &self.tools {
-            if tool.name() == name {
+            if tool.name() == name || tool.underscore_alias() == name {
                 return tool.call(params, ctx).await;
             }
         }
 
-        let normalized = normalize_tool_name(name);
-        if normalized != name {
-            for tool in &self.tools {
-                if tool.name() == normalized {
-                    return tool.call(params, ctx).await;
-                }
-            }
-        }
-
         ToolCallResult::error(format!("Unknown tool: {name}"))
-    }
-}
-
-fn normalize_tool_name(name: &str) -> &str {
-    match name {
-        "memory_search_minimal" => "memory.search_minimal",
-        "memory_expand" => "memory.expand",
-        "memory_write_episode" => "memory.write_episode",
-        "memory_reflect" => "memory.reflect",
-        "tasks_apply_event" => "tasks.apply_event",
-        "tasks_close" => "tasks.close",
-        "tasks_deps_batch" => "tasks.deps_batch",
-        "tasks_get" => "tasks.get",
-        "tasks_labels_batch" => "tasks.labels_batch",
-        "tasks_labels_summary" => "tasks.labels_summary",
-        "tasks_list" => "tasks.list",
-        "tasks_next" => "tasks.next",
-        _ => name,
     }
 }
 
@@ -154,14 +135,22 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn test_normalize_tool_name() {
-        assert_eq!(normalize_tool_name("tasks_list"), "tasks.list");
-        assert_eq!(
-            normalize_tool_name("memory_search_minimal"),
-            "memory.search_minimal"
-        );
-        assert_eq!(normalize_tool_name("status"), "status");
-        assert_eq!(normalize_tool_name("tasks.list"), "tasks.list");
+    fn test_underscore_aliases_derived_from_tool_names() {
+        // Aliases are derived from each tool's canonical dot-notation name.
+        // Verify a sample of tools produce the expected underscore aliases.
+        let registry = ToolRegistry::new();
+        let aliases: Vec<String> = registry
+            .tools
+            .iter()
+            .map(|t| t.underscore_alias())
+            .collect();
+
+        assert!(aliases.iter().any(|a| a == "tasks_list"));
+        assert!(aliases.iter().any(|a| a == "memory_search_minimal"));
+        // Tools without a dot keep the same alias as their name.
+        assert!(aliases.iter().any(|a| a == "status"));
+        // Dot-notation names produce underscore aliases, not themselves.
+        assert!(!aliases.iter().any(|a| a == "tasks.list"));
     }
 
     #[tokio::test]

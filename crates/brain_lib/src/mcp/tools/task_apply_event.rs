@@ -15,6 +15,84 @@ use crate::utils::{parse_timestamp, task_row_to_json};
 use super::McpTool;
 use super::{Warning, inject_warnings, json_response, store_or_warn};
 
+/// The result of pure validation — all static constraints checked, no I/O performed.
+#[derive(Debug)]
+struct ValidatedEvent {
+    event_type: EventType,
+    /// Raw task_id from the caller (length-checked, but not DB-resolved).
+    task_id_raw: Option<String>,
+    actor: String,
+    /// Payload with timestamps normalized to i64 and task_type validated.
+    payload: Value,
+}
+
+/// Validate all static (non-I/O) constraints on the incoming parameters.
+///
+/// Checks:
+/// - `event_type` is a recognized variant
+/// - `task_id`, if present, is ≤ 256 characters
+/// - `actor` is ≤ 256 characters
+/// - Timestamp fields (`defer_until`, `due_ts`) are valid ISO 8601 or integers
+/// - `task_type`, if present, is a recognized variant
+///
+/// Returns `Err(String)` with a human-readable message on any violation.
+/// No database access or other side effects are performed.
+fn parse_and_validate_event(params: &Params) -> Result<ValidatedEvent, String> {
+    // Parse event_type
+    let event_type: EventType = serde_json::from_value(json!(params.event_type)).map_err(|_| {
+        format!(
+            "Invalid event_type: '{}'. Must be one of: task_created, \
+             task_updated, status_changed, dependency_added, dependency_removed, \
+             note_linked, note_unlinked, label_added, label_removed, comment_added, \
+             parent_set, external_id_added, external_id_removed",
+            params.event_type
+        )
+    })?;
+
+    // Validate task_id length
+    if let Some(id) = &params.task_id
+        && id.len() > 256
+    {
+        return Err("task_id exceeds maximum length of 256 characters".into());
+    }
+
+    // Validate actor length
+    if params.actor.len() > 256 {
+        return Err("actor exceeds maximum length of 256 characters".into());
+    }
+
+    // Normalize timestamp fields from ISO 8601 strings to i64 Unix seconds
+    let mut payload = Value::Object(params.payload.clone());
+    for field in &["defer_until", "due_ts"] {
+        if let Some(val) = payload.get(*field).filter(|v| v.is_string()) {
+            match parse_timestamp(val) {
+                Some(ts) => payload[*field] = json!(ts),
+                None => {
+                    return Err(format!(
+                        "Invalid timestamp for '{field}': expected ISO 8601 string or integer"
+                    ));
+                }
+            }
+        }
+    }
+
+    // Validate task_type if provided
+    if let Some(tt) = payload.get("task_type").and_then(|v| v.as_str())
+        && tt.parse::<TaskType>().is_err()
+    {
+        return Err(format!(
+            "Invalid task_type: '{tt}'. Must be one of: task, bug, feature, epic, spike"
+        ));
+    }
+
+    Ok(ValidatedEvent {
+        event_type,
+        task_id_raw: params.task_id.clone(),
+        actor: params.actor.clone(),
+        payload,
+    })
+}
+
 /// Build the JSON Schema for `tasks.apply_event`.
 ///
 /// Note: The Anthropic API does not support `oneOf`/`allOf`/`anyOf` at the
@@ -95,27 +173,19 @@ impl TaskApplyEvent {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
-        let mut warnings: Vec<Warning> = Vec::new();
 
-        // Parse event_type
-        let event_type: EventType = match serde_json::from_value(json!(params.event_type)) {
-            Ok(et) => et,
-            Err(_) => {
-                return ToolCallResult::error(format!(
-                    "Invalid event_type: '{}'. Must be one of: task_created, \
-                     task_updated, status_changed, dependency_added, dependency_removed, \
-                     note_linked, note_unlinked, label_added, label_removed, comment_added, \
-                     parent_set, external_id_added, external_id_removed",
-                    params.event_type
-                ));
-            }
+        // Pure validation — no DB access
+        let validated = match parse_and_validate_event(&params) {
+            Ok(v) => v,
+            Err(msg) => return ToolCallResult::error(msg),
         };
 
-        // Parse task_id: auto-generate for task_created, resolve prefix for others
-        let task_id = match params.task_id.as_deref() {
-            Some(id) if id.len() > 256 => {
-                return ToolCallResult::error("task_id exceeds maximum length of 256 characters");
-            }
+        let mut warnings: Vec<Warning> = Vec::new();
+        let event_type = validated.event_type;
+        let mut payload = validated.payload;
+
+        // Resolve task_id: auto-generate for task_created, resolve prefix for others (I/O)
+        let task_id = match validated.task_id_raw.as_deref() {
             Some(id) => {
                 if event_type == EventType::TaskCreated {
                     id.to_string()
@@ -150,35 +220,7 @@ impl TaskApplyEvent {
             }
         };
 
-        if params.actor.len() > 256 {
-            return ToolCallResult::error("actor exceeds maximum length of 256 characters");
-        }
-
-        // Normalize timestamp fields from ISO 8601 strings to i64 Unix seconds
-        let mut payload = Value::Object(params.payload);
-        for field in &["defer_until", "due_ts"] {
-            if let Some(val) = payload.get(*field).filter(|v| v.is_string()) {
-                match parse_timestamp(val) {
-                    Some(ts) => payload[*field] = json!(ts),
-                    None => {
-                        return ToolCallResult::error(format!(
-                            "Invalid timestamp for '{field}': expected ISO 8601 string or integer"
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Validate task_type if provided
-        if let Some(tt) = payload.get("task_type").and_then(|v| v.as_str())
-            && tt.parse::<TaskType>().is_err()
-        {
-            return ToolCallResult::error(format!(
-                "Invalid task_type: '{tt}'. Must be one of: task, bug, feature, epic, spike"
-            ));
-        }
-
-        // Resolve depends_on_task_id and parent_task_id references in payload
+        // Resolve depends_on_task_id and parent_task_id references in payload (I/O)
         if let Some(dep_id) = payload.get("depends_on_task_id").and_then(|v| v.as_str())
             && !dep_id.is_empty()
         {
@@ -214,7 +256,12 @@ impl TaskApplyEvent {
             payload
         };
 
-        let event = TaskEvent::from_raw(task_id.clone(), params.actor, event_type.clone(), payload);
+        let event = TaskEvent::from_raw(
+            task_id.clone(),
+            validated.actor,
+            event_type.clone(),
+            payload,
+        );
 
         // Append (validates + writes JSONL + applies projection)
         if let Err(e) = ctx.tasks.append(&event) {
@@ -753,5 +800,135 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert_eq!(result.is_error, Some(true));
         assert!(result.content[0].text.contains("Invalid timestamp"));
+    }
+
+    // --- Unit tests for parse_and_validate_event (no DB required) ---
+
+    fn make_params(event_type: &str, task_id: Option<&str>, payload: Value) -> super::Params {
+        super::Params {
+            event_type: event_type.to_string(),
+            task_id: task_id.map(|s| s.to_string()),
+            actor: "test-actor".to_string(),
+            payload: match payload {
+                Value::Object(m) => m,
+                _ => panic!("payload must be an object"),
+            },
+        }
+    }
+
+    #[test]
+    fn unit_invalid_event_type() {
+        let params = make_params("bogus_event", None, json!({"title": "x"}));
+        let err = super::parse_and_validate_event(&params).unwrap_err();
+        assert!(err.contains("Invalid event_type"), "got: {err}");
+        assert!(err.contains("bogus_event"), "got: {err}");
+    }
+
+    #[test]
+    fn unit_task_id_too_long() {
+        let long_id = "a".repeat(257);
+        let params = make_params(
+            "status_changed",
+            Some(&long_id),
+            json!({"new_status": "done"}),
+        );
+        let err = super::parse_and_validate_event(&params).unwrap_err();
+        assert!(err.contains("task_id exceeds maximum length"), "got: {err}");
+    }
+
+    #[test]
+    fn unit_task_id_exactly_256_ok() {
+        let id_256 = "a".repeat(256);
+        let params = make_params(
+            "status_changed",
+            Some(&id_256),
+            json!({"new_status": "done"}),
+        );
+        assert!(
+            super::parse_and_validate_event(&params).is_ok(),
+            "256-char task_id should be accepted"
+        );
+    }
+
+    #[test]
+    fn unit_actor_too_long() {
+        let mut params = make_params("status_changed", Some("t1"), json!({"new_status": "done"}));
+        params.actor = "a".repeat(257);
+        let err = super::parse_and_validate_event(&params).unwrap_err();
+        assert!(err.contains("actor exceeds maximum length"), "got: {err}");
+    }
+
+    #[test]
+    fn unit_invalid_task_type() {
+        let params = make_params(
+            "task_created",
+            None,
+            json!({"title": "Bad type", "task_type": "story"}),
+        );
+        let err = super::parse_and_validate_event(&params).unwrap_err();
+        assert!(err.contains("Invalid task_type"), "got: {err}");
+        assert!(err.contains("story"), "got: {err}");
+    }
+
+    #[test]
+    fn unit_valid_task_type_accepted() {
+        for tt in &["task", "bug", "feature", "epic", "spike"] {
+            let params = make_params("task_created", None, json!({"title": "x", "task_type": tt}));
+            assert!(
+                super::parse_and_validate_event(&params).is_ok(),
+                "task_type '{tt}' should be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn unit_invalid_iso_timestamp_rejected() {
+        let params = make_params(
+            "task_created",
+            None,
+            json!({"title": "x", "defer_until": "not-a-date"}),
+        );
+        let err = super::parse_and_validate_event(&params).unwrap_err();
+        assert!(err.contains("Invalid timestamp"), "got: {err}");
+        assert!(err.contains("defer_until"), "got: {err}");
+    }
+
+    #[test]
+    fn unit_valid_iso_timestamp_normalized() {
+        let params = make_params(
+            "task_created",
+            None,
+            json!({"title": "x", "defer_until": "2026-12-01T00:00:00Z"}),
+        );
+        let validated = super::parse_and_validate_event(&params).unwrap();
+        // After normalization the field should be an integer, not a string
+        assert!(
+            validated.payload["defer_until"].is_i64() || validated.payload["defer_until"].is_u64(),
+            "defer_until should be normalized to integer, got: {}",
+            validated.payload["defer_until"]
+        );
+    }
+
+    #[test]
+    fn unit_valid_event_type_preserved() {
+        let params = make_params("status_changed", Some("t1"), json!({"new_status": "done"}));
+        let validated = super::parse_and_validate_event(&params).unwrap();
+        assert_eq!(
+            validated.event_type,
+            crate::tasks::events::EventType::StatusChanged
+        );
+        assert_eq!(validated.task_id_raw.as_deref(), Some("t1"));
+        assert_eq!(validated.actor, "test-actor");
+    }
+
+    #[test]
+    fn unit_no_task_id_for_non_create_passes_validation() {
+        // parse_and_validate_event doesn't check for missing task_id on non-create events —
+        // that's an I/O concern (execute() handles it).
+        let params = make_params("status_changed", None, json!({"new_status": "done"}));
+        assert!(
+            super::parse_and_validate_event(&params).is_ok(),
+            "missing task_id is not a pure-validation concern"
+        );
     }
 }
