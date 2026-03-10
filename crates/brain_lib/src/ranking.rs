@@ -288,6 +288,136 @@ pub fn resolve_intent(intent: &str) -> WeightProfile {
     }
 }
 
+// ─── Fusion Confidence ──────────────────────────────────────────
+
+/// Fusion confidence: measures agreement between vector and FTS candidate sets.
+///
+/// `confidence = |intersection(top_k_vector, top_k_fts)| / k`
+///
+/// High confidence (>0.6): both retrieval paths agree — reranking likely unnecessary.
+/// Low confidence (<0.3): significant disagreement — cross-encoder reranking recommended.
+#[derive(Debug, Clone, Copy)]
+pub struct FusionConfidence {
+    /// The confidence value in [0, 1].
+    pub confidence: f64,
+    /// Number of top candidates compared (k).
+    pub k: usize,
+    /// Number of overlapping chunk_ids in the top-k sets.
+    pub overlap: usize,
+}
+
+/// Compute fusion confidence from the top-k vector and FTS result chunk IDs.
+///
+/// Compares the top `k` results from each retrieval path and measures
+/// overlap. When both paths are empty, returns confidence 1.0 (vacuous
+/// agreement — no reranking needed).
+pub fn compute_fusion_confidence(
+    vector_ids: &[&str],
+    fts_ids: &[&str],
+    k: usize,
+) -> FusionConfidence {
+    if vector_ids.is_empty() && fts_ids.is_empty() {
+        return FusionConfidence {
+            confidence: 1.0,
+            k: 0,
+            overlap: 0,
+        };
+    }
+    if vector_ids.is_empty() || fts_ids.is_empty() {
+        return FusionConfidence {
+            confidence: 0.0,
+            k,
+            overlap: 0,
+        };
+    }
+
+    let effective_k = k.min(vector_ids.len()).min(fts_ids.len());
+    if effective_k == 0 {
+        return FusionConfidence {
+            confidence: 0.0,
+            k: 0,
+            overlap: 0,
+        };
+    }
+
+    let vector_top: std::collections::HashSet<&str> =
+        vector_ids.iter().take(effective_k).copied().collect();
+    let fts_top: std::collections::HashSet<&str> =
+        fts_ids.iter().take(effective_k).copied().collect();
+
+    let overlap = vector_top.intersection(&fts_top).count();
+    let confidence = overlap as f64 / effective_k as f64;
+
+    FusionConfidence {
+        confidence,
+        k: effective_k,
+        overlap,
+    }
+}
+
+// ─── Adaptive Reranking ─────────────────────────────────────────
+
+/// Policy for adaptive reranking based on fusion confidence.
+#[derive(Debug, Clone, Copy)]
+pub struct RerankerPolicy {
+    /// Below this threshold, trigger reranking.
+    pub low_threshold: f64,
+    /// Number of top candidates to compare for confidence.
+    pub confidence_k: usize,
+    /// Number of top fused candidates to pass to the reranker.
+    pub rerank_depth: usize,
+}
+
+impl Default for RerankerPolicy {
+    fn default() -> Self {
+        Self {
+            low_threshold: 0.3,
+            confidence_k: 5,
+            rerank_depth: 20,
+        }
+    }
+}
+
+impl RerankerPolicy {
+    /// Whether the reranker should be triggered given the fusion confidence.
+    pub fn should_rerank(&self, confidence: &FusionConfidence) -> bool {
+        confidence.confidence < self.low_threshold
+    }
+}
+
+/// A candidate for cross-encoder reranking.
+#[derive(Debug, Clone)]
+pub struct RerankCandidate {
+    pub chunk_id: String,
+    /// Capsule or snippet text (not full chunk content).
+    pub text: String,
+}
+
+/// Result from a cross-encoder reranker.
+#[derive(Debug, Clone)]
+pub struct RerankResult {
+    pub chunk_id: String,
+    /// Cross-encoder relevance score in [0, 1].
+    pub score: f64,
+}
+
+/// Trait for cross-encoder rerankers.
+///
+/// Implementations rerank candidates by semantic relevance to the query,
+/// operating on capsules/snippets (not full chunks) for efficiency.
+/// Target latency: 200-500ms on CPU for 10-30 candidates.
+///
+/// The model should be loaded lazily (not at startup) and unloaded
+/// after an idle timeout.
+pub trait Reranker: Send + Sync {
+    /// Rerank candidates given a query. Returns results sorted by descending score.
+    fn rerank(
+        &self,
+        query: &str,
+        candidates: &[RerankCandidate],
+    ) -> crate::error::Result<Vec<RerankResult>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,5 +634,91 @@ mod tests {
         assert_eq!(resolve_intent("synthesis"), WeightProfile::Synthesis);
         assert_eq!(resolve_intent("auto"), WeightProfile::Default);
         assert_eq!(resolve_intent("unknown"), WeightProfile::Default);
+    }
+
+    // ─── Fusion confidence tests ─────────────────────────────────
+
+    #[test]
+    fn test_fusion_confidence_full_overlap() {
+        let vector = vec!["a", "b", "c"];
+        let fts = vec!["a", "b", "c"];
+        let conf = compute_fusion_confidence(&vector, &fts, 3);
+        assert_eq!(conf.confidence, 1.0);
+        assert_eq!(conf.k, 3);
+        assert_eq!(conf.overlap, 3);
+    }
+
+    #[test]
+    fn test_fusion_confidence_no_overlap() {
+        let vector = vec!["a", "b", "c"];
+        let fts = vec!["d", "e", "f"];
+        let conf = compute_fusion_confidence(&vector, &fts, 3);
+        assert_eq!(conf.confidence, 0.0);
+        assert_eq!(conf.k, 3);
+        assert_eq!(conf.overlap, 0);
+    }
+
+    #[test]
+    fn test_fusion_confidence_partial_overlap() {
+        let vector = vec!["a", "b", "c", "d", "e"];
+        let fts = vec!["c", "d", "x", "y", "z"];
+        let conf = compute_fusion_confidence(&vector, &fts, 5);
+        assert_eq!(conf.overlap, 2);
+        assert!((conf.confidence - 0.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_fusion_confidence_both_empty() {
+        let conf = compute_fusion_confidence(&[], &[], 5);
+        assert_eq!(conf.confidence, 1.0);
+        assert_eq!(conf.k, 0);
+    }
+
+    #[test]
+    fn test_fusion_confidence_one_empty() {
+        let conf = compute_fusion_confidence(&["a", "b"], &[], 5);
+        assert_eq!(conf.confidence, 0.0);
+    }
+
+    #[test]
+    fn test_fusion_confidence_k_zero() {
+        let conf = compute_fusion_confidence(&["a", "b"], &["a", "b"], 0);
+        assert_eq!(conf.confidence, 0.0);
+        assert_eq!(conf.k, 0);
+        assert!(!conf.confidence.is_nan());
+    }
+
+    #[test]
+    fn test_fusion_confidence_k_clamped() {
+        let vector = vec!["a", "b"];
+        let fts = vec!["a", "b", "c"];
+        let conf = compute_fusion_confidence(&vector, &fts, 10);
+        assert_eq!(conf.k, 2);
+    }
+
+    #[test]
+    fn test_reranker_policy_default_thresholds() {
+        let policy = RerankerPolicy::default();
+
+        let high = FusionConfidence {
+            confidence: 0.8,
+            k: 5,
+            overlap: 4,
+        };
+        assert!(!policy.should_rerank(&high));
+
+        let low = FusionConfidence {
+            confidence: 0.2,
+            k: 5,
+            overlap: 1,
+        };
+        assert!(policy.should_rerank(&low));
+
+        let mid = FusionConfidence {
+            confidence: 0.4,
+            k: 5,
+            overlap: 2,
+        };
+        assert!(!policy.should_rerank(&mid));
     }
 }

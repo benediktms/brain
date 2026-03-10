@@ -35,7 +35,10 @@ pub mod prelude {
     pub use crate::parser::{ParsedDocument, parse_document};
     pub use crate::pipeline::{IndexPipeline, ScanStats, VacuumStats};
     pub use crate::query_pipeline::QueryPipeline;
-    pub use crate::ranking::{RankedResult, WeightProfile};
+    pub use crate::ranking::{
+        FusionConfidence, RankedResult, RerankCandidate, RerankResult, Reranker, RerankerPolicy,
+        WeightProfile,
+    };
     pub use crate::retrieval::{ExpandResult, ExpandedMemory, MemoryStub, SearchResult};
     pub use crate::scanner::{ScannedFile, scan_brain};
     pub use crate::store::{QueryResult, Store};

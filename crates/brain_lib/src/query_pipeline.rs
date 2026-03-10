@@ -9,6 +9,7 @@ use tracing::{instrument, warn};
 
 use std::sync::atomic::Ordering;
 
+use crate::capsule::generate_stub_capsule;
 use crate::db::Db;
 use crate::db::chunks::get_chunks_by_ids;
 use crate::db::fts::search_fts;
@@ -17,7 +18,10 @@ use crate::db::summaries::{SummaryRow, list_episodes};
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
-use crate::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
+use crate::ranking::{
+    CandidateSignals, FusionConfidence, RerankCandidate, Reranker, RerankerPolicy, Weights,
+    compute_fusion_confidence, rank_candidates, resolve_intent,
+};
 use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
 use crate::store::{DEFAULT_NPROBES, StoreReader};
 use crate::tokens::estimate_tokens;
@@ -39,6 +43,8 @@ pub struct QueryPipeline<'a> {
     store: &'a StoreReader,
     embedder: &'a Arc<dyn Embed>,
     metrics: &'a Arc<Metrics>,
+    reranker: Option<&'a dyn Reranker>,
+    reranker_policy: RerankerPolicy,
 }
 
 impl<'a> QueryPipeline<'a> {
@@ -53,7 +59,20 @@ impl<'a> QueryPipeline<'a> {
             store,
             embedder,
             metrics,
+            reranker: None,
+            reranker_policy: RerankerPolicy::default(),
         }
+    }
+
+    /// Attach a cross-encoder reranker with the given policy.
+    ///
+    /// When attached, the pipeline computes fusion confidence after hybrid
+    /// retrieval and conditionally invokes the reranker on the top-N fused
+    /// candidates when confidence is below the policy threshold.
+    pub fn with_reranker(mut self, reranker: &'a dyn Reranker, policy: RerankerPolicy) -> Self {
+        self.reranker = Some(reranker);
+        self.reranker_policy = policy;
+        self
     }
 
     /// Hybrid search: vector + FTS union, enriched, ranked, packed within budget.
@@ -66,8 +85,10 @@ impl<'a> QueryPipeline<'a> {
         k: usize,
         query_tags: &[String],
     ) -> Result<SearchResult> {
-        let ranked = self.search_ranked(query, intent, query_tags).await?;
-        Ok(pack_minimal(&ranked, budget_tokens, k, false))
+        let (ranked, confidence) = self.search_ranked(query, intent, query_tags).await?;
+        let mut result = pack_minimal(&ranked, budget_tokens, k, false);
+        result.fusion_confidence = Some(confidence);
+        Ok(result)
     }
 
     /// Hybrid search returning stubs with per-signal score breakdowns.
@@ -80,17 +101,19 @@ impl<'a> QueryPipeline<'a> {
         k: usize,
         query_tags: &[String],
     ) -> Result<SearchResult> {
-        let ranked = self.search_ranked(query, intent, query_tags).await?;
-        Ok(pack_minimal(&ranked, budget_tokens, k, true))
+        let (ranked, confidence) = self.search_ranked(query, intent, query_tags).await?;
+        let mut result = pack_minimal(&ranked, budget_tokens, k, true);
+        result.fusion_confidence = Some(confidence);
+        Ok(result)
     }
 
-    /// Core search logic: returns ranked results.
+    /// Core search logic: returns ranked results with fusion confidence.
     async fn search_ranked(
         &self,
         query: &str,
         intent: &str,
         query_tags: &[String],
-    ) -> Result<Vec<crate::ranking::RankedResult>> {
+    ) -> Result<(Vec<crate::ranking::RankedResult>, FusionConfidence)> {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
 
@@ -173,8 +196,14 @@ impl<'a> QueryPipeline<'a> {
             }
         }
 
+        // 4a. Compute fusion confidence
+        let vector_ids: Vec<&str> = vector_results.iter().map(|r| r.chunk_id.as_str()).collect();
+        let fts_ids: Vec<&str> = fts_results.iter().map(|r| r.chunk_id.as_str()).collect();
+        let fusion_confidence =
+            compute_fusion_confidence(&vector_ids, &fts_ids, self.reranker_policy.confidence_k);
+
         if candidates.is_empty() {
-            return Ok(vec![]);
+            return Ok((vec![], fusion_confidence));
         }
 
         // 5. Enrich from SQLite
@@ -230,7 +259,49 @@ impl<'a> QueryPipeline<'a> {
             .collect();
 
         // 6. Rank
-        Ok(rank_candidates(&candidate_vec, &weights, query_tags))
+        let mut ranked = rank_candidates(&candidate_vec, &weights, query_tags);
+
+        // 7. Adaptive reranking: if confidence is low and a reranker is attached,
+        //    rerank the top-N fused candidates using the cross-encoder.
+        if let Some(reranker) = self.reranker
+            && self.reranker_policy.should_rerank(&fusion_confidence)
+        {
+            let depth = self.reranker_policy.rerank_depth.min(ranked.len());
+            let candidates: Vec<RerankCandidate> = ranked
+                .iter()
+                .take(depth)
+                .map(|r| RerankCandidate {
+                    chunk_id: r.chunk_id.clone(),
+                    text: generate_stub_capsule(Some(&r.heading_path), &r.content),
+                })
+                .collect();
+
+            match reranker.rerank(query, &candidates) {
+                Ok(reranked) => {
+                    let score_map: std::collections::HashMap<&str, f64> = reranked
+                        .iter()
+                        .map(|r| (r.chunk_id.as_str(), r.score))
+                        .collect();
+
+                    for result in ranked.iter_mut().take(depth) {
+                        if let Some(&score) = score_map.get(result.chunk_id.as_str()) {
+                            result.hybrid_score = score;
+                        }
+                    }
+
+                    ranked.sort_by(|a, b| {
+                        b.hybrid_score
+                            .partial_cmp(&a.hybrid_score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+                Err(e) => {
+                    warn!(error = %e, "Reranker failed, continuing with hybrid-only ranking");
+                }
+            }
+        }
+
+        Ok((ranked, fusion_confidence))
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.
