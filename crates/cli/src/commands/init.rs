@@ -300,6 +300,10 @@ When working on tasks:
 2. **While working**: Add comments via `tasks_apply_event` (comment_added) for significant decisions or blockers
 3. **On completion**: Close the task via `tasks_close` (or `tasks_apply_event` with status_changed to `done`)
 
+**Cross-task insights**: If you discover during work on one task that something affects or should be captured on a different task, immediately add a comment to that task with the relevant context. Don't defer — the insight is freshest now and costs seconds to capture vs. minutes to reconstruct later.
+
+**Planning references**: When planning work, always reference the task ID(s) being planned for and any related tasks that may be affected. This creates a traceable link between plans and the work they address, and helps future agents (or humans) understand why decisions were made.
+
 ### Conventions
 
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog
