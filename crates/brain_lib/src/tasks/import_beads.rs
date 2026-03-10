@@ -535,7 +535,17 @@ pub fn import_beads_issues(
             let beads_task_type: TaskType = issue
                 .issue_type
                 .as_deref()
-                .and_then(|s| s.parse().ok())
+                .map(|s| {
+                    s.parse().unwrap_or_else(|e| {
+                        tracing::warn!(
+                            beads_id = %issue.id,
+                            raw_value = %s,
+                            error = %e,
+                            "invalid issue_type in beads import; defaulting to Task"
+                        );
+                        TaskType::Task
+                    })
+                })
                 .unwrap_or(TaskType::Task);
             let mut upd = TaskUpdatedPayload {
                 title: None,
