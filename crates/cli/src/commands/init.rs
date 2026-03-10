@@ -284,7 +284,12 @@ brain tasks stats              # Project statistics
 
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
+brain agent schema             # Output JSON Schema for all MCP tools
+brain agent schema --pretty    # Pretty-printed output
+brain agent schema --tool tasks.apply_event --pretty  # Single tool
 ```
+
+> **Tip:** Run `brain agent schema --pretty` to get the full JSON Schema for all MCP tools, including exact per-event-type payload definitions for `tasks_apply_event`. This is useful for validating payloads before sending them.
 
 ### Finding Work
 

@@ -251,6 +251,12 @@ enum Command {
     /// Regenerate AGENTS.md and bridge CLAUDE.md from the current brain config
     Docs,
 
+    /// Agent utilities
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+
     /// Run health checks on the index
     Doctor {
         /// Path to the notes directory
@@ -648,6 +654,25 @@ pub enum McpTarget {
 }
 
 #[derive(Subcommand)]
+enum AgentAction {
+    /// Output JSON Schema for all MCP tool definitions
+    #[command(
+        long_about = "Output the full JSON Schema for all MCP tool definitions.\n\n\
+            Useful for understanding exact payload formats and validating MCP tool calls. \
+            By default outputs all tools as a compact JSON array. Use --tool to filter to \
+            a single tool and --pretty for human-readable formatting."
+    )]
+    Schema {
+        /// Filter output to a single tool by name (e.g. "tasks.apply_event")
+        #[arg(long)]
+        tool: Option<String>,
+        /// Pretty-print the JSON output
+        #[arg(long)]
+        pretty: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum HooksAction {
     /// Install brain hooks into Claude Code settings
     Install {
@@ -903,6 +928,11 @@ async fn async_main(cli: Cli) -> Result<()> {
         Command::Docs => {
             commands::docs::run()?;
         }
+        Command::Agent { action } => match action {
+            AgentAction::Schema { tool, pretty } => {
+                commands::agent_schema::run(tool, pretty)?;
+            }
+        },
         Command::ImportBeads { path, dry_run } => {
             commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
         }
