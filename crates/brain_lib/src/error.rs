@@ -29,6 +29,9 @@ pub enum BrainCoreError {
     #[error("task dependency cycle: {0}")]
     TaskCycle(String),
 
+    #[error("record event error: {0}")]
+    RecordEvent(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }

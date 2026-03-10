@@ -17,6 +17,7 @@ pub mod ranking;
 pub mod retrieval;
 pub mod scanner;
 pub mod store;
+pub mod records;
 pub mod tasks;
 pub mod tokens;
 pub mod utils;
