@@ -1,5 +1,6 @@
 pub mod events;
 pub mod objects;
+pub mod projections;
 
 use std::path::PathBuf;
 
@@ -406,6 +407,29 @@ impl RecordStore {
     /// Return the path to the events JSONL file.
     pub fn events_path(&self) -> &std::path::Path {
         &self.events_path
+    }
+
+    /// Rebuild all records projection tables from the JSONL event log.
+    ///
+    /// Wipes the four records tables (in FK-safe order), then replays every
+    /// event in `events.jsonl` in order. Returns the number of events applied.
+    pub fn rebuild_projections(&self) -> Result<usize> {
+        let events_path = self.events_path.clone();
+        self.db
+            .with_write_conn(|conn| projections::rebuild(conn, &events_path))
+    }
+
+    /// Apply a single event to the SQLite projection and append it to the log.
+    ///
+    /// The event is written to the JSONL log first (durable), then projected
+    /// into SQLite. If the process crashes between the two writes, the next
+    /// call to `rebuild_projections` will recover the correct state.
+    pub fn apply_and_append(&self, event: &events::RecordEvent) -> Result<()> {
+        // Persist to the durable log first
+        events::append_event(&self.events_path, event)?;
+        // Then update the SQLite projection
+        self.db
+            .with_write_conn(|conn| projections::apply_event(conn, event))
     }
 }
 
