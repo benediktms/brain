@@ -255,7 +255,7 @@ proptest! {
             })
             .collect();
 
-        let result = pack_minimal(&ranked, budget, n, false);
+        let result = pack_minimal(&ranked, budget, n, false, &std::collections::HashMap::new());
 
         // First result always included even if over budget
         prop_assert!(

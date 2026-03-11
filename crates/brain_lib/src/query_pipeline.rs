@@ -15,7 +15,7 @@ use crate::db::Db;
 use crate::db::chunks::get_chunks_by_ids;
 use crate::db::fts::search_fts;
 use crate::db::links::count_backlinks;
-use crate::db::summaries::{SummaryRow, list_episodes};
+use crate::db::summaries::{SummaryRow, get_ml_summaries_for_chunks, list_episodes};
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
@@ -87,7 +87,8 @@ impl<'a> QueryPipeline<'a> {
         query_tags: &[String],
     ) -> Result<SearchResult> {
         let (ranked, confidence) = self.search_ranked(query, intent, query_tags).await?;
-        let mut result = pack_minimal(&ranked, budget_tokens, k, false);
+        let ml_summaries = self.load_ml_summaries(&ranked)?;
+        let mut result = pack_minimal(&ranked, budget_tokens, k, false, &ml_summaries);
         result.fusion_confidence = Some(confidence);
         Ok(result)
     }
@@ -103,9 +104,19 @@ impl<'a> QueryPipeline<'a> {
         query_tags: &[String],
     ) -> Result<SearchResult> {
         let (ranked, confidence) = self.search_ranked(query, intent, query_tags).await?;
-        let mut result = pack_minimal(&ranked, budget_tokens, k, true);
+        let ml_summaries = self.load_ml_summaries(&ranked)?;
+        let mut result = pack_minimal(&ranked, budget_tokens, k, true, &ml_summaries);
         result.fusion_confidence = Some(confidence);
         Ok(result)
+    }
+
+    /// Batch-load ML summaries for a set of ranked results.
+    fn load_ml_summaries(
+        &self,
+        ranked: &[crate::ranking::RankedResult],
+    ) -> Result<HashMap<String, String>> {
+        let chunk_ids: Vec<&str> = ranked.iter().map(|r| r.chunk_id.as_str()).collect();
+        self.db.with_read_conn(|conn| get_ml_summaries_for_chunks(conn, &chunk_ids))
     }
 
     /// Core search logic: returns ranked results with fusion confidence.
@@ -475,7 +486,10 @@ impl<'a> FederatedPipeline<'a> {
         });
 
         // ── 5. Pack into SearchResult ─────────────────────────────────────────
-        let mut search_result = crate::retrieval::pack_minimal(&merged, budget_tokens, k, false);
+        // ML summary preloading is not applied for federated search (multi-brain
+        // results have no single DB to batch-load from).
+        let mut search_result =
+            crate::retrieval::pack_minimal(&merged, budget_tokens, k, false, &HashMap::new());
 
         // ── 6. Annotate each stub with its source brain name ──────────────────
         for stub in &mut search_result.results {
