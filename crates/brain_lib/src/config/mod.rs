@@ -24,7 +24,7 @@ pub struct GlobalConfig {
 }
 
 /// An entry for a registered brain inside the global config.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainEntry {
     /// Absolute path to the project root.
     pub root: PathBuf,
@@ -131,6 +131,73 @@ pub fn get_or_generate_brain_id(brain_dir: &Path) -> Result<String> {
     toml.id = Some(id.clone());
     save_brain_toml(brain_dir, &toml)?;
     Ok(id)
+}
+
+// ---------------------------------------------------------------------------
+// Brain registry helpers
+// ---------------------------------------------------------------------------
+
+/// Internal: resolve a brain entry by name or ID from an already-loaded config.
+///
+/// Separated from [`resolve_brain_entry`] so unit tests can bypass the
+/// `BRAIN_HOME` env var and pass a config directly.
+pub fn resolve_brain_entry_from_config(
+    name_or_id: &str,
+    config: &GlobalConfig,
+) -> Result<(String, BrainEntry)> {
+    // Exact name match first.
+    if let Some(entry) = config.brains.get(name_or_id) {
+        return Ok((name_or_id.to_string(), entry.clone()));
+    }
+
+    // Scan by ID field.
+    for (name, entry) in &config.brains {
+        if entry.id.as_deref() == Some(name_or_id) {
+            return Ok((name.clone(), entry.clone()));
+        }
+    }
+
+    let available: Vec<&str> = config.brains.keys().map(String::as_str).collect();
+    Err(BrainCoreError::Config(format!(
+        "brain '{}' not found in registry; available: [{}]",
+        name_or_id,
+        available.join(", ")
+    )))
+}
+
+/// Resolve a brain entry by name or ID from the global registry.
+///
+/// Tries an exact name match first, then scans entries for a matching `id`
+/// field. Returns `(name, entry)` on success.
+pub fn resolve_brain_entry(name_or_id: &str) -> Result<(String, BrainEntry)> {
+    let config = load_global_config()?;
+    resolve_brain_entry_from_config(name_or_id, &config)
+}
+
+/// Open a [`crate::tasks::TaskStore`] for a remote brain identified by `name`.
+///
+/// Resolves the brain's data paths, creates the database directory if needed,
+/// opens the SQLite database, and rebuilds SQLite projections from the JSONL
+/// event log so the store is immediately usable.
+pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::tasks::TaskStore> {
+    let paths = resolve_paths_for_brain(name)?;
+
+    // Ensure the parent directory of the database file exists.
+    if let Some(parent) = paths.sqlite_db.parent() {
+        std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
+    }
+
+    let db = crate::db::Db::open(&paths.sqlite_db)?;
+
+    let tasks_dir = paths
+        .sqlite_db
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("tasks");
+
+    let store = crate::tasks::TaskStore::new(&tasks_dir, db)?;
+    store.rebuild_projections()?;
+    Ok(store)
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +484,94 @@ mod tests {
             "expected brain name in sqlite_db path, got: {}",
             result.sqlite_db.display()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_brain_entry_from_config
+    // -----------------------------------------------------------------------
+
+    fn make_global_config_with_brain(name: &str, id: Option<&str>, root: &Path) -> GlobalConfig {
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            name.to_string(),
+            BrainEntry {
+                root: root.to_path_buf(),
+                notes: vec![],
+                id: id.map(str::to_string),
+            },
+        );
+        cfg
+    }
+
+    #[test]
+    fn resolve_brain_entry_by_name() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("infra", Some("abc12345"), tmp.path());
+
+        let (name, entry) = resolve_brain_entry_from_config("infra", &cfg).unwrap();
+        assert_eq!(name, "infra");
+        assert_eq!(entry.root, tmp.path());
+        assert_eq!(entry.id, Some("abc12345".to_string()));
+    }
+
+    #[test]
+    fn resolve_brain_entry_by_id() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("infra", Some("abc12345"), tmp.path());
+
+        let (name, entry) = resolve_brain_entry_from_config("abc12345", &cfg).unwrap();
+        assert_eq!(name, "infra");
+        assert_eq!(entry.root, tmp.path());
+    }
+
+    #[test]
+    fn resolve_brain_entry_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("infra", Some("abc12345"), tmp.path());
+
+        let err = resolve_brain_entry_from_config("nonexistent", &cfg).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nonexistent"),
+            "error should mention the requested name: {msg}"
+        );
+        assert!(
+            msg.contains("infra"),
+            "error should list available brains: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // open_remote_task_store
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn open_remote_task_store_creates_functional_store() {
+        let brain_home_tmp = TempDir::new().unwrap();
+        let project_tmp = TempDir::new().unwrap();
+
+        // Point BRAIN_HOME at our temp dir.
+        // SAFETY: test is single-threaded; no concurrent env access.
+        unsafe {
+            std::env::set_var("BRAIN_HOME", brain_home_tmp.path());
+        }
+
+        let entry = BrainEntry {
+            root: project_tmp.path().to_path_buf(),
+            notes: vec![],
+            id: Some("test1234".to_string()),
+        };
+
+        let store = open_remote_task_store("test-brain", &entry).unwrap();
+
+        // The store should be functional — listing tasks on an empty store succeeds.
+        let tasks = store.list_all().unwrap();
+        assert!(tasks.is_empty());
+
+        // Clean up env var.
+        unsafe {
+            std::env::remove_var("BRAIN_HOME");
+        }
     }
 
     // -----------------------------------------------------------------------

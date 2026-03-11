@@ -172,8 +172,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         } => {
             commands::init::run(name, notes, no_agents_md)?;
         }
-        Command::List => {
-            commands::registry::run_list()?;
+        Command::List { json } => {
+            commands::registry::run_list(json)?;
         }
         Command::Remove { name, purge } => {
             commands::registry::run_remove(&name, purge)?;
@@ -202,6 +202,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     task_type,
                     assignee,
                     parent,
+                    brain,
+                    link_from,
+                    link_type,
                 } => {
                     commands::tasks::run::create(
                         &ctx,
@@ -212,6 +215,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             task_type: task_type.into(),
                             assignee,
                             parent,
+                            brain,
+                            link_from,
+                            link_type,
                         },
                     )?;
                 }

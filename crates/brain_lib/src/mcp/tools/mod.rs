@@ -1,3 +1,4 @@
+mod brains_list;
 mod helpers;
 /// MCP tool definitions and handlers.
 mod mem_expand;
@@ -15,6 +16,7 @@ mod record_tag;
 mod status;
 mod task_apply_event;
 mod task_close;
+mod task_create_remote;
 mod task_deps_batch;
 mod task_get;
 mod task_labels_batch;
@@ -85,6 +87,7 @@ impl ToolRegistry {
                 Box::new(mem_reflect::MemReflect),
                 Box::new(task_apply_event::TaskApplyEvent),
                 Box::new(task_close::TaskClose),
+                Box::new(task_create_remote::TaskCreateRemote),
                 Box::new(task_deps_batch::TaskDepsBatch),
                 Box::new(task_get::TaskGet),
                 Box::new(task_labels_batch::TaskLabelsBatch),
@@ -102,6 +105,7 @@ impl ToolRegistry {
                 Box::new(record_tag::RecordTagRemove),
                 Box::new(record_link::RecordLinkAdd),
                 Box::new(record_link::RecordLinkRemove),
+                Box::new(brains_list::BrainsList),
             ],
         }
     }
@@ -133,7 +137,7 @@ pub(super) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 23);
+        assert_eq!(defs.len(), 25);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));

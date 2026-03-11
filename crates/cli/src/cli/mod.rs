@@ -305,7 +305,11 @@ pub(crate) enum Command {
 
     /// List all registered brains
     #[command(visible_alias = "ls")]
-    List,
+    List {
+        /// Output as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Remove a registered brain
     #[command(visible_alias = "rm")]

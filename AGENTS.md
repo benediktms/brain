@@ -37,6 +37,17 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
+**Cross-brain tools:**
+
+- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix, e.g. `BRN`) for each brain. Use this to discover available targets before calling `tasks.create_remote`. Also callable as `brains_list`.
+- `tasks.create_remote` — Create a task in another registered brain project. Required params: `brain` (registry name or 8-char brain ID) and `title`. Brain resolution tries the registry name first, then falls back to scanning by ID. The task is written directly into the remote brain's event store and gets the remote brain's task ID prefix. Optional params: `description`, `priority` (0–4, default 4), `task_type` (task|bug|feature|epic|spike, default task), `assignee`, `parent` (remote task ID). When `link_from` is provided (a local task ID), a `cross_brain_ref_added` event is appended to that local task, linking it to the newly created remote task. `link_type` controls the ref direction (depends_on|blocks|related, default related). Returns `remote_task_id`, `remote_brain_name`, `remote_brain_id`, and `local_ref_created`. Also callable as `tasks_create_remote`.
+
+**Cross-brain workflow:**
+
+1. Call `brains.list` to discover registered brains and their prefixes.
+2. Call `tasks.create_remote` with the target brain name and task details.
+3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
+
 **Memory tools:**
 
 - `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
@@ -75,6 +86,11 @@ brain tasks create --title="..." --description="..." --type=task --priority=2
 brain tasks update <id> --status=in_progress
 brain tasks comment <id> "comment text"
 
+# Cross-brain task creation
+brain tasks create --title="..." --brain=<NAME_OR_ID>          # Create in another brain
+brain tasks create --title="..." --brain=infra --link-from=BRN-01JPHABC --link-type=related
+                                                                # Create remote + auto-link local task
+
 # Dependencies
 brain tasks dep add <task> <depends-on>
 brain tasks dep add-chain BRN-01 BRN-02 BRN-03  # Sequential chain
@@ -94,6 +110,10 @@ brain tasks list --group-by label     # List tasks grouped by label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Registry
+brain list                     # List registered brains
+brain list --json              # List as JSON (name, id, root, prefix)
 
 # Records
 brain artifacts <subcommand>   # Artifact management (alias: art)
