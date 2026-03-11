@@ -242,10 +242,7 @@ pub async fn open_remote_search_context(
         Err(_) => return Ok(None),
     };
 
-    let brain_id = entry
-        .id
-        .clone()
-        .unwrap_or_default();
+    let brain_id = entry.id.clone().unwrap_or_default();
 
     let paths = resolve_paths_for_brain_with_home(&name, brain_home);
 
@@ -280,9 +277,8 @@ pub fn list_brain_keys(brain_home: &Path) -> Result<Vec<(String, String)>> {
         return Ok(Vec::new());
     }
     let text = std::fs::read_to_string(&path).map_err(BrainCoreError::Io)?;
-    let config: GlobalConfig = toml::from_str(&text).map_err(|e| {
-        BrainCoreError::Config(format!("failed to parse {}: {e}", path.display()))
-    })?;
+    let config: GlobalConfig = toml::from_str(&text)
+        .map_err(|e| BrainCoreError::Config(format!("failed to parse {}: {e}", path.display())))?;
     let mut pairs: Vec<(String, String)> = config
         .brains
         .into_iter()

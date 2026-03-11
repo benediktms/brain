@@ -155,11 +155,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
     let local_brain_name = {
         let cwd = std::env::current_dir()?;
         brain_lib::config::find_brain_root(&cwd)
-            .and_then(|root| {
-                load_brain_toml(&root.join(".brain"))
-                    .ok()
-                    .map(|t| t.name)
-            })
+            .and_then(|root| load_brain_toml(&root.join(".brain")).ok().map(|t| t.name))
             .unwrap_or_else(|| "local".to_string())
     };
 
@@ -175,8 +171,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
             // Local brain is already included via local_db / local_store_reader.
             continue;
         }
-        match open_remote_search_context(&brain_home, key, &params.model_dir, &embedder_arc)
-            .await?
+        match open_remote_search_context(&brain_home, key, &params.model_dir, &embedder_arc).await?
         {
             Some(ctx) => remotes.push(ctx),
             None => {
@@ -212,9 +207,9 @@ pub async fn run(params: QueryParams) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::Cli;
     use brain_lib::retrieval::{MemoryStub, SearchResult};
     use clap::Parser;
-    use crate::cli::Cli;
 
     fn make_stub(rank: usize, score: f64, file: &str, title: &str) -> MemoryStub {
         MemoryStub {
@@ -357,9 +352,10 @@ mod tests {
 
     #[test]
     fn cli_parse_query_multiple_brain_flags() {
-        let cli =
-            Cli::try_parse_from(["brain", "query", "hello", "--brain", "work", "--brain", "personal"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "brain", "query", "hello", "--brain", "work", "--brain", "personal",
+        ])
+        .unwrap();
         if let crate::cli::Command::Query { brains, .. } = cli.command {
             assert_eq!(brains, vec!["work", "personal"]);
         } else {

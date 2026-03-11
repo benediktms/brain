@@ -400,16 +400,14 @@ impl<'a> FederatedPipeline<'a> {
         // ── 1. Build per-brain futures ────────────────────────────────────────
         type BrainResult = (String, Vec<crate::ranking::RankedResult>);
 
-        let mut futs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = BrainResult> + Send + '_>>> = Vec::new();
+        let mut futs: Vec<
+            std::pin::Pin<Box<dyn std::future::Future<Output = BrainResult> + Send + '_>>,
+        > = Vec::new();
 
         // Local brain
         {
-            let pipeline = QueryPipeline::new(
-                self.local_db,
-                self.local_store,
-                self.embedder,
-                self.metrics,
-            );
+            let pipeline =
+                QueryPipeline::new(self.local_db, self.local_store, self.embedder, self.metrics);
             let brain_name = self.local_brain_name.clone();
             let query = query.to_string();
             let intent = intent.to_string();
@@ -438,12 +436,7 @@ impl<'a> FederatedPipeline<'a> {
                 }
             };
 
-            let pipeline = QueryPipeline::new(
-                &remote.db,
-                store,
-                self.embedder,
-                self.metrics,
-            );
+            let pipeline = QueryPipeline::new(&remote.db, store, self.embedder, self.metrics);
             let brain_name = remote.brain_name.clone();
             let query = query.to_string();
             let intent = intent.to_string();

@@ -125,9 +125,7 @@ impl McpTool for MemSearchMinimal {
                     match crate::config::list_brain_keys(&ctx.brain_home) {
                         Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
                         Err(e) => {
-                            return ToolCallResult::error(format!(
-                                "Failed to list brains: {e}"
-                            ));
+                            return ToolCallResult::error(format!("Failed to list brains: {e}"));
                         }
                     }
                 } else {
@@ -179,7 +177,9 @@ impl McpTool for MemSearchMinimal {
                     .await
                 {
                     Ok(r) => r,
-                    Err(e) => return ToolCallResult::error(format!("Federated search failed: {e}")),
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Federated search failed: {e}"));
+                    }
                 }
             };
 
