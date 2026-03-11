@@ -218,9 +218,9 @@ impl<'a> QueryPipeline<'a> {
 
         // 5. Enrich from SQLite (single batched JOIN — pagerank_score comes from files table)
         let chunk_ids: Vec<String> = candidates.keys().cloned().collect();
-        let enrichment = self.db.with_read_conn(|conn| {
-            get_chunks_by_ids(conn, &chunk_ids)
-        });
+        let enrichment = self
+            .db
+            .with_read_conn(|conn| get_chunks_by_ids(conn, &chunk_ids));
 
         if let Ok(rows) = enrichment {
             let now = crate::utils::now_ts();
