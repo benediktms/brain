@@ -173,12 +173,12 @@ impl OptimizeScheduler {
         self.maybe_create_index().await;
 
         // Recompute PageRank scores after compaction so link scores stay fresh
-        if let Some(ref db) = self.db {
-            if let Err(e) = db.with_write_conn(|conn| {
+        if let Some(ref db) = self.db
+            && let Err(e) = db.with_write_conn(|conn| {
                 crate::pagerank::compute_and_store_pagerank(conn)
-            }) {
-                warn!(error = %e, "PageRank computation failed, will retry on next optimize");
-            }
+            })
+        {
+            warn!(error = %e, "PageRank computation failed, will retry on next optimize");
         }
     }
 

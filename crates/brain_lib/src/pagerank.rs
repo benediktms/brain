@@ -132,7 +132,7 @@ pub fn compute_and_store_pagerank(conn: &Connection) -> Result<()> {
     // include all files in compute_pagerank, but kept as defensive fallback).
     let mut sorted_vals: Vec<f64> = scores.values().cloned().collect();
     sorted_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = if sorted_vals.len() % 2 == 0 {
+    let median = if sorted_vals.len().is_multiple_of(2) {
         (sorted_vals[sorted_vals.len() / 2 - 1] + sorted_vals[sorted_vals.len() / 2]) / 2.0
     } else {
         sorted_vals[sorted_vals.len() / 2]
@@ -227,8 +227,8 @@ mod tests {
         let scores = compute_pagerank(&conn).unwrap();
 
         // All scores normalized to [0, 1]
-        for (_, &s) in scores.iter() {
-            assert!(s >= 0.0 && s <= 1.0, "score out of range: {s}");
+        for &s in scores.values() {
+            assert!((0.0..=1.0).contains(&s), "score out of range: {s}");
         }
 
         let hub_score = scores["h"];
@@ -296,8 +296,8 @@ mod tests {
         assert_eq!(scores.len(), 4);
 
         // All scores in [0, 1]
-        for (_, &s) in &scores {
-            assert!(s >= 0.0 && s <= 1.0, "score out of range: {s}");
+        for &s in scores.values() {
+            assert!((0.0..=1.0).contains(&s), "score out of range: {s}");
         }
 
         // b (has inbound link) should score higher than x and y (no links at all)
@@ -369,7 +369,7 @@ mod tests {
             hub_score > leaf_score,
             "hub {hub_score} should exceed leaf {leaf_score}"
         );
-        assert!(hub_score >= 0.0 && hub_score <= 1.0);
-        assert!(leaf_score >= 0.0 && leaf_score <= 1.0);
+        assert!((0.0..=1.0).contains(&hub_score));
+        assert!((0.0..=1.0).contains(&leaf_score));
     }
 }
