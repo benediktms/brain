@@ -140,6 +140,7 @@ mod tests {
             token_estimate: 10,
             signal_scores: None,
             kind: "note".to_string(),
+            brain_name: None,
         }
     }
 
