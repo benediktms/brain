@@ -35,21 +35,27 @@ struct Params {
 pub(super) struct TaskClose;
 
 impl TaskClose {
-    fn execute(&self, raw_params: Value, ctx: &McpContext) -> ToolCallResult {
+    /// Returns (ToolCallResult, Vec<(full_task_id, title)>) for capsule embedding.
+    fn execute_inner(
+        &self,
+        raw_params: Value,
+        ctx: &McpContext,
+    ) -> (ToolCallResult, Vec<(String, String)>) {
         let params: Params = match serde_json::from_value(raw_params) {
             Ok(p) => p,
-            Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            Err(e) => return (ToolCallResult::error(format!("Invalid parameters: {e}")), vec![]),
         };
 
         let ids = params.task_ids.into_vec();
         if ids.is_empty() {
-            return ToolCallResult::error("task_ids must not be empty");
+            return (ToolCallResult::error("task_ids must not be empty"), vec![]);
         }
 
         let mut closed = Vec::new();
         let mut failed = Vec::new();
         let mut total_unblocked = 0usize;
         let mut warnings: Vec<Warning> = Vec::new();
+        let mut closed_tasks: Vec<(String, String)> = Vec::new();
 
         for raw_id in &ids {
             let resolved = match ctx.tasks.resolve_task_id(raw_id) {
@@ -77,6 +83,11 @@ impl TaskClose {
                     "error": format!("{e}"),
                 }));
                 continue;
+            }
+
+            // Collect task title for capsule embedding (best-effort)
+            if let Ok(Some(task_row)) = ctx.tasks.get_task(&resolved) {
+                closed_tasks.push((resolved.clone(), task_row.title));
             }
 
             let unblocked: Vec<String> = store_or_warn(
@@ -109,8 +120,34 @@ impl TaskClose {
             },
         });
         inject_warnings(&mut response, warnings);
-        json_response(&response)
+        (json_response(&response), closed_tasks)
     }
+}
+
+async fn embed_outcome_capsule(
+    ctx: &crate::mcp::McpContext,
+    task_id: &str,
+    title: &str,
+) -> crate::error::Result<()> {
+    let (store, embedder) = match (ctx.writable_store.as_ref(), ctx.embedder.as_ref()) {
+        (Some(s), Some(e)) => (s, e),
+        _ => return Ok(()), // No store/embedder — skip silently
+    };
+
+    let capsule_text = crate::tasks::capsule::build_outcome_capsule(title, None);
+    let file_id = format!("task-outcome:{task_id}");
+
+    // 1. Embed into LanceDB
+    let embeddings =
+        crate::embedder::embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
+    store
+        .upsert_chunks(&file_id, title, &[(0, &capsule_text)], &embeddings)
+        .await?;
+
+    // 2. Store in SQLite (BM25/FTS)
+    crate::tasks::capsule::store_task_capsule(&ctx.db, &file_id, &capsule_text)?;
+
+    Ok(())
 }
 
 impl McpTool for TaskClose {
@@ -143,7 +180,18 @@ impl McpTool for TaskClose {
         params: Value,
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
-        Box::pin(std::future::ready(self.execute(params, ctx)))
+        Box::pin(async move {
+            let (result, closed_tasks) = self.execute_inner(params, ctx);
+
+            // Best-effort outcome capsule embedding for each closed task
+            for (task_id, title) in &closed_tasks {
+                if let Err(e) = embed_outcome_capsule(ctx, task_id, title).await {
+                    tracing::warn!(error = %e, task_id, "outcome capsule embedding failed (best-effort)");
+                }
+            }
+
+            result
+        })
     }
 }
 
