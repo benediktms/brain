@@ -217,6 +217,12 @@ impl TaskStore {
             .with_read_conn(|conn| queries::get_external_ids(conn, task_id))
     }
 
+    /// Get cross-brain references for a task.
+    pub fn get_cross_brain_refs(&self, task_id: &str) -> Result<Vec<queries::CrossBrainRef>> {
+        self.db
+            .with_read_conn(|conn| queries::get_cross_brain_refs(conn, task_id))
+    }
+
     /// Resolve an external ID to a brain task_id.
     pub fn resolve_external_id(&self, source: &str, external_id: &str) -> Result<Option<String>> {
         self.db
@@ -381,6 +387,23 @@ impl TaskStore {
                 }
             }
 
+            EventType::CrossBrainRefAdded => {
+                if !queries::task_exists(conn, &event.task_id)? {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "task not found: {}",
+                        event.task_id
+                    )));
+                }
+                // Validate ref_type before it hits the SQL CHECK constraint
+                if let Some(rt) = event.payload.get("ref_type").and_then(|v| v.as_str())
+                    && !matches!(rt, "depends_on" | "blocks" | "related")
+                {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "invalid ref_type: '{rt}'. Must be one of: depends_on, blocks, related"
+                    )));
+                }
+            }
+
             EventType::DependencyRemoved
             | EventType::NoteLinked
             | EventType::NoteUnlinked
@@ -388,7 +411,8 @@ impl TaskStore {
             | EventType::LabelRemoved
             | EventType::CommentAdded
             | EventType::ExternalIdAdded
-            | EventType::ExternalIdRemoved => {
+            | EventType::ExternalIdRemoved
+            | EventType::CrossBrainRefRemoved => {
                 if !queries::task_exists(conn, &event.task_id)? {
                     return Err(BrainCoreError::TaskEvent(format!(
                         "task not found: {}",
