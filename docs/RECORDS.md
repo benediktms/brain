@@ -1,6 +1,6 @@
 # Records Domain
 
-The records domain introduces durable work products and opaque state bundles as first-class citizens in Brain. This document describes the domain model, storage architecture, event types, projection tables, and planned CLI/MCP surfaces.
+The records domain introduces durable work products and opaque state bundles as first-class citizens in Brain. This document describes the domain model, storage architecture, event types, projection tables, CLI and MCP surfaces, and operational guidance.
 
 ## Overview
 
@@ -59,13 +59,13 @@ Key properties:
 
 ### RecordId
 
-A ULID string, prefixed with the brain's project prefix for human readability. Example: `BRN-01KK7XXXXXXXXXXXXXXXXXXXX`. Generated at write time.
+A ULID string, prefixed with the brain's project prefix for human readability. Example: `BRN-01KK7XXXXXXXXXXXXXXXXXXXX`. Generated at write time. Prefix resolution is supported: short prefixes (minimum 4 ULID characters after the project prefix) are accepted by CLI and MCP tools and resolved to the full ID.
 
 ### ContentRef
 
 A reference to an object in the content-addressed object store. Contains:
 - `hash`: hex-encoded BLAKE3 digest of the raw payload bytes (64 hex chars, 256 bits)
-- `size`: byte length of the payload (u64)
+- `size`: byte length of the stored object (u64) — may be less than original if compressed
 - `media_type`: optional MIME type hint (e.g., `text/plain`, `application/json`)
 
 The `hash` field doubles as the storage key. Two records with identical payloads share one object on disk.
@@ -127,7 +127,8 @@ Creates a new record (artifact or snapshot). Required fields:
   },
   "description": "Optional human-readable description",
   "task_id": "BRN-01KK...",
-  "tags": ["performance", "q1-2026"]
+  "tags": ["performance", "q1-2026"],
+  "retention_class": "permanent"
 }
 ```
 
@@ -175,6 +176,31 @@ Adds or removes a cross-reference link. Links can target tasks (by `task_id`) or
 }
 ```
 
+### PayloadEvicted
+
+Records that a record's blob has been deleted from the object store. Sets `payload_available = false` in the projection. Metadata is preserved.
+
+```json
+{
+  "content_hash": "e3b0c44...",
+  "reason": "manual eviction"
+}
+```
+
+### RetentionClassSet
+
+Updates the retention class of a record. Retention classes: `ephemeral`, `standard`, `permanent` (or null to clear).
+
+```json
+{
+  "retention_class": "permanent"
+}
+```
+
+### RecordPinned / RecordUnpinned
+
+Pins or unpins a record. Pinned records are exempt from payload eviction. Payload is empty (`{}`).
+
 ---
 
 ## Storage Layout
@@ -194,30 +220,31 @@ The records event log is kept separate from the tasks event log (`.brain/tasks/e
 ```
 ~/.brain/brains/<brain-name>/objects/
   <2-char prefix>/
-    <remaining 62 chars of BLAKE3 hex>/
-      <full 64-char BLAKE3 hex>
+    <full 64-char BLAKE3 hex>
 ```
 
 Example: a payload with BLAKE3 hash `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` would be stored at:
 
 ```
-~/.brain/brains/my-project/objects/e3/b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+~/.brain/brains/my-project/objects/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
 The 2-character prefix sharding limits directory entry count in filesystems that degrade with large flat directories. This scheme is identical to the Git object store layout and provides good distribution for BLAKE3 hashes.
 
 **Write protocol:**
-1. Compute BLAKE3 hash of the payload bytes.
+1. Compute BLAKE3 hash of the payload bytes (always on the raw, pre-compression bytes).
 2. Check if the object already exists at the expected path (deduplication).
-3. If absent, write to a temp file in the same directory, then `rename()` into place. The atomic rename prevents partial writes from being visible.
-4. Return the `ContentRef` (hash + size + optional media type) to the caller.
+3. If absent, optionally compress with zstd (level 3) if the payload exceeds the compression threshold.
+4. Write to a temp file in the same directory, then `rename()` into place. The atomic rename prevents partial writes from being visible.
+5. Return the `ContentRef` (hash + stored size + optional media type) to the caller.
 
 **Read protocol:**
 1. Derive the path from the hash in the `ContentRef`.
 2. Read the file bytes.
-3. Optionally verify the BLAKE3 hash of the read bytes against the stored hash (integrity check).
+3. Auto-detect zstd compression by checking for the zstd magic number (`0xFD2FB528` in the first 4 bytes). Decompress if detected.
+4. Return the raw (decompressed) bytes to the caller.
 
-**Deduplication:** Two records with identical payloads share one object on disk. The reference count is implicit — an object is retained as long as any record in the event log references its hash. Garbage collection (removing unreferenced objects) is a future maintenance operation.
+**Deduplication:** Two records with identical payloads share one object on disk. A blob is deleted only when no other active record references its hash (enforced by `evict_payload`).
 
 ### SQLite Projection
 
@@ -233,19 +260,24 @@ Primary record metadata table.
 
 ```sql
 CREATE TABLE records (
-    record_id     TEXT PRIMARY KEY,
-    title         TEXT NOT NULL,
-    kind          TEXT NOT NULL,                  -- RecordKind value
-    status        TEXT NOT NULL DEFAULT 'active'
-                  CHECK (status IN ('active', 'archived')),
-    description   TEXT,
-    content_hash  TEXT NOT NULL,                  -- BLAKE3 hex (64 chars)
-    content_size  INTEGER NOT NULL,               -- payload bytes
-    media_type    TEXT,                           -- optional MIME hint
-    task_id       TEXT,                           -- soft ref to tasks.task_id
-    actor         TEXT NOT NULL,                  -- creator
-    created_at    INTEGER NOT NULL,               -- unix seconds
-    updated_at    INTEGER NOT NULL                -- unix seconds
+    record_id         TEXT PRIMARY KEY,
+    title             TEXT NOT NULL,
+    kind              TEXT NOT NULL,                  -- RecordKind value
+    status            TEXT NOT NULL DEFAULT 'active'
+                      CHECK (status IN ('active', 'archived')),
+    description       TEXT,
+    content_hash      TEXT NOT NULL,                  -- BLAKE3 hex (64 chars)
+    content_size      INTEGER NOT NULL,               -- stored size in bytes
+    media_type        TEXT,                           -- optional MIME hint
+    task_id           TEXT,                           -- soft ref to tasks.task_id
+    actor             TEXT NOT NULL,                  -- creator
+    created_at        INTEGER NOT NULL,               -- unix seconds
+    updated_at        INTEGER NOT NULL,               -- unix seconds
+    retention_class   TEXT,                           -- "ephemeral" | "standard" | "permanent" | NULL
+    pinned            INTEGER NOT NULL DEFAULT 0,     -- 1 = pinned (exempt from eviction)
+    payload_available INTEGER NOT NULL DEFAULT 1,     -- 0 = blob evicted
+    content_encoding  TEXT NOT NULL DEFAULT 'identity', -- "identity" | "zstd"
+    original_size     INTEGER                         -- pre-compression byte length
 );
 ```
 
@@ -301,28 +333,25 @@ CREATE INDEX record_events_record_id ON record_events(record_id);
 
 The SQLite projection is fully rebuildable from the event log at any time. The rebuild procedure:
 
-1. Drop all FTS triggers on records tables (if any exist in future).
-2. Open a single SQLite transaction.
-3. DELETE all rows from `record_events`, `record_links`, `record_tags`, `records` (in FK-safe order).
-4. Replay every event from the JSONL file in order, applying each event to the cleared tables.
-5. Commit the transaction.
-6. Rebuild any FTS indexes.
-7. Re-create FTS triggers.
+1. Open a single SQLite transaction.
+2. DELETE all rows from `record_events`, `record_links`, `record_tags`, `records` (in FK-safe order).
+3. Replay every event from the JSONL file in order, applying each event to the cleared tables.
+4. Commit the transaction.
 
-This is identical to the tasks domain rebuild pattern in `projections::rebuild()`.
+This is identical to the tasks domain rebuild pattern.
 
 ### Invariants
 
 - The event log is the only source of truth for record metadata. Never write directly to SQLite projection tables.
-- Object payloads are written before their `RecordCreated` event is appended. If the process crashes between payload write and event append, the payload exists but no record references it — this is safe (the object is unreferenced, not corrupted).
+- Object payloads are written before their `RecordCreated` event is appended. If the process crashes between payload write and event append, the payload exists but no record references it — this is safe (the object is an orphan blob, not a corrupted record). `brain records gc` will clean it up.
 - If the process crashes after event append but before the SQLite projection is updated, the rebuild from the event log recovers the correct state.
 - Object store entries are immutable. Never overwrite an existing object at a given hash path.
 
 ### Crash Recovery
 
-On startup, if the daemon detects that the SQLite `records` table is absent or the `schema_version` is below the records migration version, it triggers a full projection rebuild from the event log.
+On startup, if the daemon detects that the SQLite `records` table is absent or the schema version is below the records migration version, it triggers a full projection rebuild from the event log.
 
-If the event log contains events for records whose objects are missing from the object store (e.g., the `objects/` directory was partially deleted), the projection rebuilds successfully but object reads for those records will fail at query time. This is surfaced as a retrieval error, not a startup failure.
+If the event log contains events for records whose objects are missing from the object store (e.g., the `objects/` directory was partially deleted), the projection rebuilds successfully but object reads for those records will fail at query time. This is surfaced as a retrieval error, not a startup failure. `brain records verify` will identify the missing blobs.
 
 ---
 
@@ -336,216 +365,377 @@ BLAKE3 is already used in Brain for content hashing in the notes indexing pipeli
 - 3–4x faster than SHA-256 on modern CPUs
 - Streaming and parallelizable
 
-### Write Path
+The hash is always computed over the raw (pre-compression) bytes. This ensures deduplication works correctly: two identical payloads produce the same hash regardless of whether compression was applied to one or both.
 
-```
-fn write_object(objects_dir: &Path, bytes: &[u8]) -> ContentRef {
-    let hash = blake3::hash(bytes);
-    let hex = hash.to_hex().to_string();            // 64 hex chars
-    let prefix = &hex[..2];                          // e.g. "e3"
-    let dir = objects_dir.join(prefix);
-    fs::create_dir_all(&dir);
-    let path = dir.join(&hex);
-    if path.exists() {
-        return ContentRef { hash: hex, size: bytes.len() as u64, media_type: None };
-    }
-    // Write to temp, rename for atomicity
-    let tmp = dir.join(format!("{hex}.tmp"));
-    fs::write(&tmp, bytes);
-    fs::rename(&tmp, &path);
-    ContentRef { hash: hex, size: bytes.len() as u64, media_type: None }
-}
-```
+### Compression
 
-### Read Path
+Object payloads are transparently compressed with zstd (level 3) when the payload size exceeds a configurable threshold. The BLAKE3 hash is always computed on the raw bytes, so deduplication is preserved across compressed and uncompressed writes.
 
-```
-fn read_object(objects_dir: &Path, content_ref: &ContentRef) -> Result<Vec<u8>> {
-    let hex = &content_ref.hash;
-    let path = objects_dir.join(&hex[..2]).join(hex);
-    let bytes = fs::read(&path)?;
-    Ok(bytes)
-}
-```
+On read, zstd compression is auto-detected by checking the first 4 bytes for the zstd magic number (`[0x28, 0xB5, 0x2F, 0xFD]`). If detected, the blob is decompressed before being returned to the caller. This is transparent — callers always receive the original bytes.
 
-### Optional Integrity Verification
-
-For reads where integrity is critical (export, display to user), callers can verify:
-
-```
-let actual_hash = blake3::hash(&bytes).to_hex().to_string();
-assert_eq!(actual_hash, content_ref.hash, "object integrity check failed");
-```
-
-This is opt-in to avoid slowing down bulk operations.
+The `content_encoding` column in the projection records whether the stored blob is `"identity"` or `"zstd"`. The `original_size` column records the pre-compression byte length.
 
 ---
 
-## CLI Surface (Planned)
+## CLI Reference
 
-The records domain will expose commands under `brain artifact` and `brain snapshot`.
-
-### artifact subcommands
+### brain artifacts (alias: art)
 
 ```
-brain artifact create --title <title> --kind <kind> [--file <path>] [--stdin]
+brain artifacts create --title <title> [--kind <kind>] [--file <path>|--stdin]
     Create a new artifact. Reads payload from file or stdin.
-    Flags: --task <task_id>, --tag <tag>..., --description <text>
+    Options: --description <text>, --task <task_id>, --tag <tag>..., --media-type <mime>
+    Default kind: document
 
-brain artifact list [--kind <kind>] [--tag <tag>] [--status active|archived]
-    List records, filtered by kind, tag, or status.
+brain artifacts list [--kind <kind>] [--tag <tag>] [--status active|archived] [--limit <n>]
+    List artifacts, filtered by kind, tag, or status. Default status: active. Default limit: 50.
 
-brain artifact show <record_id>
-    Show full metadata for a record.
+brain artifacts get <record_id>
+    Show full metadata for an artifact (tags, links, hash, size, actor, timestamps).
 
-brain artifact get <record_id> [--output <path>]
-    Download the object payload to stdout or a file.
+brain artifacts archive <record_id> [--reason <text>]
+    Mark an artifact as archived.
 
-brain artifact archive <record_id> [--reason <text>]
-    Mark a record as archived.
+brain artifacts tag add <record_id> <tag>
+    Add a tag to an artifact.
 
-brain artifact tag <record_id> --add <tag>... --remove <tag>...
-    Manage tags on an existing record.
+brain artifacts tag remove <record_id> <tag>
+    Remove a tag from an artifact.
+
+brain artifacts link add <record_id> [--task <task_id>] [--chunk <chunk_id>]
+    Add a link from an artifact to a task or note chunk.
+
+brain artifacts link remove <record_id> [--task <task_id>] [--chunk <chunk_id>]
+    Remove a link from an artifact to a task or note chunk.
 ```
 
-### snapshot subcommands
+### brain snapshots (alias: snap)
 
 ```
-brain snapshot save --title <title> [--file <path>] [--stdin]
-    Save an opaque state bundle as a snapshot.
-    Flags: --task <task_id>, --tag <tag>..., --description <text>
+brain snapshots save --title <title> [--file <path>|--stdin]
+    Save an opaque state bundle as a snapshot. Reads bytes from file or stdin.
+    Options: --description <text>, --task <task_id>, --tag <tag>..., --media-type <mime>
+    Default media type: application/octet-stream
 
-brain snapshot list [--tag <tag>] [--status active|archived]
-    List snapshots.
+brain snapshots list [--tag <tag>] [--status active|archived] [--limit <n>]
+    List snapshots. Default status: active. Default limit: 50.
 
-brain snapshot show <record_id>
-    Show metadata for a snapshot.
+brain snapshots get <record_id>
+    Show metadata for a snapshot (tags, links, hash, size, timestamps).
 
-brain snapshot restore <record_id> [--output <path>]
-    Write the snapshot bytes to stdout or a file.
+brain snapshots restore <record_id> [--output <path>]
+    Write the snapshot bytes to a file or stdout (default: stdout).
 
-brain snapshot archive <record_id>
+brain snapshots archive <record_id> [--reason <text>]
     Mark a snapshot as archived.
+
+brain snapshots tag add <record_id> <tag>
+    Add a tag to a snapshot.
+
+brain snapshots tag remove <record_id> <tag>
+    Remove a tag from a snapshot.
+
+brain snapshots link add <record_id> [--task <task_id>] [--chunk <chunk_id>]
+    Add a link from a snapshot to a task or note chunk.
+
+brain snapshots link remove <record_id> [--task <task_id>] [--chunk <chunk_id>]
+    Remove a link from a snapshot to a task or note chunk.
+```
+
+### brain records
+
+Maintenance commands for the records object store.
+
+```
+brain records verify [--verbose]
+    Verify integrity of the records object store.
+    Checks: missing blobs (referenced but absent), corrupt blobs (hash mismatch),
+    orphan blobs (present but unreferenced), stale flags (payload_available=false but blob exists).
+    Exits 0 if clean, 1 if issues found. Use --verbose for per-issue details.
+
+brain records gc [--dry-run]
+    Remove orphan blobs from the object store.
+    Orphans are blobs not referenced by any record in the event log.
+    Use --dry-run to preview without deleting.
+
+brain records evict <record_id> [--reason <text>]
+    Evict a record's payload from the object store.
+    Deletes the blob if no other record shares its hash.
+    Appends a PayloadEvicted event. Metadata is preserved.
+
+brain records pin <record_id>
+    Pin a record, marking it exempt from future eviction.
+    Appends a RecordPinned event.
+
+brain records unpin <record_id>
+    Unpin a record, allowing its payload to be evicted.
+    Appends a RecordUnpinned event.
+```
+
+All commands support `--json` for machine-readable output.
+
+### Usage Examples
+
+```bash
+# Create a report artifact from a file
+brain artifacts create --title "Q1 analysis" --kind report --file report.json
+
+# Create a document from stdin
+echo "Summary text" | brain artifacts create --title "Meeting notes" --stdin
+
+# List active artifacts
+brain artifacts list
+
+# Show full details with tags and links
+brain artifacts get BRN-01KK
+
+# Save a binary state bundle as a snapshot
+brain snapshots save --title "Agent state v3" --file state.bin
+
+# Restore snapshot bytes to stdout
+brain snapshots restore BRN-01KK7 | gunzip > restored.json
+
+# Restore to a file
+brain snapshots restore BRN-01KK7 --output state.bin
+
+# Archive an artifact with a reason
+brain artifacts archive BRN-01KK --reason "Superseded by BRN-01KK7YY"
+
+# Tag operations
+brain artifacts tag add BRN-01KK performance
+brain artifacts tag remove BRN-01KK performance
+
+# Link an artifact to a task
+brain artifacts link add BRN-01KK --task BRN-01KKBV
+
+# Verify store integrity
+brain records verify
+
+# Preview what gc would remove
+brain records gc --dry-run
+
+# Remove orphan blobs
+brain records gc
+
+# Evict a payload (metadata is kept)
+brain records evict BRN-01KK --reason "storage reclamation"
+
+# Pin a record to prevent eviction
+brain records pin BRN-01KK
 ```
 
 ---
 
-## MCP Surface (Planned)
+## MCP Tools Reference
 
-The records domain will expose tools via the MCP stdio JSON-RPC interface.
+The records domain exposes 10 tools via the MCP stdio JSON-RPC interface.
 
 ### records.create_artifact
 
-Creates a new artifact with an inline or base64-encoded payload.
+Creates a new artifact record. Writes data to the object store and appends a `RecordCreated` event.
 
 ```
-Tool: records.create_artifact
 Input:
-  title        string  (required)
-  kind         string  (required) — report|diff|export|analysis|document
-  content      string  (required) — raw text content or base64-encoded bytes
-  encoding     string  (optional, default "text") — "text" | "base64"
-  media_type   string  (optional)
-  description  string  (optional)
-  task_id      string  (optional) — link to originating task
-  tags         string[] (optional)
+  title       string    (required) — Human-readable title
+  kind        string    (optional, default "document") — report|diff|export|analysis|document|custom
+  data        string    (optional) — Base64-encoded content bytes. Omit for metadata-only record.
+  description string    (optional) — Free-text description
+  task_id     string    (optional) — Soft link to originating task
+  tags        string[]  (optional) — Initial tags
+  media_type  string    (optional) — MIME type hint (e.g. "application/json")
+
 Output:
-  record_id, content_ref, created_at
+  record_id, content_hash, size
 ```
 
 ### records.save_snapshot
 
-Saves an opaque state bundle.
+Saves a new snapshot record. Kind is always `"snapshot"`.
 
 ```
-Tool: records.save_snapshot
 Input:
-  title      string   (required)
-  content    string   (required) — base64-encoded bytes
-  description string  (optional)
-  task_id    string   (optional)
-  tags       string[] (optional)
+  title       string    (required) — Human-readable title
+  data        string    (required) — Base64-encoded snapshot bytes
+  description string    (optional) — Free-text description
+  task_id     string    (optional) — Soft link to originating task
+  tags        string[]  (optional) — Initial tags
+  media_type  string    (optional, default "application/octet-stream")
+
 Output:
-  record_id, content_ref, created_at
+  record_id, content_hash, size
 ```
 
 ### records.get
 
-Retrieves record metadata (without payload).
+Retrieves full metadata for a record by ID. Supports prefix resolution.
 
 ```
-Tool: records.get
 Input:
-  record_id  string  (required)
+  record_id   string    (required) — Full ID or unique prefix
+
 Output:
-  record metadata, content_ref, tags, links
-```
-
-### records.fetch_content
-
-Retrieves the object payload for a record.
-
-```
-Tool: records.fetch_content
-Input:
-  record_id  string  (required)
-  encoding   string  (optional, default "text") — "text" | "base64"
-Output:
-  content, content_ref, encoding
+  record_id, title, kind, status, description, content_hash, content_size,
+  media_type, task_id, actor, created_at, updated_at, tags[], links[]
 ```
 
 ### records.list
 
-Lists records with optional filters.
+Lists records with optional filters. Returns compact (shortest-unique-prefix) IDs.
 
 ```
-Tool: records.list
 Input:
-  kind    string   (optional)
-  tag     string   (optional)
-  status  string   (optional, default "active") — "active" | "archived" | "all"
-  limit   integer  (optional, default 20)
+  kind        string    (optional) — Filter by kind
+  status      string    (optional, default "active") — "active" | "archived"
+  tag         string    (optional) — Filter by tag
+  task_id     string    (optional) — Filter by associated task
+  limit       integer   (optional, default 50)
+
 Output:
-  records[]  — array of metadata stubs (no payloads)
+  records[]  — Array of metadata stubs (no payloads), count
+```
+
+### records.fetch_content
+
+Retrieves the raw content of a record. Returns base64-encoded data.
+
+```
+Input:
+  record_id   string    (required) — Full ID or unique prefix
+
+Output:
+  record_id, content_hash, size, media_type, data (base64)
 ```
 
 ### records.archive
 
-Archives a record.
+Archives a record by appending a `RecordArchived` event.
 
 ```
-Tool: records.archive
 Input:
-  record_id  string  (required)
-  reason     string  (optional)
+  record_id   string    (required) — Full ID or unique prefix
+  reason      string    (optional) — Reason for archiving
+
 Output:
-  record_id, status: "archived", updated_at
+  record_id, status: "archived"
+```
+
+### records.tag_add
+
+Adds a tag to a record (artifact or snapshot). Idempotent.
+
+```
+Input:
+  record_id   string    (required) — Full ID or unique prefix
+  tag         string    (required) — Tag to add
+
+Output:
+  record_id, tag, action: "added"
+```
+
+### records.tag_remove
+
+Removes a tag from a record. Idempotent.
+
+```
+Input:
+  record_id   string    (required) — Full ID or unique prefix
+  tag         string    (required) — Tag to remove
+
+Output:
+  record_id, tag, action: "removed"
+```
+
+### records.link_add
+
+Adds a link from a record to a task or note chunk. At least one of `task_id` or `chunk_id` must be provided.
+
+```
+Input:
+  record_id   string    (required) — Full ID or unique prefix
+  task_id     string    (optional) — Task to link to
+  chunk_id    string    (optional) — Note chunk to link to
+
+Output:
+  record_id, task_id, chunk_id, action: "linked"
+```
+
+### records.link_remove
+
+Removes a link from a record to a task or note chunk. At least one of `task_id` or `chunk_id` must be provided. Idempotent.
+
+```
+Input:
+  record_id   string    (required) — Full ID or unique prefix
+  task_id     string    (optional) — Task to unlink
+  chunk_id    string    (optional) — Note chunk to unlink
+
+Output:
+  record_id, task_id, chunk_id, action: "unlinked"
 ```
 
 ---
 
-## Open Questions and Future Work
+## Payload Lifecycle
 
-### Compression
+### Retention Classes
 
-Object store entries are currently stored uncompressed. For large text artifacts (reports, exports), gzip or zstd compression could significantly reduce disk footprint. If compression is added, the `ContentRef` should gain an `encoding` field (`none | gzip | zstd`) so readers know how to decompress. The hash should be computed over the raw (pre-compression) bytes to preserve deduplication semantics.
+Records can be assigned a retention class that signals intended lifetime to tooling:
 
-### Retention and Garbage Collection
+- `ephemeral` — Short-lived; expected to be evicted when no longer needed
+- `standard` — Default; retained until explicitly archived or evicted
+- `permanent` — Long-lived; should not be evicted without operator action
 
-When records are archived, their objects remain in the object store. Over time, unreferenced or archived objects may accumulate. A `brain records gc` command could scan the object store, identify objects not referenced by any active record in the event log, and optionally remove them. This requires care: the event log is the authoritative reference set, so GC must scan the full log (or a derived index of `content_hash` values) before deleting anything.
+The retention class is a hint stored in the projection. It does not automatically trigger eviction — eviction is always an explicit operator action.
+
+### Eviction
+
+Eviction deletes a record's blob from the object store while preserving the record's metadata in the event log and projection. After eviction:
+
+- `payload_available` is set to `false` in the projection
+- The blob is deleted from the object store only if no other record references the same hash
+- Attempts to read the content will return an error
+- The record remains queryable by metadata (title, tags, links, kind, status)
+
+Pinned records cannot be evicted. `brain records evict` will refuse to evict a pinned record.
+
+### Pinning
+
+Pinning marks a record as exempt from eviction. A `RecordPinned` event is appended; `pinned = 1` is set in the projection. `brain records unpin` appends `RecordUnpinned` and clears the flag.
+
+---
+
+## Operational Guidance
 
 ### Integrity Verification
 
-A `brain records verify` command could walk the object store and check each object's BLAKE3 hash against its filename, detecting bit-rot or accidental corruption. For large stores, this should run incrementally (with resume support via a cursor file).
+Run `brain records verify` to check the health of the object store:
 
-### Record Search
+- **Missing blobs**: Referenced by a record but absent from disk. May indicate disk corruption or accidental deletion. The record's metadata is intact but content reads will fail.
+- **Corrupt blobs**: On disk but BLAKE3 hash does not match the filename. Indicates bit-rot or overwrites. The blob file is untrustworthy and should be treated as missing.
+- **Orphan blobs**: Present on disk but not referenced by any record. Harmless but wasteful. Clean up with `brain records gc`.
+- **Stale flags**: `payload_available = false` in the projection but the blob still exists on disk. Usually indicates a crash between eviction event commit and blob deletion (see below). Harmless — the blob is just taking disk space. Can be cleaned by re-running eviction or gc.
 
-Records are not currently indexed in the LanceDB vector store. Future work could embed artifact content (text artifacts only) using the same BGE-small embedder pipeline used for notes, making artifacts retrievable via `memory.search_minimal`. This would require a `records` source in the hybrid ranker candidate pool and metadata fields compatible with the existing chunk stub format.
+### Crash Recovery
 
-### Cross-Brain References
+The records domain uses an event-first design. The correct state is always the event log; the SQLite projection is a derived view.
 
-Following the same pattern as task cross-brain references, record links could gain an optional `brain` field to support cross-brain soft references to tasks or chunks in other brains. `NULL` = local (zero-cost common case), non-NULL = cross-brain soft reference.
+**Crash between payload write and event append:** The blob exists in the object store but no `RecordCreated` event references it. The record was never created. The orphan blob will be detected by `brain records verify` and cleaned by `brain records gc`.
 
-### Schema Migration
+**Crash between event append and projection update:** The event log is ahead of the projection. On the next startup (or on-demand via rebuild), the projection is reconstructed from the event log. No data is lost.
 
-The records tables will be introduced in a new schema migration (v12 or later). The migration adds the four tables (`records`, `record_tags`, `record_links`, `record_events`) and indexes. On first open after upgrade, the daemon runs a projection rebuild from the records event log (which will be empty for existing installations, making the rebuild a no-op).
+**Crash between eviction event commit and blob deletion:** The `PayloadEvicted` event exists in the log, so the projection correctly shows `payload_available = false`. The blob still exists on disk — this is flagged as a `stale_flag` by `brain records verify`. The blob is not an orphan (the record still references the hash), so `brain records gc` will not remove it automatically. A subsequent eviction call or manual delete will resolve the stale flag. Future gc improvements may handle this case automatically.
+
+### Routine Maintenance
+
+For long-running deployments, schedule periodic maintenance:
+
+```bash
+# Weekly: verify store health
+brain records verify
+
+# After verification: clean orphans if any
+brain records gc
+
+# Archive old artifacts no longer actively used
+brain artifacts list --status active | grep old-prefix | xargs -I{} brain artifacts archive {}
+```
