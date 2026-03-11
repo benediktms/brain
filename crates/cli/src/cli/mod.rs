@@ -1,5 +1,6 @@
 mod artifacts;
 mod record_common;
+mod records;
 mod snapshots;
 mod tasks;
 
@@ -9,6 +10,7 @@ use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 
 pub(crate) use artifacts::*;
 pub(crate) use record_common::*;
+pub(crate) use records::*;
 pub(crate) use snapshots::*;
 pub(crate) use tasks::*;
 
@@ -359,6 +361,16 @@ pub(crate) enum Command {
 
         #[command(subcommand)]
         action: ArtifactsAction,
+    },
+
+    /// Manage records storage (verify, gc, evict, pin)
+    Records {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: RecordsAction,
     },
 }
 

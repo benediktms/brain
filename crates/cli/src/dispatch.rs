@@ -502,6 +502,28 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 },
             }
         }
+        Command::Records { json, action } => {
+            use commands::records::RecordsCtx;
+            let ctx = RecordsCtx::new(&cli.sqlite_db, json)?;
+
+            match action {
+                RecordsAction::Verify { verbose } => {
+                    commands::records::verify(&ctx, verbose)?;
+                }
+                RecordsAction::Gc { dry_run } => {
+                    commands::records::gc(&ctx, dry_run)?;
+                }
+                RecordsAction::Evict { id, reason } => {
+                    commands::records::evict(&ctx, &id, reason)?;
+                }
+                RecordsAction::Pin { id } => {
+                    commands::records::pin(&ctx, &id)?;
+                }
+                RecordsAction::Unpin { id } => {
+                    commands::records::unpin(&ctx, &id)?;
+                }
+            }
+        }
     }
 
     Ok(())

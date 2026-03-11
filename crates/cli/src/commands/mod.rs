@@ -13,6 +13,7 @@ pub mod init;
 pub mod mcp;
 pub mod mcp_setup;
 pub mod query;
+pub mod records;
 pub mod registry;
 pub mod reindex;
 pub mod snapshots;
