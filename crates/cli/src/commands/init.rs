@@ -271,12 +271,12 @@ When running as an MCP server (`brain mcp`), these tools are available:
 **Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
 
 **Cross-brain tools:**
-- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks.create_remote`.
-- `tasks.create_remote` — Create a task in another registered brain project. Required params: `brain` (registry name or 8-char brain ID) and `title`. Brain resolution tries the registry name first, then falls back to scanning by ID. Optional params: `description`, `priority` (0–4, default 4), `task_type`, `assignee`, `parent` (remote task ID). When `link_from` is provided (a local task ID), a cross-brain ref is added to that local task. `link_type` controls the ref direction (depends_on|blocks|related, default related). Returns `remote_task_id`, `remote_brain_name`, `remote_brain_id`, and `local_ref_created`.
+- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks.create` with a `brain` parameter.
+- `tasks.create` — Create a task in the local brain or, when the `brain` parameter is provided, in another registered brain project. Required params: `title`. For cross-brain creation, also pass `brain` (registry name or 8-char brain ID). Optional params: `description`, `priority` (0–4, default 4), `task_type`, `assignee`, `parent` (remote task ID). When `link_from` is provided (a local task ID), a cross-brain ref is added to that local task. `link_type` controls the ref direction (depends_on|blocks|related, default related). Returns `task_id` for local creation, or `remote_task_id`, `remote_brain_name`, `remote_brain_id`, and `local_ref_created` for cross-brain creation.
 
 **Cross-brain workflow:**
 1. Call `brains.list` to discover registered brains and their prefixes.
-2. Call `tasks.create_remote` with the target brain name and task details.
+2. Call `tasks.create` with the `brain` parameter set to the target brain name and your task details.
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
 
 **Memory tools:**

@@ -17,7 +17,6 @@ mod status;
 mod task_apply_event;
 mod task_close;
 mod task_create;
-mod task_create_remote;
 mod task_deps_batch;
 mod task_get;
 mod task_labels_batch;
@@ -89,7 +88,6 @@ impl ToolRegistry {
                 Box::new(task_apply_event::TaskApplyEvent),
                 Box::new(task_close::TaskClose),
                 Box::new(task_create::TaskCreate),
-                Box::new(task_create_remote::TaskCreateRemote),
                 Box::new(task_deps_batch::TaskDepsBatch),
                 Box::new(task_get::TaskGet),
                 Box::new(task_labels_batch::TaskLabelsBatch),
@@ -139,7 +137,7 @@ pub(super) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 26);
+        assert_eq!(defs.len(), 25);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
@@ -147,9 +145,11 @@ pub(super) mod tests {
         assert!(names.contains(&"memory.write_episode"));
         assert!(names.contains(&"memory.reflect"));
         assert!(names.contains(&"tasks.apply_event"));
+        assert!(names.contains(&"tasks.create"));
         assert!(names.contains(&"tasks.get"));
         assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));
+        assert!(!names.contains(&"tasks.create_remote"));
 
         // All should have valid JSON schemas
         for def in &defs {
