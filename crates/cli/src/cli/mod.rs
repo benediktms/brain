@@ -259,6 +259,13 @@ pub(crate) enum Command {
         older_than: u32,
     },
 
+    /// Backfill task capsule embeddings for tasks not yet indexed in the vector store
+    BackfillTasks {
+        /// Preview mode: list tasks that would be indexed without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Regenerate AGENTS.md and bridge CLAUDE.md from the current brain config
     Docs,
 

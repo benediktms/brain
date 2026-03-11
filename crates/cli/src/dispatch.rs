@@ -132,6 +132,10 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Vacuum { older_than } => {
             commands::vacuum::run(cli.model_dir, cli.lance_db, cli.sqlite_db, older_than).await?
         }
+        Command::BackfillTasks { dry_run } => {
+            commands::backfill_tasks::run(cli.model_dir, cli.lance_db, cli.sqlite_db, dry_run)
+                .await?
+        }
         Command::Doctor { notes_path } => {
             commands::doctor::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }

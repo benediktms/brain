@@ -37,7 +37,9 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
-**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
+**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Done/cancelled tasks get both a task capsule and an outcome capsule. Tasks become discoverable via `memory_search_minimal` without any extra steps. For tasks created before this feature, run `brain backfill-tasks` to index them.
+
+**Tip:** Tasks live in the same vector store as notes. Use `memory_search_minimal` to find tasks by semantic meaning (e.g. "what was done about search ranking?"), or `tasks_list` with `search` for keyword matching. Task results have `kind: "task"` or `kind: "task-outcome"` — outcome capsules capture what was done and what was learned.
 
 **Cross-brain tools:**
 
@@ -122,6 +124,10 @@ brain artifacts <subcommand>   # Artifact management (alias: art)
 brain snapshots <subcommand>   # Snapshot management (alias: snap)
 brain records <subcommand>     # Records maintenance (verify, gc, evict, pin, unpin)
 
+# Indexing
+brain backfill-tasks           # Embed all tasks into the vector store
+brain backfill-tasks --dry-run # Preview without writing
+
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
 ```
@@ -192,7 +198,9 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
-**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
+**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Done/cancelled tasks get both a task capsule and an outcome capsule. Tasks become discoverable via `memory_search_minimal` without any extra steps. For tasks created before this feature, run `brain backfill-tasks` to index them.
+
+**Tip:** Tasks live in the same vector store as notes. Use `memory_search_minimal` to find tasks by semantic meaning (e.g. "what was done about search ranking?"), or `tasks_list` with `search` for keyword matching. Task results have `kind: "task"` or `kind: "task-outcome"` — outcome capsules capture what was done and what was learned.
 
 **Cross-brain tools:**
 - `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks.create_remote`.
