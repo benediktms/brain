@@ -16,6 +16,7 @@ mod record_tag;
 mod status;
 mod task_apply_event;
 mod task_close;
+mod task_create;
 mod task_create_remote;
 mod task_deps_batch;
 mod task_get;
@@ -87,6 +88,7 @@ impl ToolRegistry {
                 Box::new(mem_reflect::MemReflect),
                 Box::new(task_apply_event::TaskApplyEvent),
                 Box::new(task_close::TaskClose),
+                Box::new(task_create::TaskCreate),
                 Box::new(task_create_remote::TaskCreateRemote),
                 Box::new(task_deps_batch::TaskDepsBatch),
                 Box::new(task_get::TaskGet),
@@ -137,7 +139,7 @@ pub(super) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 25);
+        assert_eq!(defs.len(), 26);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
