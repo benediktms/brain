@@ -58,7 +58,10 @@ pub fn apply_filters(
                 return false;
             }
             if let Some(ref a) = filter.assignee
-                && t.assignee.as_deref() != Some(a.as_str())
+                && !t
+                    .assignee
+                    .as_deref()
+                    .is_some_and(|v| v.eq_ignore_ascii_case(a))
             {
                 return false;
             }
