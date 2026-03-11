@@ -480,9 +480,15 @@ mod tests {
     fn test_make_stub_uses_ml_summary() {
         let ranked = vec![make_ranked("chunk:1", 0.9, "Raw content here.")];
         let mut ml_summaries = HashMap::new();
-        ml_summaries.insert("chunk:1".to_string(), "ML-generated summary text.".to_string());
+        ml_summaries.insert(
+            "chunk:1".to_string(),
+            "ML-generated summary text.".to_string(),
+        );
         let result = pack_minimal(&ranked, 1000, 10, false, &ml_summaries);
-        assert_eq!(result.results[0].summary_2sent, "ML-generated summary text.");
+        assert_eq!(
+            result.results[0].summary_2sent,
+            "ML-generated summary text."
+        );
     }
 
     #[test]
@@ -492,6 +498,9 @@ mod tests {
         // Falls back to generate_stub_capsule — should not be empty
         assert!(!result.results[0].summary_2sent.is_empty());
         // Must NOT equal the ML text (there is none)
-        assert_ne!(result.results[0].summary_2sent, "ML-generated summary text.");
+        assert_ne!(
+            result.results[0].summary_2sent,
+            "ML-generated summary text."
+        );
     }
 }

@@ -179,8 +179,10 @@ pub fn get_ml_summaries_for_chunks(
         placeholders.join(", ")
     );
     let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<&dyn rusqlite::types::ToSql> =
-        chunk_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let params: Vec<&dyn rusqlite::types::ToSql> = chunk_ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows = stmt.query_map(params.as_slice(), |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
@@ -365,9 +367,11 @@ mod tests {
         let id = store_ml_summary(&conn, "chunk:1", "ML summary text", "flan-t5-small").unwrap();
         assert!(!id.is_empty());
 
-        let map =
-            get_ml_summaries_for_chunks(&conn, &["chunk:1"]).unwrap();
-        assert_eq!(map.get("chunk:1").map(String::as_str), Some("ML summary text"));
+        let map = get_ml_summaries_for_chunks(&conn, &["chunk:1"]).unwrap();
+        assert_eq!(
+            map.get("chunk:1").map(String::as_str),
+            Some("ML summary text")
+        );
     }
 
     #[test]
@@ -424,8 +428,7 @@ mod tests {
         // Summarize chunk:1 only
         store_ml_summary(&conn, "chunk:1", "summary for one", "flan-t5-small").unwrap();
 
-        let lacking =
-            find_chunks_lacking_summary(&conn, "flan-t5-small", 10).unwrap();
+        let lacking = find_chunks_lacking_summary(&conn, "flan-t5-small", 10).unwrap();
         let ids: Vec<&str> = lacking.iter().map(|(id, _)| id.as_str()).collect();
 
         assert!(ids.contains(&"chunk:2"), "chunk:2 should be returned");
@@ -476,8 +479,7 @@ mod tests {
         store_ml_summary(&conn, "chunk:1", "summary one", "flan-t5-small").unwrap();
         store_ml_summary(&conn, "chunk:2", "summary two", "flan-t5-small").unwrap();
 
-        let map =
-            get_ml_summaries_for_chunks(&conn, &["chunk:1", "chunk:2"]).unwrap();
+        let map = get_ml_summaries_for_chunks(&conn, &["chunk:1", "chunk:2"]).unwrap();
         assert_eq!(map.get("chunk:1").map(String::as_str), Some("summary one"));
         assert_eq!(map.get("chunk:2").map(String::as_str), Some("summary two"));
     }
@@ -485,8 +487,7 @@ mod tests {
     #[test]
     fn test_get_ml_summaries_for_chunks_missing_chunk_not_in_result() {
         let conn = setup();
-        let map =
-            get_ml_summaries_for_chunks(&conn, &["chunk:nonexistent"]).unwrap();
+        let map = get_ml_summaries_for_chunks(&conn, &["chunk:nonexistent"]).unwrap();
         assert!(map.get("chunk:nonexistent").is_none());
     }
 }

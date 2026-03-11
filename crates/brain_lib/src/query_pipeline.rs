@@ -116,7 +116,8 @@ impl<'a> QueryPipeline<'a> {
         ranked: &[crate::ranking::RankedResult],
     ) -> Result<HashMap<String, String>> {
         let chunk_ids: Vec<&str> = ranked.iter().map(|r| r.chunk_id.as_str()).collect();
-        self.db.with_read_conn(|conn| get_ml_summaries_for_chunks(conn, &chunk_ids))
+        self.db
+            .with_read_conn(|conn| get_ml_summaries_for_chunks(conn, &chunk_ids))
     }
 
     /// Core search logic: returns ranked results with fusion confidence.

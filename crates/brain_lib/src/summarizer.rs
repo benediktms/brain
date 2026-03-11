@@ -90,9 +90,8 @@ impl FlanT5Summarizer {
 
         let config_str = std::fs::read_to_string(&config_path)
             .map_err(|e| BrainCoreError::Embedding(format!("failed to read config.json: {e}")))?;
-        let config: t5::Config = serde_json::from_str(&config_str).map_err(|e| {
-            BrainCoreError::Embedding(format!("failed to parse config.json: {e}"))
-        })?;
+        let config: t5::Config = serde_json::from_str(&config_str)
+            .map_err(|e| BrainCoreError::Embedding(format!("failed to parse config.json: {e}")))?;
 
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| BrainCoreError::Embedding(format!("failed to load tokenizer: {e}")))?;
@@ -266,8 +265,8 @@ mod tests {
 
     #[test]
     fn flan_t5_load_nonexistent_path_returns_error() {
-        let err = FlanT5Summarizer::load(std::path::Path::new("/nonexistent/path/to/model"))
-            .unwrap_err();
+        let err =
+            FlanT5Summarizer::load(std::path::Path::new("/nonexistent/path/to/model")).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("missing"), "got: {msg}");
     }

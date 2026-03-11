@@ -1,13 +1,13 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use crate::db::summaries::{find_chunks_lacking_summary, store_ml_summary};
 use crate::db::Db;
-use crate::summarizer::{summarize_async, Summarize};
+use crate::db::summaries::{find_chunks_lacking_summary, store_ml_summary};
+use crate::summarizer::{Summarize, summarize_async};
 
 /// Default idle threshold: 5 minutes of no file events before consolidation starts.
 const DEFAULT_IDLE_THRESHOLD: Duration = Duration::from_secs(300);
@@ -104,8 +104,9 @@ impl ConsolidationScheduler {
         };
 
         // Find chunks that have no ML summary from this summarizer backend.
-        let chunks = db
-            .with_read_conn(|conn| find_chunks_lacking_summary(conn, summarizer.backend_name(), self.batch_size))?;
+        let chunks = db.with_read_conn(|conn| {
+            find_chunks_lacking_summary(conn, summarizer.backend_name(), self.batch_size)
+        })?;
 
         if chunks.is_empty() {
             return Ok(0);
@@ -162,8 +163,8 @@ impl ConsolidationScheduler {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
     use std::time::Duration;
 
     use super::*;
@@ -194,18 +195,18 @@ mod tests {
         scheduler.record_file_event();
         let elapsed = scheduler.seconds_since_last_event();
         // Should be 0 or 1 seconds (just recorded)
-        assert!(elapsed <= 1, "elapsed should be <= 1s after recording, got {elapsed}");
+        assert!(
+            elapsed <= 1,
+            "elapsed should be <= 1s after recording, got {elapsed}"
+        );
     }
 
     #[tokio::test]
     async fn maybe_consolidate_skips_when_idle_threshold_not_met() {
         let ts = Arc::new(AtomicU64::new(now_unix_secs())); // very recent event
         // Use a 1-hour idle threshold so we definitely don't trigger
-        let scheduler = ConsolidationScheduler::with_config(
-            Arc::clone(&ts),
-            Duration::from_secs(3600),
-            10,
-        );
+        let scheduler =
+            ConsolidationScheduler::with_config(Arc::clone(&ts), Duration::from_secs(3600), 10);
 
         let db = Db::open_in_memory().unwrap();
         let summarizer: Arc<dyn Summarize> = Arc::new(MockSummarizer);
@@ -252,20 +253,15 @@ mod tests {
     #[tokio::test]
     async fn maybe_consolidate_skips_already_summarized_chunks() {
         let ts = Arc::new(AtomicU64::new(0));
-        let scheduler = ConsolidationScheduler::with_config(
-            Arc::clone(&ts),
-            Duration::from_secs(1),
-            10,
-        );
+        let scheduler =
+            ConsolidationScheduler::with_config(Arc::clone(&ts), Duration::from_secs(1), 10);
 
         let db = Db::open_in_memory().unwrap();
         insert_chunk(&db, "chunk:1", "file:1", "content one");
 
         // Pre-store a summary for chunk:1
-        db.with_write_conn(|conn| {
-            store_ml_summary(conn, "chunk:1", "existing summary", "mock")
-        })
-        .unwrap();
+        db.with_write_conn(|conn| store_ml_summary(conn, "chunk:1", "existing summary", "mock"))
+            .unwrap();
 
         let summarizer: Arc<dyn Summarize> = Arc::new(MockSummarizer);
 

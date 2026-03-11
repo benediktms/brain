@@ -203,6 +203,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 2, "partial index should not block duplicate episodes");
+        assert_eq!(
+            count, 2,
+            "partial index should not block duplicate episodes"
+        );
     }
 }
