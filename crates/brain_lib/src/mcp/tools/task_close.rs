@@ -43,7 +43,12 @@ impl TaskClose {
     ) -> (ToolCallResult, Vec<(String, String)>) {
         let params: Params = match serde_json::from_value(raw_params) {
             Ok(p) => p,
-            Err(e) => return (ToolCallResult::error(format!("Invalid parameters: {e}")), vec![]),
+            Err(e) => {
+                return (
+                    ToolCallResult::error(format!("Invalid parameters: {e}")),
+                    vec![],
+                );
+            }
         };
 
         let ids = params.task_ids.into_vec();

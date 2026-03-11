@@ -74,12 +74,10 @@ pub fn build_outcome_capsule(title: &str, completion_reason: Option<&str>) -> St
 /// errors propagate to the caller.
 pub fn store_task_capsule(
     db: &Db,
-    file_id: &str,  // e.g. "task:BRN-01ABC" or "task-outcome:BRN-01ABC"
+    file_id: &str, // e.g. "task:BRN-01ABC" or "task-outcome:BRN-01ABC"
     capsule_text: &str,
 ) -> Result<()> {
-    db.with_write_conn(|conn| {
-        crate::db::chunks::upsert_task_chunk(conn, file_id, capsule_text)
-    })
+    db.with_write_conn(|conn| crate::db::chunks::upsert_task_chunk(conn, file_id, capsule_text))
 }
 
 /// Metadata required to build and embed a task capsule.
@@ -101,7 +99,12 @@ pub async fn embed_task_capsule(
     db: &Db,
     params: TaskCapsuleParams<'_>,
 ) -> Result<()> {
-    let capsule_text = build_task_capsule(params.title, params.description, params.labels, params.priority);
+    let capsule_text = build_task_capsule(
+        params.title,
+        params.description,
+        params.labels,
+        params.priority,
+    );
     let file_id = format!("task:{}", params.task_id);
 
     let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;

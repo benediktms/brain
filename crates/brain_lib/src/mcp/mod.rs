@@ -34,7 +34,7 @@ use tools::ToolRegistry;
 pub struct McpContext {
     pub db: Db,
     pub store: Option<StoreReader>,
-    pub writable_store: Option<Store>,  // for task capsule embedding
+    pub writable_store: Option<Store>, // for task capsule embedding
     pub embedder: Option<Arc<dyn Embed>>,
     pub tasks: TaskStore,
     pub records: RecordStore,

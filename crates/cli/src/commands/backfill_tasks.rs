@@ -24,10 +24,7 @@ pub async fn run(
 
     let embedder: Arc<dyn Embed> = {
         let model_dir = model_dir.clone();
-        Arc::new(
-            tokio::task::spawn_blocking(move || Embedder::load(&model_dir))
-                .await??,
-        )
+        Arc::new(tokio::task::spawn_blocking(move || Embedder::load(&model_dir)).await??)
     };
 
     // Open TaskStore
@@ -56,7 +53,9 @@ pub async fn run(
         .count();
 
     if dry_run {
-        println!("Dry run: would backfill {total} task capsules + {terminal_count} outcome capsules");
+        println!(
+            "Dry run: would backfill {total} task capsules + {terminal_count} outcome capsules"
+        );
         for task in &all_tasks {
             let labels = labels_map
                 .get(&task.task_id)
@@ -82,10 +81,7 @@ pub async fn run(
     let mut errors = 0usize;
 
     for (i, task) in all_tasks.iter().enumerate() {
-        let labels = labels_map
-            .get(&task.task_id)
-            .cloned()
-            .unwrap_or_default();
+        let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
 
         // Embed task capsule
         match brain_lib::tasks::capsule::embed_task_capsule(
@@ -123,10 +119,7 @@ pub async fn run(
             {
                 Ok(()) => outcomes += 1,
                 Err(e) => {
-                    eprintln!(
-                        "  warn: outcome capsule failed for {}: {e}",
-                        task.task_id
-                    );
+                    eprintln!("  warn: outcome capsule failed for {}: {e}", task.task_id);
                     errors += 1;
                 }
             }
