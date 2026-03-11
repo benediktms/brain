@@ -163,6 +163,29 @@ pub(crate) fn resolve_brain_paths_with_home(
     }))
 }
 
+/// Resolve paths for a brain identified by `name` (from the registry).
+///
+/// Unlike [`resolve_brain_paths`], this does not require being inside the
+/// project directory — it derives paths purely from the name.
+pub fn resolve_paths_for_brain(name: &str) -> Result<ResolvedPaths> {
+    let home = brain_home()?;
+    Ok(resolve_paths_for_brain_with_home(name, &home))
+}
+
+/// Internal: resolve paths for a named brain given an explicit `home` directory.
+///
+/// Separated to make unit tests independent of the `BRAIN_HOME` env var.
+/// Unlike [`resolve_brain_paths_with_home`], this returns the struct directly
+/// since home is provided and no fallible discovery is needed.
+pub fn resolve_paths_for_brain_with_home(name: &str, home: &Path) -> ResolvedPaths {
+    let brain_data = home.join("brains").join(name);
+    ResolvedPaths {
+        model_dir: home.join("models").join("bge-small-en-v1.5"),
+        lance_db: brain_data.join("lancedb"),
+        sqlite_db: brain_data.join("brain.db"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +335,64 @@ mod tests {
             result.lance_db.to_string_lossy().contains("inner-brain"),
             "expected inner-brain in path, got: {}",
             result.lance_db.display()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_paths_for_brain_with_home
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_paths_for_brain_with_home_returns_correct_paths() {
+        let fake_home = TempDir::new().unwrap();
+        let home = fake_home.path();
+
+        let result = resolve_paths_for_brain_with_home("my-brain", home);
+
+        assert_eq!(
+            result.model_dir,
+            home.join("models").join("bge-small-en-v1.5")
+        );
+        assert_eq!(
+            result.lance_db,
+            home.join("brains").join("my-brain").join("lancedb")
+        );
+        assert_eq!(
+            result.sqlite_db,
+            home.join("brains").join("my-brain").join("brain.db")
+        );
+    }
+
+    #[test]
+    fn resolve_paths_for_brain_with_home_different_names_produce_different_paths() {
+        let fake_home = TempDir::new().unwrap();
+        let home = fake_home.path();
+
+        let result_a = resolve_paths_for_brain_with_home("brain-a", home);
+        let result_b = resolve_paths_for_brain_with_home("brain-b", home);
+
+        assert_ne!(result_a.lance_db, result_b.lance_db);
+        assert_ne!(result_a.sqlite_db, result_b.sqlite_db);
+        // model_dir is shared
+        assert_eq!(result_a.model_dir, result_b.model_dir);
+    }
+
+    #[test]
+    fn resolve_paths_for_brain_with_home_name_is_in_paths() {
+        let fake_home = TempDir::new().unwrap();
+        let home = fake_home.path();
+
+        let result = resolve_paths_for_brain_with_home("special-brain", home);
+
+        assert!(
+            result.lance_db.to_string_lossy().contains("special-brain"),
+            "expected brain name in lancedb path, got: {}",
+            result.lance_db.display()
+        );
+        assert!(
+            result.sqlite_db.to_string_lossy().contains("special-brain"),
+            "expected brain name in sqlite_db path, got: {}",
+            result.sqlite_db.display()
         );
     }
 }

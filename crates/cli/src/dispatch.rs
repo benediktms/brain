@@ -75,13 +75,13 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             match action {
                 DaemonAction::Start { notes_path } => {
                     // Child process after fork — run watch directly.
-                    let outcome = commands::watch::run(
-                        notes_path,
-                        cli.model_dir,
-                        cli.lance_db,
-                        cli.sqlite_db,
-                    )
-                    .await?;
+                    let outcome = match notes_path {
+                        Some(path) => {
+                            commands::watch::run(path, cli.model_dir, cli.lance_db, cli.sqlite_db)
+                                .await?
+                        }
+                        None => commands::watch::run_multi().await?,
+                    };
                     if !outcome.clean {
                         std::process::exit(1);
                     }

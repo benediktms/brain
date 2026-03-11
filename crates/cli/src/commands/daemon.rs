@@ -160,6 +160,21 @@ impl Daemon {
         }
     }
 
+    /// Send SIGHUP to the running daemon so it reloads the registry.
+    /// Silently succeeds if no daemon is running.
+    pub fn signal_reload(&self) -> Result<()> {
+        let pid = match self.read_pid_file()? {
+            Some((pid, _)) => pid,
+            None => return Ok(()),
+        };
+        if !self.is_alive(pid) {
+            return Ok(());
+        }
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGHUP) };
+        println!("Signaled daemon to reload registry");
+        Ok(())
+    }
+
     fn is_alive(&self, pid: u32) -> bool {
         let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
         if ret == 0 {

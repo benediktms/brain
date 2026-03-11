@@ -1,10 +1,17 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use brain_lib::config::paths::normalize_note_paths_lenient;
+use brain_lib::config::{load_global_config, resolve_paths_for_brain};
+use brain_lib::db::Db;
+use brain_lib::embedder::Embedder;
+use brain_lib::pipeline::IndexPipeline;
 use brain_lib::prelude::*;
-use tracing::info;
+use brain_lib::store::Store;
+use tracing::{debug, info, warn};
 
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
 use tokio::signal::unix::SignalKind;
@@ -269,4 +276,475 @@ async fn drain_with_timeout(
         Ok(processed) => Ok(processed),
         Err(_) => Err(work_queue.len()),
     }
+}
+
+// ── Multi-brain support ────────────────────────────────────────────────────
+
+/// Per-brain state held by the multi-brain event loop.
+struct BrainInstance {
+    name: String,
+    pipeline: IndexPipeline,
+    work_queue: WorkQueue,
+    note_dirs: Vec<PathBuf>,
+}
+
+/// Watch all registered brains from the global config for changes and
+/// re-index incrementally.
+///
+/// Reads `~/.brain/config.toml`, creates a separate [`IndexPipeline`] for
+/// each registered brain (sharing a single embedder), and routes file events
+/// to the correct pipeline via longest-prefix matching.  Handles SIGHUP to
+/// reload the brain registry without restarting.
+pub async fn run_multi() -> Result<ShutdownOutcome> {
+    // ── 1. Load global config ────────────────────────────────────────────
+    let global_cfg = load_global_config()?;
+    if global_cfg.brains.is_empty() {
+        bail!(
+            "no brains are registered in the global config. \
+             Run `brain register` inside a project to add one."
+        );
+    }
+
+    // ── 2. Load embedder once (model_dir is the same for all brains) ─────
+    // Use the first registered brain to derive model_dir.
+    let first_name = global_cfg.brains.keys().next().expect("non-empty map");
+    let first_paths = resolve_paths_for_brain(first_name)?;
+    let model_dir = first_paths.model_dir.clone();
+
+    let embedder: Arc<dyn Embed> = {
+        let model_dir_clone = model_dir.clone();
+        let loaded = tokio::task::spawn_blocking(move || Embedder::load(&model_dir_clone))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking embedder: {e}"))??;
+        Arc::new(loaded)
+    };
+
+    // ── 3. Initialise per-brain pipelines ────────────────────────────────
+    let mut brains: HashMap<String, BrainInstance> = HashMap::new();
+
+    for (name, entry) in &global_cfg.brains {
+        match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder)).await {
+            Ok(instance) => {
+                brains.insert(name.clone(), instance);
+            }
+            Err(e) => {
+                warn!(brain = %name, error = %e, "failed to initialise brain, skipping");
+            }
+        }
+    }
+
+    if brains.is_empty() {
+        bail!("all registered brains failed to initialise; daemon cannot start");
+    }
+
+    info!(brains = brains.len(), "multi-brain daemon started");
+
+    // ── 4. Build path-to-brain lookup (longest prefix first) ────────────
+    let mut prefix_map = build_prefix_map(&brains);
+
+    // ── 5. Set up single BrainWatcher ────────────────────────────────────
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    let mut watcher = BrainWatcher::new_empty(tx)?;
+
+    for instance in brains.values() {
+        for dir in &instance.note_dirs {
+            if let Err(e) = watcher.watch_path(dir) {
+                warn!(brain = %instance.name, dir = %dir.display(), error = %e, "failed to watch directory");
+            }
+        }
+    }
+
+    // ── 6. Signal handlers ───────────────────────────────────────────────
+    let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+        .expect("failed to register SIGTERM handler");
+
+    let mut sighup = tokio::signal::unix::signal(SignalKind::hangup())
+        .expect("failed to register SIGHUP handler");
+
+    let mut sigusr1 = tokio::signal::unix::signal(SignalKind::user_defined1())
+        .expect("failed to register SIGUSR1 handler");
+
+    // Periodic optimization tick (same as single-brain run())
+    let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
+
+    // ── 7. Event loop ─────────────────────────────────────────────────────
+    let shutdown_reason = loop {
+        tokio::select! {
+            event = rx.recv() => {
+                match event {
+                    Some(first) => {
+                        // Collect first + any immediately ready events (50ms window)
+                        let mut batch = vec![first];
+                        let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
+                        while let Ok(Some(evt)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+                            batch.push(evt);
+                        }
+
+                        // Route each event to the correct brain's work queue
+                        for evt in batch {
+                            let event_path = event_primary_path(&evt);
+                            if let Some(brain_name) = lookup_brain(&prefix_map, &event_path) {
+                                if let Some(instance) = brains.get_mut(&brain_name) {
+                                    instance.work_queue.push(evt);
+                                }
+                            } else {
+                                debug!(path = %event_path.display(), "event path matches no brain, dropping");
+                            }
+                        }
+
+                        // Process each brain's work queue
+                        for instance in brains.values_mut() {
+                            if instance.work_queue.is_empty() {
+                                continue;
+                            }
+                            let (renames, index_paths, delete_paths) = instance.work_queue.drain_batch();
+
+                            for (from, to) in &renames {
+                                if let Err(e) = instance.pipeline.rename_file(from, to).await {
+                                    warn!(brain = %instance.name, error = %e, "error handling rename");
+                                }
+                            }
+                            for p in &delete_paths {
+                                if let Err(e) = instance.pipeline.delete_file(p).await {
+                                    warn!(brain = %instance.name, error = %e, "error handling delete");
+                                }
+                            }
+                            if !index_paths.is_empty()
+                                && let Err(e) =
+                                    instance.pipeline.index_files_batch(&index_paths).await
+                            {
+                                warn!(brain = %instance.name, error = %e, "error in batch index");
+                            }
+
+                            instance.pipeline.store().optimizer().maybe_optimize().await;
+                        }
+                    }
+                    None => {
+                        info!("watcher channel closed, shutting down");
+                        break ShutdownReason::ChannelClosed;
+                    }
+                }
+            }
+            _ = optimize_tick.tick() => {
+                for instance in brains.values() {
+                    instance.pipeline.store().optimizer().maybe_optimize().await;
+                }
+            }
+            _ = sighup.recv() => {
+                info!("received SIGHUP, reloading brain registry");
+                match reload_brains(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
+                    Ok(()) => {
+                        prefix_map = build_prefix_map(&brains);
+                        info!(brains = brains.len(), "brain registry reloaded");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "brain registry reload failed, continuing with existing config");
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("received Ctrl+C, shutting down");
+                break ShutdownReason::Signal;
+            }
+            _ = sigterm.recv() => {
+                info!("received SIGTERM, shutting down");
+                break ShutdownReason::Signal;
+            }
+            _ = sigusr1.recv() => {
+                // Log a basic status snapshot to stderr
+                let total_brains = brains.len();
+                eprintln!("multi-brain daemon: {} brain(s) active", total_brains);
+            }
+        }
+    };
+
+    // ── 8. Shutdown sequence ──────────────────────────────────────────────
+
+    // Phase 1: Stop watcher
+    info!("shutdown phase 1/5: stopping file watcher");
+    drop(watcher);
+
+    // Phase 2: Drain pending work queues (signal shutdown only)
+    let mut total_dropped: usize = 0;
+    let mut force_shutdown = false;
+
+    if matches!(shutdown_reason, ShutdownReason::Signal) {
+        info!("shutdown phase 2/5: draining pending work queues (10s timeout)");
+
+        while let Ok(evt) = rx.try_recv() {
+            let event_path = event_primary_path(&evt);
+            if let Some(brain_name) = lookup_brain(&prefix_map, &event_path)
+                && let Some(instance) = brains.get_mut(&brain_name)
+            {
+                instance.work_queue.push(evt);
+            }
+        }
+
+        for instance in brains.values_mut() {
+            if instance.work_queue.is_empty() {
+                continue;
+            }
+            let queued = instance.work_queue.len();
+            info!(brain = %instance.name, queued, "draining remaining work queue");
+
+            let drain_result = tokio::select! {
+                result = drain_with_timeout(&instance.pipeline, &mut instance.work_queue, Duration::from_secs(10)) => {
+                    result
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    info!("received second Ctrl+C, force-shutting down");
+                    force_shutdown = true;
+                    Err(instance.work_queue.len())
+                }
+            };
+
+            match drain_result {
+                Ok(processed) => {
+                    info!(brain = %instance.name, processed, "drain complete");
+                }
+                Err(remaining) => {
+                    total_dropped += remaining;
+                    warn!(brain = %instance.name, remaining, "drain incomplete, items dropped");
+                }
+            }
+
+            if force_shutdown {
+                break;
+            }
+        }
+    } else {
+        info!("shutdown phase 2/5: channel closed, skipping drain");
+    }
+
+    if !force_shutdown {
+        // Phase 3: SQLite WAL checkpoint for all brains
+        info!("shutdown phase 3/5: checkpointing SQLite WAL");
+        for instance in brains.values() {
+            if let Err(e) = instance.pipeline.db().wal_checkpoint() {
+                warn!(brain = %instance.name, error = %e, "WAL checkpoint failed");
+            }
+        }
+
+        // Phase 4: LanceDB optimize for all brains
+        info!("shutdown phase 4/5: optimizing LanceDB");
+        for instance in brains.values() {
+            instance.pipeline.store().optimizer().force_optimize().await;
+        }
+    } else {
+        info!("shutdown phases 3-5: skipped (force shutdown)");
+    }
+
+    // Phase 5: Done
+    let clean = !force_shutdown && total_dropped == 0;
+    info!(
+        clean,
+        dropped_items = total_dropped,
+        "shutdown phase 5/5: shutdown complete"
+    );
+
+    Ok(ShutdownOutcome {
+        clean,
+        dropped_items: total_dropped,
+    })
+}
+
+/// Initialise a single [`BrainInstance`] from a brain name and note directories.
+async fn init_brain_instance(
+    name: &str,
+    notes: Vec<PathBuf>,
+    embedder: Arc<dyn Embed>,
+) -> Result<BrainInstance> {
+    let paths = resolve_paths_for_brain(name)?;
+
+    // Validate that at least one note directory exists
+    let note_dirs: Vec<PathBuf> = notes
+        .into_iter()
+        .filter(|p| {
+            if p.exists() {
+                true
+            } else {
+                warn!(brain = %name, dir = %p.display(), "note directory does not exist, skipping");
+                false
+            }
+        })
+        .collect();
+
+    // Open the SQLite database (sync, needs spawn_blocking)
+    let sqlite_path = paths.sqlite_db.clone();
+    let db = tokio::task::spawn_blocking(move || Db::open(&sqlite_path))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking Db::open: {e}"))??;
+
+    // Open or create the LanceDB store
+    let store = Store::open_or_create(&paths.lance_db).await?;
+
+    // Create the pipeline with the shared embedder
+    let pipeline = IndexPipeline::with_embedder(db, store, embedder).await?;
+
+    // Run initial full scan
+    if !note_dirs.is_empty() {
+        match pipeline.full_scan(&note_dirs).await {
+            Ok(stats) => {
+                info!(
+                    brain = %name,
+                    indexed = stats.indexed,
+                    skipped = stats.skipped,
+                    deleted = stats.deleted,
+                    "startup scan complete"
+                );
+            }
+            Err(e) => {
+                warn!(brain = %name, error = %e, "startup scan failed");
+            }
+        }
+    }
+
+    Ok(BrainInstance {
+        name: name.to_string(),
+        pipeline,
+        work_queue: WorkQueue::default(),
+        note_dirs,
+    })
+}
+
+/// Build a sorted prefix lookup: `Vec<(prefix_path, brain_name)>`, longest
+/// prefix first so that more-specific paths match before shorter ones.
+fn build_prefix_map(brains: &HashMap<String, BrainInstance>) -> Vec<(PathBuf, String)> {
+    let mut map: Vec<(PathBuf, String)> = brains
+        .values()
+        .flat_map(|inst| {
+            inst.note_dirs
+                .iter()
+                .map(|dir| (dir.clone(), inst.name.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    // Sort by path component count descending (longest prefix first)
+    map.sort_by(|(a, _), (b, _)| b.components().count().cmp(&a.components().count()));
+
+    map
+}
+
+/// Given an event path, find the brain whose note directory is the longest
+/// prefix of that path.
+fn lookup_brain(prefix_map: &[(PathBuf, String)], event_path: &Path) -> Option<String> {
+    for (prefix, brain_name) in prefix_map {
+        if event_path.starts_with(prefix) {
+            return Some(brain_name.clone());
+        }
+    }
+    None
+}
+
+/// Extract the primary path from a [`FileEvent`] for routing purposes.
+fn event_primary_path(event: &FileEvent) -> PathBuf {
+    match event {
+        FileEvent::Changed(p) | FileEvent::Created(p) | FileEvent::Deleted(p) => p.clone(),
+        FileEvent::Renamed { to, .. } => to.clone(),
+    }
+}
+
+/// Reload the brain registry from disk, diffing against the current state.
+///
+/// - New brains: initialise and watch
+/// - Removed brains: unwatch and drop
+/// - Updated brains (notes dirs changed): unwatch old, watch new
+async fn reload_brains(
+    brains: &mut HashMap<String, BrainInstance>,
+    watcher: &mut BrainWatcher,
+    embedder: Arc<dyn Embed>,
+) -> Result<()> {
+    let new_cfg = load_global_config()?;
+
+    // Collect owned name sets before mutating `brains`
+    let new_names: std::collections::HashSet<String> = new_cfg.brains.keys().cloned().collect();
+    let old_names: std::collections::HashSet<String> = brains.keys().cloned().collect();
+
+    // Removed brains: unwatch dirs and remove from map
+    let removed: Vec<String> = old_names.difference(&new_names).cloned().collect();
+
+    for name in &removed {
+        if let Some(instance) = brains.remove(name) {
+            for dir in &instance.note_dirs {
+                if let Err(e) = watcher.unwatch_path(dir) {
+                    warn!(brain = %name, dir = %dir.display(), error = %e, "failed to unwatch directory");
+                }
+            }
+            info!(brain = %name, "brain removed from registry");
+        }
+    }
+
+    // New brains: initialise and watch
+    let added: Vec<String> = new_names.difference(&old_names).cloned().collect();
+
+    for name in &added {
+        if let Some(entry) = new_cfg.brains.get(name) {
+            match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder)).await {
+                Ok(instance) => {
+                    for dir in &instance.note_dirs {
+                        if let Err(e) = watcher.watch_path(dir) {
+                            warn!(brain = %name, dir = %dir.display(), error = %e, "failed to watch new brain directory");
+                        }
+                    }
+                    info!(brain = %name, "new brain added to registry");
+                    brains.insert(name.clone(), instance);
+                }
+                Err(e) => {
+                    warn!(brain = %name, error = %e, "failed to initialise new brain, skipping");
+                }
+            }
+        }
+    }
+
+    // Updated brains: check if note dirs changed
+    let updated: Vec<String> = old_names.intersection(&new_names).cloned().collect();
+    for name in updated {
+        let new_entry = match new_cfg.brains.get(&name) {
+            Some(e) => e,
+            None => continue,
+        };
+        let instance = match brains.get_mut(&name) {
+            Some(i) => i,
+            None => continue,
+        };
+
+        let old_dirs: std::collections::HashSet<&PathBuf> = instance.note_dirs.iter().collect();
+        let new_dirs_raw: std::collections::HashSet<&PathBuf> = new_entry.notes.iter().collect();
+
+        if old_dirs == new_dirs_raw {
+            continue; // No change
+        }
+
+        // Unwatch removed dirs
+        for dir in old_dirs.difference(&new_dirs_raw) {
+            if let Err(e) = watcher.unwatch_path(dir) {
+                warn!(brain = %name, dir = %dir.display(), error = %e, "failed to unwatch old directory");
+            }
+        }
+
+        // Keep unchanged dirs, watch only truly new ones
+        let unchanged: Vec<PathBuf> = old_dirs
+            .intersection(&new_dirs_raw)
+            .map(|d| (*d).clone())
+            .collect();
+        let mut new_note_dirs = unchanged;
+
+        for dir in new_dirs_raw.difference(&old_dirs) {
+            if dir.exists() {
+                if let Err(e) = watcher.watch_path(dir) {
+                    warn!(brain = %name, dir = %dir.display(), error = %e, "failed to watch new directory");
+                } else {
+                    new_note_dirs.push((*dir).clone());
+                }
+            } else {
+                warn!(brain = %name, dir = %dir.display(), "new note directory does not exist, skipping");
+            }
+        }
+
+        instance.note_dirs = new_note_dirs;
+        info!(brain = %name, "brain note directories updated");
+    }
+
+    Ok(())
 }
