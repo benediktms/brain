@@ -43,7 +43,7 @@ impl McpTool for MemSearchMinimal {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Search the knowledge base and return compact memory stubs within a token budget. Use this first to find relevant memories, then expand specific ones.".into(),
+            description: "Search the knowledge base and return compact memory stubs within a token budget. Results include note chunks and task capsules. Each result carries a `kind` field: \"note\", \"task\", or \"task-outcome\". Use this first to find relevant memories, then expand specific ones.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -125,6 +125,7 @@ impl McpTool for MemSearchMinimal {
                         "score": stub.hybrid_score,
                         "file_path": stub.file_path,
                         "heading_path": stub.heading_path,
+                        "kind": stub.kind,
                     })
                 })
                 .collect();

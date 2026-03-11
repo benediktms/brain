@@ -35,6 +35,9 @@ pub struct MemoryStub {
     /// Per-signal score breakdown. Present when `pack_minimal` is called with
     /// `include_scores: true`.
     pub signal_scores: Option<SignalScores>,
+    /// Result kind: "note" for indexed note chunks, "task" for task capsules,
+    /// "task-outcome" for completed task outcome capsules.
+    pub kind: String,
 }
 
 /// Result of a search_minimal call.
@@ -234,6 +237,8 @@ fn make_stub(result: &RankedResult) -> MemoryStub {
 
     let stub_tokens = estimate_tokens(&title) + estimate_tokens(&summary_2sent) + 5;
 
+    let kind = derive_kind(&result.chunk_id);
+
     MemoryStub {
         memory_id: result.chunk_id.clone(),
         title,
@@ -243,6 +248,18 @@ fn make_stub(result: &RankedResult) -> MemoryStub {
         heading_path: result.heading_path.clone(),
         token_estimate: stub_tokens,
         signal_scores: None,
+        kind,
+    }
+}
+
+/// Derive the result kind from a chunk_id prefix.
+fn derive_kind(chunk_id: &str) -> String {
+    if chunk_id.starts_with("task-outcome:") {
+        "task-outcome".to_string()
+    } else if chunk_id.starts_with("task:") {
+        "task".to_string()
+    } else {
+        "note".to_string()
     }
 }
 
@@ -410,5 +427,38 @@ mod tests {
         let ranked = vec![make_ranked("a", 0.9, "Content.")];
         let result = pack_minimal(&ranked, 1000, 10, false);
         assert!(result.results[0].signal_scores.is_none());
+    }
+
+    #[test]
+    fn test_derive_kind() {
+        assert_eq!(derive_kind("task:BRN-01ABC:0"), "task");
+        assert_eq!(derive_kind("task-outcome:BRN-01XYZ:0"), "task-outcome");
+        assert_eq!(derive_kind("01JXYZ1234:0"), "note");
+        assert_eq!(derive_kind("some-uuid:3"), "note");
+    }
+
+    #[test]
+    fn test_stub_kind_for_note() {
+        let ranked = vec![make_ranked("01JABCDEFGH", 0.9, "Some content.")];
+        let result = pack_minimal(&ranked, 1000, 10, false);
+        assert_eq!(result.results[0].kind, "note");
+    }
+
+    #[test]
+    fn test_stub_kind_for_task() {
+        let mut r = make_ranked("task:BRN-01ABC:0", 0.9, "Task content.");
+        r.chunk_id = "task:BRN-01ABC:0".to_string();
+        let ranked = vec![r];
+        let result = pack_minimal(&ranked, 1000, 10, false);
+        assert_eq!(result.results[0].kind, "task");
+    }
+
+    #[test]
+    fn test_stub_kind_for_task_outcome() {
+        let mut r = make_ranked("task-outcome:BRN-01XYZ:0", 0.9, "Outcome content.");
+        r.chunk_id = "task-outcome:BRN-01XYZ:0".to_string();
+        let ranked = vec![r];
+        let result = pack_minimal(&ranked, 1000, 10, false);
+        assert_eq!(result.results[0].kind, "task-outcome");
     }
 }
