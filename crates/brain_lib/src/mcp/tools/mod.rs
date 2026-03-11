@@ -4,6 +4,14 @@ mod mem_expand;
 mod mem_reflect;
 mod mem_search_minimal;
 mod mem_write_episode;
+mod record_archive;
+mod record_create_artifact;
+mod record_fetch_content;
+mod record_get;
+mod record_link;
+mod record_list;
+mod record_save_snapshot;
+mod record_tag;
 mod status;
 mod task_apply_event;
 mod task_close;
@@ -84,6 +92,16 @@ impl ToolRegistry {
                 Box::new(task_list::TaskList),
                 Box::new(task_next::TaskNext),
                 Box::new(status::Status),
+                Box::new(record_create_artifact::RecordCreateArtifact),
+                Box::new(record_save_snapshot::RecordSaveSnapshot),
+                Box::new(record_get::RecordGet),
+                Box::new(record_list::RecordList),
+                Box::new(record_fetch_content::RecordFetchContent),
+                Box::new(record_archive::RecordArchive),
+                Box::new(record_tag::RecordTagAdd),
+                Box::new(record_tag::RecordTagRemove),
+                Box::new(record_link::RecordLinkAdd),
+                Box::new(record_link::RecordLinkRemove),
             ],
         }
     }
@@ -115,7 +133,7 @@ pub(super) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 13);
+        assert_eq!(defs.len(), 23);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
@@ -186,6 +204,13 @@ pub(super) mod tests {
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
 
+        let records_dir = tmp.path().join("records");
+        let records_db = crate::db::Db::open(&sqlite_path).unwrap();
+        let records = crate::records::RecordStore::new(&records_dir, records_db).unwrap();
+
+        let objects_dir = tmp.path().join("objects");
+        let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
+
         (
             tmp,
             McpContext {
@@ -193,6 +218,8 @@ pub(super) mod tests {
                 store: Some(store_reader),
                 embedder: Some(embedder),
                 tasks,
+                records,
+                objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
             },
         )

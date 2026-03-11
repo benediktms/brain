@@ -642,6 +642,7 @@ version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "base64 0.22.1",
  "blake3",
  "candle-core",
  "candle-nn",
@@ -667,6 +668,7 @@ dependencies = [
  "tracing",
  "ulid",
  "walkdir",
+ "zstd",
 ]
 
 [[package]]

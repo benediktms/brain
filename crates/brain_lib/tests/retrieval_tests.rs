@@ -57,12 +57,19 @@ async fn setup_mcp() -> (McpContext, TempDir) {
     let embedder = Arc::new(MockEmbedder);
     let tasks_db = Db::open(&sqlite_path).unwrap();
     let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
+    let records_dir = tmp.path().join("records");
+    let records_db = Db::open(&sqlite_path).unwrap();
+    let records = brain_lib::records::RecordStore::new(&records_dir, records_db).unwrap();
+    let objects_dir = tmp.path().join("objects");
+    let objects = brain_lib::records::objects::ObjectStore::new(&objects_dir).unwrap();
 
     let ctx = McpContext {
         db,
         store: Some(store_reader),
         embedder: Some(embedder),
         tasks,
+        records,
+        objects,
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
     };
     (ctx, tmp)
@@ -572,6 +579,13 @@ async fn test_mcp_search_minimal_returns_results() {
         embedder: Some(Arc::new(MockEmbedder)),
         tasks: brain_lib::tasks::TaskStore::new(&tasks_dir2, Db::open(&sqlite_path).unwrap())
             .unwrap(),
+        records: brain_lib::records::RecordStore::new(
+            &tmp.path().join("records2"),
+            Db::open(&sqlite_path).unwrap(),
+        )
+        .unwrap(),
+        objects: brain_lib::records::objects::ObjectStore::new(tmp.path().join("objects2"))
+            .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
     };
 
@@ -634,6 +648,13 @@ async fn test_mcp_expand_returns_full_content() {
         store: Some(brain_lib::store::StoreReader::from_store(&store3)),
         embedder: Some(Arc::new(MockEmbedder)),
         tasks: brain_lib::tasks::TaskStore::new(&tasks_dir3, Db::open(&sqlite_path).unwrap())
+            .unwrap(),
+        records: brain_lib::records::RecordStore::new(
+            &tmp.path().join("records3"),
+            Db::open(&sqlite_path).unwrap(),
+        )
+        .unwrap(),
+        objects: brain_lib::records::objects::ObjectStore::new(tmp.path().join("objects3"))
             .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
     };

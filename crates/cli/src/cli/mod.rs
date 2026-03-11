@@ -1,9 +1,17 @@
+mod artifacts;
+mod record_common;
+mod records;
+mod snapshots;
 mod tasks;
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 
+pub(crate) use artifacts::*;
+pub(crate) use record_common::*;
+pub(crate) use records::*;
+pub(crate) use snapshots::*;
 pub(crate) use tasks::*;
 
 // ── value-enum helpers ──────────────────────────────────────
@@ -331,6 +339,38 @@ pub(crate) enum Command {
 
         #[command(subcommand)]
         action: TasksAction,
+    },
+
+    /// Manage snapshots (opaque state bundles)
+    #[command(visible_alias = "snap")]
+    Snapshots {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: SnapshotsAction,
+    },
+
+    /// Manage artifacts (durable work products)
+    #[command(visible_alias = "art")]
+    Artifacts {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: ArtifactsAction,
+    },
+
+    /// Manage records storage (verify, gc, evict, pin)
+    Records {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: RecordsAction,
     },
 }
 

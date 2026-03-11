@@ -10,8 +10,9 @@ A **brain** is a named knowledge container with its own notes, tasks, indexes, a
 
 - **Notes**: Markdown files are the source of truth. SQLite metadata, LanceDB embeddings, and FTS indexes are derived projections, rebuildable from source.
 - **Tasks**: The append-only event log (`.brain/tasks/events.jsonl`, git-tracked) is the source of truth. SQLite task tables are derived projections, rebuildable by replaying the log.
+- **Records**: The append-only event log (`~/.brain/brains/<name>/records/events.jsonl`) is the source of truth for artifact and snapshot metadata. Payloads are stored out-of-line in a content-addressed object store (`~/.brain/brains/<name>/objects/`). SQLite record tables are derived projections, rebuildable by replaying the log. See [docs/RECORDS.md](./RECORDS.md) for the full design.
 
-Notes and tasks are parallel subsystems that can cross-reference each other (tasks link to note chunks, notes can mention task IDs) but have decoupled lifecycles and mutation patterns.
+Notes, tasks, and records are parallel subsystems that can cross-reference each other (tasks link to note chunks, records link to tasks and note chunks) but have decoupled lifecycles and mutation patterns.
 
 ## Directory Structure
 
@@ -21,8 +22,13 @@ Notes and tasks are parallel subsystems that can cross-reference each other (tas
   brains/
     <brain-name>/                          # Per-brain derived data
       config.toml                          # Per-brain config (overrides global)
-      brain.db                             # SQLite projections (notes + tasks)
+      brain.db                             # SQLite projections (notes + tasks + records)
       lancedb/                             # Vector indexes
+      records/
+        events.jsonl                       # Record event log (source of truth)
+      objects/                             # Content-addressed payload store (BLAKE3)
+        <2-char prefix>/
+          <full 64-char BLAKE3 hex>        # Payload bytes, immutable
 ~/code/my-project/                         # A project with brain notes
   .brain/
     brain.toml                             # Brain marker: name + note paths
@@ -137,13 +143,13 @@ graph TB
 
 ## Storage Role Separation
 
-| Concern | SQLite (Control Plane) | LanceDB (Data Plane) | Task Event Log |
-|---------|----------------------|---------------------|----------------|
-| **Role** | Transactional bookkeeping | Vector similarity search | Task source of truth |
-| **Stores** | File identity, content hashes, chunk metadata, links, task projections, FTS5 index, summaries, schema versions | Chunk text, 384-dim embeddings, tags, timestamps, scores | Append-only task events (ULID-ordered JSONL) |
-| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 | kNN vector search, batch upserts | Sequential append, full replay for rebuild |
-| **Concurrency** | WAL mode (concurrent readers, single writer) | Arc\<Table\> shared across threads | Single writer (append-only) |
-| **Consistency anchor** | content_hash gates note re-indexing | Derived from SQLite state | Log is authoritative; SQLite task tables are derived projections |
+| Concern | SQLite (Control Plane) | LanceDB (Data Plane) | Task Event Log | Record Event Log | Object Store |
+|---------|----------------------|---------------------|----------------|-----------------|--------------|
+| **Role** | Transactional bookkeeping | Vector similarity search | Task source of truth | Record metadata source of truth | Record payload storage |
+| **Stores** | File identity, content hashes, chunk metadata, links, task projections, record projections, FTS5 index, summaries, schema versions | Chunk text, 384-dim embeddings, tags, timestamps, scores | Append-only task events (ULID-ordered JSONL) | Append-only record events (ULID-ordered JSONL) | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
+| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 | kNN vector search, batch upserts | Sequential append, full replay for rebuild | Sequential append, full replay for rebuild | Write-once keyed by hash, read by hash path |
+| **Concurrency** | WAL mode (concurrent readers, single writer) | Arc\<Table\> shared across threads | Single writer (append-only) | Single writer (append-only) | Atomic rename on write; concurrent reads safe |
+| **Consistency anchor** | content_hash gates note re-indexing | Derived from SQLite state | Log is authoritative; SQLite task tables are derived projections | Log is authoritative; SQLite record tables are derived projections | Hash is the identity; write-before-event-append ordering prevents dangling refs |
 
 ## Sequence Diagrams
 

@@ -38,17 +38,11 @@
     }
   ],
   "expected_orders": {
-    "lookup": [
-      "keyword_king",
+    "synthesis": [
+      "vector_king",
       "link_hub",
       "recent_gem",
-      "vector_king"
-    ],
-    "reflection": [
-      "recent_gem",
-      "keyword_king",
-      "vector_king",
-      "link_hub"
+      "keyword_king"
     ],
     "planning": [
       "link_hub",
@@ -56,11 +50,17 @@
       "keyword_king",
       "recent_gem"
     ],
-    "synthesis": [
+    "reflection": [
+      "recent_gem",
+      "keyword_king",
       "vector_king",
+      "link_hub"
+    ],
+    "lookup": [
+      "keyword_king",
       "link_hub",
       "recent_gem",
-      "keyword_king"
+      "vector_king"
     ]
   }
 }

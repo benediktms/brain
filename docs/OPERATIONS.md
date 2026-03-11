@@ -10,7 +10,7 @@ Brain handles most upgrade tasks automatically on the next startup or index cycl
 
 ### Schema Migrations
 
-When brain opens the SQLite database, `init_schema` checks the stored `user_version` against the compiled `SCHEMA_VERSION` (currently **11**). If the stored version is behind, a version-aware migration dispatch loop runs each migration sequentially in its own transaction — from the current version up to the target. If the stored version is *ahead* of the binary (e.g. you downgraded), brain rejects the database with an error rather than silently corrupting it.
+When brain opens the SQLite database, `init_schema` checks the stored `user_version` against the compiled `SCHEMA_VERSION` (currently **13**). Version 12 added records domain tables (`records`, `record_tags`, `record_links`, `record_events`). Version 13 added storage lifecycle columns (`retention_class`, `pinned`, `payload_available`, `content_encoding`, `original_size`) for compression, retention classes, and payload eviction. If the stored version is behind, a version-aware migration dispatch loop runs each migration sequentially in its own transaction — from the current version up to the target. If the stored version is *ahead* of the binary (e.g. you downgraded), brain rejects the database with an error rather than silently corrupting it.
 
 ### FTS5 Tables
 
@@ -54,6 +54,15 @@ cp -r .brain/lancedb/ .brain/lancedb.bak/
 
 For registered brains, the derived data lives at `~/.brain/brains/<name>/` instead.
 
+### Records Data
+
+The records event log at `~/.brain/brains/<name>/records/events.jsonl` is the source of truth for record metadata and should be backed up. The object store at `~/.brain/brains/<name>/objects/` contains immutable content-addressed blobs that can be large — back up if payload content is irreplaceable.
+
+```sh
+cp ~/.brain/brains/<name>/records/events.jsonl ~/.brain/brains/<name>/records/events.jsonl.bak
+cp -r ~/.brain/brains/<name>/objects/ ~/.brain/brains/<name>/objects.bak/
+```
+
 ### Lightweight Approach
 
 Skip backups entirely. If anything goes wrong, delete the derived data and rebuild:
@@ -85,6 +94,10 @@ The brain registry at `~/.brain/config.toml` is small and worth backing up. It s
 | FTS out of sync | Automatic — `ensure_fts5()` rebuilds tables and triggers on every startup |
 | Stale chunks after upgrade | Automatic — chunker version bump triggers lazy re-index on next cycle |
 | Model files missing/corrupt | Run `just setup-model` or `scripts/setup-model.sh` |
+| Records projection corrupted | The SQLite record tables are derived from `records/events.jsonl`. Delete `brain.db` and restart — the daemon rebuilds record projections from the event log automatically. |
+| Object store corrupted | Run `brain records verify` to identify missing or corrupt blobs. Corrupt blobs can be removed manually. Missing blobs for evicted records are expected (`payload_available = 0`). |
+| Orphan blobs accumulating | Run `brain records gc` to scan for unreferenced objects. Use `--dry-run` first to preview. |
+| Record payload accidentally evicted | Eviction removes the blob but preserves metadata. If the original content is available, re-create the record with the same bytes — content-addressing stores it at the same hash. |
 | Task data lost | Tasks live in `brain.db` — if SQLite is corrupted, task history is lost (no Markdown source). Back up `brain.db` if tasks are important. |
 
 ### Full Reset
@@ -102,6 +115,27 @@ For registered brains:
 rm -rf ~/.brain/brains/<name>/
 brain reindex --full .
 ```
+
+### Records Maintenance
+
+```sh
+# Verify integrity of the object store
+brain records verify
+brain records verify --verbose    # Show detailed findings
+
+# Remove orphan blobs (unreferenced by any record)
+brain records gc --dry-run        # Preview what would be removed
+brain records gc                  # Actually remove orphans
+
+# Evict a record's payload (free disk space, keep metadata)
+brain records evict <record_id> --reason "no longer needed"
+
+# Pin/unpin records to control eviction eligibility
+brain records pin <record_id>
+brain records unpin <record_id>
+```
+
+All commands support `--json` for machine-readable output. `brain records verify` exits with code 1 if issues are found, making it suitable for scripting and CI checks.
 
 ---
 
@@ -179,6 +213,14 @@ Brain verifies model file integrity at startup using BLAKE3 checksums. If you se
 rm -rf ~/.brain/models/bge-small-en-v1.5/
 just setup-model
 ```
+
+### "Record not found" after database rebuild
+
+Record projections are rebuilt from the records event log (`records/events.jsonl`). If the event log is intact, restart the daemon to trigger a projection rebuild. If the event log is missing, record metadata is lost — only the raw object store blobs remain.
+
+### Object store growing unexpectedly
+
+Run `brain records verify` to check for orphan blobs (objects not referenced by any record). Then `brain records gc` to remove them. Also check for duplicate large artifacts that could be archived.
 
 ---
 

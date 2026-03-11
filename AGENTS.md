@@ -44,6 +44,21 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
+**Records tools:**
+
+| Tool | Description |
+| --- | --- |
+| `records.create_artifact` | Create a new artifact record with base64-encoded content |
+| `records.save_snapshot` | Save an opaque state bundle as a snapshot record |
+| `records.get` | Get a record by ID with full metadata, tags, and links (supports prefix resolution) |
+| `records.list` | List records with optional filters (kind, status, tag, task_id) |
+| `records.fetch_content` | Fetch raw content of a record as base64-encoded data |
+| `records.archive` | Archive a record (metadata-only, payload preserved) |
+| `records.tag_add` | Add a tag to a record (idempotent) |
+| `records.tag_remove` | Remove a tag from a record (idempotent) |
+| `records.link_add` | Link a record to a task or note chunk |
+| `records.link_remove` | Remove a link from a record |
+
 ### CLI Commands (for human terminal use)
 
 ```bash
@@ -79,6 +94,11 @@ brain tasks list --group-by label     # List tasks grouped by label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Records
+brain artifacts <subcommand>   # Artifact management (alias: art)
+brain snapshots <subcommand>   # Snapshot management (alias: snap)
+brain records <subcommand>     # Records maintenance (verify, gc, evict, pin, unpin)
 
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md

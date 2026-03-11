@@ -163,6 +163,11 @@ mod tests {
         let db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
+        let records_dir = tmp.path().join("records");
+        let records_db = crate::db::Db::open(&sqlite_path).unwrap();
+        let records = crate::records::RecordStore::new(&records_dir, records_db).unwrap();
+        let objects_dir = tmp.path().join("objects");
+        let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
 
         (
             tmp,
@@ -171,6 +176,8 @@ mod tests {
                 store: None,
                 embedder: None,
                 tasks,
+                records,
+                objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
             },
         )
@@ -191,6 +198,11 @@ mod tests {
         let _store = store;
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
+        let records_dir = tmp.path().join("records");
+        let records_db = crate::db::Db::open(&sqlite_path).unwrap();
+        let records = crate::records::RecordStore::new(&records_dir, records_db).unwrap();
+        let objects_dir = tmp.path().join("objects");
+        let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
 
         (
             tmp,
@@ -199,6 +211,8 @@ mod tests {
                 store: Some(store_reader),
                 embedder: None,
                 tasks,
+                records,
+                objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
             },
         )

@@ -373,6 +373,154 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Snapshots { json, action } => {
+            use commands::snapshots::run::{ListParams, SaveParams, SnapshotCtx};
+            let ctx = SnapshotCtx::new(&cli.sqlite_db, json)?;
+
+            match action {
+                SnapshotsAction::Save {
+                    title,
+                    file,
+                    stdin,
+                    description,
+                    task,
+                    tag,
+                    media_type,
+                } => {
+                    commands::snapshots::run::save(
+                        &ctx,
+                        SaveParams {
+                            title,
+                            file,
+                            stdin,
+                            description,
+                            task,
+                            tags: tag,
+                            media_type,
+                        },
+                    )?;
+                }
+                SnapshotsAction::List { tag, status, limit } => {
+                    commands::snapshots::run::list(&ctx, &ListParams { tag, status, limit })?;
+                }
+                SnapshotsAction::Get { id } => {
+                    commands::snapshots::run::get(&ctx, &id)?;
+                }
+                SnapshotsAction::Restore { id, output } => {
+                    commands::snapshots::run::restore(&ctx, &id, output)?;
+                }
+                SnapshotsAction::Archive { id, reason } => {
+                    commands::snapshots::run::archive(&ctx, &id, reason)?;
+                }
+                SnapshotsAction::Tag { action } => match action {
+                    RecordTagAction::Add { id, tag } => {
+                        commands::snapshots::run::tag_add(&ctx, &id, &tag)?;
+                    }
+                    RecordTagAction::Remove { id, tag } => {
+                        commands::snapshots::run::tag_remove(&ctx, &id, &tag)?;
+                    }
+                },
+                SnapshotsAction::Link { action } => match action {
+                    RecordLinkAction::Add { id, task, chunk } => {
+                        commands::snapshots::run::link_add(&ctx, &id, task, chunk)?;
+                    }
+                    RecordLinkAction::Remove { id, task, chunk } => {
+                        commands::snapshots::run::link_remove(&ctx, &id, task, chunk)?;
+                    }
+                },
+            }
+        }
+        Command::Artifacts { json, action } => {
+            use commands::artifacts::run::ArtifactCtx;
+            let ctx = ArtifactCtx::new(&cli.sqlite_db, json)?;
+
+            match action {
+                ArtifactsAction::Create {
+                    title,
+                    kind,
+                    file,
+                    stdin,
+                    description,
+                    task,
+                    tag,
+                    media_type,
+                } => {
+                    commands::artifacts::run::create(
+                        &ctx,
+                        commands::artifacts::run::CreateParams {
+                            title,
+                            kind,
+                            file,
+                            stdin,
+                            description,
+                            task,
+                            tags: tag,
+                            media_type,
+                        },
+                    )?;
+                }
+                ArtifactsAction::List {
+                    kind,
+                    tag,
+                    status,
+                    limit,
+                } => {
+                    commands::artifacts::run::list(
+                        &ctx,
+                        &commands::artifacts::run::ListParams {
+                            kind,
+                            tag,
+                            status,
+                            limit,
+                        },
+                    )?;
+                }
+                ArtifactsAction::Get { id } => {
+                    commands::artifacts::run::get(&ctx, &id)?;
+                }
+                ArtifactsAction::Archive { id, reason } => {
+                    commands::artifacts::run::archive(&ctx, &id, reason)?;
+                }
+                ArtifactsAction::Tag { action } => match action {
+                    RecordTagAction::Add { id, tag } => {
+                        commands::artifacts::run::tag_add(&ctx, &id, &tag)?;
+                    }
+                    RecordTagAction::Remove { id, tag } => {
+                        commands::artifacts::run::tag_remove(&ctx, &id, &tag)?;
+                    }
+                },
+                ArtifactsAction::Link { action } => match action {
+                    RecordLinkAction::Add { id, task, chunk } => {
+                        commands::artifacts::run::link_add(&ctx, &id, task, chunk)?;
+                    }
+                    RecordLinkAction::Remove { id, task, chunk } => {
+                        commands::artifacts::run::link_remove(&ctx, &id, task, chunk)?;
+                    }
+                },
+            }
+        }
+        Command::Records { json, action } => {
+            use commands::records::RecordsCtx;
+            let ctx = RecordsCtx::new(&cli.sqlite_db, json)?;
+
+            match action {
+                RecordsAction::Verify { verbose } => {
+                    commands::records::verify(&ctx, verbose)?;
+                }
+                RecordsAction::Gc { dry_run } => {
+                    commands::records::gc(&ctx, dry_run)?;
+                }
+                RecordsAction::Evict { id, reason } => {
+                    commands::records::evict(&ctx, &id, reason)?;
+                }
+                RecordsAction::Pin { id } => {
+                    commands::records::pin(&ctx, &id)?;
+                }
+                RecordsAction::Unpin { id } => {
+                    commands::records::unpin(&ctx, &id)?;
+                }
+            }
+        }
     }
 
     Ok(())
