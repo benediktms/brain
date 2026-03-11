@@ -52,16 +52,16 @@ pub async fn run(
 
     // Try to load the summarizer if the model directory exists alongside the embedder
     let summarizer_dir = model_dir.parent().map(|p| p.join("flan-t5-small"));
-    if let Some(ref dir) = summarizer_dir {
-        if dir.is_dir() {
-            match FlanT5Summarizer::load(dir) {
-                Ok(s) => {
-                    info!(model_dir = %dir.display(), "loaded Flan-T5 summarizer");
-                    pipeline.set_summarizer(Arc::new(s));
-                }
-                Err(e) => {
-                    warn!(error = %e, "failed to load summarizer, consolidation disabled");
-                }
+    if let Some(ref dir) = summarizer_dir
+        && dir.is_dir()
+    {
+        match FlanT5Summarizer::load(dir) {
+            Ok(s) => {
+                info!(model_dir = %dir.display(), "loaded Flan-T5 summarizer");
+                pipeline.set_summarizer(Arc::new(s));
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to load summarizer, consolidation disabled");
             }
         }
     }
