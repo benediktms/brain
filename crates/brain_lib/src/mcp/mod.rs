@@ -338,11 +338,13 @@ mod tests {
         assert!(names.contains(&"memory.search_minimal"));
         assert!(names.contains(&"memory.expand"));
         assert!(names.contains(&"tasks.apply_event"));
+        assert!(names.contains(&"tasks.create"));
         assert!(names.contains(&"tasks.labels_batch"));
         assert!(names.contains(&"tasks.deps_batch"));
         assert!(names.contains(&"tasks.get"));
         assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));
+        assert!(!names.contains(&"tasks.create_remote"));
     }
 
     #[tokio::test]

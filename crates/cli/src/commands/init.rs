@@ -260,6 +260,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 
 **Task tools:**
 - `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`, `cross_brain_ref_added`, `cross_brain_ref_removed`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
+- `tasks_create` — Create a task with a flat schema (no event envelope). Required param: `title`. Optional: `description`, `priority` (0-4, default 4), `task_type` (task|bug|feature|epic|spike), `assignee`, `parent` (task ID prefix), `due_ts` (ISO 8601), `defer_until` (ISO 8601), `actor` (default: mcp). For remote creation: add `brain` (target brain name or ID from registry); optionally `link_from` (local task ID) and `link_type` (depends_on|blocks|related, default: related). Returns `{task_id, task, unblocked_task_ids}` for local creation, or `{remote_task_id, remote_brain_name, remote_brain_id, local_ref_created}` for remote creation. Subsumes `tasks_create_remote`.
 - `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`. Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description).
 - `tasks_get` — Get full task details including relationships, comments, labels, linked notes, and cross-brain references (`cross_refs`). Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
 - `tasks_next` — Get highest-priority ready tasks sorted by priority then due date. Use for "what should I work on?" queries.
@@ -271,12 +272,11 @@ When running as an MCP server (`brain mcp`), these tools are available:
 **Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
 
 **Cross-brain tools:**
-- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks.create_remote`.
-- `tasks.create_remote` — Create a task in another registered brain project. Required params: `brain` (registry name or 8-char brain ID) and `title`. Brain resolution tries the registry name first, then falls back to scanning by ID. Optional params: `description`, `priority` (0–4, default 4), `task_type`, `assignee`, `parent` (remote task ID). When `link_from` is provided (a local task ID), a cross-brain ref is added to that local task. `link_type` controls the ref direction (depends_on|blocks|related, default related). Returns `remote_task_id`, `remote_brain_name`, `remote_brain_id`, and `local_ref_created`.
+- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks_create` with a `brain` parameter. Also callable as `brains_list`.
 
 **Cross-brain workflow:**
 1. Call `brains.list` to discover registered brains and their prefixes.
-2. Call `tasks.create_remote` with the target brain name and task details.
+2. Call `tasks_create` with the target `brain` name and task details.
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
 
 **Memory tools:**
@@ -290,7 +290,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `records.save_snapshot` — Save an opaque state bundle as a snapshot record.
 - `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution).
 - `records.list` — List records with optional filters (kind, status, tag, task_id).
-- `records.fetch_content` — Fetch raw content of a record as base64-encoded data.
+- `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata.
 - `records.archive` — Archive a record (metadata-only, payload preserved).
 - `records.tag_add` — Add a tag to a record (idempotent).
 - `records.tag_remove` — Remove a tag from a record (idempotent).

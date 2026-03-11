@@ -16,7 +16,7 @@ mod record_tag;
 mod status;
 mod task_apply_event;
 mod task_close;
-mod task_create_remote;
+mod task_create;
 mod task_deps_batch;
 mod task_get;
 mod task_labels_batch;
@@ -87,7 +87,7 @@ impl ToolRegistry {
                 Box::new(mem_reflect::MemReflect),
                 Box::new(task_apply_event::TaskApplyEvent),
                 Box::new(task_close::TaskClose),
-                Box::new(task_create_remote::TaskCreateRemote),
+                Box::new(task_create::TaskCreate),
                 Box::new(task_deps_batch::TaskDepsBatch),
                 Box::new(task_get::TaskGet),
                 Box::new(task_labels_batch::TaskLabelsBatch),
@@ -145,9 +145,11 @@ pub(super) mod tests {
         assert!(names.contains(&"memory.write_episode"));
         assert!(names.contains(&"memory.reflect"));
         assert!(names.contains(&"tasks.apply_event"));
+        assert!(names.contains(&"tasks.create"));
         assert!(names.contains(&"tasks.get"));
         assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));
+        assert!(!names.contains(&"tasks.create_remote"));
 
         // All should have valid JSON schemas
         for def in &defs {

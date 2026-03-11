@@ -192,7 +192,7 @@ fn default_actor() -> String {
 }
 
 /// Whether this event type should trigger a capsule re-embed.
-fn should_embed_capsule(event_type: &EventType) -> bool {
+pub(super) fn should_embed_capsule(event_type: &EventType) -> bool {
     matches!(
         event_type,
         EventType::TaskCreated
@@ -204,7 +204,10 @@ fn should_embed_capsule(event_type: &EventType) -> bool {
 }
 
 /// Fetch task state, build capsule, embed into LanceDB + SQLite.
-async fn embed_capsule_for_task(ctx: &McpContext, task_id: &str) -> crate::error::Result<()> {
+pub(super) async fn embed_capsule_for_task(
+    ctx: &McpContext,
+    task_id: &str,
+) -> crate::error::Result<()> {
     let (store, embedder) = match (ctx.writable_store.as_ref(), ctx.embedder.as_ref()) {
         (Some(s), Some(e)) => (s, e),
         _ => return Ok(()), // No store/embedder — skip silently
@@ -233,7 +236,10 @@ async fn embed_capsule_for_task(ctx: &McpContext, task_id: &str) -> crate::error
 }
 
 /// Build and embed an outcome capsule for a done/cancelled task.
-async fn embed_outcome_for_task(ctx: &McpContext, task_id: &str) -> crate::error::Result<()> {
+pub(super) async fn embed_outcome_for_task(
+    ctx: &McpContext,
+    task_id: &str,
+) -> crate::error::Result<()> {
     let (store, embedder) = match (ctx.writable_store.as_ref(), ctx.embedder.as_ref()) {
         (Some(s), Some(e)) => (s, e),
         _ => return Ok(()),
