@@ -141,14 +141,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_daemon_start() {
+    fn parse_daemon_start_no_args() {
         let cli = Cli::try_parse_from(["brain", "daemon", "start"]).unwrap();
-        assert!(matches!(
-            cli.command,
+        match cli.command {
             Command::Daemon {
-                action: DaemonAction::Start { .. }
+                action: DaemonAction::Start { notes_path },
+            } => {
+                assert!(
+                    notes_path.is_none(),
+                    "notes_path should be None when not provided"
+                );
             }
-        ));
+            _ => panic!("expected Daemon Start"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_start_with_path() {
+        let cli = Cli::try_parse_from(["brain", "daemon", "start", "./notes"]).unwrap();
+        match cli.command {
+            Command::Daemon {
+                action: DaemonAction::Start { notes_path },
+            } => {
+                assert_eq!(
+                    notes_path,
+                    Some(PathBuf::from("./notes")),
+                    "notes_path should be Some when provided"
+                );
+            }
+            _ => panic!("expected Daemon Start"),
+        }
     }
 
     #[test]

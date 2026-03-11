@@ -453,7 +453,10 @@ pub(crate) enum DaemonAction {
     #[command(long_about = "Start the daemon in the background.\n\n\
         Forks a child process, detaches it from the terminal via setsid, and \
         writes its PID to ~/.brain/brain.pid. The child process runs the watcher \
-        loop, logging to ~/.brain/brain.log.")]
+        loop, logging to ~/.brain/brain.log.\n\n\
+        When no path is given, watches all brain projects registered in \
+        ~/.brain/config.toml. When a path is given, watches only that directory \
+        (legacy single-brain mode).")]
     Start {
         /// Path to notes directory. When omitted, watches all registered brains from the global registry.
         #[arg(value_hint = ValueHint::DirPath)]

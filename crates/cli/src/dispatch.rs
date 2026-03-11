@@ -77,13 +77,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     // Child process after fork — run watch directly.
                     let outcome = match notes_path {
                         Some(path) => {
-                            commands::watch::run(
-                                path,
-                                cli.model_dir,
-                                cli.lance_db,
-                                cli.sqlite_db,
-                            )
-                            .await?
+                            commands::watch::run(path, cli.model_dir, cli.lance_db, cli.sqlite_db)
+                                .await?
                         }
                         None => commands::watch::run_multi().await?,
                     };

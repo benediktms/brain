@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -337,10 +337,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         bail!("all registered brains failed to initialise; daemon cannot start");
     }
 
-    info!(
-        brains = brains.len(),
-        "multi-brain daemon started"
-    );
+    info!(brains = brains.len(), "multi-brain daemon started");
 
     // ── 4. Build path-to-brain lookup (longest prefix first) ────────────
     let mut prefix_map = build_prefix_map(&brains);
@@ -412,10 +409,11 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                                     warn!(brain = %instance.name, error = %e, "error handling delete");
                                 }
                             }
-                            if !index_paths.is_empty() {
-                                if let Err(e) = instance.pipeline.index_files_batch(&index_paths).await {
-                                    warn!(brain = %instance.name, error = %e, "error in batch index");
-                                }
+                            if !index_paths.is_empty()
+                                && let Err(e) =
+                                    instance.pipeline.index_files_batch(&index_paths).await
+                            {
+                                warn!(brain = %instance.name, error = %e, "error in batch index");
                             }
 
                             instance.pipeline.store().optimizer().maybe_optimize().await;
@@ -475,10 +473,10 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
         while let Ok(evt) = rx.try_recv() {
             let event_path = event_primary_path(&evt);
-            if let Some(brain_name) = lookup_brain(&prefix_map, &event_path) {
-                if let Some(instance) = brains.get_mut(&brain_name) {
-                    instance.work_queue.push(evt);
-                }
+            if let Some(brain_name) = lookup_brain(&prefix_map, &event_path)
+                && let Some(instance) = brains.get_mut(&brain_name)
+            {
+                instance.work_queue.push(evt);
             }
         }
 
@@ -623,16 +621,14 @@ fn build_prefix_map(brains: &HashMap<String, BrainInstance>) -> Vec<(PathBuf, St
         .collect();
 
     // Sort by path component count descending (longest prefix first)
-    map.sort_by(|(a, _), (b, _)| {
-        b.components().count().cmp(&a.components().count())
-    });
+    map.sort_by(|(a, _), (b, _)| b.components().count().cmp(&a.components().count()));
 
     map
 }
 
 /// Given an event path, find the brain whose note directory is the longest
 /// prefix of that path.
-fn lookup_brain(prefix_map: &[(PathBuf, String)], event_path: &PathBuf) -> Option<String> {
+fn lookup_brain(prefix_map: &[(PathBuf, String)], event_path: &Path) -> Option<String> {
     for (prefix, brain_name) in prefix_map {
         if event_path.starts_with(prefix) {
             return Some(brain_name.clone());
@@ -662,8 +658,7 @@ async fn reload_brains(
     let new_cfg = load_global_config()?;
 
     // Collect owned name sets before mutating `brains`
-    let new_names: std::collections::HashSet<String> =
-        new_cfg.brains.keys().cloned().collect();
+    let new_names: std::collections::HashSet<String> = new_cfg.brains.keys().cloned().collect();
     let old_names: std::collections::HashSet<String> = brains.keys().cloned().collect();
 
     // Removed brains: unwatch dirs and remove from map

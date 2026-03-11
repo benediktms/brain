@@ -349,9 +349,18 @@ mod tests {
 
         let result = resolve_paths_for_brain_with_home("my-brain", home);
 
-        assert_eq!(result.model_dir, home.join("models").join("bge-small-en-v1.5"));
-        assert_eq!(result.lance_db, home.join("brains").join("my-brain").join("lancedb"));
-        assert_eq!(result.sqlite_db, home.join("brains").join("my-brain").join("brain.db"));
+        assert_eq!(
+            result.model_dir,
+            home.join("models").join("bge-small-en-v1.5")
+        );
+        assert_eq!(
+            result.lance_db,
+            home.join("brains").join("my-brain").join("lancedb")
+        );
+        assert_eq!(
+            result.sqlite_db,
+            home.join("brains").join("my-brain").join("brain.db")
+        );
     }
 
     #[test]
