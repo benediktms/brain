@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -9,6 +10,7 @@ use brain_lib::config::{load_global_config, resolve_paths_for_brain};
 use brain_lib::db::Db;
 use brain_lib::embedder::Embedder;
 use brain_lib::pipeline::IndexPipeline;
+use brain_lib::pipeline::consolidation::ConsolidationScheduler;
 use brain_lib::prelude::*;
 use brain_lib::store::Store;
 use tracing::{debug, info, warn};
@@ -73,6 +75,13 @@ pub async fn run(
     // threshold is evaluated inside should_optimize().
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
+    // Consolidation scheduler: runs ML summarization when the system has been
+    // idle for 5 minutes. The tick is cheap (atomic load); actual work only
+    // happens when a summarizer is configured and idle threshold is met.
+    let last_event_ts = Arc::new(AtomicU64::new(0));
+    let consolidator = ConsolidationScheduler::new(last_event_ts.clone());
+    let mut consolidation_tick = tokio::time::interval(Duration::from_secs(30));
+
     // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
         .expect("failed to register SIGTERM handler");
@@ -126,6 +135,9 @@ pub async fn run(
 
                         // 6. Check row-count trigger after each batch
                         pipeline.store().optimizer().maybe_optimize().await;
+
+                        // 7. Stamp the last-event timestamp for idle detection
+                        consolidator.record_file_event();
                     }
                     None => {
                         info!("watcher channel closed, shutting down");
@@ -136,6 +148,13 @@ pub async fn run(
             _ = optimize_tick.tick() => {
                 // Check time-elapsed trigger during quiet periods
                 pipeline.store().optimizer().maybe_optimize().await;
+            }
+            _ = consolidation_tick.tick() => {
+                if let Some(summarizer) = pipeline.summarizer() {
+                    if let Err(e) = consolidator.maybe_consolidate(pipeline.db(), summarizer).await {
+                        tracing::warn!("consolidation error: {e}");
+                    }
+                }
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("received Ctrl+C, shutting down");
@@ -286,6 +305,8 @@ struct BrainInstance {
     pipeline: IndexPipeline,
     work_queue: WorkQueue,
     note_dirs: Vec<PathBuf>,
+    last_event_ts: Arc<AtomicU64>,
+    consolidator: ConsolidationScheduler,
 }
 
 /// Watch all registered brains from the global config for changes and
@@ -367,6 +388,10 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Periodic optimization tick (same as single-brain run())
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
+    // Consolidation tick: cheap idle check every 30s; actual work gated on
+    // per-brain idle threshold (5min) and summarizer being configured.
+    let mut consolidation_tick = tokio::time::interval(Duration::from_secs(30));
+
     // ── 7. Event loop ─────────────────────────────────────────────────────
     let shutdown_reason = loop {
         tokio::select! {
@@ -386,6 +411,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                             if let Some(brain_name) = lookup_brain(&prefix_map, &event_path) {
                                 if let Some(instance) = brains.get_mut(&brain_name) {
                                     instance.work_queue.push(evt);
+                                    instance.consolidator.record_file_event();
                                 }
                             } else {
                                 debug!(path = %event_path.display(), "event path matches no brain, dropping");
@@ -428,6 +454,18 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             _ = optimize_tick.tick() => {
                 for instance in brains.values() {
                     instance.pipeline.store().optimizer().maybe_optimize().await;
+                }
+            }
+            _ = consolidation_tick.tick() => {
+                for instance in brains.values() {
+                    if let Some(summarizer) = instance.pipeline.summarizer() {
+                        if let Err(e) = instance.consolidator.maybe_consolidate(
+                            instance.pipeline.db(),
+                            summarizer,
+                        ).await {
+                            tracing::warn!(brain = %instance.name, "consolidation error: {e}");
+                        }
+                    }
                 }
             }
             _ = sighup.recv() => {
@@ -599,11 +637,16 @@ async fn init_brain_instance(
         }
     }
 
+    let last_event_ts = Arc::new(AtomicU64::new(0));
+    let consolidator = ConsolidationScheduler::new(last_event_ts.clone());
+
     Ok(BrainInstance {
         name: name.to_string(),
         pipeline,
         work_queue: WorkQueue::default(),
         note_dirs,
+        last_event_ts,
+        consolidator,
     })
 }
 
