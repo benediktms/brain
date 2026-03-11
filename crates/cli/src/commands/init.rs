@@ -88,7 +88,12 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         eprintln!("Warning: {e}");
     }
 
-    // 8. Print success
+    // 8. Signal daemon to reload registry (best-effort)
+    super::daemon::Daemon::new()
+        .and_then(|d| d.signal_reload())
+        .ok();
+
+    // 9. Print success
     let display_notes: Vec<String> = note_dirs.iter().map(|p| p.display().to_string()).collect();
     println!(
         "Brain \"{brain_name}\" initialized. Note directories: {:?}",

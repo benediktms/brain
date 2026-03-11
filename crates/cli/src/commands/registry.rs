@@ -35,6 +35,11 @@ pub fn run_remove(name: &str, purge: bool) -> Result<()> {
     save_global_config(&global)?;
     println!("Removed brain \"{name}\" from registry.");
 
+    // Signal daemon to reload registry (best-effort)
+    super::daemon::Daemon::new()
+        .and_then(|d| d.signal_reload())
+        .ok();
+
     if purge {
         let brains_dir = brain_home()?.join("brains").join(name);
         if brains_dir.exists() {
