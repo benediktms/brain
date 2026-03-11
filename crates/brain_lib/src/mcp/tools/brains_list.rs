@@ -34,7 +34,7 @@ impl McpTool for BrainsList {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "List all registered brain projects from the global registry (~/.brain/config.toml). Returns name, ID, root path, and task prefix for each brain. Use this to discover available brains before creating cross-brain tasks.".into(),
+            description: "List all registered brain projects from the global registry (~/.brain/config.toml). Returns name, ID, root path, and task prefix for each brain. Use this to discover available brains before cross-brain operations (federated search via memory.search_minimal with brains parameter, or cross-brain task creation).".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {}

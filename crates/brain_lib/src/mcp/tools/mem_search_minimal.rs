@@ -77,7 +77,7 @@ impl McpTool for MemSearchMinimal {
                     "brains": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Optional list of brain names to search. Use [\"all\"] to search all registered brains. When omitted, searches only the current brain."
+                        "description": "Optional list of brain names or IDs to search across multiple brains. Use [\"all\"] to search all registered brains. When omitted, searches only the current brain. Call brains.list first to discover available brain names."
                     }
                 },
                 "required": ["query"]
