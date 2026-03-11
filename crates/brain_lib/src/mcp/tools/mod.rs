@@ -4,6 +4,12 @@ mod mem_expand;
 mod mem_reflect;
 mod mem_search_minimal;
 mod mem_write_episode;
+mod record_archive;
+mod record_create_artifact;
+mod record_fetch_content;
+mod record_get;
+mod record_list;
+mod record_save_snapshot;
 mod status;
 mod task_apply_event;
 mod task_close;
@@ -84,6 +90,12 @@ impl ToolRegistry {
                 Box::new(task_list::TaskList),
                 Box::new(task_next::TaskNext),
                 Box::new(status::Status),
+                Box::new(record_create_artifact::RecordCreateArtifact),
+                Box::new(record_save_snapshot::RecordSaveSnapshot),
+                Box::new(record_get::RecordGet),
+                Box::new(record_list::RecordList),
+                Box::new(record_fetch_content::RecordFetchContent),
+                Box::new(record_archive::RecordArchive),
             ],
         }
     }
@@ -115,7 +127,7 @@ pub(super) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 13);
+        assert_eq!(defs.len(), 19);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
