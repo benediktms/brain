@@ -1,3 +1,4 @@
+pub mod consolidation;
 mod indexing;
 mod maintenance;
 mod scan;
@@ -12,6 +13,7 @@ use crate::db::meta;
 use crate::embedder::{Embed, Embedder};
 use crate::metrics::Metrics;
 use crate::store::Store;
+use crate::summarizer::Summarize;
 
 /// Statistics from a full scan operation.
 #[derive(Debug, Default)]
@@ -35,6 +37,7 @@ pub struct IndexPipeline {
     pub(crate) store: Store,
     pub(crate) embedder: Arc<dyn Embed>,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) summarizer: Option<Arc<dyn Summarize>>,
 }
 
 /// Check/stamp the LanceDB schema version, rebuilding the table when needed.
@@ -125,6 +128,7 @@ impl IndexPipeline {
             store,
             embedder: Arc::new(embedder),
             metrics: Arc::new(Metrics::new()),
+            summarizer: None,
         })
     }
 
@@ -144,6 +148,7 @@ impl IndexPipeline {
             store,
             embedder,
             metrics: Arc::new(Metrics::new()),
+            summarizer: None,
         })
     }
 
@@ -165,5 +170,15 @@ impl IndexPipeline {
     /// Get a reference to the metrics.
     pub fn metrics(&self) -> &Arc<Metrics> {
         &self.metrics
+    }
+
+    /// Set the summarizer on an existing pipeline.
+    pub fn set_summarizer(&mut self, summarizer: Arc<dyn Summarize>) {
+        self.summarizer = Some(summarizer);
+    }
+
+    /// Get a reference to the optional summarizer.
+    pub fn summarizer(&self) -> Option<&Arc<dyn Summarize>> {
+        self.summarizer.as_ref()
     }
 }

@@ -18,6 +18,7 @@ pub mod records;
 pub mod retrieval;
 pub mod scanner;
 pub mod store;
+pub mod summarizer;
 pub mod tasks;
 pub mod tokens;
 pub mod utils;

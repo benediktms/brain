@@ -3,6 +3,8 @@
 /// Provides a two-tier API:
 /// - `search_minimal`: returns compact stubs within a token budget
 /// - `expand`: returns full content for selected memory IDs
+use std::collections::HashMap;
+
 use crate::capsule::generate_stub_capsule;
 use crate::ranking::{FusionConfidence, RankedResult, SignalScores};
 use crate::tokens::estimate_tokens;
@@ -121,18 +123,24 @@ impl Expandable for ExpandableChunk {
 ///
 /// When `include_scores` is true, each stub carries the per-signal score
 /// breakdown from ranking.
+///
+/// `ml_summaries` is a preloaded map from chunk_id to ML-generated summary
+/// text. When a chunk_id is present in the map, its ML summary is used as
+/// `summary_2sent` instead of the rule-based `generate_stub_capsule` output.
 pub fn pack_minimal(
     ranked: &[RankedResult],
     budget_tokens: usize,
     k: usize,
     include_scores: bool,
+    ml_summaries: &HashMap<String, String>,
 ) -> SearchResult {
     let total_available = ranked.len();
     let mut results = Vec::new();
     let mut used_tokens = 0;
 
     for result in ranked.iter().take(k) {
-        let mut stub = make_stub(result);
+        let ml_summary = ml_summaries.get(&result.chunk_id).map(|s| s.as_str());
+        let mut stub = make_stub(result, ml_summary);
         let stub_tokens = estimate_stub_tokens(&stub);
 
         if used_tokens + stub_tokens > budget_tokens && !results.is_empty() {
@@ -212,7 +220,7 @@ pub fn expand_results<T: Expandable>(results: &[T], budget_tokens: usize) -> Exp
     }
 }
 
-fn make_stub(result: &RankedResult) -> MemoryStub {
+fn make_stub(result: &RankedResult, ml_summary: Option<&str>) -> MemoryStub {
     // Title: use heading_path leaf, or first line of content
     let title = if !result.heading_path.is_empty() {
         result
@@ -234,8 +242,11 @@ fn make_stub(result: &RankedResult) -> MemoryStub {
             .collect()
     };
 
-    // Summary: capsule-based (title + first sentence) for richer stubs
-    let summary_2sent = generate_stub_capsule(Some(&title), &result.content);
+    // Summary: prefer ML summary when available, fall back to rule-based capsule
+    let summary_2sent = match ml_summary {
+        Some(ml) => ml.to_string(),
+        None => generate_stub_capsule(Some(&title), &result.content),
+    };
 
     let stub_tokens = estimate_tokens(&title) + estimate_tokens(&summary_2sent) + 5;
 
@@ -321,7 +332,7 @@ mod tests {
             make_ranked("c", 0.7, "Third result content here."),
         ];
 
-        let result = pack_minimal(&ranked, 1000, 10, false);
+        let result = pack_minimal(&ranked, 1000, 10, false, &HashMap::new());
         assert_eq!(result.num_results, 3);
         assert!(result.used_tokens_est <= result.budget_tokens);
         assert_eq!(result.total_available, 3);
@@ -338,7 +349,7 @@ mod tests {
         ];
 
         // Very tight budget — should only fit 1 stub
-        let result = pack_minimal(&ranked, 15, 10, false);
+        let result = pack_minimal(&ranked, 15, 10, false, &HashMap::new());
         assert!(result.num_results <= 2);
         assert!(result.used_tokens_est <= 15);
     }
@@ -351,13 +362,13 @@ mod tests {
             make_ranked("c", 0.7, "Content."),
         ];
 
-        let result = pack_minimal(&ranked, 10000, 2, false);
+        let result = pack_minimal(&ranked, 10000, 2, false, &HashMap::new());
         assert_eq!(result.num_results, 2);
     }
 
     #[test]
     fn test_pack_minimal_empty() {
-        let result = pack_minimal(&[], 1000, 10, false);
+        let result = pack_minimal(&[], 1000, 10, false, &HashMap::new());
         assert_eq!(result.num_results, 0);
         assert_eq!(result.used_tokens_est, 0);
     }
@@ -402,7 +413,7 @@ mod tests {
     #[test]
     fn test_stub_has_title_from_heading() {
         let ranked = vec![make_ranked("test", 0.9, "Some content.")];
-        let result = pack_minimal(&ranked, 1000, 10, false);
+        let result = pack_minimal(&ranked, 1000, 10, false, &HashMap::new());
         assert_eq!(result.results[0].title, "test");
     }
 
@@ -413,7 +424,7 @@ mod tests {
             make_ranked("b", 0.8, "Second result content here."),
         ];
 
-        let result = pack_minimal(&ranked, 1000, 10, true);
+        let result = pack_minimal(&ranked, 1000, 10, true, &HashMap::new());
         assert_eq!(result.num_results, 2);
         assert!(result.used_tokens_est <= result.budget_tokens);
 
@@ -428,7 +439,7 @@ mod tests {
     #[test]
     fn test_pack_minimal_without_scores() {
         let ranked = vec![make_ranked("a", 0.9, "Content.")];
-        let result = pack_minimal(&ranked, 1000, 10, false);
+        let result = pack_minimal(&ranked, 1000, 10, false, &HashMap::new());
         assert!(result.results[0].signal_scores.is_none());
     }
 
@@ -443,7 +454,7 @@ mod tests {
     #[test]
     fn test_stub_kind_for_note() {
         let ranked = vec![make_ranked("01JABCDEFGH", 0.9, "Some content.")];
-        let result = pack_minimal(&ranked, 1000, 10, false);
+        let result = pack_minimal(&ranked, 1000, 10, false, &HashMap::new());
         assert_eq!(result.results[0].kind, "note");
     }
 
@@ -452,7 +463,7 @@ mod tests {
         let mut r = make_ranked("task:BRN-01ABC:0", 0.9, "Task content.");
         r.chunk_id = "task:BRN-01ABC:0".to_string();
         let ranked = vec![r];
-        let result = pack_minimal(&ranked, 1000, 10, false);
+        let result = pack_minimal(&ranked, 1000, 10, false, &HashMap::new());
         assert_eq!(result.results[0].kind, "task");
     }
 
@@ -461,7 +472,35 @@ mod tests {
         let mut r = make_ranked("task-outcome:BRN-01XYZ:0", 0.9, "Outcome content.");
         r.chunk_id = "task-outcome:BRN-01XYZ:0".to_string();
         let ranked = vec![r];
-        let result = pack_minimal(&ranked, 1000, 10, false);
+        let result = pack_minimal(&ranked, 1000, 10, false, &HashMap::new());
         assert_eq!(result.results[0].kind, "task-outcome");
+    }
+
+    #[test]
+    fn test_make_stub_uses_ml_summary() {
+        let ranked = vec![make_ranked("chunk:1", 0.9, "Raw content here.")];
+        let mut ml_summaries = HashMap::new();
+        ml_summaries.insert(
+            "chunk:1".to_string(),
+            "ML-generated summary text.".to_string(),
+        );
+        let result = pack_minimal(&ranked, 1000, 10, false, &ml_summaries);
+        assert_eq!(
+            result.results[0].summary_2sent,
+            "ML-generated summary text."
+        );
+    }
+
+    #[test]
+    fn test_make_stub_falls_back_to_capsule_when_no_ml_summary() {
+        let ranked = vec![make_ranked("chunk:1", 0.9, "Raw content here.")];
+        let result = pack_minimal(&ranked, 1000, 10, false, &HashMap::new());
+        // Falls back to generate_stub_capsule — should not be empty
+        assert!(!result.results[0].summary_2sent.is_empty());
+        // Must NOT equal the ML text (there is none)
+        assert_ne!(
+            result.results[0].summary_2sent,
+            "ML-generated summary text."
+        );
     }
 }

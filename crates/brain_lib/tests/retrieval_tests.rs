@@ -407,7 +407,7 @@ fn test_search_minimal_budget_compliance() {
         .collect();
 
     // Tight budget: 100 tokens
-    let result = pack_minimal(&ranked, 100, 20, false);
+    let result = pack_minimal(&ranked, 100, 20, false, &std::collections::HashMap::new());
     assert!(
         result.used_tokens_est <= 100,
         "must not exceed budget: {} > 100",
@@ -417,7 +417,7 @@ fn test_search_minimal_budget_compliance() {
     assert_eq!(result.total_available, 20);
 
     // Generous budget
-    let result = pack_minimal(&ranked, 10000, 20, false);
+    let result = pack_minimal(&ranked, 10000, 20, false, &std::collections::HashMap::new());
     assert_eq!(
         result.num_results, 20,
         "generous budget should fit all results"
