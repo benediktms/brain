@@ -667,13 +667,15 @@ fn empty_record_batch(schema: &Schema) -> crate::error::Result<RecordBatch> {
 /// Validate that a file_id is safe to interpolate into a LanceDB filter expression.
 ///
 /// Accepts both legacy UUID format (hex digits + hyphens) and ULID format
-/// (Crockford Base32: alphanumeric characters). The key constraint is preventing
-/// SQL injection in filter strings, so we allow only `[a-zA-Z0-9-]`.
+/// (Crockford Base32: alphanumeric characters), as well as task capsule IDs
+/// (e.g. "task:BRN-01ABC" or "task-outcome:BRN-01ABC") which contain `:`.
+/// The key constraint is preventing SQL injection in filter strings, so we
+/// allow only `[a-zA-Z0-9-:]`.
 fn validate_file_id(file_id: &str) -> crate::error::Result<&str> {
     if !file_id.is_empty()
         && file_id
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
     {
         Ok(file_id)
     } else {

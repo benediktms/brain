@@ -107,6 +107,42 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
     super::collect_rows(rows)
 }
 
+/// Upsert a task capsule chunk into SQLite.
+///
+/// Creates a synthetic `files` row if needed (with path = file_id),
+/// then replaces the chunk metadata. This ensures task capsule chunks
+/// are found by both FTS5 and the enrichment JOIN in get_chunks_by_ids.
+pub fn upsert_task_chunk(
+    conn: &Connection,
+    task_file_id: &str, // e.g. "task:BRN-01KK" or "task-outcome:BRN-01KK"
+    capsule_text: &str,
+) -> Result<()> {
+    // Ensure a synthetic files row exists
+    conn.execute(
+        "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?1, 'idle')",
+        [task_file_id],
+    )?;
+    // Update last_indexed_at for recency signal
+    conn.execute(
+        "UPDATE files SET last_indexed_at = strftime('%s','now') WHERE file_id = ?1",
+        [task_file_id],
+    )?;
+    // Replace chunk (delete + insert for FTS trigger)
+    conn.execute("DELETE FROM chunks WHERE file_id = ?1", [task_file_id])?;
+    let chunk_id = format!("{task_file_id}:0");
+    conn.execute(
+        "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate)
+         VALUES (?1, ?2, 0, '', ?3, '', 0, 0, ?4)",
+        rusqlite::params![
+            chunk_id,
+            task_file_id,
+            capsule_text,
+            crate::tokens::estimate_tokens(capsule_text) as i64,
+        ],
+    )?;
+    Ok(())
+}
+
 /// Get ordered chunk hashes for a file (by chunk_ord).
 pub fn get_chunk_hashes(conn: &Connection, file_id: &str) -> Result<Vec<String>> {
     let mut stmt =

@@ -1,3 +1,4 @@
+pub mod capsule;
 pub mod cross_brain;
 pub mod cycle;
 pub mod enrichment;
