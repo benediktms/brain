@@ -154,6 +154,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Docs => {
             commands::docs::run()?;
         }
+        Command::Id => {
+            commands::id::run()?;
+        }
         Command::Agent { action } => match action {
             AgentAction::Schema { tool, pretty } => {
                 commands::agent_schema::run(tool, pretty)?;

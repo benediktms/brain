@@ -247,3 +247,31 @@ pub fn get_deps_for_task(conn: &Connection, task_id: &str) -> Result<Vec<String>
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
 }
+
+/// A cross-brain reference from a local task to a task in another brain.
+#[derive(Debug, Clone)]
+pub struct CrossBrainRef {
+    pub brain_id: String,
+    pub remote_task: String,
+    pub ref_type: String,
+    pub note: Option<String>,
+    pub created_at: i64,
+}
+
+/// Get cross-brain references for a task, ordered by creation time.
+pub fn get_cross_brain_refs(conn: &Connection, task_id: &str) -> Result<Vec<CrossBrainRef>> {
+    let mut stmt = conn.prepare(
+        "SELECT brain_id, remote_task, ref_type, note, created_at
+         FROM task_cross_refs WHERE task_id = ?1 ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map([task_id], |row| {
+        Ok(CrossBrainRef {
+            brain_id: row.get(0)?,
+            remote_task: row.get(1)?,
+            ref_type: row.get(2)?,
+            note: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?;
+    crate::db::collect_rows(rows)
+}

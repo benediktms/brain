@@ -31,6 +31,9 @@ pub struct BrainEntry {
     /// Note directory paths (absolute).
     #[serde(default)]
     pub notes: Vec<PathBuf>,
+    /// Stable brain ID (8-char Nano ID).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +48,9 @@ pub struct BrainToml {
     /// Relative paths to note directories.
     #[serde(default)]
     pub notes: Vec<PathBuf>,
+    /// Stable brain ID (8-char Nano ID).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +114,23 @@ pub fn save_brain_toml(brain_dir: &Path, cfg: &BrainToml) -> Result<()> {
         .map_err(|e| BrainCoreError::Config(format!("failed to serialize brain.toml: {e}")))?;
     std::fs::write(&path, text).map_err(BrainCoreError::Io)?;
     Ok(())
+}
+
+/// Generate a new 8-character Nano ID for use as a stable brain identifier.
+pub fn generate_brain_id() -> String {
+    nanoid::nanoid!(8)
+}
+
+/// Get or lazily generate a brain ID, persisting it to brain.toml.
+pub fn get_or_generate_brain_id(brain_dir: &Path) -> Result<String> {
+    let mut toml = load_brain_toml(brain_dir)?;
+    if let Some(ref id) = toml.id {
+        return Ok(id.clone());
+    }
+    let id = generate_brain_id();
+    toml.id = Some(id.clone());
+    save_brain_toml(brain_dir, &toml)?;
+    Ok(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -394,5 +417,61 @@ mod tests {
             "expected brain name in sqlite_db path, got: {}",
             result.sqlite_db.display()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Brain ID helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn generate_brain_id_returns_8_chars() {
+        let id = generate_brain_id();
+        assert_eq!(id.len(), 8);
+    }
+
+    #[test]
+    fn brain_toml_round_trip_with_id() {
+        let tmp = TempDir::new().unwrap();
+        let brain_dir = tmp.path().join(".brain");
+        fs::create_dir_all(&brain_dir).unwrap();
+
+        let toml_cfg = BrainToml {
+            name: "test-brain".to_string(),
+            notes: vec![],
+            id: Some("abcd1234".to_string()),
+        };
+        save_brain_toml(&brain_dir, &toml_cfg).unwrap();
+        let loaded = load_brain_toml(&brain_dir).unwrap();
+        assert_eq!(loaded.id, Some("abcd1234".to_string()));
+    }
+
+    #[test]
+    fn brain_toml_round_trip_without_id() {
+        let tmp = TempDir::new().unwrap();
+        let brain_dir = tmp.path().join(".brain");
+        fs::create_dir_all(&brain_dir).unwrap();
+
+        let toml_cfg = BrainToml {
+            name: "test-brain".to_string(),
+            notes: vec![],
+            id: None,
+        };
+        save_brain_toml(&brain_dir, &toml_cfg).unwrap();
+        let loaded = load_brain_toml(&brain_dir).unwrap();
+        assert_eq!(loaded.id, None);
+    }
+
+    #[test]
+    fn get_or_generate_brain_id_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let brain_dir = tmp.path().join(".brain");
+        fs::create_dir_all(&brain_dir).unwrap();
+        fs::write(brain_dir.join("brain.toml"), "name = \"test\"\n").unwrap();
+
+        let id1 = get_or_generate_brain_id(&brain_dir).unwrap();
+        assert_eq!(id1.len(), 8);
+
+        let id2 = get_or_generate_brain_id(&brain_dir).unwrap();
+        assert_eq!(id1, id2, "second call should return same ID");
     }
 }

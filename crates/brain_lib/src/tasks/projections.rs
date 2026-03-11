@@ -3,8 +3,9 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    CommentPayload, DependencyPayload, EventType, ExternalIdPayload, LabelPayload, NoteLinkPayload,
-    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
+    CommentPayload, CrossBrainRefPayload, DependencyPayload, EventType, ExternalIdPayload,
+    LabelPayload, NoteLinkPayload, ParentSetPayload, StatusChangedPayload, TaskCreatedPayload,
+    TaskEvent, TaskUpdatedPayload,
 };
 use super::queries::next_child_seq;
 
@@ -236,6 +237,38 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                 rusqlite::params![event.task_id, p.source, p.external_id],
             )?;
         }
+
+        EventType::CrossBrainRefAdded => {
+            let p: CrossBrainRefPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("bad CrossBrainRefAdded payload: {e}"))
+                })?;
+
+            conn.execute(
+                "INSERT OR IGNORE INTO task_cross_refs (task_id, brain_id, remote_task, ref_type, note, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    event.task_id,
+                    p.brain_id,
+                    p.remote_task,
+                    p.ref_type,
+                    p.note,
+                    event.timestamp,
+                ],
+            )?;
+        }
+
+        EventType::CrossBrainRefRemoved => {
+            let p: CrossBrainRefPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("bad CrossBrainRefRemoved payload: {e}"))
+                })?;
+
+            conn.execute(
+                "DELETE FROM task_cross_refs WHERE task_id = ?1 AND brain_id = ?2 AND remote_task = ?3",
+                rusqlite::params![event.task_id, p.brain_id, p.remote_task],
+            )?;
+        }
     }
 
     // Record the event itself
@@ -261,6 +294,9 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
 /// Drops FTS task triggers before the bulk delete to avoid content-sync
 /// deletes on a potentially corrupt index, then rebuilds the FTS index
 /// and re-creates triggers after commit.
+// NOTE: If task purging/compaction is added in the future, cross-brain refs
+// to purged tasks will become dangling. Consider a tombstone mechanism
+// (e.g. task_tombstones table) so remote brains can detect deleted tasks.
 pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
     // Drop FTS triggers to avoid content-sync deletes on potentially corrupt index
     conn.execute_batch(
@@ -278,6 +314,7 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
          DELETE FROM task_labels;
          DELETE FROM task_note_links;
          DELETE FROM task_external_ids;
+         DELETE FROM task_cross_refs;
          DELETE FROM task_deps;
          DELETE FROM tasks;",
     )?;
@@ -571,5 +608,81 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_apply_cross_brain_ref_added_removed() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("t1", "Task", 2)).unwrap();
+
+        let add = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::CrossBrainRefAdded,
+            &CrossBrainRefPayload {
+                brain_id: "abc12345".to_string(),
+                remote_task: "INF-01KK7".to_string(),
+                ref_type: "depends_on".to_string(),
+                note: Some("needs infra work first".to_string()),
+            },
+        );
+        apply_event(&conn, &add).unwrap();
+
+        let (brain_id, remote_task, ref_type, note): (String, String, String, Option<String>) =
+            conn.query_row(
+                "SELECT brain_id, remote_task, ref_type, note FROM task_cross_refs WHERE task_id = 't1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(brain_id, "abc12345");
+        assert_eq!(remote_task, "INF-01KK7");
+        assert_eq!(ref_type, "depends_on");
+        assert_eq!(note.as_deref(), Some("needs infra work first"));
+
+        // Duplicate add is idempotent (INSERT OR IGNORE)
+        let add2 = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::CrossBrainRefAdded,
+            &CrossBrainRefPayload {
+                brain_id: "abc12345".to_string(),
+                remote_task: "INF-01KK7".to_string(),
+                ref_type: "depends_on".to_string(),
+                note: Some("different note".to_string()),
+            },
+        );
+        apply_event(&conn, &add2).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_cross_refs WHERE task_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Remove
+        let rm = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::CrossBrainRefRemoved,
+            &CrossBrainRefPayload {
+                brain_id: "abc12345".to_string(),
+                remote_task: "INF-01KK7".to_string(),
+                ref_type: "depends_on".to_string(),
+                note: None,
+            },
+        );
+        apply_event(&conn, &rm).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_cross_refs WHERE task_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

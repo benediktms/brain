@@ -9,7 +9,9 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
+use crate::tasks::enrichment::{
+    comments_to_json, cross_refs_to_json, dep_summary_to_json, note_links_to_json,
+};
 use crate::tasks::queries::TaskRow;
 use crate::utils::task_row_to_json;
 
@@ -126,6 +128,12 @@ impl TaskGet {
             &mut warnings,
         );
         let linked_notes_json = note_links_to_json(&note_links);
+
+        let cross_refs = store_or_warn(
+            ctx.tasks.get_cross_brain_refs(task_id),
+            "get_cross_brain_refs",
+            &mut warnings,
+        );
 
         let children = store_or_warn(
             ctx.tasks.get_children(task_id),
@@ -283,6 +291,7 @@ impl TaskGet {
                 "dependency_summary".into(),
                 dep_summary_to_json(&dep_summary),
             );
+            obj.insert("cross_refs".into(), json!(cross_refs_to_json(&cross_refs)));
         }
 
         inject_warnings(&mut task_json, warnings);
@@ -298,7 +307,7 @@ impl McpTool for TaskGet {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Get a single task by ID (full or prefix) with full details including relationships, comments, labels, and linked notes. Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects.".into(),
+            description: "Get a single task by ID (full or prefix) with full details including relationships, comments, labels, linked notes, and cross_refs (cross-brain references). Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

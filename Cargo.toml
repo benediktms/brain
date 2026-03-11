@@ -22,6 +22,7 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 proptest = "1"
 toml = "0.8"
 dirs = "6"
+nanoid = "0.4"
 
 # Optimize candle crates in dev builds for usable embedding speed.
 # opt-level 1 enables SIMD vectorization with minimal compile-time cost.
