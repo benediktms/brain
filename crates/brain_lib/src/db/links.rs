@@ -4,9 +4,69 @@ use ulid::Ulid;
 use crate::error::Result;
 use crate::links::Link;
 
+/// Resolve a link's `target_path` to a `file_id` using Obsidian-style disambiguation.
+///
+/// Resolution order (for wiki/markdown links):
+/// 1. Exact `path` match (handles absolute paths stored as-is)
+/// 2. Path ends with `/<target>.md` (wiki bare stems, e.g. "headings" → .../headings.md)
+/// 3. Path ends with `/<target>` (markdown links that already carry an extension)
+///
+/// When multiple files match the same rule, the shortest path wins (nearest-match
+/// semantics, mimicking Obsidian). Returns `None` for external links or no match.
+pub(crate) fn resolve_target_file_id(
+    conn: &Connection,
+    target_path: &str,
+    link_type: &str,
+) -> Option<String> {
+    if link_type == "external" {
+        return None;
+    }
+
+    // Collect all candidate (file_id, path) rows that match any of the three strategies.
+    let suffix_with_md = format!("/{}.md", target_path);
+    let suffix_bare = format!("/{}", target_path);
+
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT file_id, path FROM files
+              WHERE path = ?1
+                 OR path LIKE '%' || ?2
+                 OR path LIKE '%' || ?3",
+        )
+        .ok()?;
+
+    let candidates: Vec<(String, String)> = stmt
+        .query_map(
+            rusqlite::params![target_path, suffix_with_md, suffix_bare],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Pick the candidate with the shortest path (nearest-match).
+    candidates
+        .into_iter()
+        .min_by_key(|(_, path)| path.len())
+        .map(|(file_id, _)| file_id)
+}
+
+/// Returns true if the `links.target_file_id` column exists (i.e. v15+ schema).
+fn has_target_file_id_column(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('links') WHERE name = 'target_file_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
 /// Atomically replace all links for a file.
 ///
 /// Deletes existing links for the `source_file_id`, then inserts the new set.
+/// When the schema is at v15+, resolves `target_file_id` for wiki/markdown links
+/// at insert time. Falls back to the v14 INSERT when the column is absent.
 pub fn replace_links(conn: &Connection, source_file_id: &str, links: &[Link]) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
@@ -15,22 +75,40 @@ pub fn replace_links(conn: &Connection, source_file_id: &str, links: &[Link]) ->
         [source_file_id],
     )?;
 
-    let mut stmt = tx.prepare_cached(
-        "INSERT INTO links (link_id, source_file_id, target_path, link_text, link_type)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
+    let with_target_file_id = has_target_file_id_column(&tx);
 
-    for link in links {
-        stmt.execute(rusqlite::params![
-            Ulid::new().to_string(),
-            source_file_id,
-            link.target,
-            link.link_text,
-            link.link_type.as_str(),
-        ])?;
+    if with_target_file_id {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_text, link_type, target_file_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
+        for link in links {
+            let target_file_id = resolve_target_file_id(&tx, &link.target, link.link_type.as_str());
+            stmt.execute(rusqlite::params![
+                Ulid::new().to_string(),
+                source_file_id,
+                link.target,
+                link.link_text,
+                link.link_type.as_str(),
+                target_file_id,
+            ])?;
+        }
+    } else {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_text, link_type)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for link in links {
+            stmt.execute(rusqlite::params![
+                Ulid::new().to_string(),
+                source_file_id,
+                link.target,
+                link.link_text,
+                link.link_type.as_str(),
+            ])?;
+        }
     }
 
-    drop(stmt);
     tx.commit()?;
     Ok(())
 }

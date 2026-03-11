@@ -72,8 +72,7 @@ struct GoldenRankingCandidate {
     sim_vector: f64,
     bm25: f64,
     age_seconds: f64,
-    backlink_count: usize,
-    max_backlinks: usize,
+    pagerank_score: f64,
     importance: f64,
 }
 
@@ -257,8 +256,7 @@ fn make_ranking_candidates() -> Vec<GoldenRankingCandidate> {
             sim_vector: 0.95,
             bm25: 0.10,
             age_seconds: 3600.0,
-            backlink_count: 1,
-            max_backlinks: 10,
+            pagerank_score: 0.289,
             importance: 0.5,
         },
         GoldenRankingCandidate {
@@ -266,8 +264,7 @@ fn make_ranking_candidates() -> Vec<GoldenRankingCandidate> {
             sim_vector: 0.10,
             bm25: 0.95,
             age_seconds: 86400.0,
-            backlink_count: 2,
-            max_backlinks: 10,
+            pagerank_score: 0.458,
             importance: 0.5,
         },
         GoldenRankingCandidate {
@@ -275,8 +272,7 @@ fn make_ranking_candidates() -> Vec<GoldenRankingCandidate> {
             sim_vector: 0.40,
             bm25: 0.30,
             age_seconds: 172800.0,
-            backlink_count: 10,
-            max_backlinks: 10,
+            pagerank_score: 1.0,
             importance: 0.5,
         },
         GoldenRankingCandidate {
@@ -284,8 +280,7 @@ fn make_ranking_candidates() -> Vec<GoldenRankingCandidate> {
             sim_vector: 0.20,
             bm25: 0.20,
             age_seconds: 60.0,
-            backlink_count: 0,
-            max_backlinks: 10,
+            pagerank_score: 0.0,
             importance: 2.0,
         },
     ]
@@ -299,8 +294,7 @@ fn golden_to_signals(candidates: &[GoldenRankingCandidate]) -> Vec<CandidateSign
             sim_vector: c.sim_vector,
             bm25: c.bm25,
             age_seconds: c.age_seconds,
-            backlink_count: c.backlink_count,
-            max_backlinks: c.max_backlinks,
+            pagerank_score: c.pagerank_score,
             tags: vec![],
             importance: c.importance,
             file_path: format!("/notes/{}.md", c.chunk_id),
