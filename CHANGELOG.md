@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-03-11
+
+### Bug Fixes
+
+- Collapse nested if statements to satisfy clippy collapsible_if
+- Make assignee filter case-insensitive (#51)
+
+### Documentation
+
+- Document task capsule embedding in AGENTS.md
+
+### Features
+
+- Federated search across multiple brain projects (#54)
+- Add backfill-tasks CLI command and document task vector search
+- Hook capsule embedding into task_apply_event
+- Add kind field to MemoryStub and search_minimal responses
+- Embed outcome capsule after task close
+- Add capsule module and SQLite task chunk storage
+- Add writable Store to McpContext for task capsule embedding
+- Cross-brain task creation (CLI + MCP) (#53)
+- Add cross-brain task references (#52)
+- Unified daemon watches all registered brain projects (#50)
+- Add records domain with event-sourced storage (#49)
+
+### Refactoring
+
+- Fix too_many_arguments clippy warning on embed_task_capsule
+
+### Testing
+
+- Add integration tests for task capsule embedding and search
+
 ## [0.2.0] - 2026-03-10
 
 ### Bug Fixes
