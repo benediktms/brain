@@ -26,6 +26,14 @@ struct ValidatedEvent {
     payload: Value,
 }
 
+/// The result of `execute_inner` — the tool result plus metadata for capsule embedding.
+struct ExecuteResult {
+    result: ToolCallResult,
+    /// Full task ID if the event succeeded (for capsule embedding).
+    task_id: Option<String>,
+    event_type: Option<EventType>,
+}
+
 /// Validate all static (non-I/O) constraints on the incoming parameters.
 ///
 /// Checks:
@@ -181,19 +189,80 @@ fn default_actor() -> String {
     "mcp".into()
 }
 
+/// Whether this event type should trigger a capsule re-embed.
+fn should_embed_capsule(event_type: &EventType) -> bool {
+    matches!(
+        event_type,
+        EventType::TaskCreated
+            | EventType::TaskUpdated
+            | EventType::StatusChanged
+            | EventType::LabelAdded
+            | EventType::LabelRemoved
+    )
+}
+
+/// Fetch task state, build capsule, embed into LanceDB + SQLite.
+async fn embed_capsule_for_task(ctx: &McpContext, task_id: &str) -> crate::error::Result<()> {
+    let (store, embedder) = match (ctx.writable_store.as_ref(), ctx.embedder.as_ref()) {
+        (Some(s), Some(e)) => (s, e),
+        _ => return Ok(()), // No store/embedder — skip silently
+    };
+
+    // Fetch current task state
+    let task = match ctx.tasks.get_task(task_id)? {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+
+    let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
+
+    let capsule_text = crate::tasks::capsule::build_task_capsule(
+        &task.title,
+        task.description.as_deref(),
+        &labels,
+        task.priority,
+    );
+
+    let file_id = format!("task:{task_id}");
+
+    // 1. Embed into LanceDB (vector search)
+    let embeddings =
+        crate::embedder::embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
+    store
+        .upsert_chunks(&file_id, &task.title, &[(0, &capsule_text)], &embeddings)
+        .await?;
+
+    // 2. Store in SQLite (BM25/FTS)
+    crate::tasks::capsule::store_task_capsule(&ctx.db, &file_id, &capsule_text)?;
+
+    Ok(())
+}
+
 pub(super) struct TaskApplyEvent;
 
 impl TaskApplyEvent {
-    fn execute(&self, raw_params: Value, ctx: &McpContext) -> ToolCallResult {
+    fn execute_inner(&self, raw_params: Value, ctx: &McpContext) -> ExecuteResult {
         let params: Params = match serde_json::from_value(raw_params) {
             Ok(p) => p,
-            Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            Err(e) => {
+                return ExecuteResult {
+                    result: ToolCallResult::error(format!("Invalid parameters: {e}")),
+                    task_id: None,
+                    event_type: None,
+                };
+            }
         };
 
         // Pure validation — no DB access
         let validated = match parse_and_validate_event(&params) {
             Ok(v) => v,
-            Err(msg) => return ToolCallResult::error(msg),
+            Err(msg) => {
+                return ExecuteResult {
+                    result: ToolCallResult::error(msg),
+                    task_id: None,
+                    event_type: None,
+                };
+            }
         };
 
         let mut warnings: Vec<Warning> = Vec::new();
@@ -210,9 +279,13 @@ impl TaskApplyEvent {
                     match ctx.tasks.resolve_task_id(id) {
                         Ok(resolved) => resolved,
                         Err(e) => {
-                            return ToolCallResult::error(format!(
-                                "Failed to resolve task_id: {e}"
-                            ));
+                            return ExecuteResult {
+                                result: ToolCallResult::error(format!(
+                                    "Failed to resolve task_id: {e}"
+                                )),
+                                task_id: None,
+                                event_type: None,
+                            };
                         }
                     }
                 }
@@ -222,16 +295,24 @@ impl TaskApplyEvent {
                     let prefix = match ctx.tasks.get_project_prefix() {
                         Ok(p) => p,
                         Err(e) => {
-                            return ToolCallResult::error(format!(
-                                "Failed to get project prefix: {e}"
-                            ));
+                            return ExecuteResult {
+                                result: ToolCallResult::error(format!(
+                                    "Failed to get project prefix: {e}"
+                                )),
+                                task_id: None,
+                                event_type: None,
+                            };
                         }
                     };
                     new_task_id(&prefix)
                 } else {
-                    return ToolCallResult::error(
-                        "Missing required parameter: task_id (required for all event types except task_created)",
-                    );
+                    return ExecuteResult {
+                        result: ToolCallResult::error(
+                            "Missing required parameter: task_id (required for all event types except task_created)",
+                        ),
+                        task_id: None,
+                        event_type: None,
+                    };
                 }
             }
         };
@@ -243,9 +324,13 @@ impl TaskApplyEvent {
             match ctx.tasks.resolve_task_id(dep_id) {
                 Ok(resolved) => payload["depends_on_task_id"] = json!(resolved),
                 Err(e) => {
-                    return ToolCallResult::error(format!(
-                        "Failed to resolve depends_on_task_id: {e}"
-                    ));
+                    return ExecuteResult {
+                        result: ToolCallResult::error(format!(
+                            "Failed to resolve depends_on_task_id: {e}"
+                        )),
+                        task_id: None,
+                        event_type: None,
+                    };
                 }
             }
         }
@@ -255,7 +340,13 @@ impl TaskApplyEvent {
             match ctx.tasks.resolve_task_id(parent_id) {
                 Ok(resolved) => payload["parent_task_id"] = json!(resolved),
                 Err(e) => {
-                    return ToolCallResult::error(format!("Failed to resolve parent_task_id: {e}"));
+                    return ExecuteResult {
+                        result: ToolCallResult::error(format!(
+                            "Failed to resolve parent_task_id: {e}"
+                        )),
+                        task_id: None,
+                        event_type: None,
+                    };
                 }
             }
         }
@@ -265,7 +356,13 @@ impl TaskApplyEvent {
             match serde_json::from_value::<TaskCreatedPayload>(payload) {
                 Ok(typed) => serde_json::to_value(typed).unwrap(),
                 Err(e) => {
-                    return ToolCallResult::error(format!("Invalid task_created payload: {e}"));
+                    return ExecuteResult {
+                        result: ToolCallResult::error(format!(
+                            "Invalid task_created payload: {e}"
+                        )),
+                        task_id: None,
+                        event_type: None,
+                    };
                 }
             }
         } else {
@@ -281,7 +378,11 @@ impl TaskApplyEvent {
 
         // Append (validates + writes JSONL + applies projection)
         if let Err(e) = ctx.tasks.append(&event) {
-            return ToolCallResult::error(format!("Task event failed: {e}"));
+            return ExecuteResult {
+                result: ToolCallResult::error(format!("Task event failed: {e}")),
+                task_id: None,
+                event_type: None,
+            };
         }
 
         // Fetch resulting task state
@@ -338,7 +439,12 @@ impl TaskApplyEvent {
         });
 
         inject_warnings(&mut response, warnings);
-        json_response(&response)
+
+        ExecuteResult {
+            result: json_response(&response),
+            task_id: Some(task_id),
+            event_type: Some(event_type),
+        }
     }
 }
 
@@ -360,7 +466,20 @@ impl McpTool for TaskApplyEvent {
         params: Value,
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
-        Box::pin(std::future::ready(self.execute(params, ctx)))
+        Box::pin(async move {
+            let exec = self.execute_inner(params, ctx);
+
+            // Best-effort capsule embedding for relevant events
+            if let (Some(task_id), Some(event_type)) = (&exec.task_id, &exec.event_type) {
+                if should_embed_capsule(event_type) {
+                    if let Err(e) = embed_capsule_for_task(ctx, task_id).await {
+                        warn!(error = %e, task_id, "task capsule embedding failed (best-effort)");
+                    }
+                }
+            }
+
+            exec.result
+        })
     }
 }
 
@@ -940,7 +1059,7 @@ mod tests {
     #[test]
     fn unit_no_task_id_for_non_create_passes_validation() {
         // parse_and_validate_event doesn't check for missing task_id on non-create events —
-        // that's an I/O concern (execute() handles it).
+        // that's an I/O concern (execute_inner() handles it).
         let params = make_params("status_changed", None, json!({"new_status": "done"}));
         assert!(
             super::parse_and_validate_event(&params).is_ok(),
