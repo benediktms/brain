@@ -15,6 +15,7 @@ pub mod pipeline;
 pub mod query_pipeline;
 pub mod ranking;
 pub mod records;
+pub mod summarizer;
 pub mod retrieval;
 pub mod scanner;
 pub mod store;
