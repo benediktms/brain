@@ -1,28 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_REPO="BAAI/bge-small-en-v1.5"
-DEFAULT_MODEL_DIR="${BRAIN_HOME:-$HOME/.brain}/models/bge-small-en-v1.5"
-MODEL_DIR="${BRAIN_MODEL_DIR:-$DEFAULT_MODEL_DIR}"
+BRAIN_HOME="${BRAIN_HOME:-$HOME/.brain}"
 
-echo "==> Setting up BGE-small-en-v1.5 model"
+# ── Model definitions ─────────────────────────────────────────────────────
+# Each model: repo, local dir override env var, default subdir, required files
+declare -A MODELS=(
+    [bge-small]="BAAI/bge-small-en-v1.5"
+    [flan-t5-small]="google/flan-t5-small"
+)
 
-# Check if model is already downloaded
-if [[ -f "$MODEL_DIR/config.json" && -f "$MODEL_DIR/tokenizer.json" && -f "$MODEL_DIR/model.safetensors" ]]; then
-    echo "Model already downloaded at $MODEL_DIR"
-    exit 0
-fi
+declare -A MODEL_ENV=(
+    [bge-small]="BRAIN_MODEL_DIR"
+    [flan-t5-small]="BRAIN_SUMMARIZER_MODEL_DIR"
+)
 
-# Resolve the HF CLI command (brew installs as 'hf', pipx as 'huggingface-cli')
-HF_CMD=""
-if command -v hf &>/dev/null; then
-    HF_CMD="hf"
-elif command -v huggingface-cli &>/dev/null; then
-    HF_CMD="huggingface-cli"
-fi
+declare -A MODEL_DIRS=(
+    [bge-small]="$BRAIN_HOME/models/bge-small-en-v1.5"
+    [flan-t5-small]="$BRAIN_HOME/models/flan-t5-small"
+)
 
-# Install if not available
-if [[ -z "$HF_CMD" ]]; then
+MODEL_FILES="config.json tokenizer.json model.safetensors"
+
+# ── HuggingFace CLI resolution ────────────────────────────────────────────
+resolve_hf_cli() {
+    if command -v hf &>/dev/null; then
+        echo "hf"
+    elif command -v huggingface-cli &>/dev/null; then
+        echo "huggingface-cli"
+    else
+        echo ""
+    fi
+}
+
+install_hf_cli() {
     echo "==> HuggingFace CLI not found, installing..."
     if [[ "$(uname -s)" == "Darwin" ]]; then
         if ! command -v brew &>/dev/null; then
@@ -30,28 +41,76 @@ if [[ -z "$HF_CMD" ]]; then
             exit 1
         fi
         brew install huggingface-cli
-        HF_CMD="hf"
+        echo "hf"
     else
-        # Linux: fall back to pipx
         if ! command -v pipx &>/dev/null; then
             echo "Error: pipx is required on Linux. Install with: sudo apt install pipx"
             exit 1
         fi
         pipx install huggingface-hub
-        HF_CMD="huggingface-cli"
+        echo "huggingface-cli"
     fi
+}
+
+# ── Download a single model ───────────────────────────────────────────────
+download_model() {
+    local name="$1"
+    local repo="${MODELS[$name]}"
+    local env_var="${MODEL_ENV[$name]}"
+    local default_dir="${MODEL_DIRS[$name]}"
+    local model_dir="${!env_var:-$default_dir}"
+
+    echo "==> Setting up $name ($repo)"
+
+    # Check if already downloaded
+    local all_present=true
+    for f in $MODEL_FILES; do
+        if [[ ! -f "$model_dir/$f" ]]; then
+            all_present=false
+            break
+        fi
+    done
+
+    if [[ "$all_present" == "true" ]]; then
+        echo "    Already downloaded at $model_dir"
+        return 0
+    fi
+
+    # Download
+    echo "    Downloading to $model_dir"
+    mkdir -p "$model_dir"
+    "$HF_CMD" download "$repo" $MODEL_FILES --local-dir "$model_dir"
+
+    if command -v b3sum &>/dev/null; then
+        echo "    BLAKE3 checksums:"
+        for f in $MODEL_FILES; do
+            b3sum "$model_dir/$f"
+        done
+    fi
+
+    echo "    Ready at $model_dir"
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────
+
+# Parse args: specific models or all
+REQUESTED=("$@")
+if [[ ${#REQUESTED[@]} -eq 0 ]]; then
+    REQUESTED=("bge-small" "flan-t5-small")
 fi
 
-# Download model
-echo "==> Downloading $MODEL_REPO to $MODEL_DIR"
-mkdir -p "$MODEL_DIR"
-"$HF_CMD" download "$MODEL_REPO" \
-    config.json tokenizer.json model.safetensors \
-    --local-dir "$MODEL_DIR"
-
-if command -v b3sum &>/dev/null; then
-    echo "==> BLAKE3 checksums:"
-    b3sum "$MODEL_DIR"/config.json "$MODEL_DIR"/tokenizer.json "$MODEL_DIR"/model.safetensors
+# Resolve HF CLI
+HF_CMD=$(resolve_hf_cli)
+if [[ -z "$HF_CMD" ]]; then
+    HF_CMD=$(install_hf_cli)
 fi
 
-echo "==> Model ready at $MODEL_DIR"
+for model in "${REQUESTED[@]}"; do
+    if [[ -z "${MODELS[$model]+x}" ]]; then
+        echo "Error: unknown model '$model'. Available: ${!MODELS[*]}"
+        exit 1
+    fi
+    download_model "$model"
+done
+
+echo "==> All models ready."
