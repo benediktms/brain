@@ -2,10 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use brain_lib::config::{list_brain_keys, load_brain_toml, open_remote_search_context};
 use brain_lib::embedder::{Embed, Embedder};
 use brain_lib::metrics::Metrics;
 use brain_lib::prelude::*;
-use brain_lib::query_pipeline::QueryPipeline;
+use brain_lib::query_pipeline::{FederatedPipeline, QueryPipeline};
 use brain_lib::ranking::resolve_intent;
 use brain_lib::retrieval::SearchResult;
 
@@ -19,6 +20,8 @@ pub struct QueryParams {
     pub model_dir: PathBuf,
     pub db_path: PathBuf,
     pub sqlite_path: PathBuf,
+    /// Brain names/IDs to search. Empty = local brain only. "all" = all registered brains.
+    pub brains: Vec<String>,
 }
 
 /// Format a `SearchResult` into the human-readable CLI output string.
@@ -42,10 +45,19 @@ pub fn format_search_results(result: &SearchResult, intent: &str, budget: usize)
             stub.hybrid_score
         ));
         if !stub.heading_path.is_empty() {
-            output.push_str(&format!(
-                "  file: {} | {}\n",
-                stub.file_path, stub.heading_path
-            ));
+            if let Some(ref brain) = stub.brain_name {
+                output.push_str(&format!(
+                    "  file: [{}] {} | {}\n",
+                    brain, stub.file_path, stub.heading_path
+                ));
+            } else {
+                output.push_str(&format!(
+                    "  file: {} | {}\n",
+                    stub.file_path, stub.heading_path
+                ));
+            }
+        } else if let Some(ref brain) = stub.brain_name {
+            output.push_str(&format!("  file: [{}] {}\n", brain, stub.file_path));
         } else {
             output.push_str(&format!("  file: {}\n", stub.file_path));
         }
@@ -112,14 +124,87 @@ pub async fn run_with_pipeline(
 pub async fn run(params: QueryParams) -> Result<()> {
     let embedder = Embedder::load(&params.model_dir)?;
     let embedder_arc: Arc<dyn Embed> = Arc::new(embedder);
-    let store = Store::open_or_create(&params.db_path).await?;
-    let store_reader = brain_lib::store::StoreReader::from_store(&store);
-    let db = brain_lib::db::Db::open(&params.sqlite_path)?;
-
     let metrics = Arc::new(Metrics::new());
-    let pipeline = QueryPipeline::new(&db, &store_reader, &embedder_arc, &metrics);
 
-    let output = run_with_pipeline(&params, &pipeline).await?;
+    if params.brains.is_empty() {
+        // Single-brain path (backward compatible).
+        let store = Store::open_or_create(&params.db_path).await?;
+        let store_reader = brain_lib::store::StoreReader::from_store(&store);
+        let db = brain_lib::db::Db::open(&params.sqlite_path)?;
+        let pipeline = QueryPipeline::new(&db, &store_reader, &embedder_arc, &metrics);
+        let output = run_with_pipeline(&params, &pipeline).await?;
+        print!("{output}");
+        return Ok(());
+    }
+
+    // Federated path.
+    let brain_home = brain_lib::config::brain_home()
+        .map_err(|e| anyhow::anyhow!("cannot determine brain home: {e}"))?;
+
+    // Determine which brain names to search.
+    let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
+        list_brain_keys(&brain_home)?
+            .into_iter()
+            .map(|(name, _id)| name)
+            .collect()
+    } else {
+        params.brains.clone()
+    };
+
+    // Determine the local brain name from cwd brain.toml.
+    let local_brain_name = {
+        let cwd = std::env::current_dir()?;
+        brain_lib::config::find_brain_root(&cwd)
+            .and_then(|root| {
+                load_brain_toml(&root.join(".brain"))
+                    .ok()
+                    .map(|t| t.name)
+            })
+            .unwrap_or_else(|| "local".to_string())
+    };
+
+    // Open local brain stores.
+    let local_store = Store::open_or_create(&params.db_path).await?;
+    let local_store_reader = brain_lib::store::StoreReader::from_store(&local_store);
+    let local_db = brain_lib::db::Db::open(&params.sqlite_path)?;
+
+    // Open remote search contexts for all requested brains that are not the local brain.
+    let mut remotes = Vec::new();
+    for key in &brain_keys {
+        if key == &local_brain_name {
+            // Local brain is already included via local_db / local_store_reader.
+            continue;
+        }
+        match open_remote_search_context(&brain_home, key, &params.model_dir, &embedder_arc)
+            .await?
+        {
+            Some(ctx) => remotes.push(ctx),
+            None => {
+                eprintln!("warning: brain '{key}' not found in registry, skipping");
+            }
+        }
+    }
+
+    let federated = FederatedPipeline {
+        local_db: &local_db,
+        local_store: &local_store_reader,
+        local_brain_name: local_brain_name.clone(),
+        remotes,
+        embedder: &embedder_arc,
+        metrics: &metrics,
+    };
+
+    let search_result = federated
+        .search(
+            &params.query,
+            &params.intent,
+            params.budget,
+            params.top_k,
+            &[],
+        )
+        .await?;
+
+    let output = format_search_results(&search_result, &params.intent, params.budget);
     print!("{output}");
     Ok(())
 }
@@ -128,6 +213,8 @@ pub async fn run(params: QueryParams) -> Result<()> {
 mod tests {
     use super::*;
     use brain_lib::retrieval::{MemoryStub, SearchResult};
+    use clap::Parser;
+    use crate::cli::Cli;
 
     fn make_stub(rank: usize, score: f64, file: &str, title: &str) -> MemoryStub {
         MemoryStub {
@@ -210,5 +297,83 @@ mod tests {
         };
         let output = format_search_results(&result, "lookup", 500);
         assert!(output.contains("This is the summary."), "got: {output}");
+    }
+
+    #[test]
+    fn format_result_with_brain_name() {
+        let mut stub = make_stub(1, 0.85, "notes/remote.md", "Remote Note");
+        stub.brain_name = Some("work".to_string());
+        let result = SearchResult {
+            budget_tokens: 500,
+            used_tokens_est: 10,
+            num_results: 1,
+            total_available: 1,
+            results: vec![stub],
+            fusion_confidence: None,
+        };
+        let output = format_search_results(&result, "lookup", 500);
+        assert!(output.contains("[work] notes/remote.md"), "got: {output}");
+    }
+
+    #[test]
+    fn format_result_with_brain_name_and_heading() {
+        let mut stub = make_stub(1, 0.85, "notes/remote.md", "Remote Note");
+        stub.brain_name = Some("personal".to_string());
+        stub.heading_path = "## Section".to_string();
+        let result = SearchResult {
+            budget_tokens: 500,
+            used_tokens_est: 10,
+            num_results: 1,
+            total_available: 1,
+            results: vec![stub],
+            fusion_confidence: None,
+        };
+        let output = format_search_results(&result, "lookup", 500);
+        assert!(
+            output.contains("[personal] notes/remote.md | ## Section"),
+            "got: {output}"
+        );
+    }
+
+    #[test]
+    fn cli_parse_query_no_brain_flag() {
+        let cli = Cli::try_parse_from(["brain", "query", "hello"]).unwrap();
+        if let crate::cli::Command::Query { brains, .. } = cli.command {
+            assert!(brains.is_empty());
+        } else {
+            panic!("expected Query command");
+        }
+    }
+
+    #[test]
+    fn cli_parse_query_single_brain_flag() {
+        let cli = Cli::try_parse_from(["brain", "query", "hello", "--brain", "work"]).unwrap();
+        if let crate::cli::Command::Query { brains, .. } = cli.command {
+            assert_eq!(brains, vec!["work"]);
+        } else {
+            panic!("expected Query command");
+        }
+    }
+
+    #[test]
+    fn cli_parse_query_multiple_brain_flags() {
+        let cli =
+            Cli::try_parse_from(["brain", "query", "hello", "--brain", "work", "--brain", "personal"])
+                .unwrap();
+        if let crate::cli::Command::Query { brains, .. } = cli.command {
+            assert_eq!(brains, vec!["work", "personal"]);
+        } else {
+            panic!("expected Query command");
+        }
+    }
+
+    #[test]
+    fn cli_parse_query_brain_all() {
+        let cli = Cli::try_parse_from(["brain", "query", "hello", "--brain", "all"]).unwrap();
+        if let crate::cli::Command::Query { brains, .. } = cli.command {
+            assert_eq!(brains, vec!["all"]);
+        } else {
+            panic!("expected Query command");
+        }
     }
 }

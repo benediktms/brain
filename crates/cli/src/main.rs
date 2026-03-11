@@ -91,6 +91,7 @@ mod tests {
                 intent,
                 budget,
                 verbose,
+                brains: _,
             } => {
                 assert_eq!(query, "hello");
                 assert_eq!(k, 5);

@@ -187,6 +187,10 @@ pub(crate) enum Command {
         /// Show per-signal score breakdown for each result
         #[arg(short = 'V', long)]
         verbose: bool,
+
+        /// Search across specific brains (repeatable). Use 'all' for all registered brains.
+        #[arg(long = "brain", value_name = "NAME_OR_ID", num_args = 1)]
+        brains: Vec<String>,
     },
 
     /// Watch a directory for changes and re-index incrementally
