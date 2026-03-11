@@ -129,6 +129,16 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 | `tasks.get`             | Get a single task by ID with full details, relationships, comments, labels, and linked notes. |
 | `tasks.list`            | List tasks filtered by status (`all`, `ready`, `blocked`) or fetch specific tasks by ID.      |
 | `tasks.next`            | Return highest-priority ready tasks, sorted by priority or due date.                          |
+| `records.create_artifact` | Create a new artifact record with base64-encoded content in the object store.               |
+| `records.save_snapshot` | Save an opaque state bundle as a snapshot record in the object store.                         |
+| `records.get`           | Get a record by ID with full metadata, tags, and links. Supports prefix resolution.           |
+| `records.list`          | List records with optional filters (kind, status, tag, task\_id).                              |
+| `records.fetch_content` | Fetch the raw content of a record as base64-encoded data.                                     |
+| `records.archive`       | Archive a record (metadata-only operation, payload preserved).                                |
+| `records.tag_add`       | Add a tag to a record. Idempotent.                                                            |
+| `records.tag_remove`    | Remove a tag from a record. Idempotent.                                                       |
+| `records.link_add`      | Link a record to a task or note chunk.                                                        |
+| `records.link_remove`   | Remove a link from a record to a task or note chunk.                                          |
 | `status`                | Get runtime health metrics: latency percentiles, token usage, queue depth, stuck files.       |
 
 ### Progressive Retrieval Pattern
@@ -247,10 +257,12 @@ just clean-db     # Clean database (forces full reindex)
 
 ```
 brain/
-  brain_lib/      # Core library: indexing, retrieval, embedding, MCP, tasks
+  brain_lib/      # Core library: indexing, retrieval, embedding, MCP, tasks, records
   cli/            # Thin binary: wires CLI commands to library functions
   docs/
     ARCHITECTURE.md
+    RECORDS.md
+    OPERATIONS.md
     RESEARCH.md
   justfile
 ```
@@ -270,6 +282,7 @@ just changelog
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Full technical architecture, sequence diagrams, storage design, mathematical foundations
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) — Upgrading, backup, recovery, troubleshooting, performance tuning, model management
+- [docs/RECORDS.md](docs/RECORDS.md) — Records domain: artifacts, snapshots, content-addressed storage, CLI/MCP reference
 - [docs/RESEARCH.md](docs/RESEARCH.md) — Research survey of agentic memory systems, retrieval design, token budget design
 - [MemGPT](https://arxiv.org/abs/2310.08560) — Virtual context management for long-running agents (Packer et al., 2023)
 - [Generative Agents](https://arxiv.org/abs/2304.03442) — Recency/relevance/importance scoring with reflective synthesis (Park et al., 2023)
