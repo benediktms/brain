@@ -50,9 +50,8 @@ fn backfill_target_file_ids(conn: &Connection) -> Result<()> {
         rows.filter_map(|r| r.ok()).collect()
     };
 
-    let mut update = conn.prepare_cached(
-        "UPDATE links SET target_file_id = ?1 WHERE link_id = ?2",
-    )?;
+    let mut update =
+        conn.prepare_cached("UPDATE links SET target_file_id = ?1 WHERE link_id = ?2")?;
 
     for (link_id, target_path, link_type) in &links {
         let file_id = resolve_target_file_id(conn, target_path, link_type);
@@ -202,7 +201,11 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(wiki_target, Some("f2".to_string()), "wiki link should resolve to f2");
+        assert_eq!(
+            wiki_target,
+            Some("f2".to_string()),
+            "wiki link should resolve to f2"
+        );
 
         // Markdown relative "simple.md" → /vault/notes/simple.md → f3
         let md_target: Option<String> = conn
@@ -212,7 +215,11 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(md_target, Some("f3".to_string()), "markdown link should resolve to f3");
+        assert_eq!(
+            md_target,
+            Some("f3".to_string()),
+            "markdown link should resolve to f3"
+        );
 
         // External link remains NULL
         let ext_target: Option<String> = conn
@@ -222,7 +229,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(ext_target.is_none(), "external link should have NULL target_file_id");
+        assert!(
+            ext_target.is_none(),
+            "external link should have NULL target_file_id"
+        );
     }
 
     #[test]
@@ -255,7 +265,11 @@ mod tests {
             )
             .unwrap();
         // Should resolve to f2 (/vault/simple.md), not fail or match a phantom .md.md
-        assert_eq!(target, Some("f2".to_string()), "simple.md should resolve without double extension");
+        assert_eq!(
+            target,
+            Some("f2".to_string()),
+            "simple.md should resolve without double extension"
+        );
     }
 
     #[test]
@@ -335,6 +349,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(target.is_none(), "unresolvable wiki link should remain NULL");
+        assert!(
+            target.is_none(),
+            "unresolvable wiki link should remain NULL"
+        );
     }
 }

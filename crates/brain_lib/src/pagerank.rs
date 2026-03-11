@@ -32,7 +32,10 @@ pub fn compute_pagerank(conn: &Connection) -> Result<HashMap<String, f64>> {
         let (source, target) = row?;
         nodes.insert(source.clone());
         nodes.insert(target.clone());
-        out_edges.entry(source.clone()).or_default().push(target.clone());
+        out_edges
+            .entry(source.clone())
+            .or_default()
+            .push(target.clone());
         in_edges.entry(target).or_default().push(source);
     }
 
@@ -53,7 +56,8 @@ pub fn compute_pagerank(conn: &Connection) -> Result<HashMap<String, f64>> {
     let base = (1.0 - DAMPING) / n_f;
 
     // Initialize scores uniformly
-    let mut scores: HashMap<String, f64> = node_vec.iter().map(|id| (id.clone(), 1.0 / n_f)).collect();
+    let mut scores: HashMap<String, f64> =
+        node_vec.iter().map(|id| (id.clone(), 1.0 / n_f)).collect();
 
     for _ in 0..MAX_ITER {
         let mut new_scores: HashMap<String, f64> = HashMap::with_capacity(n);
@@ -148,9 +152,8 @@ pub fn compute_and_store_pagerank(conn: &Connection) -> Result<()> {
         }
 
         // Files not in the scores map get the median (defensive)
-        let mut missing_stmt = tx.prepare(
-            "UPDATE files SET pagerank_score = ?1 WHERE pagerank_score IS NULL",
-        )?;
+        let mut missing_stmt =
+            tx.prepare("UPDATE files SET pagerank_score = ?1 WHERE pagerank_score IS NULL")?;
         missing_stmt.execute(rusqlite::params![median])?;
     }
     tx.commit()?;
