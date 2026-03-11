@@ -5,8 +5,8 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent, RecordEventType,
-    RecordUpdatedPayload, TagPayload, read_all_events,
+    LinkPayload, PayloadEvictedPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+    RecordEventType, RecordUpdatedPayload, RetentionClassSetPayload, TagPayload, read_all_events,
 };
 
 /// Apply a single event to the SQLite records projection tables.
@@ -25,8 +25,10 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
                 "INSERT INTO records
                     (record_id, title, kind, status, description,
                      content_hash, content_size, media_type,
-                     task_id, actor, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                     task_id, actor, created_at, updated_at,
+                     retention_class, pinned, payload_available, content_encoding, original_size)
+                 VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                         ?12, 0, 1, 'identity', ?13)",
                 rusqlite::params![
                     event.record_id,
                     p.title,
@@ -39,6 +41,8 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
                     event.actor,
                     event.timestamp,
                     event.timestamp,
+                    p.retention_class,
+                    p.content_ref.size as i64,
                 ],
             )?;
 
@@ -151,6 +155,44 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
                    AND (task_id IS ?2 OR task_id = ?2)
                    AND (chunk_id IS ?3 OR chunk_id = ?3)",
                 rusqlite::params![event.record_id, p.task_id, p.chunk_id],
+            )?;
+        }
+
+        RecordEventType::PayloadEvicted => {
+            let _p: PayloadEvictedPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::RecordEvent(format!("bad PayloadEvicted payload: {e}"))
+                })?;
+
+            conn.execute(
+                "UPDATE records SET payload_available = 0, updated_at = ?1 WHERE record_id = ?2",
+                rusqlite::params![event.timestamp, event.record_id],
+            )?;
+        }
+
+        RecordEventType::RetentionClassSet => {
+            let p: RetentionClassSetPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::RecordEvent(format!("bad RetentionClassSet payload: {e}"))
+                })?;
+
+            conn.execute(
+                "UPDATE records SET retention_class = ?1, updated_at = ?2 WHERE record_id = ?3",
+                rusqlite::params![p.retention_class, event.timestamp, event.record_id],
+            )?;
+        }
+
+        RecordEventType::RecordPinned => {
+            conn.execute(
+                "UPDATE records SET pinned = 1, updated_at = ?1 WHERE record_id = ?2",
+                rusqlite::params![event.timestamp, event.record_id],
+            )?;
+        }
+
+        RecordEventType::RecordUnpinned => {
+            conn.execute(
+                "UPDATE records SET pinned = 0, updated_at = ?1 WHERE record_id = ?2",
+                rusqlite::params![event.timestamp, event.record_id],
             )?;
         }
     }
@@ -580,5 +622,198 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tag_count, 1);
+    }
+
+    #[test]
+    fn test_apply_payload_evicted() {
+        use crate::records::events::PayloadEvictedPayload;
+
+        let conn = setup();
+        apply_event(&conn, &make_created_event("r1", "T", "report")).unwrap();
+
+        // Verify default: payload_available = 1
+        let avail: i32 = conn
+            .query_row(
+                "SELECT payload_available FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(avail, 1);
+
+        let evict = RecordEvent::from_payload(
+            "r1",
+            "gc-agent",
+            PayloadEvictedPayload {
+                content_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+                reason: "gc".to_string(),
+            },
+        );
+        apply_event(&conn, &evict).unwrap();
+
+        let avail: i32 = conn
+            .query_row(
+                "SELECT payload_available FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(avail, 0);
+    }
+
+    #[test]
+    fn test_apply_retention_class_set() {
+        use crate::records::events::RetentionClassSetPayload;
+
+        let conn = setup();
+        apply_event(&conn, &make_created_event("r1", "T", "report")).unwrap();
+
+        // Verify default: retention_class = NULL
+        let rc: Option<String> = conn
+            .query_row(
+                "SELECT retention_class FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(rc.is_none());
+
+        let set_rc = RecordEvent::from_payload(
+            "r1",
+            "agent",
+            RetentionClassSetPayload {
+                retention_class: Some("permanent".to_string()),
+            },
+        );
+        apply_event(&conn, &set_rc).unwrap();
+
+        let rc: Option<String> = conn
+            .query_row(
+                "SELECT retention_class FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rc.as_deref(), Some("permanent"));
+
+        // Clear it back to None
+        let clear_rc = RecordEvent::from_payload(
+            "r1",
+            "agent",
+            RetentionClassSetPayload {
+                retention_class: None,
+            },
+        );
+        apply_event(&conn, &clear_rc).unwrap();
+
+        let rc: Option<String> = conn
+            .query_row(
+                "SELECT retention_class FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(rc.is_none());
+    }
+
+    #[test]
+    fn test_apply_record_pinned_unpinned() {
+        use crate::records::events::PinPayload;
+
+        let conn = setup();
+        apply_event(&conn, &make_created_event("r1", "T", "report")).unwrap();
+
+        // Default: pinned = 0
+        let pinned: i32 = conn
+            .query_row(
+                "SELECT pinned FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pinned, 0);
+
+        // Pin it
+        apply_event(
+            &conn,
+            &RecordEvent::new("r1", "agent", RecordEventType::RecordPinned, &PinPayload {}),
+        )
+        .unwrap();
+
+        let pinned: i32 = conn
+            .query_row(
+                "SELECT pinned FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pinned, 1);
+
+        // Unpin it
+        apply_event(
+            &conn,
+            &RecordEvent::new("r1", "agent", RecordEventType::RecordUnpinned, &PinPayload {}),
+        )
+        .unwrap();
+
+        let pinned: i32 = conn
+            .query_row(
+                "SELECT pinned FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pinned, 0);
+    }
+
+    #[test]
+    fn test_record_created_sets_new_columns() {
+        use crate::records::events::RecordCreatedPayload;
+
+        let conn = setup();
+
+        let ev = RecordEvent::from_payload(
+            "r1",
+            "agent",
+            RecordCreatedPayload {
+                title: "T".to_string(),
+                kind: "report".to_string(),
+                content_ref: ContentRefPayload {
+                    hash: "abc123".to_string(),
+                    size: 512,
+                    media_type: None,
+                },
+                description: None,
+                task_id: None,
+                tags: vec![],
+                scope_type: None,
+                scope_id: None,
+                retention_class: Some("ephemeral".to_string()),
+                producer: None,
+            },
+        );
+        apply_event(&conn, &ev).unwrap();
+
+        let (retention_class, pinned, payload_available, content_encoding, original_size): (
+            Option<String>,
+            i32,
+            i32,
+            String,
+            Option<i64>,
+        ) = conn
+            .query_row(
+                "SELECT retention_class, pinned, payload_available, content_encoding, original_size
+                 FROM records WHERE record_id = 'r1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+
+        assert_eq!(retention_class.as_deref(), Some("ephemeral"));
+        assert_eq!(pinned, 0);
+        assert_eq!(payload_available, 1);
+        assert_eq!(content_encoding, "identity");
+        assert_eq!(original_size, Some(512));
     }
 }

@@ -38,6 +38,10 @@ pub enum RecordEventType {
     TagRemoved,
     LinkAdded,
     LinkRemoved,
+    PayloadEvicted,
+    RetentionClassSet,
+    RecordPinned,
+    RecordUnpinned,
 }
 
 // -- Typed payload structs --
@@ -119,6 +123,23 @@ pub struct LinkPayload {
     pub chunk_id: Option<String>,
 }
 
+/// Payload for `PayloadEvicted` events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayloadEvictedPayload {
+    pub content_hash: String,
+    pub reason: String,
+}
+
+/// Payload for `RetentionClassSet` events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetentionClassSetPayload {
+    pub retention_class: Option<String>,
+}
+
+/// Payload for `RecordPinned` / `RecordUnpinned` events (empty payload).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinPayload {}
+
 // -- EventPayload trait --
 
 /// Maps a typed payload to its unambiguous `RecordEventType`.
@@ -141,6 +162,18 @@ impl RecordEventPayload for RecordUpdatedPayload {
 impl RecordEventPayload for RecordArchivedPayload {
     fn event_type() -> RecordEventType {
         RecordEventType::RecordArchived
+    }
+}
+
+impl RecordEventPayload for PayloadEvictedPayload {
+    fn event_type() -> RecordEventType {
+        RecordEventType::PayloadEvicted
+    }
+}
+
+impl RecordEventPayload for RetentionClassSetPayload {
+    fn event_type() -> RecordEventType {
+        RecordEventType::RetentionClassSet
     }
 }
 
@@ -713,5 +746,107 @@ mod tests {
         for ev in &events {
             assert!(!ev.record_id.is_empty());
         }
+    }
+
+    #[test]
+    fn test_payload_evicted_serde_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        let payload = PayloadEvictedPayload {
+            content_hash: "deadbeef".to_string(),
+            reason: "gc".to_string(),
+        };
+        let ev = RecordEvent::from_payload("r1", "gc-agent", payload);
+        assert_eq!(ev.event_type, RecordEventType::PayloadEvicted);
+
+        append_event(&path, &ev).unwrap();
+        let events = read_all_events(&path).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, RecordEventType::PayloadEvicted);
+
+        let p: PayloadEvictedPayload = serde_json::from_value(events[0].payload.clone()).unwrap();
+        assert_eq!(p.content_hash, "deadbeef");
+        assert_eq!(p.reason, "gc");
+    }
+
+    #[test]
+    fn test_retention_class_set_serde_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        let payload = RetentionClassSetPayload {
+            retention_class: Some("permanent".to_string()),
+        };
+        let ev = RecordEvent::from_payload("r1", "agent", payload);
+        assert_eq!(ev.event_type, RecordEventType::RetentionClassSet);
+
+        append_event(&path, &ev).unwrap();
+        let events = read_all_events(&path).unwrap();
+        let p: RetentionClassSetPayload =
+            serde_json::from_value(events[0].payload.clone()).unwrap();
+        assert_eq!(p.retention_class.as_deref(), Some("permanent"));
+    }
+
+    #[test]
+    fn test_retention_class_set_null_serde() {
+        let payload = RetentionClassSetPayload {
+            retention_class: None,
+        };
+        let ev = RecordEvent::from_payload("r1", "agent", payload);
+        let p: RetentionClassSetPayload = serde_json::from_value(ev.payload).unwrap();
+        assert!(p.retention_class.is_none());
+    }
+
+    #[test]
+    fn test_pin_events_serde_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+
+        for event_type in [RecordEventType::RecordPinned, RecordEventType::RecordUnpinned] {
+            append_event(
+                &path,
+                &RecordEvent::new("r1", "agent", event_type.clone(), &PinPayload {}),
+            )
+            .unwrap();
+        }
+
+        let events = read_all_events(&path).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, RecordEventType::RecordPinned);
+        assert_eq!(events[1].event_type, RecordEventType::RecordUnpinned);
+    }
+
+    #[test]
+    fn test_new_event_type_serialization_format() {
+        let ev = RecordEvent::from_payload(
+            "r1",
+            "agent",
+            PayloadEvictedPayload {
+                content_hash: "abc".to_string(),
+                reason: "test".to_string(),
+            },
+        );
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"event_type\":\"payload_evicted\""));
+
+        let ev2 = RecordEvent::from_payload(
+            "r1",
+            "agent",
+            RetentionClassSetPayload {
+                retention_class: None,
+            },
+        );
+        let json2 = serde_json::to_string(&ev2).unwrap();
+        assert!(json2.contains("\"event_type\":\"retention_class_set\""));
+
+        let ev3 = RecordEvent::new("r1", "agent", RecordEventType::RecordPinned, &PinPayload {});
+        let json3 = serde_json::to_string(&ev3).unwrap();
+        assert!(json3.contains("\"event_type\":\"record_pinned\""));
+
+        let ev4 =
+            RecordEvent::new("r1", "agent", RecordEventType::RecordUnpinned, &PinPayload {});
+        let json4 = serde_json::to_string(&ev4).unwrap();
+        assert!(json4.contains("\"event_type\":\"record_unpinned\""));
     }
 }

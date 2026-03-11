@@ -468,6 +468,20 @@ impl RecordStore {
             Ok(crate::db::meta::get_meta(conn, "project_prefix")?.unwrap_or_else(|| "BRN".to_string()))
         })
     }
+
+    pub fn get_all_content_refs(&self) -> Result<Vec<(String, String, bool)>> {
+        self.db.with_read_conn(queries::get_all_content_refs)
+    }
+
+    pub fn count_payload_refs(
+        &self,
+        content_hash: &str,
+        exclude_record_id: &str,
+    ) -> Result<i64> {
+        self.db.with_read_conn(|conn| {
+            queries::count_payload_refs(conn, content_hash, exclude_record_id)
+        })
+    }
 }
 
 #[cfg(test)]

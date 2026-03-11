@@ -28,6 +28,11 @@ pub struct RecordRow {
     pub actor: String,
     pub created_at: i64,
     pub updated_at: i64,
+    pub retention_class: Option<String>,
+    pub pinned: bool,
+    pub payload_available: bool,
+    pub content_encoding: String,
+    pub original_size: Option<i64>,
 }
 
 /// A row from the record_links projection table.
@@ -52,7 +57,8 @@ pub struct RecordFilter {
 
 const RECORD_COLUMNS: &str =
     "record_id, title, kind, status, description, content_hash, content_size, \
-     media_type, task_id, actor, created_at, updated_at";
+     media_type, task_id, actor, created_at, updated_at, \
+     retention_class, pinned, payload_available, content_encoding, original_size";
 
 fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<RecordRow> {
     Ok(RecordRow {
@@ -68,6 +74,11 @@ fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<RecordRow> {
         actor: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+        retention_class: row.get(12)?,
+        pinned: row.get::<_, i32>(13)? != 0,
+        payload_available: row.get::<_, i32>(14)? != 0,
+        content_encoding: row.get(15)?,
+        original_size: row.get(16)?,
     })
 }
 
@@ -128,7 +139,8 @@ pub fn list_records(conn: &Connection, filter: &RecordFilter) -> Result<Vec<Reco
          ORDER BY r.updated_at DESC, r.record_id ASC {limit_clause}",
         RECORD_COLUMNS_PREFIXED = "record_id, r.title, r.kind, r.status, r.description, \
              r.content_hash, r.content_size, r.media_type, r.task_id, \
-             r.actor, r.created_at, r.updated_at",
+             r.actor, r.created_at, r.updated_at, \
+             r.retention_class, r.pinned, r.payload_available, r.content_encoding, r.original_size",
     );
 
     let mut stmt = conn.prepare(&sql)?;
@@ -301,6 +313,34 @@ pub fn compact_record_ids(conn: &Connection) -> Result<HashMap<String, String>> 
     }
 
     Ok(result)
+}
+
+/// Get all content references (record_id, content_hash, payload_available) for integrity checks.
+pub fn get_all_content_refs(conn: &Connection) -> Result<Vec<(String, String, bool)>> {
+    let mut stmt =
+        conn.prepare("SELECT record_id, content_hash, payload_available FROM records")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i32>(2)? != 0,
+        ))
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+/// Count how many OTHER records reference the same content_hash with payload_available = 1.
+pub fn count_payload_refs(
+    conn: &Connection,
+    content_hash: &str,
+    exclude_record_id: &str,
+) -> Result<i64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM records WHERE content_hash = ?1 AND payload_available = 1 AND record_id != ?2",
+        rusqlite::params![content_hash, exclude_record_id],
+        |row| row.get(0),
+    )?;
+    Ok(count)
 }
 
 // -- Internal helpers --
@@ -718,5 +758,103 @@ mod tests {
             let single = compact_record_id(&conn, id).unwrap();
             assert_eq!(&single, expected, "mismatch for {id}");
         }
+    }
+
+    // -- new column tests --
+
+    #[test]
+    fn test_get_record_new_fields_defaults() {
+        let conn = setup();
+        create_record(&conn, "r1", "Record", "report");
+
+        let row = get_record(&conn, "r1").unwrap().unwrap();
+        assert!(row.retention_class.is_none());
+        assert!(!row.pinned);
+        assert!(row.payload_available);
+        assert_eq!(row.content_encoding, "identity");
+        assert_eq!(row.original_size, Some(42)); // content_ref.size = 42 in create_record
+    }
+
+    #[test]
+    fn test_list_records_returns_new_fields() {
+        let conn = setup();
+        create_record(&conn, "r1", "Record", "report");
+
+        let filter = RecordFilter {
+            kind: None,
+            status: None,
+            tag: None,
+            task_id: None,
+            limit: None,
+        };
+        let rows = list_records(&conn, &filter).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert!(!row.pinned);
+        assert!(row.payload_available);
+        assert_eq!(row.content_encoding, "identity");
+    }
+
+    #[test]
+    fn test_get_all_content_refs() {
+        let conn = setup();
+        create_record(&conn, "r1", "Record A", "report");
+        create_record(&conn, "r2", "Record B", "diff");
+
+        let refs = get_all_content_refs(&conn).unwrap();
+        assert_eq!(refs.len(), 2);
+        // All payload_available should be true by default
+        assert!(refs.iter().all(|(_, _, avail)| *avail));
+        let ids: Vec<&str> = refs.iter().map(|(id, _, _)| id.as_str()).collect();
+        assert!(ids.contains(&"r1"));
+        assert!(ids.contains(&"r2"));
+    }
+
+    #[test]
+    fn test_count_payload_refs() {
+        let conn = setup();
+
+        // Both records share the same content_hash (from create_record helper)
+        create_record(&conn, "r1", "Record A", "report");
+        create_record(&conn, "r2", "Record B", "diff");
+
+        // r1 and r2 share the same hash — excluding r1, r2 still references it
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let count = count_payload_refs(&conn, hash, "r1").unwrap();
+        assert_eq!(count, 1); // r2 references the same hash
+
+        let count2 = count_payload_refs(&conn, hash, "r2").unwrap();
+        assert_eq!(count2, 1); // r1 references it
+
+        // Different hash → 0
+        let count3 = count_payload_refs(&conn, "nonexistent_hash", "r1").unwrap();
+        assert_eq!(count3, 0);
+    }
+
+    #[test]
+    fn test_count_payload_refs_excludes_evicted() {
+        use crate::records::events::{PayloadEvictedPayload, RecordEvent};
+        use crate::records::projections::apply_event;
+
+        let conn = setup();
+        create_record(&conn, "r1", "Record A", "report");
+        create_record(&conn, "r2", "Record B", "report");
+
+        // Evict r2's payload
+        let evict = RecordEvent::from_payload(
+            "r2",
+            "gc",
+            PayloadEvictedPayload {
+                content_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+                reason: "gc".to_string(),
+            },
+        );
+        apply_event(&conn, &evict).unwrap();
+
+        // Now excluding r1, r2's payload_available=0 so it doesn't count
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let count = count_payload_refs(&conn, hash, "r1").unwrap();
+        assert_eq!(count, 0);
     }
 }
