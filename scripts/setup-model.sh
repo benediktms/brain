@@ -4,23 +4,25 @@ set -euo pipefail
 BRAIN_HOME="${BRAIN_HOME:-$HOME/.brain}"
 
 # ── Model definitions ─────────────────────────────────────────────────────
-# Each model: repo, local dir override env var, default subdir, required files
-declare -A MODELS=(
-    [bge-small]="BAAI/bge-small-en-v1.5"
-    [flan-t5-small]="google/flan-t5-small"
-)
-
-declare -A MODEL_ENV=(
-    [bge-small]="BRAIN_MODEL_DIR"
-    [flan-t5-small]="BRAIN_SUMMARIZER_MODEL_DIR"
-)
-
-declare -A MODEL_DIRS=(
-    [bge-small]="$BRAIN_HOME/models/bge-small-en-v1.5"
-    [flan-t5-small]="$BRAIN_HOME/models/flan-t5-small"
-)
+# Parallel arrays (Bash 3 compatible)
+MODEL_NAMES=(   bge-small                    flan-t5-small          )
+MODEL_REPOS=(   "BAAI/bge-small-en-v1.5"     "google/flan-t5-small" )
+MODEL_ENVS=(    "BRAIN_MODEL_DIR"            "BRAIN_SUMMARIZER_MODEL_DIR" )
+MODEL_DEFAULTS=("$BRAIN_HOME/models/bge-small-en-v1.5" "$BRAIN_HOME/models/flan-t5-small")
 
 MODEL_FILES="config.json tokenizer.json model.safetensors"
+
+# Lookup index by name; sets MODEL_IDX or returns 1
+resolve_model_index() {
+    local name="$1"
+    for i in "${!MODEL_NAMES[@]}"; do
+        if [[ "${MODEL_NAMES[$i]}" == "$name" ]]; then
+            MODEL_IDX=$i
+            return 0
+        fi
+    done
+    return 1
+}
 
 # ── HuggingFace CLI resolution ────────────────────────────────────────────
 resolve_hf_cli() {
@@ -55,9 +57,13 @@ install_hf_cli() {
 # ── Download a single model ───────────────────────────────────────────────
 download_model() {
     local name="$1"
-    local repo="${MODELS[$name]}"
-    local env_var="${MODEL_ENV[$name]}"
-    local default_dir="${MODEL_DIRS[$name]}"
+    if ! resolve_model_index "$name"; then
+        echo "Error: unknown model '$name'. Available: ${MODEL_NAMES[*]}"
+        exit 1
+    fi
+    local repo="${MODEL_REPOS[$MODEL_IDX]}"
+    local env_var="${MODEL_ENVS[$MODEL_IDX]}"
+    local default_dir="${MODEL_DEFAULTS[$MODEL_IDX]}"
     local model_dir="${!env_var:-$default_dir}"
 
     echo "==> Setting up $name ($repo)"
@@ -96,7 +102,7 @@ download_model() {
 # Parse args: specific models or all
 REQUESTED=("$@")
 if [[ ${#REQUESTED[@]} -eq 0 ]]; then
-    REQUESTED=("bge-small" "flan-t5-small")
+    REQUESTED=("${MODEL_NAMES[@]}")
 fi
 
 # Resolve HF CLI
@@ -106,10 +112,6 @@ if [[ -z "$HF_CMD" ]]; then
 fi
 
 for model in "${REQUESTED[@]}"; do
-    if [[ -z "${MODELS[$model]+x}" ]]; then
-        echo "Error: unknown model '$model'. Available: ${!MODELS[*]}"
-        exit 1
-    fi
     download_model "$model"
 done
 
