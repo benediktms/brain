@@ -75,17 +75,18 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             match action {
                 DaemonAction::Start { notes_path } => {
                     // Child process after fork — run watch directly.
-                    let path = match notes_path {
-                        Some(p) => p,
-                        None => anyhow::bail!("multi-brain mode not yet implemented"),
+                    let outcome = match notes_path {
+                        Some(path) => {
+                            commands::watch::run(
+                                path,
+                                cli.model_dir,
+                                cli.lance_db,
+                                cli.sqlite_db,
+                            )
+                            .await?
+                        }
+                        None => commands::watch::run_multi().await?,
                     };
-                    let outcome = commands::watch::run(
-                        path,
-                        cli.model_dir,
-                        cli.lance_db,
-                        cli.sqlite_db,
-                    )
-                    .await?;
                     if !outcome.clean {
                         std::process::exit(1);
                     }
