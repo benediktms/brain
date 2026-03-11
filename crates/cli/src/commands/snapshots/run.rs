@@ -32,8 +32,7 @@ impl SnapshotCtx {
         let objects_dir = brain_dir.join("objects");
         let record_store =
             RecordStore::new(&records_dir, db).context("Failed to open record store")?;
-        let object_store =
-            ObjectStore::new(&objects_dir).context("Failed to open object store")?;
+        let object_store = ObjectStore::new(&objects_dir).context("Failed to open object store")?;
         Ok(Self {
             record_store,
             object_store,
@@ -75,8 +74,7 @@ pub struct SaveParams {
 
 pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
     let data: Vec<u8> = if let Some(ref path) = params.file {
-        std::fs::read(path)
-            .with_context(|| format!("Failed to read file: {}", path.display()))?
+        std::fs::read(path).with_context(|| format!("Failed to read file: {}", path.display()))?
     } else if params.stdin {
         let mut buf = Vec::new();
         std::io::stdin()
@@ -198,10 +196,7 @@ pub fn list(ctx: &SnapshotCtx, params: &ListParams) -> Result<()> {
             return Ok(());
         }
 
-        let short_ids = ctx
-            .record_store
-            .compact_record_ids()
-            .unwrap_or_default();
+        let short_ids = ctx.record_store.compact_record_ids().unwrap_or_default();
 
         let mut table = MarkdownTable::new(vec!["ID", "TITLE", "STATUS", "SIZE", "CREATED"]);
         for r in &records {
@@ -339,7 +334,11 @@ pub fn restore(ctx: &SnapshotCtx, id: &str, output: Option<std::path::PathBuf>) 
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                println!("Restored {} to {}", format_size(bytes.len() as i64), path.display());
+                println!(
+                    "Restored {} to {}",
+                    format_size(bytes.len() as i64),
+                    path.display()
+                );
             }
         }
         None => {
@@ -364,7 +363,9 @@ pub fn tag_add(ctx: &SnapshotCtx, id: &str, tag: &str) -> Result<()> {
         &record_id,
         "cli",
         RecordEventType::TagAdded,
-        &TagPayload { tag: tag.to_string() },
+        &TagPayload {
+            tag: tag.to_string(),
+        },
     );
 
     ctx.record_store
@@ -391,7 +392,9 @@ pub fn tag_remove(ctx: &SnapshotCtx, id: &str, tag: &str) -> Result<()> {
         &record_id,
         "cli",
         RecordEventType::TagRemoved,
-        &TagPayload { tag: tag.to_string() },
+        &TagPayload {
+            tag: tag.to_string(),
+        },
     );
 
     ctx.record_store
@@ -429,7 +432,10 @@ pub fn link_add(
         &record_id,
         "cli",
         RecordEventType::LinkAdded,
-        &LinkPayload { task_id: task.clone(), chunk_id: chunk.clone() },
+        &LinkPayload {
+            task_id: task.clone(),
+            chunk_id: chunk.clone(),
+        },
     );
 
     ctx.record_store
@@ -475,7 +481,10 @@ pub fn link_remove(
         &record_id,
         "cli",
         RecordEventType::LinkRemoved,
-        &LinkPayload { task_id: task.clone(), chunk_id: chunk.clone() },
+        &LinkPayload {
+            task_id: task.clone(),
+            chunk_id: chunk.clone(),
+        },
     );
 
     ctx.record_store
@@ -513,7 +522,9 @@ pub fn archive(ctx: &SnapshotCtx, id: &str, reason: Option<String>) -> Result<()
     let event = RecordEvent::from_payload(
         &record_id,
         "cli",
-        RecordArchivedPayload { reason: reason.clone() },
+        RecordArchivedPayload {
+            reason: reason.clone(),
+        },
     );
 
     ctx.record_store

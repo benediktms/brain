@@ -334,7 +334,11 @@ pub fn read_all_events(path: &Path) -> Result<Vec<RecordEvent>> {
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(BrainCoreError::RecordEvent(format!("open events file: {e}"))),
+        Err(e) => {
+            return Err(BrainCoreError::RecordEvent(format!(
+                "open events file: {e}"
+            )));
+        }
     };
 
     let reader = BufReader::new(file);
@@ -362,7 +366,10 @@ pub fn read_all_events(path: &Path) -> Result<Vec<RecordEvent>> {
 /// Skips empty or malformed lines. Returns events in append order.
 pub fn read_events_for_record(path: &Path, record_id: &str) -> Result<Vec<RecordEvent>> {
     let all = read_all_events(path)?;
-    Ok(all.into_iter().filter(|e| e.record_id == record_id).collect())
+    Ok(all
+        .into_iter()
+        .filter(|e| e.record_id == record_id)
+        .collect())
 }
 
 /// Count the total number of valid events in a JSONL file.
@@ -720,7 +727,14 @@ mod tests {
         for et in [RecordEventType::TagAdded, RecordEventType::TagRemoved] {
             append_event(
                 &path,
-                &RecordEvent::new("r1", "agent", et, &TagPayload { tag: "t".to_string() }),
+                &RecordEvent::new(
+                    "r1",
+                    "agent",
+                    et,
+                    &TagPayload {
+                        tag: "t".to_string(),
+                    },
+                ),
             )
             .unwrap();
         }
@@ -847,7 +861,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("events.jsonl");
 
-        for event_type in [RecordEventType::RecordPinned, RecordEventType::RecordUnpinned] {
+        for event_type in [
+            RecordEventType::RecordPinned,
+            RecordEventType::RecordUnpinned,
+        ] {
             append_event(
                 &path,
                 &RecordEvent::new("r1", "agent", event_type.clone(), &PinPayload {}),
@@ -888,8 +905,12 @@ mod tests {
         let json3 = serde_json::to_string(&ev3).unwrap();
         assert!(json3.contains("\"event_type\":\"record_pinned\""));
 
-        let ev4 =
-            RecordEvent::new("r1", "agent", RecordEventType::RecordUnpinned, &PinPayload {});
+        let ev4 = RecordEvent::new(
+            "r1",
+            "agent",
+            RecordEventType::RecordUnpinned,
+            &PinPayload {},
+        );
         let json4 = serde_json::to_string(&ev4).unwrap();
         assert!(json4.contains("\"event_type\":\"record_unpinned\""));
     }

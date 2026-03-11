@@ -113,7 +113,15 @@ mod tests {
                 "SELECT retention_class, pinned, payload_available, content_encoding, original_size
                  FROM records WHERE record_id = 'r1'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .unwrap();
 

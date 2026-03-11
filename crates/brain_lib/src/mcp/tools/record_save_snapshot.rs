@@ -43,7 +43,11 @@ impl RecordSaveSnapshot {
             Err(e) => return ToolCallResult::error(format!("Invalid base64 data: {e}")),
         };
 
-        let (content_ref, encoding, original_size) = match ctx.objects.write_compressed(&raw_bytes, Some(params.media_type.clone()), COMPRESSION_THRESHOLD) {
+        let (content_ref, encoding, original_size) = match ctx.objects.write_compressed(
+            &raw_bytes,
+            Some(params.media_type.clone()),
+            COMPRESSION_THRESHOLD,
+        ) {
             Ok(r) => r,
             Err(e) => return ToolCallResult::error(format!("Failed to write object: {e}")),
         };
@@ -97,7 +101,9 @@ impl McpTool for RecordSaveSnapshot {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Save a new snapshot record. Writes data to the object store with kind='snapshot'.".into(),
+            description:
+                "Save a new snapshot record. Writes data to the object store with kind='snapshot'."
+                    .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

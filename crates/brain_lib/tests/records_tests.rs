@@ -357,9 +357,15 @@ fn test_rebuild_twice_is_idempotent() {
     let title_after_second = get_title(&db, &r1);
 
     assert_eq!(count1, count2, "event counts should match across rebuilds");
-    assert_eq!(records_after_first, records_after_second, "record count unchanged");
+    assert_eq!(
+        records_after_first, records_after_second,
+        "record count unchanged"
+    );
     assert_eq!(tags_after_first, tags_after_second, "tag count unchanged");
-    assert_eq!(links_after_first, links_after_second, "link count unchanged");
+    assert_eq!(
+        links_after_first, links_after_second,
+        "link count unchanged"
+    );
     assert_eq!(title_after_first, title_after_second, "title unchanged");
 }
 
@@ -458,10 +464,7 @@ fn test_rebuild_skips_truncated_last_line_and_recovers() {
 
     // Simulate a partial (truncated) write: append an incomplete JSON line
     {
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(&events_path)
-            .unwrap();
+        let mut file = OpenOptions::new().append(true).open(&events_path).unwrap();
         // Incomplete JSON — no closing brace
         file.write_all(b"{\"event_id\":\"truncated\",\"record_id\":\"r3\"")
             .unwrap();
@@ -704,7 +707,10 @@ fn test_tag_add_then_remove_leaves_no_tag() {
     })
     .unwrap();
 
-    assert!(!tag_exists(&db, &rid, "temporary"), "tag should not appear after removal");
+    assert!(
+        !tag_exists(&db, &rid, "temporary"),
+        "tag should not appear after removal"
+    );
     assert_eq!(count_tags_for(&db, &rid), 0);
 }
 
@@ -720,7 +726,11 @@ fn test_multiple_tags_add_remove_selectively() {
                 &rid,
                 "Multi-Tag",
                 "analysis",
-                vec!["keep-a".to_string(), "remove-b".to_string(), "keep-c".to_string()],
+                vec![
+                    "keep-a".to_string(),
+                    "remove-b".to_string(),
+                    "keep-c".to_string(),
+                ],
             ),
         )
     })
@@ -742,7 +752,10 @@ fn test_multiple_tags_add_remove_selectively() {
     .unwrap();
 
     assert!(tag_exists(&db, &rid, "keep-a"));
-    assert!(!tag_exists(&db, &rid, "remove-b"), "removed tag should not appear");
+    assert!(
+        !tag_exists(&db, &rid, "remove-b"),
+        "removed tag should not appear"
+    );
     assert!(tag_exists(&db, &rid, "keep-c"));
     assert_eq!(count_tags_for(&db, &rid), 2);
 }
@@ -782,7 +795,11 @@ fn test_tag_add_remove_then_rebuild_is_consistent() {
 
     db.with_write_conn(|conn| rebuild(conn, &events_path))
         .unwrap();
-    assert_eq!(count_tags_for(&db, &rid), 0, "tag should not appear after rebuild");
+    assert_eq!(
+        count_tags_for(&db, &rid),
+        0,
+        "tag should not appear after rebuild"
+    );
 }
 
 // ─── 8. Link lifecycle: add + remove ─────────────────────────────
@@ -830,7 +847,10 @@ fn test_link_add_then_remove_leaves_no_link() {
     })
     .unwrap();
 
-    assert!(!link_task_exists(&db, &rid, "TASK-99"), "link should not appear after removal");
+    assert!(
+        !link_task_exists(&db, &rid, "TASK-99"),
+        "link should not appear after removal"
+    );
     assert_eq!(count_links_for(&db, &rid), 0);
 }
 
@@ -871,7 +891,11 @@ fn test_link_add_remove_then_rebuild_is_consistent() {
 
     db.with_write_conn(|conn| rebuild(conn, &events_path))
         .unwrap();
-    assert_eq!(count_links_for(&db, &rid), 0, "link should not appear after rebuild");
+    assert_eq!(
+        count_links_for(&db, &rid),
+        0,
+        "link should not appear after rebuild"
+    );
 }
 
 // ─── 9. Object store integration ─────────────────────────────────
@@ -954,7 +978,10 @@ fn test_object_store_deduplication_with_multiple_records() {
     let payload = b"shared content";
     let ref1 = store.write(payload).unwrap();
     let ref2 = store.write(payload).unwrap();
-    assert_eq!(ref1.hash, ref2.hash, "duplicate blob should produce same hash");
+    assert_eq!(
+        ref1.hash, ref2.hash,
+        "duplicate blob should produce same hash"
+    );
 
     // Two different records reference the same blob
     let rids = [new_record_id("BRN"), new_record_id("BRN")];
@@ -965,11 +992,7 @@ fn test_object_store_deduplication_with_multiple_records() {
             RecordCreatedPayload {
                 title: format!("Record {i}"),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload::new(
-                    ref1.hash.clone(),
-                    ref1.size,
-                    None,
-                ),
+                content_ref: ContentRefPayload::new(ref1.hash.clone(), ref1.size, None),
                 description: None,
                 task_id: None,
                 tags: vec![],
@@ -1002,7 +1025,10 @@ fn test_object_store_deduplication_with_multiple_records() {
         .unwrap()
     };
     assert_eq!(hashes.len(), 2);
-    assert_eq!(hashes[0], hashes[1], "both records should reference the same blob hash");
+    assert_eq!(
+        hashes[0], hashes[1],
+        "both records should reference the same blob hash"
+    );
 }
 
 // ─── 10. RecordStore high-level API ──────────────────────────────
@@ -1041,8 +1067,12 @@ fn test_record_store_append_then_rebuild_recovers_projection() {
     let r2 = new_record_id("BRN");
 
     // Append events to log only (no projection applied)
-    store.append(&make_created_event(&r1, "One", "report")).unwrap();
-    store.append(&make_created_event(&r2, "Two", "diff")).unwrap();
+    store
+        .append(&make_created_event(&r1, "One", "report"))
+        .unwrap();
+    store
+        .append(&make_created_event(&r2, "Two", "diff"))
+        .unwrap();
     store
         .append(&RecordEvent::new(
             &r1,
@@ -1087,7 +1117,13 @@ fn test_record_store_append_then_rebuild_recovers_projection() {
 #[test]
 fn test_record_status_from_str() {
     use std::str::FromStr;
-    assert_eq!(RecordStatus::from_str("active").unwrap(), RecordStatus::Active);
-    assert_eq!(RecordStatus::from_str("archived").unwrap(), RecordStatus::Archived);
+    assert_eq!(
+        RecordStatus::from_str("active").unwrap(),
+        RecordStatus::Active
+    );
+    assert_eq!(
+        RecordStatus::from_str("archived").unwrap(),
+        RecordStatus::Archived
+    );
     assert!(RecordStatus::from_str("invalid").is_err());
 }

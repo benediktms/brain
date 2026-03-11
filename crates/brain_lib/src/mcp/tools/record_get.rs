@@ -37,15 +37,20 @@ impl RecordGet {
         let tags = ctx.records.get_record_tags(&record_id).unwrap_or_default();
         let links = ctx.records.get_record_links(&record_id).unwrap_or_default();
 
-        let compact_id = ctx.records.compact_record_id(&record_id).unwrap_or_else(|_| record_id.clone());
+        let compact_id = ctx
+            .records
+            .compact_record_id(&record_id)
+            .unwrap_or_else(|_| record_id.clone());
 
         let links_json: Vec<Value> = links
             .iter()
-            .map(|l| json!({
-                "task_id": l.task_id,
-                "chunk_id": l.chunk_id,
-                "created_at": l.created_at,
-            }))
+            .map(|l| {
+                json!({
+                    "task_id": l.task_id,
+                    "chunk_id": l.chunk_id,
+                    "created_at": l.created_at,
+                })
+            })
             .collect();
 
         let result = json!({

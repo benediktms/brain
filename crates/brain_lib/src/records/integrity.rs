@@ -117,8 +117,10 @@ pub fn verify_integrity(
 ) -> Result<IntegrityReport> {
     let content_refs = record_store.get_all_content_refs()?;
 
-    let referenced_hashes: HashSet<String> =
-        content_refs.iter().map(|(_, hash, _)| hash.clone()).collect();
+    let referenced_hashes: HashSet<String> = content_refs
+        .iter()
+        .map(|(_, hash, _)| hash.clone())
+        .collect();
 
     let mut report = IntegrityReport {
         records_checked: content_refs.len(),
@@ -214,10 +216,10 @@ mod tests {
 
     use crate::db::Db;
 
-    use super::*;
+    use super::super::RecordStore;
     use super::super::events::*;
     use super::super::objects::ObjectStore;
-    use super::super::RecordStore;
+    use super::*;
 
     fn setup() -> (TempDir, RecordStore, ObjectStore) {
         let dir = TempDir::new().unwrap();
@@ -416,8 +418,9 @@ mod tests {
         data: &[u8],
         threshold: usize,
     ) -> String {
-        let (content_ref, _encoding, _original_size) =
-            object_store.write_compressed(data, None, threshold).unwrap();
+        let (content_ref, _encoding, _original_size) = object_store
+            .write_compressed(data, None, threshold)
+            .unwrap();
         let event = RecordEvent::from_payload(
             record_id,
             "test-agent",

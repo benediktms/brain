@@ -47,7 +47,10 @@ impl RecordArchive {
             return ToolCallResult::error(format!("Failed to archive record: {e}"));
         }
 
-        let compact_id = ctx.records.compact_record_id(&record_id).unwrap_or_else(|_| record_id.clone());
+        let compact_id = ctx
+            .records
+            .compact_record_id(&record_id)
+            .unwrap_or_else(|_| record_id.clone());
 
         let result = json!({
             "record_id": compact_id,

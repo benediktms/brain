@@ -374,7 +374,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Snapshots { json, action } => {
-            use commands::snapshots::run::{SaveParams, ListParams, SnapshotCtx};
+            use commands::snapshots::run::{ListParams, SaveParams, SnapshotCtx};
             let ctx = SnapshotCtx::new(&cli.sqlite_db, json)?;
 
             match action {
@@ -401,10 +401,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     )?;
                 }
                 SnapshotsAction::List { tag, status, limit } => {
-                    commands::snapshots::run::list(
-                        &ctx,
-                        &ListParams { tag, status, limit },
-                    )?;
+                    commands::snapshots::run::list(&ctx, &ListParams { tag, status, limit })?;
                 }
                 SnapshotsAction::Get { id } => {
                     commands::snapshots::run::get(&ctx, &id)?;

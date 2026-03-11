@@ -48,7 +48,11 @@ impl RecordCreateArtifact {
             vec![]
         };
 
-        let (content_ref, encoding, original_size) = match ctx.objects.write_compressed(&raw_bytes, params.media_type.clone(), COMPRESSION_THRESHOLD) {
+        let (content_ref, encoding, original_size) = match ctx.objects.write_compressed(
+            &raw_bytes,
+            params.media_type.clone(),
+            COMPRESSION_THRESHOLD,
+        ) {
             Ok(r) => r,
             Err(e) => return ToolCallResult::error(format!("Failed to write object: {e}")),
         };

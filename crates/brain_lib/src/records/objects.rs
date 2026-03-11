@@ -82,9 +82,8 @@ impl ObjectStore {
 
         // Write to a temp file in the same directory, then atomically rename.
         let tmp_path = dir.join(format!("{hex}.tmp"));
-        std::fs::write(&tmp_path, data).map_err(|e| {
-            BrainCoreError::Internal(format!("object store: write temp file: {e}"))
-        })?;
+        std::fs::write(&tmp_path, data)
+            .map_err(|e| BrainCoreError::Internal(format!("object store: write temp file: {e}")))?;
         std::fs::rename(&tmp_path, &dest).map_err(|e| {
             // Best-effort cleanup of the temp file if rename fails.
             let _ = std::fs::remove_file(&tmp_path);
@@ -101,9 +100,7 @@ impl ObjectStore {
         let path = self.blob_path(hash)?;
         std::fs::read(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                BrainCoreError::ObjectStore(format!(
-                    "blob not found: {hash}"
-                ))
+                BrainCoreError::ObjectStore(format!("blob not found: {hash}"))
             } else {
                 BrainCoreError::Internal(format!("object store: read blob {hash}: {e}"))
             }
@@ -122,9 +119,7 @@ impl ObjectStore {
         let path = self.blob_path(hash)?;
         std::fs::remove_file(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                BrainCoreError::ObjectStore(format!(
-                    "blob not found: {hash}"
-                ))
+                BrainCoreError::ObjectStore(format!("blob not found: {hash}"))
             } else {
                 BrainCoreError::Internal(format!("object store: delete blob {hash}: {e}"))
             }
@@ -195,9 +190,8 @@ impl ObjectStore {
         let stored_size = bytes_to_write.len() as u64;
 
         let tmp_path = dir.join(format!("{hex}.tmp"));
-        std::fs::write(&tmp_path, &bytes_to_write).map_err(|e| {
-            BrainCoreError::Internal(format!("object store: write temp file: {e}"))
-        })?;
+        std::fs::write(&tmp_path, &bytes_to_write)
+            .map_err(|e| BrainCoreError::Internal(format!("object store: write temp file: {e}")))?;
         std::fs::rename(&tmp_path, &dest).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
             BrainCoreError::Internal(format!("object store: atomic rename: {e}"))
@@ -239,7 +233,7 @@ impl ObjectStore {
             Err(e) => {
                 return Err(BrainCoreError::Internal(format!(
                     "object store: list root: {e}"
-                )))
+                )));
             }
         };
 
@@ -261,9 +255,7 @@ impl ObjectStore {
             };
 
             let children = std::fs::read_dir(&path).map_err(|e| {
-                BrainCoreError::Internal(format!(
-                    "object store: list prefix dir {dir_name}: {e}"
-                ))
+                BrainCoreError::Internal(format!("object store: list prefix dir {dir_name}: {e}"))
             })?;
 
             for child in children {
@@ -278,9 +270,7 @@ impl ObjectStore {
                 if file_name.ends_with(".tmp") {
                     continue;
                 }
-                if file_name.len() == 64
-                    && file_name.chars().all(|c| c.is_ascii_hexdigit())
-                {
+                if file_name.len() == 64 && file_name.chars().all(|c| c.is_ascii_hexdigit()) {
                     hashes.push(file_name);
                 }
             }
@@ -459,9 +449,8 @@ mod tests {
         let (_dir, store) = make_store();
         let data = b"small data";
         let threshold = 1024;
-        let (content_ref, encoding, original_size) = store
-            .write_compressed(data, None, threshold)
-            .unwrap();
+        let (content_ref, encoding, original_size) =
+            store.write_compressed(data, None, threshold).unwrap();
 
         assert_eq!(encoding, "identity");
         assert_eq!(original_size, data.len() as u64);
@@ -478,9 +467,8 @@ mod tests {
         // Create a highly compressible payload larger than threshold.
         let data: Vec<u8> = b"aaaa".repeat(1024);
         let threshold = 100;
-        let (content_ref, encoding, original_size) = store
-            .write_compressed(&data, None, threshold)
-            .unwrap();
+        let (content_ref, encoding, original_size) =
+            store.write_compressed(&data, None, threshold).unwrap();
 
         assert_eq!(encoding, "zstd");
         assert_eq!(original_size, data.len() as u64);
@@ -497,9 +485,7 @@ mod tests {
     fn test_read_auto_compressed() {
         let (_dir, store) = make_store();
         let data: Vec<u8> = b"hello world ".repeat(500);
-        let (content_ref, encoding, _) = store
-            .write_compressed(&data, None, 100)
-            .unwrap();
+        let (content_ref, encoding, _) = store.write_compressed(&data, None, 100).unwrap();
         assert_eq!(encoding, "zstd");
 
         let recovered = store.read_auto(&content_ref.hash).unwrap();
@@ -522,12 +508,8 @@ mod tests {
         let data: Vec<u8> = b"repeated ".repeat(500);
         let threshold = 100;
 
-        let (ref1, enc1, orig1) = store
-            .write_compressed(&data, None, threshold)
-            .unwrap();
-        let (ref2, enc2, orig2) = store
-            .write_compressed(&data, None, threshold)
-            .unwrap();
+        let (ref1, enc1, orig1) = store.write_compressed(&data, None, threshold).unwrap();
+        let (ref2, enc2, orig2) = store.write_compressed(&data, None, threshold).unwrap();
 
         assert_eq!(ref1.hash, ref2.hash);
         // Both writes must report the actual encoding ("zstd").
@@ -535,7 +517,10 @@ mod tests {
         assert_eq!(enc2, "zstd");
         // Stored size must match the compressed size on disk, not the original.
         assert_eq!(ref1.size, ref2.size);
-        assert!(ref2.size < data.len() as u64, "dedup should return compressed stored size");
+        assert!(
+            ref2.size < data.len() as u64,
+            "dedup should return compressed stored size"
+        );
         // Original sizes must match.
         assert_eq!(orig1, orig2);
         assert_eq!(orig1, data.len() as u64);
@@ -552,12 +537,8 @@ mod tests {
         let data = b"small data";
         let threshold = 1024;
 
-        let (ref1, enc1, _) = store
-            .write_compressed(data, None, threshold)
-            .unwrap();
-        let (ref2, enc2, _) = store
-            .write_compressed(data, None, threshold)
-            .unwrap();
+        let (ref1, enc1, _) = store.write_compressed(data, None, threshold).unwrap();
+        let (ref2, enc2, _) = store.write_compressed(data, None, threshold).unwrap();
 
         assert_eq!(ref1.hash, ref2.hash);
         assert_eq!(enc1, "identity");

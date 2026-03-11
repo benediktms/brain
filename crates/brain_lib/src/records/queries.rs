@@ -55,8 +55,7 @@ pub struct RecordFilter {
 
 // -- Column constant --
 
-const RECORD_COLUMNS: &str =
-    "record_id, title, kind, status, description, content_hash, content_size, \
+const RECORD_COLUMNS: &str = "record_id, title, kind, status, description, content_hash, content_size, \
      media_type, task_id, actor, created_at, updated_at, \
      retention_class, pinned, payload_available, content_encoding, original_size";
 
@@ -87,7 +86,9 @@ fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<RecordRow> {
 /// Get a single record by exact ID.
 pub fn get_record(conn: &Connection, record_id: &str) -> Result<Option<RecordRow>> {
     let sql = format!("SELECT {RECORD_COLUMNS} FROM records WHERE record_id = ?1");
-    let result = conn.query_row(&sql, [record_id], row_to_record).optional()?;
+    let result = conn
+        .query_row(&sql, [record_id], row_to_record)
+        .optional()?;
     Ok(result)
 }
 
@@ -231,8 +232,8 @@ pub fn resolve_record_id(conn: &Connection, input: &str) -> Result<String> {
 
     // Range scan on PRIMARY KEY B-tree
     let upper_bound = increment_string(&search_prefix);
-    let mut stmt = conn
-        .prepare("SELECT record_id FROM records WHERE record_id >= ?1 AND record_id < ?2")?;
+    let mut stmt =
+        conn.prepare("SELECT record_id FROM records WHERE record_id >= ?1 AND record_id < ?2")?;
     let matches: Vec<String> = stmt
         .query_map(rusqlite::params![search_prefix, upper_bound], |row| {
             row.get(0)
@@ -296,7 +297,11 @@ pub fn compact_record_ids(conn: &Connection) -> Result<HashMap<String, String>> 
 
     for i in 0..n {
         let id = &ids[i];
-        let prev = if i > 0 { Some(ids[i - 1].as_str()) } else { None };
+        let prev = if i > 0 {
+            Some(ids[i - 1].as_str())
+        } else {
+            None
+        };
         let next = if i + 1 < n {
             Some(ids[i + 1].as_str())
         } else {
@@ -509,11 +514,8 @@ mod tests {
         create_record(&conn, "r2", "To Archive", "diff");
 
         // Archive r2
-        let archive_ev = RecordEvent::from_payload(
-            "r2",
-            "agent",
-            RecordArchivedPayload { reason: None },
-        );
+        let archive_ev =
+            RecordEvent::from_payload("r2", "agent", RecordArchivedPayload { reason: None });
         apply_event(&conn, &archive_ev).unwrap();
 
         let filter = RecordFilter {
@@ -591,13 +593,17 @@ mod tests {
             "r1",
             "agent",
             RecordEventType::TagAdded,
-            &TagPayload { tag: "beta".to_string() },
+            &TagPayload {
+                tag: "beta".to_string(),
+            },
         );
         let ev2 = RecordEvent::new(
             "r1",
             "agent",
             RecordEventType::TagAdded,
-            &TagPayload { tag: "alpha".to_string() },
+            &TagPayload {
+                tag: "alpha".to_string(),
+            },
         );
         apply_event(&conn, &ev1).unwrap();
         apply_event(&conn, &ev2).unwrap();
@@ -664,8 +670,7 @@ mod tests {
     fn test_resolve_exact_match() {
         let conn = setup();
         create_record(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Record", "report");
-        let resolved =
-            resolve_record_id(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M").unwrap();
+        let resolved = resolve_record_id(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M").unwrap();
         assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
     }
 
@@ -727,7 +732,12 @@ mod tests {
     #[test]
     fn test_compact_record_id() {
         let conn = setup();
-        create_record(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Only record", "report");
+        create_record(
+            &conn,
+            "BRN-01JPHZS7VXQK4R3BGTHNED2P8M",
+            "Only record",
+            "report",
+        );
         let compact = compact_record_id(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M").unwrap();
         assert_eq!(compact.len(), MIN_DISPLAY_PREFIX_LEN);
         assert_eq!(compact, "BRN-01JP");

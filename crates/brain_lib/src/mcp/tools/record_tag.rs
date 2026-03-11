@@ -42,7 +42,9 @@ impl RecordTagAdd {
             &record_id,
             "mcp",
             RecordEventType::TagAdded,
-            &TagPayload { tag: params.tag.clone() },
+            &TagPayload {
+                tag: params.tag.clone(),
+            },
         );
 
         if let Err(e) = ctx.records.apply_and_append(&event) {
@@ -123,7 +125,9 @@ impl RecordTagRemove {
             &record_id,
             "mcp",
             RecordEventType::TagRemoved,
-            &TagPayload { tag: params.tag.clone() },
+            &TagPayload {
+                tag: params.tag.clone(),
+            },
         );
 
         if let Err(e) = ctx.records.apply_and_append(&event) {

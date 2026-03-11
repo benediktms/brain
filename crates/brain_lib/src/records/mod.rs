@@ -437,27 +437,33 @@ impl RecordStore {
     // -- Query methods --
 
     pub fn get_record(&self, record_id: &str) -> Result<Option<queries::RecordRow>> {
-        self.db.with_read_conn(|conn| queries::get_record(conn, record_id))
+        self.db
+            .with_read_conn(|conn| queries::get_record(conn, record_id))
     }
 
     pub fn list_records(&self, filter: &queries::RecordFilter) -> Result<Vec<queries::RecordRow>> {
-        self.db.with_read_conn(|conn| queries::list_records(conn, filter))
+        self.db
+            .with_read_conn(|conn| queries::list_records(conn, filter))
     }
 
     pub fn get_record_tags(&self, record_id: &str) -> Result<Vec<String>> {
-        self.db.with_read_conn(|conn| queries::get_record_tags(conn, record_id))
+        self.db
+            .with_read_conn(|conn| queries::get_record_tags(conn, record_id))
     }
 
     pub fn get_record_links(&self, record_id: &str) -> Result<Vec<queries::RecordLink>> {
-        self.db.with_read_conn(|conn| queries::get_record_links(conn, record_id))
+        self.db
+            .with_read_conn(|conn| queries::get_record_links(conn, record_id))
     }
 
     pub fn resolve_record_id(&self, input: &str) -> Result<String> {
-        self.db.with_read_conn(|conn| queries::resolve_record_id(conn, input))
+        self.db
+            .with_read_conn(|conn| queries::resolve_record_id(conn, input))
     }
 
     pub fn compact_record_id(&self, record_id: &str) -> Result<String> {
-        self.db.with_read_conn(|conn| queries::compact_record_id(conn, record_id))
+        self.db
+            .with_read_conn(|conn| queries::compact_record_id(conn, record_id))
     }
 
     pub fn compact_record_ids(&self) -> Result<std::collections::HashMap<String, String>> {
@@ -466,7 +472,8 @@ impl RecordStore {
 
     pub fn get_project_prefix(&self) -> Result<String> {
         self.db.with_read_conn(|conn| {
-            Ok(crate::db::meta::get_meta(conn, "project_prefix")?.unwrap_or_else(|| "BRN".to_string()))
+            Ok(crate::db::meta::get_meta(conn, "project_prefix")?
+                .unwrap_or_else(|| "BRN".to_string()))
         })
     }
 
@@ -474,11 +481,7 @@ impl RecordStore {
         self.db.with_read_conn(queries::get_all_content_refs)
     }
 
-    pub fn count_payload_refs(
-        &self,
-        content_hash: &str,
-        exclude_record_id: &str,
-    ) -> Result<i64> {
+    pub fn count_payload_refs(&self, content_hash: &str, exclude_record_id: &str) -> Result<i64> {
         self.db.with_read_conn(|conn| {
             queries::count_payload_refs(conn, content_hash, exclude_record_id)
         })
@@ -513,9 +516,9 @@ impl RecordStore {
         actor: &str,
         objects: &objects::ObjectStore,
     ) -> Result<()> {
-        let record = self
-            .get_record(record_id)?
-            .ok_or_else(|| crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}")))?;
+        let record = self.get_record(record_id)?.ok_or_else(|| {
+            crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
 
         if !record.payload_available {
             return Err(crate::error::BrainCoreError::RecordEvent(
@@ -550,8 +553,9 @@ impl RecordStore {
         retention_class: Option<&str>,
         actor: &str,
     ) -> Result<()> {
-        self.get_record(record_id)?
-            .ok_or_else(|| crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}")))?;
+        self.get_record(record_id)?.ok_or_else(|| {
+            crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
 
         let payload = events::RetentionClassSetPayload {
             retention_class: retention_class.map(|s| s.to_string()),
@@ -562,8 +566,9 @@ impl RecordStore {
 
     /// Pin a record, preventing it from being evicted.
     pub fn pin_record(&self, record_id: &str, actor: &str) -> Result<()> {
-        self.get_record(record_id)?
-            .ok_or_else(|| crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}")))?;
+        self.get_record(record_id)?.ok_or_else(|| {
+            crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
 
         let event = events::RecordEvent::new(
             record_id,
@@ -576,8 +581,9 @@ impl RecordStore {
 
     /// Unpin a record, allowing it to be evicted again.
     pub fn unpin_record(&self, record_id: &str, actor: &str) -> Result<()> {
-        self.get_record(record_id)?
-            .ok_or_else(|| crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}")))?;
+        self.get_record(record_id)?.ok_or_else(|| {
+            crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
 
         let event = events::RecordEvent::new(
             record_id,
@@ -591,8 +597,8 @@ impl RecordStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::events::*;
+    use super::*;
 
     #[test]
     fn test_record_id_display() {
@@ -615,14 +621,20 @@ mod tests {
         assert_eq!(RecordKind::Analysis.as_str(), "analysis");
         assert_eq!(RecordKind::Document.as_str(), "document");
         assert_eq!(RecordKind::Snapshot.as_str(), "snapshot");
-        assert_eq!(RecordKind::Custom("custom_kind".to_string()).as_str(), "custom_kind");
+        assert_eq!(
+            RecordKind::Custom("custom_kind".to_string()).as_str(),
+            "custom_kind"
+        );
     }
 
     #[test]
     fn test_record_kind_from_str() {
         assert_eq!(RecordKind::from("report"), RecordKind::Report);
         assert_eq!(RecordKind::from("snapshot"), RecordKind::Snapshot);
-        assert_eq!(RecordKind::from("unknown"), RecordKind::Custom("unknown".to_string()));
+        assert_eq!(
+            RecordKind::from("unknown"),
+            RecordKind::Custom("unknown".to_string())
+        );
     }
 
     #[test]
@@ -644,8 +656,14 @@ mod tests {
     #[test]
     fn test_record_status_parse() {
         use std::str::FromStr;
-        assert_eq!(RecordStatus::from_str("active").unwrap(), RecordStatus::Active);
-        assert_eq!(RecordStatus::from_str("archived").unwrap(), RecordStatus::Archived);
+        assert_eq!(
+            RecordStatus::from_str("active").unwrap(),
+            RecordStatus::Active
+        );
+        assert_eq!(
+            RecordStatus::from_str("archived").unwrap(),
+            RecordStatus::Archived
+        );
         assert!(RecordStatus::from_str("invalid").is_err());
     }
 
@@ -666,7 +684,10 @@ mod tests {
             None,
         );
         let json = serde_json::to_string(&cr).unwrap();
-        assert!(!json.contains("media_type"), "media_type should be absent when None");
+        assert!(
+            !json.contains("media_type"),
+            "media_type should be absent when None"
+        );
         let back: ContentRef = serde_json::from_str(&json).unwrap();
         assert_eq!(back.hash, cr.hash);
         assert_eq!(back.size, cr.size);
@@ -781,7 +802,10 @@ mod tests {
         let db = crate::db::Db::open_in_memory().unwrap();
         let store = RecordStore::new(&records_dir, db).unwrap();
         assert!(records_dir.exists());
-        assert_eq!(store.events_path(), records_dir.join("events.jsonl").as_path());
+        assert_eq!(
+            store.events_path(),
+            records_dir.join("events.jsonl").as_path()
+        );
     }
 
     #[test]
@@ -821,9 +845,7 @@ mod tests {
 
     // -- Helper for eviction/pin/retention tests --
 
-    fn make_store_with_objects(
-        dir: &tempfile::TempDir,
-    ) -> (RecordStore, objects::ObjectStore) {
+    fn make_store_with_objects(dir: &tempfile::TempDir) -> (RecordStore, objects::ObjectStore) {
         let records_dir = dir.path().join("records");
         let db = crate::db::Db::open_in_memory().unwrap();
         let store = RecordStore::new(&records_dir, db).unwrap();
@@ -838,11 +860,7 @@ mod tests {
             RecordCreatedPayload {
                 title: "Test Record".to_string(),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload::new(
-                    content_hash.to_string(),
-                    size,
-                    None,
-                ),
+                content_ref: ContentRefPayload::new(content_hash.to_string(), size, None),
                 description: None,
                 task_id: None,
                 tags: vec![],
@@ -870,7 +888,9 @@ mod tests {
         let row = store.get_record("r1").unwrap().unwrap();
         assert!(row.payload_available);
 
-        store.evict_payload("r1", "gc", "gc-agent", &objects).unwrap();
+        store
+            .evict_payload("r1", "gc", "gc-agent", &objects)
+            .unwrap();
 
         let row = store.get_record("r1").unwrap().unwrap();
         assert!(!row.payload_available);
@@ -891,7 +911,12 @@ mod tests {
 
         let result = store.evict_payload("r1", "gc", "gc-agent", &objects);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cannot evict pinned record"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot evict pinned record")
+        );
 
         // Blob must still exist
         assert!(objects.exists(&content_ref.hash));
@@ -906,11 +931,18 @@ mod tests {
         let content_ref = objects.write(data).unwrap();
         create_record_in_store(&store, "r1", &content_ref.hash, content_ref.size);
 
-        store.evict_payload("r1", "gc", "gc-agent", &objects).unwrap();
+        store
+            .evict_payload("r1", "gc", "gc-agent", &objects)
+            .unwrap();
 
         let result = store.evict_payload("r1", "gc", "gc-agent", &objects);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("payload already evicted"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("payload already evicted")
+        );
     }
 
     #[test]
@@ -925,7 +957,9 @@ mod tests {
         create_record_in_store(&store, "r2", &content_ref.hash, content_ref.size);
 
         // Evict r1 — blob should survive because r2 still references it
-        store.evict_payload("r1", "gc", "gc-agent", &objects).unwrap();
+        store
+            .evict_payload("r1", "gc", "gc-agent", &objects)
+            .unwrap();
 
         let row1 = store.get_record("r1").unwrap().unwrap();
         assert!(!row1.payload_available);
@@ -945,11 +979,15 @@ mod tests {
         create_record_in_store(&store, "r2", &content_ref.hash, content_ref.size);
 
         // Evict r1 first — blob survives
-        store.evict_payload("r1", "gc", "gc-agent", &objects).unwrap();
+        store
+            .evict_payload("r1", "gc", "gc-agent", &objects)
+            .unwrap();
         assert!(objects.exists(&content_ref.hash));
 
         // Evict r2 — now blob can be deleted
-        store.evict_payload("r2", "gc", "gc-agent", &objects).unwrap();
+        store
+            .evict_payload("r2", "gc", "gc-agent", &objects)
+            .unwrap();
         assert!(!objects.exists(&content_ref.hash));
     }
 
@@ -975,7 +1013,9 @@ mod tests {
         let row = store.get_record("r1").unwrap().unwrap();
         assert!(row.retention_class.is_none());
 
-        store.set_retention_class("r1", Some("permanent"), "agent").unwrap();
+        store
+            .set_retention_class("r1", Some("permanent"), "agent")
+            .unwrap();
 
         let row = store.get_record("r1").unwrap().unwrap();
         assert_eq!(row.retention_class.as_deref(), Some("permanent"));
@@ -988,7 +1028,9 @@ mod tests {
         let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         create_record_in_store(&store, "r1", hash, 42);
 
-        store.set_retention_class("r1", Some("ephemeral"), "agent").unwrap();
+        store
+            .set_retention_class("r1", Some("ephemeral"), "agent")
+            .unwrap();
         let row = store.get_record("r1").unwrap().unwrap();
         assert_eq!(row.retention_class.as_deref(), Some("ephemeral"));
 

@@ -22,8 +22,7 @@ impl RecordsCtx {
         let objects_dir = brain_dir.join("objects");
         let record_store =
             RecordStore::new(&records_dir, db).context("Failed to open record store")?;
-        let object_store =
-            ObjectStore::new(&objects_dir).context("Failed to open object store")?;
+        let object_store = ObjectStore::new(&objects_dir).context("Failed to open object store")?;
         Ok(Self {
             record_store,
             object_store,
@@ -51,7 +50,11 @@ pub fn verify(ctx: &RecordsCtx, verbose: bool) -> Result<()> {
         print!("{report}");
         if verbose && !report.is_clean() {
             for m in &report.missing {
-                println!("  MISSING: record={} hash={}", m.record_id, &m.content_hash[..16]);
+                println!(
+                    "  MISSING: record={} hash={}",
+                    m.record_id,
+                    &m.content_hash[..16]
+                );
             }
             for c in &report.corrupt {
                 println!(

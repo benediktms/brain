@@ -21,10 +21,7 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
                     BrainCoreError::RecordEvent(format!("bad RecordCreated payload: {e}"))
                 })?;
 
-            let original_size = p
-                .content_ref
-                .original_size
-                .unwrap_or(p.content_ref.size) as i64;
+            let original_size = p.content_ref.original_size.unwrap_or(p.content_ref.size) as i64;
 
             conn.execute(
                 "INSERT INTO records
@@ -95,8 +92,7 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
             let record_id_idx = params.len() + 1;
             params.push(SqlValue::Text(event.record_id.clone()));
 
-            let sql =
-                format!("UPDATE records SET {set_clause} WHERE record_id = ?{record_id_idx}");
+            let sql = format!("UPDATE records SET {set_clause} WHERE record_id = ?{record_id_idx}");
             conn.execute(&sql, rusqlite::params_from_iter(params))?;
         }
 
@@ -123,9 +119,8 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
         }
 
         RecordEventType::TagRemoved => {
-            let p: TagPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
-                BrainCoreError::RecordEvent(format!("bad TagRemoved payload: {e}"))
-            })?;
+            let p: TagPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| BrainCoreError::RecordEvent(format!("bad TagRemoved payload: {e}")))?;
 
             conn.execute(
                 "DELETE FROM record_tags WHERE record_id = ?1 AND tag = ?2",
@@ -177,8 +172,8 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
         }
 
         RecordEventType::RetentionClassSet => {
-            let p: RetentionClassSetPayload =
-                serde_json::from_value(event.payload.clone()).map_err(|e| {
+            let p: RetentionClassSetPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| {
                     BrainCoreError::RecordEvent(format!("bad RetentionClassSet payload: {e}"))
                 })?;
 
@@ -204,15 +199,16 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
     }
 
     // Record the event itself in the queryable audit log
-    let payload_json =
-        serde_json::to_string(&event.payload).unwrap_or_else(|_| "{}".into());
+    let payload_json = serde_json::to_string(&event.payload).unwrap_or_else(|_| "{}".into());
     conn.execute(
         "INSERT INTO record_events (event_id, record_id, event_type, timestamp, actor, payload)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
             event.event_id,
             event.record_id,
-            serde_json::to_string(&event.event_type).unwrap_or_default().trim_matches('"'),
+            serde_json::to_string(&event.event_type)
+                .unwrap_or_default()
+                .trim_matches('"'),
             event.timestamp,
             event.actor,
             payload_json,
@@ -258,8 +254,8 @@ mod tests {
     use super::*;
     use crate::db::schema::init_schema;
     use crate::records::events::{
-        ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload,
-        RecordEvent, RecordEventType, RecordUpdatedPayload, TagPayload, append_event,
+        ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+        RecordEventType, RecordUpdatedPayload, TagPayload, append_event,
     };
     use tempfile::TempDir;
 
@@ -568,7 +564,11 @@ mod tests {
         let conn = setup();
 
         // Create
-        append_event(&events_path, &make_created_event("r1", "Original", "report")).unwrap();
+        append_event(
+            &events_path,
+            &make_created_event("r1", "Original", "report"),
+        )
+        .unwrap();
 
         // Update title
         append_event(
@@ -757,7 +757,12 @@ mod tests {
         // Unpin it
         apply_event(
             &conn,
-            &RecordEvent::new("r1", "agent", RecordEventType::RecordUnpinned, &PinPayload {}),
+            &RecordEvent::new(
+                "r1",
+                "agent",
+                RecordEventType::RecordUnpinned,
+                &PinPayload {},
+            ),
         )
         .unwrap();
 
@@ -783,11 +788,7 @@ mod tests {
             RecordCreatedPayload {
                 title: "T".to_string(),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload::new(
-                    "abc123".to_string(),
-                    512,
-                    None,
-                ),
+                content_ref: ContentRefPayload::new("abc123".to_string(), 512, None),
                 description: None,
                 task_id: None,
                 tags: vec![],
@@ -810,7 +811,15 @@ mod tests {
                 "SELECT retention_class, pinned, payload_available, content_encoding, original_size
                  FROM records WHERE record_id = 'r1'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .unwrap();
 
