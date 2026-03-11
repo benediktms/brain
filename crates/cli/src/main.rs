@@ -519,6 +519,40 @@ mod tests {
         ));
     }
 
+    // ── Cross-brain task create parsing ────────────────────────────
+
+    #[test]
+    fn parse_tasks_create_with_brain() {
+        let cli = Cli::try_parse_from([
+            "brain", "tasks", "create", "--brain", "infra", "--title", "Fix CI",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Tasks {
+                action: TasksAction::Create { brain, title, .. },
+                ..
+            } => {
+                assert_eq!(brain, Some("infra".to_string()));
+                assert_eq!(title, "Fix CI");
+            }
+            _ => panic!("expected Tasks Create"),
+        }
+    }
+
+    #[test]
+    fn parse_tasks_create_link_from_requires_brain() {
+        let result = Cli::try_parse_from([
+            "brain",
+            "tasks",
+            "create",
+            "--title",
+            "Test",
+            "--link-from",
+            "BRN-01ABC",
+        ]);
+        assert!(result.is_err(), "--link-from without --brain should fail");
+    }
+
     // ── Edge cases ──────────────────────────────────────────────────
 
     #[test]

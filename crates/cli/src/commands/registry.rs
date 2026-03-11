@@ -1,24 +1,69 @@
 use anyhow::Result;
-use brain_lib::config::{brain_home, load_global_config, save_global_config};
+use brain_lib::config::{brain_home, load_global_config, open_remote_task_store, save_global_config};
 
 /// List all registered brains.
-pub fn run_list() -> Result<()> {
+pub fn run_list(json: bool) -> Result<()> {
     let global = load_global_config()?;
 
     if global.brains.is_empty() {
-        println!("No brains registered. Run `brain init` in a project directory.");
+        if json {
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "brains": [],
+                "count": 0
+            }))?);
+        } else {
+            println!("No brains registered. Run `brain init` in a project directory.");
+        }
         return Ok(());
     }
 
-    for (name, entry) in &global.brains {
-        let notes: Vec<String> = entry
-            .notes
+    let mut entries: Vec<(String, brain_lib::config::BrainEntry, Option<String>)> = global
+        .brains
+        .into_iter()
+        .map(|(name, entry)| {
+            let prefix = open_remote_task_store(&name, &entry)
+                .ok()
+                .and_then(|store| store.get_project_prefix().ok());
+            (name, entry, prefix)
+        })
+        .collect();
+
+    // Sort by name for deterministic output.
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if json {
+        let brains: Vec<serde_json::Value> = entries
             .iter()
-            .map(|p| p.display().to_string())
+            .map(|(name, entry, prefix)| {
+                serde_json::json!({
+                    "name": name,
+                    "id": entry.id,
+                    "root": entry.root.display().to_string(),
+                    "prefix": prefix,
+                })
+            })
             .collect();
-        println!("{name}");
-        println!("  root:  {}", entry.root.display());
-        println!("  notes: {}", notes.join(", "));
+        let count = brains.len();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "brains": brains,
+                "count": count
+            }))?
+        );
+        return Ok(());
+    }
+
+    for (name, entry, prefix) in &entries {
+        if let Some(ref id) = entry.id {
+            println!("{name} [{id}]");
+        } else {
+            println!("{name}");
+        }
+        println!("  root:   {}", entry.root.display());
+        if let Some(p) = prefix {
+            println!("  prefix: {p}");
+        }
     }
 
     Ok(())
