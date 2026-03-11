@@ -1,4 +1,5 @@
 mod artifacts;
+mod record_common;
 mod snapshots;
 mod tasks;
 
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 
 pub(crate) use artifacts::*;
+pub(crate) use record_common::*;
 pub(crate) use snapshots::*;
 pub(crate) use tasks::*;
 

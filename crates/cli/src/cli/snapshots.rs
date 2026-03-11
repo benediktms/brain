@@ -1,5 +1,7 @@
 use clap::Subcommand;
 
+use super::record_common::{RecordLinkAction, RecordTagAction};
+
 #[derive(Subcommand)]
 pub(crate) enum SnapshotsAction {
     /// Save a new snapshot (opaque state bundle)
@@ -72,5 +74,17 @@ pub(crate) enum SnapshotsAction {
         /// Reason for archiving
         #[arg(long)]
         reason: Option<String>,
+    },
+
+    /// Add or remove tags on a snapshot
+    Tag {
+        #[command(subcommand)]
+        action: RecordTagAction,
+    },
+
+    /// Add or remove links on a snapshot
+    Link {
+        #[command(subcommand)]
+        action: RecordLinkAction,
     },
 }

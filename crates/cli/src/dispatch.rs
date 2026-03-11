@@ -415,6 +415,22 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 SnapshotsAction::Archive { id, reason } => {
                     commands::snapshots::run::archive(&ctx, &id, reason)?;
                 }
+                SnapshotsAction::Tag { action } => match action {
+                    RecordTagAction::Add { id, tag } => {
+                        commands::snapshots::run::tag_add(&ctx, &id, &tag)?;
+                    }
+                    RecordTagAction::Remove { id, tag } => {
+                        commands::snapshots::run::tag_remove(&ctx, &id, &tag)?;
+                    }
+                },
+                SnapshotsAction::Link { action } => match action {
+                    RecordLinkAction::Add { id, task, chunk } => {
+                        commands::snapshots::run::link_add(&ctx, &id, task, chunk)?;
+                    }
+                    RecordLinkAction::Remove { id, task, chunk } => {
+                        commands::snapshots::run::link_remove(&ctx, &id, task, chunk)?;
+                    }
+                },
             }
         }
         Command::Artifacts { json, action } => {
@@ -468,6 +484,22 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 ArtifactsAction::Archive { id, reason } => {
                     commands::artifacts::run::archive(&ctx, &id, reason)?;
                 }
+                ArtifactsAction::Tag { action } => match action {
+                    RecordTagAction::Add { id, tag } => {
+                        commands::artifacts::run::tag_add(&ctx, &id, &tag)?;
+                    }
+                    RecordTagAction::Remove { id, tag } => {
+                        commands::artifacts::run::tag_remove(&ctx, &id, &tag)?;
+                    }
+                },
+                ArtifactsAction::Link { action } => match action {
+                    RecordLinkAction::Add { id, task, chunk } => {
+                        commands::artifacts::run::link_add(&ctx, &id, task, chunk)?;
+                    }
+                    RecordLinkAction::Remove { id, task, chunk } => {
+                        commands::artifacts::run::link_remove(&ctx, &id, task, chunk)?;
+                    }
+                },
             }
         }
     }

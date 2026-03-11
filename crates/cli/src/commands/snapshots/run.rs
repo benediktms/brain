@@ -8,7 +8,8 @@ use serde_json::json;
 use brain_lib::db::Db;
 use brain_lib::records::RecordStore;
 use brain_lib::records::events::{
-    ContentRefPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+    ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+    RecordEventType, TagPayload,
 };
 use brain_lib::records::objects::ObjectStore;
 use brain_lib::records::queries::RecordFilter;
@@ -343,6 +344,156 @@ pub fn restore(ctx: &SnapshotCtx, id: &str, output: Option<std::path::PathBuf>) 
             std::io::stdout()
                 .write_all(&bytes)
                 .context("Failed to write to stdout")?;
+        }
+    }
+
+    Ok(())
+}
+
+// -- tag --
+
+pub fn tag_add(ctx: &SnapshotCtx, id: &str, tag: &str) -> Result<()> {
+    let record_id = ctx
+        .record_store
+        .resolve_record_id(id)
+        .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
+
+    let event = RecordEvent::new(
+        &record_id,
+        "cli",
+        RecordEventType::TagAdded,
+        &TagPayload { tag: tag.to_string() },
+    );
+
+    ctx.record_store
+        .apply_and_append(&event)
+        .context("Failed to apply tag_add event")?;
+
+    if ctx.json {
+        let out = serde_json::json!({ "record_id": record_id, "tag": tag, "action": "added" });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Added tag '{tag}' to snapshot {record_id}");
+    }
+
+    Ok(())
+}
+
+pub fn tag_remove(ctx: &SnapshotCtx, id: &str, tag: &str) -> Result<()> {
+    let record_id = ctx
+        .record_store
+        .resolve_record_id(id)
+        .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
+
+    let event = RecordEvent::new(
+        &record_id,
+        "cli",
+        RecordEventType::TagRemoved,
+        &TagPayload { tag: tag.to_string() },
+    );
+
+    ctx.record_store
+        .apply_and_append(&event)
+        .context("Failed to apply tag_remove event")?;
+
+    if ctx.json {
+        let out = serde_json::json!({ "record_id": record_id, "tag": tag, "action": "removed" });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Removed tag '{tag}' from snapshot {record_id}");
+    }
+
+    Ok(())
+}
+
+// -- link --
+
+pub fn link_add(
+    ctx: &SnapshotCtx,
+    id: &str,
+    task: Option<String>,
+    chunk: Option<String>,
+) -> Result<()> {
+    if task.is_none() && chunk.is_none() {
+        anyhow::bail!("Must specify at least one of --task or --chunk");
+    }
+
+    let record_id = ctx
+        .record_store
+        .resolve_record_id(id)
+        .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
+
+    let event = RecordEvent::new(
+        &record_id,
+        "cli",
+        RecordEventType::LinkAdded,
+        &LinkPayload { task_id: task.clone(), chunk_id: chunk.clone() },
+    );
+
+    ctx.record_store
+        .apply_and_append(&event)
+        .context("Failed to apply link_add event")?;
+
+    if ctx.json {
+        let out = serde_json::json!({
+            "record_id": record_id,
+            "task_id": task,
+            "chunk_id": chunk,
+            "action": "linked",
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        if let Some(ref t) = task {
+            println!("Linked task '{t}' to snapshot {record_id}");
+        }
+        if let Some(ref c) = chunk {
+            println!("Linked chunk '{c}' to snapshot {record_id}");
+        }
+    }
+
+    Ok(())
+}
+
+pub fn link_remove(
+    ctx: &SnapshotCtx,
+    id: &str,
+    task: Option<String>,
+    chunk: Option<String>,
+) -> Result<()> {
+    if task.is_none() && chunk.is_none() {
+        anyhow::bail!("Must specify at least one of --task or --chunk");
+    }
+
+    let record_id = ctx
+        .record_store
+        .resolve_record_id(id)
+        .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
+
+    let event = RecordEvent::new(
+        &record_id,
+        "cli",
+        RecordEventType::LinkRemoved,
+        &LinkPayload { task_id: task.clone(), chunk_id: chunk.clone() },
+    );
+
+    ctx.record_store
+        .apply_and_append(&event)
+        .context("Failed to apply link_remove event")?;
+
+    if ctx.json {
+        let out = serde_json::json!({
+            "record_id": record_id,
+            "task_id": task,
+            "chunk_id": chunk,
+            "action": "unlinked",
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        if let Some(ref t) = task {
+            println!("Unlinked task '{t}' from snapshot {record_id}");
+        }
+        if let Some(ref c) = chunk {
+            println!("Unlinked chunk '{c}' from snapshot {record_id}");
         }
     }
 

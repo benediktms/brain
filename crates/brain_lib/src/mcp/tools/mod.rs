@@ -8,8 +8,10 @@ mod record_archive;
 mod record_create_artifact;
 mod record_fetch_content;
 mod record_get;
+mod record_link;
 mod record_list;
 mod record_save_snapshot;
+mod record_tag;
 mod status;
 mod task_apply_event;
 mod task_close;
@@ -96,6 +98,10 @@ impl ToolRegistry {
                 Box::new(record_list::RecordList),
                 Box::new(record_fetch_content::RecordFetchContent),
                 Box::new(record_archive::RecordArchive),
+                Box::new(record_tag::RecordTagAdd),
+                Box::new(record_tag::RecordTagRemove),
+                Box::new(record_link::RecordLinkAdd),
+                Box::new(record_link::RecordLinkRemove),
             ],
         }
     }
@@ -127,7 +133,7 @@ pub(super) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 19);
+        assert_eq!(defs.len(), 23);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
