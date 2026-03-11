@@ -262,6 +262,9 @@ pub(crate) enum Command {
     /// Regenerate AGENTS.md and bridge CLAUDE.md from the current brain config
     Docs,
 
+    /// Show the brain ID for the current project (generates one if missing)
+    Id,
+
     /// Agent utilities
     Agent {
         #[command(subcommand)]

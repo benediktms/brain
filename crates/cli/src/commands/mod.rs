@@ -7,6 +7,7 @@ pub mod daemon_service;
 pub mod docs;
 pub mod doctor;
 pub mod hooks;
+pub mod id;
 pub mod import_beads;
 pub mod index;
 pub mod init;
