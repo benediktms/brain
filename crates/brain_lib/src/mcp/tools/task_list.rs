@@ -688,6 +688,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_filter_by_assignee_case_insensitive() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        apply(&registry, &ctx, json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Alice task", "priority": 1, "assignee": "alice"}})).await;
+        apply(&registry, &ctx, json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "Bob task", "priority": 2, "assignee": "Bob"}})).await;
+
+        // Filter with uppercase should match lowercase stored value
+        let result = registry
+            .dispatch("tasks.list", json!({"assignee": "Alice"}), &ctx)
+            .await;
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["title"], "Alice task");
+
+        // Filter with lowercase should match mixed-case stored value
+        let result = registry
+            .dispatch("tasks.list", json!({"assignee": "bob"}), &ctx)
+            .await;
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["title"], "Bob task");
+    }
+
+    #[tokio::test]
     async fn test_filter_by_label() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
