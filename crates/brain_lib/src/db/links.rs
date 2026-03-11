@@ -138,16 +138,12 @@ pub fn count_backlinks(conn: &Connection, target_path: &str) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::db::files::get_or_create_file_id;
-    use crate::db::migrations::migrate_v14_to_v15;
     use crate::db::schema::init_schema;
     use crate::links::{Link, LinkType};
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
-        // Apply v14→v15 to add target_file_id to links and pagerank_score to files.
-        // init_schema currently stamps v14; this will be removed once schema.rs is bumped to v15.
-        migrate_v14_to_v15(&conn).unwrap();
         conn
     }
 

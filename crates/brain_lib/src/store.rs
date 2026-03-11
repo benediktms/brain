@@ -73,6 +73,7 @@ pub struct OptimizeScheduler {
     guard: tokio::sync::Mutex<Instant>,
     row_threshold: u64,
     time_threshold: Duration,
+    db: Option<Arc<crate::db::Db>>,
 }
 
 impl OptimizeScheduler {
@@ -83,7 +84,13 @@ impl OptimizeScheduler {
             guard: tokio::sync::Mutex::new(Instant::now()),
             row_threshold,
             time_threshold,
+            db: None,
         }
+    }
+
+    /// Attach a SQLite database pool for post-optimize PageRank computation.
+    pub fn set_db(&mut self, db: Arc<crate::db::Db>) {
+        self.db = Some(db);
     }
 
     /// Record that `n` mutations occurred (called from all write methods).
@@ -164,6 +171,15 @@ impl OptimizeScheduler {
 
         // Auto-create IVF-PQ index if enough rows and no index exists yet
         self.maybe_create_index().await;
+
+        // Recompute PageRank scores after compaction so link scores stay fresh
+        if let Some(ref db) = self.db {
+            if let Err(e) = db.with_write_conn(|conn| {
+                crate::pagerank::compute_and_store_pagerank(conn)
+            }) {
+                warn!(error = %e, "PageRank computation failed, will retry on next optimize");
+            }
+        }
     }
 
     /// Create IVF-PQ vector index if the table has enough rows and no vector index exists.
@@ -316,6 +332,11 @@ impl Store {
         &self.optimize_scheduler
     }
 
+    /// Attach a SQLite database pool so that PageRank is recomputed after each optimize.
+    pub fn set_db(&mut self, db: Arc<crate::db::Db>) {
+        self.optimize_scheduler.set_db(db);
+    }
+
     /// Access the underlying LanceDB table (for index inspection/management).
     pub fn table(&self) -> &lancedb::Table {
         &self.table
@@ -344,11 +365,13 @@ impl Store {
             .map_err(|e| BrainCoreError::VectorDb(format!("failed to recreate table: {e}")))?;
 
         let table = Arc::new(table);
+        let saved_db = self.optimize_scheduler.db.take();
         self.optimize_scheduler = OptimizeScheduler::new(
             Arc::clone(&table),
             DEFAULT_ROW_THRESHOLD,
             DEFAULT_TIME_THRESHOLD,
         );
+        self.optimize_scheduler.db = saved_db;
         self.table = table;
 
         info!("LanceDB chunks table recreated with current schema");
