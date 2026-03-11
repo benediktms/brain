@@ -4,9 +4,46 @@ use ulid::Ulid;
 use crate::error::Result;
 use crate::links::Link;
 
+/// Resolve a link's `target_path` to a `file_id` by querying the files table.
+///
+/// For wiki/markdown links, tries three match strategies in order:
+/// 1. Exact path match (`files.path = target_path`)
+/// 2. Suffix match with `.md` extension (`files.path LIKE '%/' || target_path || '.md'`)
+/// 3. Suffix match without extension (`files.path LIKE '%/' || target_path`)
+///
+/// Returns `None` for external links or when no matching file is found.
+fn resolve_target_file_id(conn: &Connection, target_path: &str, link_type: &str) -> Option<String> {
+    if link_type == "external" {
+        return None;
+    }
+    conn.query_row(
+        "SELECT file_id FROM files
+          WHERE path = ?1
+             OR path LIKE '%/' || ?1 || '.md'
+             OR path LIKE '%/' || ?1
+          LIMIT 1",
+        [target_path],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+/// Returns true if the `links.target_file_id` column exists (i.e. v15+ schema).
+fn has_target_file_id_column(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('links') WHERE name = 'target_file_id'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
 /// Atomically replace all links for a file.
 ///
 /// Deletes existing links for the `source_file_id`, then inserts the new set.
+/// When the schema is at v15+, resolves `target_file_id` for wiki/markdown links
+/// at insert time. Falls back to the v14 INSERT when the column is absent.
 pub fn replace_links(conn: &Connection, source_file_id: &str, links: &[Link]) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
@@ -15,22 +52,40 @@ pub fn replace_links(conn: &Connection, source_file_id: &str, links: &[Link]) ->
         [source_file_id],
     )?;
 
-    let mut stmt = tx.prepare_cached(
-        "INSERT INTO links (link_id, source_file_id, target_path, link_text, link_type)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
+    let with_target_file_id = has_target_file_id_column(&tx);
 
-    for link in links {
-        stmt.execute(rusqlite::params![
-            Ulid::new().to_string(),
-            source_file_id,
-            link.target,
-            link.link_text,
-            link.link_type.as_str(),
-        ])?;
+    if with_target_file_id {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_text, link_type, target_file_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
+        for link in links {
+            let target_file_id = resolve_target_file_id(&tx, &link.target, link.link_type.as_str());
+            stmt.execute(rusqlite::params![
+                Ulid::new().to_string(),
+                source_file_id,
+                link.target,
+                link.link_text,
+                link.link_type.as_str(),
+                target_file_id,
+            ])?;
+        }
+    } else {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_text, link_type)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for link in links {
+            stmt.execute(rusqlite::params![
+                Ulid::new().to_string(),
+                source_file_id,
+                link.target,
+                link.link_text,
+                link.link_type.as_str(),
+            ])?;
+        }
     }
 
-    drop(stmt);
     tx.commit()?;
     Ok(())
 }
@@ -60,12 +115,16 @@ pub fn count_backlinks(conn: &Connection, target_path: &str) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::db::files::get_or_create_file_id;
+    use crate::db::migrations::migrate_v14_to_v15;
     use crate::db::schema::init_schema;
     use crate::links::{Link, LinkType};
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
+        // Apply v14→v15 to add target_file_id to links and pagerank_score to files.
+        // init_schema currently stamps v14; this will be removed once schema.rs is bumped to v15.
+        migrate_v14_to_v15(&conn).unwrap();
         conn
     }
 

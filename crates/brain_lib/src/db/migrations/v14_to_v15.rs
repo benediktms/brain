@@ -2,29 +2,33 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
-/// v14 → v15: Add `summarizer` and `chunk_id` columns to the `summaries` table.
+/// v14 → v15: Add `target_file_id` to `links` and `pagerank_score` to `files`.
 ///
-/// - `summarizer TEXT NOT NULL DEFAULT 'rule-based'`: tracks which backend produced
-///   each summary for invalidation when the model changes.
-/// - `chunk_id TEXT`: foreign key to the chunk that was summarized (for kind='summary').
-/// - Partial unique index on `(chunk_id, summarizer) WHERE kind = 'summary'` to prevent
-///   duplicate ML summaries per chunk per backend.
+/// - `links.target_file_id`: nullable FK to `files(file_id)`, resolved at index
+///   time for wiki/markdown links. External links remain NULL.
+/// - `files.pagerank_score`: nullable REAL, populated by the optimize cycle.
 pub fn migrate_v14_to_v15(conn: &Connection) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    conn.execute_batch(
+        "
+        BEGIN;
 
-    tx.execute(
-        "ALTER TABLE summaries ADD COLUMN summarizer TEXT NOT NULL DEFAULT 'rule-based'",
-        [],
-    )?;
-    tx.execute("ALTER TABLE summaries ADD COLUMN chunk_id TEXT", [])?;
-    tx.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_chunk_summarizer
-             ON summaries(chunk_id, summarizer) WHERE kind = 'summary'",
-        [],
-    )?;
+        ALTER TABLE links ADD COLUMN target_file_id TEXT REFERENCES files(file_id) ON DELETE SET NULL;
+        CREATE INDEX idx_links_target_file ON links(target_file_id);
 
-    tx.execute("PRAGMA user_version = 15", [])?;
-    tx.commit()?;
+        UPDATE links SET target_file_id = (
+            SELECT file_id FROM files
+            WHERE files.path = links.target_path
+               OR files.path LIKE '%/' || links.target_path || '.md'
+               OR files.path LIKE '%/' || links.target_path
+        ) WHERE link_type IN ('wiki', 'markdown');
+
+        ALTER TABLE files ADD COLUMN pagerank_score REAL;
+
+        PRAGMA user_version = 15;
+
+        COMMIT;
+    ",
+    )?;
     Ok(())
 }
 
@@ -32,34 +36,39 @@ pub fn migrate_v14_to_v15(conn: &Connection) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Minimal v14 schema: files + links tables only (no other dependencies needed).
     fn setup_v14(conn: &Connection) {
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
+
              CREATE TABLE files (
-                 file_id       TEXT PRIMARY KEY,
-                 path          TEXT NOT NULL UNIQUE,
-                 indexing_state TEXT NOT NULL DEFAULT 'idle'
+                 file_id         TEXT PRIMARY KEY,
+                 path            TEXT UNIQUE NOT NULL,
+                 content_hash    TEXT,
+                 mtime           INTEGER,
+                 size            INTEGER,
+                 last_indexed_at INTEGER,
+                 deleted_at      INTEGER,
+                 indexing_state  TEXT NOT NULL DEFAULT 'idle'
              );
-             CREATE TABLE summaries (
-                 summary_id  TEXT PRIMARY KEY,
-                 file_id     TEXT REFERENCES files(file_id) ON DELETE SET NULL,
-                 kind        TEXT NOT NULL CHECK(kind IN ('episode', 'reflection', 'summary')),
-                 title       TEXT,
-                 content     TEXT NOT NULL,
-                 tags        TEXT NOT NULL DEFAULT '[]',
-                 importance  REAL NOT NULL DEFAULT 1.0,
-                 created_at  INTEGER NOT NULL,
-                 updated_at  INTEGER NOT NULL,
-                 valid_from  INTEGER,
-                 valid_to    INTEGER
+
+             CREATE TABLE links (
+                 link_id        TEXT PRIMARY KEY,
+                 source_file_id TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+                 target_path    TEXT NOT NULL,
+                 link_text      TEXT,
+                 link_type      TEXT NOT NULL CHECK(link_type IN ('wiki', 'markdown', 'external'))
              );
+             CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_file_id);
+             CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_path);
+
              PRAGMA user_version = 14;",
         )
         .unwrap();
     }
 
     #[test]
-    fn test_migration_bumps_version() {
+    fn test_schema_version_is_15_after_migration() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v14(&conn);
 
@@ -72,140 +81,161 @@ mod tests {
     }
 
     #[test]
-    fn test_summarizer_column_has_default() {
+    fn test_target_file_id_column_exists() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v14(&conn);
         migrate_v14_to_v15(&conn).unwrap();
 
-        // Insert a row without specifying summarizer — should use default
+        // Insert a file and a link — target_file_id column must exist
         conn.execute(
-            "INSERT INTO summaries (summary_id, kind, content, created_at, updated_at)
-             VALUES ('s1', 'episode', 'test content', 1000, 1000)",
+            "INSERT INTO files (file_id, path) VALUES ('f1', '/notes/foo.md')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_type, target_file_id)
+             VALUES ('l1', 'f1', 'foo.md', 'markdown', NULL)",
             [],
         )
         .unwrap();
 
-        let summarizer: String = conn
+        let val: Option<String> = conn
             .query_row(
-                "SELECT summarizer FROM summaries WHERE summary_id = 's1'",
+                "SELECT target_file_id FROM links WHERE link_id = 'l1'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(summarizer, "rule-based");
+        assert!(val.is_none());
     }
 
     #[test]
-    fn test_chunk_id_column_is_nullable() {
+    fn test_pagerank_score_column_exists() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v14(&conn);
         migrate_v14_to_v15(&conn).unwrap();
 
         conn.execute(
-            "INSERT INTO summaries (summary_id, kind, content, created_at, updated_at)
-             VALUES ('s1', 'episode', 'test content', 1000, 1000)",
+            "INSERT INTO files (file_id, path) VALUES ('f1', '/notes/bar.md')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE files SET pagerank_score = 0.42 WHERE file_id = 'f1'",
             [],
         )
         .unwrap();
 
-        let chunk_id: Option<String> = conn
+        let score: Option<f64> = conn
             .query_row(
-                "SELECT chunk_id FROM summaries WHERE summary_id = 's1'",
+                "SELECT pagerank_score FROM files WHERE file_id = 'f1'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(chunk_id.is_none());
+        assert_eq!(score, Some(0.42));
     }
 
     #[test]
-    fn test_unique_index_prevents_duplicate_summaries_per_chunk() {
+    fn test_backfill_resolves_wiki_and_markdown_links() {
         let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         setup_v14(&conn);
-        migrate_v14_to_v15(&conn).unwrap();
 
-        // First ML summary for chunk c1 with backend 'flan-t5-small'
-        conn.execute(
-            "INSERT INTO summaries (summary_id, kind, content, chunk_id, summarizer, created_at, updated_at)
-             VALUES ('s1', 'summary', 'first summary', 'c1', 'flan-t5-small', 1000, 1000)",
-            [],
+        // Seed files
+        conn.execute_batch(
+            "INSERT INTO files (file_id, path) VALUES
+                 ('f1', '/notes/source.md'),
+                 ('f2', '/notes/headings.md'),
+                 ('f3', '/notes/simple.md');",
         )
         .unwrap();
 
-        // Duplicate (same chunk_id + summarizer + kind='summary') should fail
-        let result = conn.execute(
-            "INSERT INTO summaries (summary_id, kind, content, chunk_id, summarizer, created_at, updated_at)
-             VALUES ('s2', 'summary', 'duplicate summary', 'c1', 'flan-t5-small', 2000, 2000)",
-            [],
-        );
-        assert!(
-            result.is_err(),
-            "duplicate (chunk_id, summarizer) for kind='summary' should be rejected"
-        );
+        // Seed links (pre-migration, no target_file_id column yet)
+        conn.execute_batch(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_type) VALUES
+                 ('l1', 'f1', 'headings', 'wiki'),
+                 ('l2', 'f1', 'simple.md', 'markdown'),
+                 ('l3', 'f1', 'https://example.com', 'external');",
+        )
+        .unwrap();
+
+        migrate_v14_to_v15(&conn).unwrap();
+
+        // Wiki link "headings" should resolve to f2 (/notes/headings.md via LIKE '%/headings.md')
+        let wiki_target: Option<String> = conn
+            .query_row(
+                "SELECT target_file_id FROM links WHERE link_id = 'l1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(wiki_target, Some("f2".to_string()), "wiki link should resolve to f2");
+
+        // Markdown link "simple.md" should resolve to f3 (/notes/simple.md via path = target_path)
+        let md_target: Option<String> = conn
+            .query_row(
+                "SELECT target_file_id FROM links WHERE link_id = 'l2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(md_target, Some("f3".to_string()), "markdown link should resolve to f3");
+
+        // External link should remain NULL
+        let ext_target: Option<String> = conn
+            .query_row(
+                "SELECT target_file_id FROM links WHERE link_id = 'l3'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(ext_target.is_none(), "external link should have NULL target_file_id");
     }
 
     #[test]
-    fn test_unique_index_allows_different_backends_same_chunk() {
+    fn test_target_file_index_exists() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v14(&conn);
         migrate_v14_to_v15(&conn).unwrap();
-
-        conn.execute(
-            "INSERT INTO summaries (summary_id, kind, content, chunk_id, summarizer, created_at, updated_at)
-             VALUES ('s1', 'summary', 'flan summary', 'c1', 'flan-t5-small', 1000, 1000)",
-            [],
-        )
-        .unwrap();
-
-        // Different backend for the same chunk — should succeed
-        conn.execute(
-            "INSERT INTO summaries (summary_id, kind, content, chunk_id, summarizer, created_at, updated_at)
-             VALUES ('s2', 'summary', 'remote summary', 'c1', 'remote-llm', 1000, 1000)",
-            [],
-        )
-        .unwrap();
 
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM summaries WHERE chunk_id = 'c1' AND kind = 'summary'",
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_links_target_file'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 1, "idx_links_target_file index should exist");
     }
 
     #[test]
-    fn test_unique_index_is_partial_episodes_not_affected() {
+    fn test_unresolvable_wiki_link_stays_null() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v14(&conn);
+
+        conn.execute(
+            "INSERT INTO files (file_id, path) VALUES ('f1', '/notes/source.md')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_type)
+             VALUES ('l1', 'f1', 'nonexistent', 'wiki')",
+            [],
+        )
+        .unwrap();
+
         migrate_v14_to_v15(&conn).unwrap();
 
-        // Two episodes can share chunk_id (index only applies WHERE kind='summary')
-        conn.execute(
-            "INSERT INTO summaries (summary_id, kind, content, chunk_id, summarizer, created_at, updated_at)
-             VALUES ('s1', 'episode', 'episode 1', 'c1', 'rule-based', 1000, 1000)",
-            [],
-        )
-        .unwrap();
-
-        conn.execute(
-            "INSERT INTO summaries (summary_id, kind, content, chunk_id, summarizer, created_at, updated_at)
-             VALUES ('s2', 'episode', 'episode 2', 'c1', 'rule-based', 2000, 2000)",
-            [],
-        )
-        .unwrap();
-
-        let count: i64 = conn
+        let target: Option<String> = conn
             .query_row(
-                "SELECT COUNT(*) FROM summaries WHERE chunk_id = 'c1' AND kind = 'episode'",
+                "SELECT target_file_id FROM links WHERE link_id = 'l1'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(
-            count, 2,
-            "partial index should not block duplicate episodes"
-        );
+        assert!(target.is_none(), "unresolvable wiki link should remain NULL");
     }
 }
