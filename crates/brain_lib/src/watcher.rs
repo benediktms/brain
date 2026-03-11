@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify_debouncer_full::notify::RecursiveMode;
@@ -17,7 +17,7 @@ pub enum FileEvent {
 
 /// Watches directories for markdown file changes, debouncing and filtering events.
 pub struct BrainWatcher {
-    _debouncer: Debouncer<notify_debouncer_full::notify::RecommendedWatcher, RecommendedCache>,
+    debouncer: Debouncer<notify_debouncer_full::notify::RecommendedWatcher, RecommendedCache>,
 }
 
 impl BrainWatcher {
@@ -29,7 +29,19 @@ impl BrainWatcher {
         dirs: &[PathBuf],
         tx: tokio::sync::mpsc::Sender<FileEvent>,
     ) -> crate::error::Result<Self> {
-        let mut debouncer = new_debouncer(
+        let mut watcher = Self::new_empty(tx)?;
+        for dir in dirs {
+            watcher.watch_path(dir.as_path())?;
+        }
+        Ok(watcher)
+    }
+
+    /// Create a new watcher with no initial directories.
+    ///
+    /// Directories can be added later via [`watch_path`](Self::watch_path).
+    /// This is useful for multi-brain mode where directories are registered individually.
+    pub fn new_empty(tx: tokio::sync::mpsc::Sender<FileEvent>) -> crate::error::Result<Self> {
+        let debouncer = new_debouncer(
             Duration::from_millis(250),
             None,
             move |result: DebounceEventResult| match result {
@@ -55,19 +67,40 @@ impl BrainWatcher {
             crate::error::BrainCoreError::Io(std::io::Error::other(format!("watcher init: {e}")))
         })?;
 
-        for dir in dirs {
-            debouncer
-                .watch(dir.as_path(), RecursiveMode::Recursive)
-                .map_err(|e| {
-                    crate::error::BrainCoreError::Io(std::io::Error::other(format!(
-                        "watch dir: {e}"
-                    )))
-                })?;
-            info!(dir = %dir.display(), "watching directory");
-        }
+        Ok(Self { debouncer })
+    }
 
-        Ok(Self {
-            _debouncer: debouncer,
+    /// Start watching a directory recursively.
+    ///
+    /// Returns an error if the directory does not exist or cannot be watched.
+    /// The caller decides whether to skip non-existent directories or fail.
+    pub fn watch_path(&mut self, dir: &Path) -> crate::error::Result<()> {
+        if !dir.exists() {
+            return Err(crate::error::BrainCoreError::Io(std::io::Error::other(
+                format!("watch dir does not exist: {}", dir.display()),
+            )));
+        }
+        self.debouncer
+            .watch(dir, RecursiveMode::Recursive)
+            .map_err(|e| {
+                crate::error::BrainCoreError::Io(std::io::Error::other(format!(
+                    "watch dir {}: {e}",
+                    dir.display()
+                )))
+            })?;
+        info!(dir = %dir.display(), "watching directory");
+        Ok(())
+    }
+
+    /// Stop watching a previously registered directory.
+    ///
+    /// Returns an error if the directory was not being watched or the unwatch fails.
+    pub fn unwatch_path(&mut self, dir: &Path) -> crate::error::Result<()> {
+        self.debouncer.unwatch(dir).map_err(|e| {
+            crate::error::BrainCoreError::Io(std::io::Error::other(format!(
+                "unwatch dir {}: {e}",
+                dir.display()
+            )))
         })
     }
 }
