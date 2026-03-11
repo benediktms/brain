@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures::future::join_all;
 use tracing::{instrument, warn};
 
 use std::sync::atomic::Ordering;
@@ -108,7 +109,7 @@ impl<'a> QueryPipeline<'a> {
     }
 
     /// Core search logic: returns ranked results with fusion confidence.
-    async fn search_ranked(
+    pub(crate) async fn search_ranked(
         &self,
         query: &str,
         intent: &str,
@@ -352,5 +353,142 @@ impl<'a> QueryPipeline<'a> {
             episodes,
             search_result,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FederatedPipeline
+// ---------------------------------------------------------------------------
+
+/// Federated search across multiple brain projects.
+///
+/// Fans out queries to each brain's `QueryPipeline` in parallel,
+/// then merges results by `hybrid_score` (descending).
+pub struct FederatedPipeline<'a> {
+    /// The local brain's SQLite database.
+    pub local_db: &'a crate::db::Db,
+    /// The local brain's vector store reader.
+    pub local_store: &'a StoreReader,
+    /// Human-readable name of the local brain (for attribution).
+    pub local_brain_name: String,
+    /// Remote brain search contexts opened via `open_remote_search_context`.
+    pub remotes: Vec<crate::config::RemoteSearchContext>,
+    /// Shared embedder — query is embedded once, used across all brains.
+    pub embedder: &'a Arc<dyn crate::embedder::Embed>,
+    /// Shared metrics handle.
+    pub metrics: &'a Arc<crate::metrics::Metrics>,
+}
+
+impl<'a> FederatedPipeline<'a> {
+    /// Search across the local brain and all configured remote brains.
+    ///
+    /// The query is embedded once and each brain's `QueryPipeline` is run
+    /// concurrently. Results are merged by `hybrid_score` (descending) and
+    /// packed into a single `SearchResult` within the token budget.
+    ///
+    /// Remote brains whose vector store is `None` (LanceDB not yet initialised)
+    /// are skipped with a warning — the search continues with the remaining
+    /// brains.
+    pub async fn search(
+        &self,
+        query: &str,
+        intent: &str,
+        budget_tokens: usize,
+        k: usize,
+        query_tags: &[String],
+    ) -> Result<crate::retrieval::SearchResult> {
+        // ── 1. Build per-brain futures ────────────────────────────────────────
+        type BrainResult = (String, Vec<crate::ranking::RankedResult>);
+
+        let mut futs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = BrainResult> + Send + '_>>> = Vec::new();
+
+        // Local brain
+        {
+            let pipeline = QueryPipeline::new(
+                self.local_db,
+                self.local_store,
+                self.embedder,
+                self.metrics,
+            );
+            let brain_name = self.local_brain_name.clone();
+            let query = query.to_string();
+            let intent = intent.to_string();
+            let query_tags = query_tags.to_vec();
+            futs.push(Box::pin(async move {
+                match pipeline.search_ranked(&query, &intent, &query_tags).await {
+                    Ok((ranked, _confidence)) => (brain_name, ranked),
+                    Err(e) => {
+                        warn!(brain = %brain_name, error = %e, "local brain search failed");
+                        (brain_name, vec![])
+                    }
+                }
+            }));
+        }
+
+        // Remote brains — skip those without a vector store
+        for remote in &self.remotes {
+            let store = match &remote.store {
+                Some(s) => s,
+                None => {
+                    warn!(
+                        brain = %remote.brain_name,
+                        "skipping remote brain: LanceDB not initialised"
+                    );
+                    continue;
+                }
+            };
+
+            let pipeline = QueryPipeline::new(
+                &remote.db,
+                store,
+                self.embedder,
+                self.metrics,
+            );
+            let brain_name = remote.brain_name.clone();
+            let query = query.to_string();
+            let intent = intent.to_string();
+            let query_tags = query_tags.to_vec();
+            futs.push(Box::pin(async move {
+                match pipeline.search_ranked(&query, &intent, &query_tags).await {
+                    Ok((ranked, _confidence)) => (brain_name, ranked),
+                    Err(e) => {
+                        warn!(brain = %brain_name, error = %e, "remote brain search failed");
+                        (brain_name, vec![])
+                    }
+                }
+            }));
+        }
+
+        // ── 2. Fan out and collect ────────────────────────────────────────────
+        let all_results: Vec<BrainResult> = join_all(futs).await;
+
+        // ── 3. Merge: pair each RankedResult with its source brain name ───────
+        // Use a map from chunk_id → brain_name for post-processing.
+        let mut chunk_brain: HashMap<String, String> = HashMap::new();
+        let mut merged: Vec<crate::ranking::RankedResult> = Vec::new();
+
+        for (brain_name, ranked) in all_results {
+            for result in ranked {
+                chunk_brain.insert(result.chunk_id.clone(), brain_name.clone());
+                merged.push(result);
+            }
+        }
+
+        // ── 4. Sort by hybrid_score descending ────────────────────────────────
+        merged.sort_by(|a, b| {
+            b.hybrid_score
+                .partial_cmp(&a.hybrid_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // ── 5. Pack into SearchResult ─────────────────────────────────────────
+        let mut search_result = crate::retrieval::pack_minimal(&merged, budget_tokens, k, false);
+
+        // ── 6. Annotate each stub with its source brain name ──────────────────
+        for stub in &mut search_result.results {
+            stub.brain_name = chunk_brain.get(&stub.memory_id).cloned();
+        }
+
+        Ok(search_result)
     }
 }
