@@ -131,7 +131,7 @@ impl McpTool for TaskCreateRemote {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Create a task in another registered brain project. Resolves the target brain by name or ID from the global registry (~/.brain/config.toml), creates the task in that brain's event store, and optionally adds a cross-brain reference back to a local task.".into(),
+            description: "Create a task in another registered brain project. Resolves the target brain from the global registry (~/.brain/config.toml): tries registry name first, then falls back to matching by brain ID. Creates the task in the remote brain's event store (the task ID carries the remote brain's prefix). When link_from is provided (a local task ID), a cross_brain_ref_added event is appended to that local task, linking it to the newly created remote task; link_type controls the ref direction (depends_on|blocks|related, default: related). Returns remote_task_id, remote_brain_name, remote_brain_id, and local_ref_created. Use brains.list first to discover available brain names and prefixes.".into(),
             input_schema: create_remote_schema(),
         }
     }
