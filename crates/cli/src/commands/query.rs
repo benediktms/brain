@@ -139,6 +139,7 @@ mod tests {
             heading_path: String::new(),
             token_estimate: 10,
             signal_scores: None,
+            kind: "note".to_string(),
         }
     }
 

@@ -268,6 +268,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
+**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
+
 **Cross-brain tools:**
 - `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks.create_remote`.
 - `tasks.create_remote` — Create a task in another registered brain project. Required params: `brain` (registry name or 8-char brain ID) and `title`. Brain resolution tries the registry name first, then falls back to scanning by ID. Optional params: `description`, `priority` (0–4, default 4), `task_type`, `assignee`, `parent` (remote task ID). When `link_from` is provided (a local task ID), a cross-brain ref is added to that local task. `link_type` controls the ref direction (depends_on|blocks|related, default related). Returns `remote_task_id`, `remote_brain_name`, `remote_brain_id`, and `local_ref_created`.
@@ -278,7 +280,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
 
 **Memory tools:**
-- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
+- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.

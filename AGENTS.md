@@ -37,6 +37,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
+**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
+
 **Cross-brain tools:**
 
 - `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix, e.g. `BRN`) for each brain. Use this to discover available targets before calling `tasks.create_remote`. Also callable as `brains_list`.
@@ -50,7 +52,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 
 **Memory tools:**
 
-- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
+- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
@@ -164,7 +166,6 @@ This file is the canonical reference for all AI agents working on this codebase 
 If unsure whether a change warrants a docs update, err on the side of updating — stale docs cause more harm than verbose docs.
 
 <!-- brain:start -->
-
 ## Build & Test
 
 ```bash
@@ -182,7 +183,6 @@ This project uses `brain` for task tracking. **Always use MCP tools for task ope
 When running as an MCP server (`brain mcp`), these tools are available:
 
 **Task tools:**
-
 - `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`, `cross_brain_ref_added`, `cross_brain_ref_removed`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
 - `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`. Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description).
 - `tasks_get` — Get full task details including relationships, comments, labels, linked notes, and cross-brain references (`cross_refs`). Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
@@ -192,12 +192,37 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
-**Memory tools:**
+**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
 
-- `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
+**Cross-brain tools:**
+- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks.create_remote`.
+- `tasks.create_remote` — Create a task in another registered brain project. Required params: `brain` (registry name or 8-char brain ID) and `title`. Brain resolution tries the registry name first, then falls back to scanning by ID. Optional params: `description`, `priority` (0–4, default 4), `task_type`, `assignee`, `parent` (remote task ID). When `link_from` is provided (a local task ID), a cross-brain ref is added to that local task. `link_type` controls the ref direction (depends_on|blocks|related, default related). Returns `remote_task_id`, `remote_brain_name`, `remote_brain_id`, and `local_ref_created`.
+
+**Cross-brain workflow:**
+1. Call `brains.list` to discover registered brains and their prefixes.
+2. Call `tasks.create_remote` with the target brain name and task details.
+3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
+
+**Memory tools:**
+- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
+
+**Records tools:**
+- `records.create_artifact` — Create a new artifact record with base64-encoded content.
+- `records.save_snapshot` — Save an opaque state bundle as a snapshot record.
+- `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution).
+- `records.list` — List records with optional filters (kind, status, tag, task_id).
+- `records.fetch_content` — Fetch raw content of a record as base64-encoded data.
+- `records.archive` — Archive a record (metadata-only, payload preserved).
+- `records.tag_add` — Add a tag to a record (idempotent).
+- `records.tag_remove` — Remove a tag from a record (idempotent).
+- `records.link_add` — Link a record to a task or note chunk.
+- `records.link_remove` — Remove a link from a record.
+
+**Other tools:**
+- `status` — Health/status probe. Returns project name, brain ID, task counts, and index stats.
 
 ### CLI Commands (for human terminal use)
 
@@ -214,6 +239,14 @@ brain tasks show <id>          # Detailed task view
 brain tasks create --title="..." --description="..." --type=task --priority=2
 brain tasks update <id> --status=in_progress
 brain tasks comment <id> "comment text"
+
+# Cross-brain task creation
+brain tasks create --title="..." --brain=<NAME_OR_ID>          # Create in another brain
+brain tasks create --title="..." --brain=infra --link-from=BRN-01X --link-type=related  # Create + auto-link
+
+# Registry
+brain list                     # List registered brains
+brain list --json              # List as JSON (name, id, root, prefix)
 
 # Dependencies
 brain tasks dep add <task> <depends-on>
@@ -234,12 +267,16 @@ brain tasks stats              # Project statistics
 
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
+brain agent schema             # Output JSON Schema for all MCP tools
+brain agent schema --pretty    # Pretty-printed output
+brain agent schema --tool tasks.apply_event --pretty  # Single tool
 ```
+
+> **Tip:** Run `brain agent schema --pretty` to get the full JSON Schema for all MCP tools, including exact per-event-type payload definitions for `tasks_apply_event`. This is useful for validating payloads before sending them.
 
 ### Finding Work
 
 When the user asks what to work on next (e.g., "what's next?", "what should I work on?", "next task", "any work?"), always check brain tasks first:
-
 1. Use `tasks_next` MCP tool to get unblocked tasks sorted by priority
 2. Present the top candidates with their ID, title, priority, and type
 3. If a task has dependencies, briefly note what's blocking it
@@ -247,18 +284,13 @@ When the user asks what to work on next (e.g., "what's next?", "what should I wo
 ### Workflow
 
 When working on tasks:
-
 1. **Before starting**: Mark the task `in_progress` via `tasks_apply_event` (status_changed)
 2. **While working**: Add comments via `tasks_apply_event` (comment_added) for significant decisions or blockers
 3. **On completion**: Close the task via `tasks_close` (or `tasks_apply_event` with status_changed to `done`)
 
-**When creating tasks**, always add appropriate labels:
+**Cross-task insights**: If you discover during work on one task that something affects or should be captured on a different task, immediately add a comment to that task with the relevant context. Don't defer — the insight is freshest now and costs seconds to capture vs. minutes to reconstruct later.
 
-- Start with an `area:` label (see Label Schema below)
-- Add `type:` label if the work type is distinct (e.g., `type:test`, `type:perf`, `type:refactor`)
-- Use `phase:polish` for cleanup/final-touch tasks
-- Review existing labels with `brain tasks labels` to avoid creating duplicates
-- Maximum 3 labels per task; if you need more, the task may be too broad
+**Planning references**: When planning work, always reference the task ID(s) being planned for and any related tasks that may be affected. This creates a traceable link between plans and the work they address, and helps future agents (or humans) understand why decisions were made.
 
 ### Conventions
 
