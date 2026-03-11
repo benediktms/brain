@@ -1,4 +1,5 @@
 pub mod events;
+pub mod integrity;
 pub mod objects;
 pub mod projections;
 pub mod queries;
