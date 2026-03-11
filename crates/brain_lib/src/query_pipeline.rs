@@ -14,7 +14,6 @@ use crate::capsule::generate_stub_capsule;
 use crate::db::Db;
 use crate::db::chunks::get_chunks_by_ids;
 use crate::db::fts::search_fts;
-use crate::db::links::count_backlinks;
 use crate::db::summaries::{SummaryRow, get_ml_summaries_for_chunks, list_episodes};
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
@@ -169,8 +168,7 @@ impl<'a> QueryPipeline<'a> {
                     sim_vector: sim.clamp(0.0, 1.0),
                     bm25: 0.0,
                     age_seconds: 0.0,
-                    backlink_count: 0,
-                    max_backlinks: 0,
+                    pagerank_score: 0.0,
                     tags: vec![],
                     importance: 1.0,
                     file_path: vr.file_path.clone(),
@@ -194,8 +192,7 @@ impl<'a> QueryPipeline<'a> {
                         sim_vector: 0.0,
                         bm25: fr.score,
                         age_seconds: 0.0,
-                        backlink_count: 0,
-                        max_backlinks: 0,
+                        pagerank_score: 0.0,
                         tags: vec![],
                         importance: 1.0,
                         file_path: String::new(),
@@ -219,33 +216,14 @@ impl<'a> QueryPipeline<'a> {
             return Ok((vec![], fusion_confidence));
         }
 
-        // 5. Enrich from SQLite
+        // 5. Enrich from SQLite (single batched JOIN — pagerank_score comes from files table)
         let chunk_ids: Vec<String> = candidates.keys().cloned().collect();
         let enrichment = self.db.with_read_conn(|conn| {
-            let rows = get_chunks_by_ids(conn, &chunk_ids)?;
-
-            let file_ids: Vec<String> = rows.iter().map(|r| r.file_id.clone()).collect();
-            let mut backlinks: HashMap<String, usize> = HashMap::new();
-            for fid in &file_ids {
-                if !backlinks.contains_key(fid) {
-                    let path: Option<String> = conn
-                        .query_row("SELECT path FROM files WHERE file_id = ?1", [fid], |row| {
-                            row.get(0)
-                        })
-                        .ok();
-                    if let Some(path) = path {
-                        let count = count_backlinks(conn, &path).unwrap_or(0);
-                        backlinks.insert(fid.clone(), count);
-                    }
-                }
-            }
-
-            Ok((rows, backlinks))
+            get_chunks_by_ids(conn, &chunk_ids)
         });
 
-        if let Ok((rows, backlinks)) = enrichment {
+        if let Ok(rows) = enrichment {
             let now = crate::utils::now_ts();
-            let max_bl = backlinks.values().copied().max().unwrap_or(0);
 
             for row in &rows {
                 if let Some(candidate) = candidates.get_mut(&row.chunk_id) {
@@ -255,8 +233,7 @@ impl<'a> QueryPipeline<'a> {
                     candidate.token_estimate = row.token_estimate;
                     candidate.byte_start = row.byte_start;
                     candidate.byte_end = row.byte_end;
-                    candidate.backlink_count = *backlinks.get(&row.file_id).unwrap_or(&0);
-                    candidate.max_backlinks = max_bl;
+                    candidate.pagerank_score = row.pagerank_score;
 
                     if let Some(indexed_at) = row.last_indexed_at {
                         candidate.age_seconds = (now - indexed_at).max(0) as f64;

@@ -119,10 +119,8 @@ pub struct CandidateSignals {
     pub bm25: f64,
     /// Seconds since last update of the source file.
     pub age_seconds: f64,
-    /// Number of backlinks to the source file.
-    pub backlink_count: usize,
-    /// Maximum backlink count in the candidate set (for normalization).
-    pub max_backlinks: usize,
+    /// Precomputed PageRank score from the files table, normalized to [0, 1].
+    pub pagerank_score: f64,
     /// Tags on this chunk/file.
     pub tags: Vec<String>,
     /// Importance score (default 1.0).
@@ -193,16 +191,6 @@ fn recency_score(age_seconds: f64) -> f64 {
     (-age_seconds / RECENCY_TAU).exp()
 }
 
-/// Compute normalized backlink score: log(1 + count) / log(1 + max).
-fn link_score(backlink_count: usize, max_backlinks: usize) -> f64 {
-    if max_backlinks == 0 {
-        return 0.0;
-    }
-    let num = (1.0 + backlink_count as f64).ln();
-    let den = (1.0 + max_backlinks as f64).ln();
-    num / den
-}
-
 /// Compute Jaccard similarity between two tag sets.
 /// Returns 0.0 if both sets are empty.
 fn tag_match_score(query_tags: &[String], chunk_tags: &[String]) -> f64 {
@@ -243,7 +231,7 @@ pub fn rank_candidates(
                 vector: c.sim_vector,
                 keyword: c.bm25,
                 recency: recency_score(c.age_seconds),
-                links: link_score(c.backlink_count, c.max_backlinks),
+                links: c.pagerank_score,
                 tag_match: tag_match_score(query_tags, &c.tags),
                 importance: c.importance,
             };
@@ -427,15 +415,14 @@ mod tests {
         sim_v: f64,
         bm25: f64,
         age_days: f64,
-        backlinks: usize,
+        pagerank: f64,
     ) -> CandidateSignals {
         CandidateSignals {
             chunk_id: chunk_id.to_string(),
             sim_vector: sim_v,
             bm25,
             age_seconds: age_days * 86400.0,
-            backlink_count: backlinks,
-            max_backlinks: 10,
+            pagerank_score: pagerank,
             tags: vec![],
             importance: 1.0,
             file_path: format!("/notes/{chunk_id}.md"),
@@ -508,21 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn test_link_score_none() {
-        assert_eq!(link_score(0, 0), 0.0);
-        assert_eq!(link_score(0, 10), 0.0);
-    }
-
-    #[test]
-    fn test_link_score_max() {
-        let score = link_score(10, 10);
-        assert!(
-            (score - 1.0).abs() < f64::EPSILON,
-            "max backlinks should score 1.0"
-        );
-    }
-
-    #[test]
     fn test_tag_match_empty() {
         assert_eq!(tag_match_score(&[], &[]), 0.0);
         assert_eq!(tag_match_score(&["a".into()], &[]), 0.0);
@@ -550,9 +522,9 @@ mod tests {
     #[test]
     fn test_rank_candidates_ordering() {
         let candidates = vec![
-            make_candidate("low", 0.1, 0.1, 60.0, 0),
-            make_candidate("high", 0.9, 0.9, 1.0, 8),
-            make_candidate("mid", 0.5, 0.5, 15.0, 3),
+            make_candidate("low", 0.1, 0.1, 60.0, 0.0),
+            make_candidate("high", 0.9, 0.9, 1.0, 0.8),
+            make_candidate("mid", 0.5, 0.5, 15.0, 0.3),
         ];
 
         let weights = Weights::from_profile(WeightProfile::Default);
@@ -574,8 +546,7 @@ mod tests {
                 sim_vector: 0.3,
                 bm25: 0.95,
                 age_seconds: 60.0 * 86400.0, // 60 days old
-                backlink_count: 0,
-                max_backlinks: 5,
+                pagerank_score: 0.0,
                 tags: vec![],
                 importance: 1.0,
                 file_path: "/notes/a.md".into(),
@@ -590,8 +561,7 @@ mod tests {
                 sim_vector: 0.3,
                 bm25: 0.1,
                 age_seconds: 3600.0, // 1 hour old
-                backlink_count: 0,
-                max_backlinks: 5,
+                pagerank_score: 0.0,
                 tags: vec![],
                 importance: 1.0,
                 file_path: "/notes/b.md".into(),
