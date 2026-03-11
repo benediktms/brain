@@ -723,14 +723,19 @@ async fn reload_brains(
             }
         }
 
-        // Watch added dirs
-        let mut new_note_dirs: Vec<PathBuf> = Vec::new();
-        for dir in new_dirs_raw {
+        // Keep unchanged dirs, watch only truly new ones
+        let unchanged: Vec<PathBuf> = old_dirs
+            .intersection(&new_dirs_raw)
+            .map(|d| (*d).clone())
+            .collect();
+        let mut new_note_dirs = unchanged;
+
+        for dir in new_dirs_raw.difference(&old_dirs) {
             if dir.exists() {
                 if let Err(e) = watcher.watch_path(dir) {
                     warn!(brain = %name, dir = %dir.display(), error = %e, "failed to watch new directory");
                 } else {
-                    new_note_dirs.push(dir.clone());
+                    new_note_dirs.push((*dir).clone());
                 }
             } else {
                 warn!(brain = %name, dir = %dir.display(), "new note directory does not exist, skipping");
