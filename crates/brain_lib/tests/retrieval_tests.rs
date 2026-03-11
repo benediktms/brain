@@ -46,6 +46,7 @@ async fn setup() -> (IndexPipeline, TempDir) {
 
 async fn setup_mcp() -> (McpContext, TempDir) {
     let tmp = TempDir::new().unwrap();
+    let brain_home = tmp.path().to_path_buf();
     let sqlite_path = tmp.path().join("brain.db");
     let lance_path = tmp.path().join("brain_lancedb");
     let tasks_dir = tmp.path().join("tasks");
@@ -71,6 +72,8 @@ async fn setup_mcp() -> (McpContext, TempDir) {
         records,
         objects,
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
+        brain_home,
+        brain_name: "test-brain".to_string(),
     };
     (ctx, tmp)
 }
@@ -589,6 +592,8 @@ async fn test_mcp_search_minimal_returns_results() {
         objects: brain_lib::records::objects::ObjectStore::new(tmp.path().join("objects2"))
             .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
+        brain_home: tmp.path().to_path_buf(),
+        brain_name: "test-brain".to_string(),
     };
 
     // Search — MockEmbedder won't give semantic results, but pipeline should not error.
@@ -661,6 +666,8 @@ async fn test_mcp_expand_returns_full_content() {
         objects: brain_lib::records::objects::ObjectStore::new(tmp.path().join("objects3"))
             .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
+        brain_home: tmp.path().to_path_buf(),
+        brain_name: "test-brain".to_string(),
     };
 
     // Get the chunk_id

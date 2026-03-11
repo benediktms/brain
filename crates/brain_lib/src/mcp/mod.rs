@@ -40,6 +40,10 @@ pub struct McpContext {
     pub records: RecordStore,
     pub objects: ObjectStore,
     pub metrics: Arc<Metrics>,
+    /// The brain home directory (`$BRAIN_HOME` or `~/.brain`).
+    pub brain_home: std::path::PathBuf,
+    /// Human-readable name of the current brain (from its data directory path).
+    pub brain_name: String,
 }
 
 impl McpContext {
@@ -98,6 +102,22 @@ impl McpContext {
 
         let metrics = Arc::new(Metrics::new());
 
+        // Derive brain_home and brain_name from sqlite_db path.
+        // Convention: sqlite_db = $BRAIN_HOME/brains/<name>/brain.db
+        // So: brain_home = sqlite_db.parent().parent().parent()
+        //     brain_name  = sqlite_db.parent().parent().file_name()
+        let brain_data_dir = sqlite_db.parent().unwrap_or(std::path::Path::new("."));
+        let brain_name = brain_data_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let brain_home = brain_data_dir
+            .parent() // brains/
+            .and_then(|p| p.parent()) // $BRAIN_HOME
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+
         Ok(Arc::new(Self {
             db,
             store,
@@ -107,6 +127,8 @@ impl McpContext {
             records,
             objects,
             metrics,
+            brain_home,
+            brain_name,
         }))
     }
 

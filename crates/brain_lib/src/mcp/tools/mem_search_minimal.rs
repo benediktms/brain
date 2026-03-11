@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::query_pipeline::QueryPipeline;
+use crate::query_pipeline::{FederatedPipeline, QueryPipeline};
 
 use super::{McpTool, json_response};
 
@@ -21,6 +21,8 @@ struct Params {
     k: u64,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default)]
+    brains: Vec<String>,
 }
 
 fn default_intent() -> String {
@@ -71,6 +73,11 @@ impl McpTool for MemSearchMinimal {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Optional tags to boost results matching these tags via Jaccard similarity. Pass as a JSON array, e.g. [\"rust\", \"memory\"]"
+                    },
+                    "brains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional list of brain names to search. Use [\"all\"] to search all registered brains. When omitted, searches only the current brain."
                     }
                 },
                 "required": ["query"]
@@ -96,19 +103,84 @@ impl McpTool for MemSearchMinimal {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
-            let search_result = match pipeline
-                .search(
-                    &params.query,
-                    &params.intent,
-                    params.budget_tokens as usize,
-                    params.k as usize,
-                    &params.tags,
-                )
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
+            let search_result = if params.brains.is_empty() {
+                // Single-brain path — unchanged behaviour.
+                let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
+                match pipeline
+                    .search(
+                        &params.query,
+                        &params.intent,
+                        params.budget_tokens as usize,
+                        params.k as usize,
+                        &params.tags,
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
+                }
+            } else {
+                // Federated path — open remote brain contexts.
+                let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
+                    match crate::config::list_brain_keys(&ctx.brain_home) {
+                        Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
+                        Err(e) => {
+                            return ToolCallResult::error(format!(
+                                "Failed to list brains: {e}"
+                            ));
+                        }
+                    }
+                } else {
+                    params.brains.clone()
+                };
+
+                let mut remotes = Vec::new();
+                for key in &brain_keys {
+                    if key == &ctx.brain_name {
+                        // Skip the current brain — it is already the local brain.
+                        continue;
+                    }
+                    match crate::config::open_remote_search_context(
+                        &ctx.brain_home,
+                        key,
+                        // model_dir is not used by open_remote_search_context currently
+                        std::path::Path::new(""),
+                        embedder,
+                    )
+                    .await
+                    {
+                        Ok(Some(remote)) => remotes.push(remote),
+                        Ok(None) => {
+                            tracing::warn!(brain = %key, "brain not found in registry, skipping");
+                        }
+                        Err(e) => {
+                            tracing::warn!(brain = %key, error = %e, "failed to open remote brain, skipping");
+                        }
+                    }
+                }
+
+                let federated = FederatedPipeline {
+                    local_db: &ctx.db,
+                    local_store: store,
+                    local_brain_name: ctx.brain_name.clone(),
+                    remotes,
+                    embedder,
+                    metrics: &ctx.metrics,
+                };
+
+                match federated
+                    .search(
+                        &params.query,
+                        &params.intent,
+                        params.budget_tokens as usize,
+                        params.k as usize,
+                        &params.tags,
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => return ToolCallResult::error(format!("Federated search failed: {e}")),
+                }
             };
 
             ctx.metrics
@@ -118,7 +190,7 @@ impl McpTool for MemSearchMinimal {
                 .results
                 .iter()
                 .map(|stub| {
-                    json!({
+                    let mut stub_json = json!({
                         "memory_id": stub.memory_id,
                         "title": stub.title,
                         "summary": stub.summary_2sent,
@@ -126,7 +198,11 @@ impl McpTool for MemSearchMinimal {
                         "file_path": stub.file_path,
                         "heading_path": stub.heading_path,
                         "kind": stub.kind,
-                    })
+                    });
+                    if let Some(ref bn) = stub.brain_name {
+                        stub_json["brain_name"] = json!(bn);
+                    }
+                    stub_json
                 })
                 .collect();
 
@@ -158,6 +234,7 @@ mod tests {
     /// Build a context with store and embedder both absent (tasks-only mode).
     async fn create_tasks_only_context() -> (tempfile::TempDir, McpContext) {
         let tmp = tempfile::TempDir::new().unwrap();
+        let brain_home = tmp.path().to_path_buf();
         let sqlite_path = tmp.path().join("test.db");
         let tasks_dir = tmp.path().join("tasks");
 
@@ -181,6 +258,8 @@ mod tests {
                 records,
                 objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
+                brain_home,
+                brain_name: "test-brain".to_string(),
             },
         )
     }
@@ -188,6 +267,7 @@ mod tests {
     /// Build a context with store present but embedder absent.
     async fn create_no_embedder_context() -> (tempfile::TempDir, McpContext) {
         let tmp = tempfile::TempDir::new().unwrap();
+        let brain_home = tmp.path().to_path_buf();
         let sqlite_path = tmp.path().join("test.db");
         let lance_path = tmp.path().join("test_lance");
         let tasks_dir = tmp.path().join("tasks");
@@ -216,6 +296,8 @@ mod tests {
                 records,
                 objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
+                brain_home,
+                brain_name: "test-brain".to_string(),
             },
         )
     }
