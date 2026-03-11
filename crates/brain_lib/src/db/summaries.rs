@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension};
 use ulid::Ulid;
 
@@ -115,6 +117,79 @@ pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<Summary
         .optional()?;
 
     Ok(result)
+}
+
+/// Store an ML-generated summary for a chunk.
+/// Uses UPSERT to replace existing summary from the same summarizer.
+pub fn store_ml_summary(
+    conn: &Connection,
+    chunk_id: &str,
+    summary_text: &str,
+    summarizer: &str,
+) -> Result<String> {
+    let summary_id = Ulid::new().to_string();
+    let now = crate::utils::now_ts();
+    conn.execute(
+        "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, created_at, updated_at, summarizer, chunk_id)
+         VALUES (?1, 'summary', NULL, ?2, '[]', 1.0, ?3, ?4, ?5, ?6)
+         ON CONFLICT(chunk_id, summarizer) WHERE kind = 'summary'
+         DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
+        rusqlite::params![summary_id, summary_text, now, now, summarizer, chunk_id],
+    )?;
+    Ok(summary_id)
+}
+
+/// Find chunk_ids that have no ML summary from the given summarizer.
+/// Returns (chunk_id, content) pairs ordered by most recently indexed first.
+pub fn find_chunks_lacking_summary(
+    conn: &Connection,
+    summarizer: &str,
+    limit: usize,
+) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.chunk_id, c.content FROM chunks c
+         WHERE NOT EXISTS (
+             SELECT 1 FROM summaries s
+             WHERE s.chunk_id = c.chunk_id AND s.summarizer = ?1 AND s.kind = 'summary'
+         )
+         ORDER BY c.rowid DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![summarizer, limit as i64], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    super::collect_rows(rows)
+}
+
+/// Batch-load ML summaries for a set of chunk_ids.
+/// Returns a map from chunk_id to summary text.
+/// Prefers the most recent summary if multiple summarizers exist.
+pub fn get_ml_summaries_for_chunks(
+    conn: &Connection,
+    chunk_ids: &[&str],
+) -> Result<HashMap<String, String>> {
+    if chunk_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders: Vec<String> = (1..=chunk_ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT chunk_id, content FROM summaries
+         WHERE kind = 'summary' AND chunk_id IN ({})
+         ORDER BY updated_at DESC",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> =
+        chunk_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (chunk_id, content) = row?;
+        map.entry(chunk_id).or_insert(content);
+    }
+    Ok(map)
 }
 
 /// List recent episodes.
@@ -264,5 +339,154 @@ mod tests {
         let conn = setup();
         let result = get_summary(&conn, "nonexistent").unwrap();
         assert!(result.is_none());
+    }
+
+    // --- ML summary tests ---
+
+    fn insert_chunk(conn: &Connection, chunk_id: &str, file_id: &str, content: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?1, 'idle')",
+            [file_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate)
+             VALUES (?1, ?2, 0, '', ?3, '', 0, 0, 0)",
+            rusqlite::params![chunk_id, file_id, content],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_store_ml_summary_and_get_round_trip() {
+        let conn = setup();
+        insert_chunk(&conn, "chunk:1", "file:1", "chunk content one");
+
+        let id = store_ml_summary(&conn, "chunk:1", "ML summary text", "flan-t5-small").unwrap();
+        assert!(!id.is_empty());
+
+        let map =
+            get_ml_summaries_for_chunks(&conn, &["chunk:1"]).unwrap();
+        assert_eq!(map.get("chunk:1").map(String::as_str), Some("ML summary text"));
+    }
+
+    #[test]
+    fn test_store_ml_summary_upsert_overwrites_same_summarizer() {
+        let conn = setup();
+        insert_chunk(&conn, "chunk:1", "file:1", "chunk content");
+
+        store_ml_summary(&conn, "chunk:1", "first summary", "flan-t5-small").unwrap();
+        store_ml_summary(&conn, "chunk:1", "updated summary", "flan-t5-small").unwrap();
+
+        let map = get_ml_summaries_for_chunks(&conn, &["chunk:1"]).unwrap();
+        assert_eq!(
+            map.get("chunk:1").map(String::as_str),
+            Some("updated summary"),
+            "second store should overwrite first"
+        );
+
+        // Only one row in summaries for this chunk+summarizer
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM summaries WHERE chunk_id = 'chunk:1' AND kind = 'summary' AND summarizer = 'flan-t5-small'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_store_ml_summary_different_summarizers_coexist() {
+        let conn = setup();
+        insert_chunk(&conn, "chunk:1", "file:1", "chunk content");
+
+        store_ml_summary(&conn, "chunk:1", "flan summary", "flan-t5-small").unwrap();
+        store_ml_summary(&conn, "chunk:1", "remote summary", "remote-llm").unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM summaries WHERE chunk_id = 'chunk:1' AND kind = 'summary'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_find_chunks_lacking_summary_returns_unsummarized() {
+        let conn = setup();
+        insert_chunk(&conn, "chunk:1", "file:1", "content one");
+        insert_chunk(&conn, "chunk:2", "file:1", "content two");
+        insert_chunk(&conn, "chunk:3", "file:1", "content three");
+
+        // Summarize chunk:1 only
+        store_ml_summary(&conn, "chunk:1", "summary for one", "flan-t5-small").unwrap();
+
+        let lacking =
+            find_chunks_lacking_summary(&conn, "flan-t5-small", 10).unwrap();
+        let ids: Vec<&str> = lacking.iter().map(|(id, _)| id.as_str()).collect();
+
+        assert!(ids.contains(&"chunk:2"), "chunk:2 should be returned");
+        assert!(ids.contains(&"chunk:3"), "chunk:3 should be returned");
+        assert!(!ids.contains(&"chunk:1"), "chunk:1 is already summarized");
+    }
+
+    #[test]
+    fn test_find_chunks_lacking_summary_respects_limit() {
+        let conn = setup();
+        for i in 0..5 {
+            insert_chunk(
+                &conn,
+                &format!("chunk:{i}"),
+                "file:1",
+                &format!("content {i}"),
+            );
+        }
+
+        let lacking = find_chunks_lacking_summary(&conn, "flan-t5-small", 3).unwrap();
+        assert_eq!(lacking.len(), 3);
+    }
+
+    #[test]
+    fn test_find_chunks_lacking_summary_excludes_summarized() {
+        let conn = setup();
+        insert_chunk(&conn, "chunk:1", "file:1", "content one");
+
+        store_ml_summary(&conn, "chunk:1", "summary", "flan-t5-small").unwrap();
+
+        let lacking = find_chunks_lacking_summary(&conn, "flan-t5-small", 10).unwrap();
+        assert!(lacking.is_empty(), "all chunks are summarized");
+    }
+
+    #[test]
+    fn test_get_ml_summaries_for_chunks_empty_input() {
+        let conn = setup();
+        let map = get_ml_summaries_for_chunks(&conn, &[]).unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_get_ml_summaries_for_chunks_batch() {
+        let conn = setup();
+        insert_chunk(&conn, "chunk:1", "file:1", "content one");
+        insert_chunk(&conn, "chunk:2", "file:1", "content two");
+
+        store_ml_summary(&conn, "chunk:1", "summary one", "flan-t5-small").unwrap();
+        store_ml_summary(&conn, "chunk:2", "summary two", "flan-t5-small").unwrap();
+
+        let map =
+            get_ml_summaries_for_chunks(&conn, &["chunk:1", "chunk:2"]).unwrap();
+        assert_eq!(map.get("chunk:1").map(String::as_str), Some("summary one"));
+        assert_eq!(map.get("chunk:2").map(String::as_str), Some("summary two"));
+    }
+
+    #[test]
+    fn test_get_ml_summaries_for_chunks_missing_chunk_not_in_result() {
+        let conn = setup();
+        let map =
+            get_ml_summaries_for_chunks(&conn, &["chunk:nonexistent"]).unwrap();
+        assert!(map.get("chunk:nonexistent").is_none());
     }
 }
