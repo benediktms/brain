@@ -150,10 +150,10 @@ pub async fn run(
                 pipeline.store().optimizer().maybe_optimize().await;
             }
             _ = consolidation_tick.tick() => {
-                if let Some(summarizer) = pipeline.summarizer() {
-                    if let Err(e) = consolidator.maybe_consolidate(pipeline.db(), summarizer).await {
-                        tracing::warn!("consolidation error: {e}");
-                    }
+                if let Some(summarizer) = pipeline.summarizer()
+                    && let Err(e) = consolidator.maybe_consolidate(pipeline.db(), summarizer).await
+                {
+                    tracing::warn!("consolidation error: {e}");
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -305,7 +305,6 @@ struct BrainInstance {
     pipeline: IndexPipeline,
     work_queue: WorkQueue,
     note_dirs: Vec<PathBuf>,
-    last_event_ts: Arc<AtomicU64>,
     consolidator: ConsolidationScheduler,
 }
 
@@ -458,13 +457,13 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = consolidation_tick.tick() => {
                 for instance in brains.values() {
-                    if let Some(summarizer) = instance.pipeline.summarizer() {
-                        if let Err(e) = instance.consolidator.maybe_consolidate(
+                    if let Some(summarizer) = instance.pipeline.summarizer()
+                        && let Err(e) = instance.consolidator.maybe_consolidate(
                             instance.pipeline.db(),
                             summarizer,
-                        ).await {
-                            tracing::warn!(brain = %instance.name, "consolidation error: {e}");
-                        }
+                        ).await
+                    {
+                        tracing::warn!(brain = %instance.name, "consolidation error: {e}");
                     }
                 }
             }
@@ -638,14 +637,13 @@ async fn init_brain_instance(
     }
 
     let last_event_ts = Arc::new(AtomicU64::new(0));
-    let consolidator = ConsolidationScheduler::new(last_event_ts.clone());
+    let consolidator = ConsolidationScheduler::new(last_event_ts);
 
     Ok(BrainInstance {
         name: name.to_string(),
         pipeline,
         work_queue: WorkQueue::default(),
         note_dirs,
-        last_event_ts,
         consolidator,
     })
 }
