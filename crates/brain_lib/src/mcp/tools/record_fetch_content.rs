@@ -41,20 +41,63 @@ impl RecordFetchContent {
             Err(e) => return ToolCallResult::error(format!("Failed to read content: {e}")),
         };
 
-        let data_b64 = BASE64.encode(&raw_bytes);
-
         let compact_id = ctx
             .records
             .compact_record_id(&record_id)
             .unwrap_or_else(|_| record_id.clone());
 
-        let result = json!({
-            "record_id": compact_id,
-            "content_hash": record.content_hash,
-            "size": record.content_size,
-            "media_type": record.media_type,
-            "data": data_b64,
-        });
+        // Detect text-like content by media_type
+        let is_text = record
+            .media_type
+            .as_deref()
+            .map(|mt| {
+                mt.starts_with("text/")
+                    || mt == "application/json"
+                    || mt == "application/toml"
+                    || mt == "application/yaml"
+            })
+            .unwrap_or(false);
+
+        let result = if is_text {
+            match std::str::from_utf8(&raw_bytes) {
+                Ok(text) => json!({
+                    "record_id": compact_id,
+                    "title": record.title,
+                    "kind": record.kind,
+                    "content_hash": record.content_hash,
+                    "size": record.content_size,
+                    "media_type": record.media_type,
+                    "encoding": "utf-8",
+                    "text": text,
+                }),
+                Err(_) => {
+                    // Not valid UTF-8 despite text media_type — fall back to base64
+                    let data_b64 = BASE64.encode(&raw_bytes);
+                    json!({
+                        "record_id": compact_id,
+                        "title": record.title,
+                        "kind": record.kind,
+                        "content_hash": record.content_hash,
+                        "size": record.content_size,
+                        "media_type": record.media_type,
+                        "encoding": "base64",
+                        "data": data_b64,
+                    })
+                }
+            }
+        } else {
+            let data_b64 = BASE64.encode(&raw_bytes);
+            json!({
+                "record_id": compact_id,
+                "title": record.title,
+                "kind": record.kind,
+                "content_hash": record.content_hash,
+                "size": record.content_size,
+                "media_type": record.media_type,
+                "encoding": "base64",
+                "data": data_b64,
+            })
+        };
 
         json_response(&result)
     }
@@ -68,7 +111,7 @@ impl McpTool for RecordFetchContent {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Fetch the raw content of a record. Returns base64-encoded data along with metadata.".into(),
+            description: "Fetch the content of a record. For text content (media_type starting with 'text/' or 'application/json'), returns decoded UTF-8 text directly in the 'text' field. For binary content, returns base64-encoded data in the 'data' field. The 'encoding' field indicates how to interpret the content ('utf-8' or 'base64'). Includes title and kind metadata.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
