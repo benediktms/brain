@@ -39,6 +39,7 @@ regex = "1"
 toml = { workspace = true }
 dirs = { workspace = true }
 base64 = "0.22"
+zstd = "0.13"
 
 # Enable Accelerate (Apple BLAS) on macOS for ~2x faster embeddings.
 [target.'cfg(target_os = "macos")'.dependencies]

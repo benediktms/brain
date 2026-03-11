@@ -482,6 +482,101 @@ impl RecordStore {
             queries::count_payload_refs(conn, content_hash, exclude_record_id)
         })
     }
+
+    // -- Eviction, pinning, and retention class methods --
+
+    /// Evict a record's payload blob from the object store.
+    ///
+    /// Validates:
+    /// - Record exists
+    /// - `payload_available == true` (not already evicted)
+    /// - `pinned == false` (pinned records cannot be evicted)
+    ///
+    /// Uses ref-counting: only deletes the blob if no OTHER records reference
+    /// the same content_hash with payload_available = 1.
+    ///
+    /// Appends a `PayloadEvicted` event and updates the projection.
+    pub fn evict_payload(
+        &self,
+        record_id: &str,
+        reason: &str,
+        actor: &str,
+        objects: &objects::ObjectStore,
+    ) -> Result<()> {
+        let record = self
+            .get_record(record_id)?
+            .ok_or_else(|| crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}")))?;
+
+        if !record.payload_available {
+            return Err(crate::error::BrainCoreError::RecordEvent(
+                "payload already evicted".to_string(),
+            ));
+        }
+        if record.pinned {
+            return Err(crate::error::BrainCoreError::RecordEvent(
+                "cannot evict pinned record".to_string(),
+            ));
+        }
+
+        let payload = events::PayloadEvictedPayload {
+            content_hash: record.content_hash.clone(),
+            reason: reason.to_string(),
+        };
+        let event = events::RecordEvent::from_payload(record_id, actor, payload);
+        self.apply_and_append(&event)?;
+
+        let other_refs = self.count_payload_refs(&record.content_hash, record_id)?;
+        if other_refs == 0 && objects.exists(&record.content_hash) {
+            objects.delete(&record.content_hash)?;
+        }
+
+        Ok(())
+    }
+
+    /// Set or clear the retention class for a record.
+    pub fn set_retention_class(
+        &self,
+        record_id: &str,
+        retention_class: Option<&str>,
+        actor: &str,
+    ) -> Result<()> {
+        self.get_record(record_id)?
+            .ok_or_else(|| crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}")))?;
+
+        let payload = events::RetentionClassSetPayload {
+            retention_class: retention_class.map(|s| s.to_string()),
+        };
+        let event = events::RecordEvent::from_payload(record_id, actor, payload);
+        self.apply_and_append(&event)
+    }
+
+    /// Pin a record, preventing it from being evicted.
+    pub fn pin_record(&self, record_id: &str, actor: &str) -> Result<()> {
+        self.get_record(record_id)?
+            .ok_or_else(|| crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}")))?;
+
+        let event = events::RecordEvent::new(
+            record_id,
+            actor,
+            events::RecordEventType::RecordPinned,
+            &events::PinPayload {},
+        );
+        self.apply_and_append(&event)
+    }
+
+    /// Unpin a record, allowing it to be evicted again.
+    pub fn unpin_record(&self, record_id: &str, actor: &str) -> Result<()> {
+        self.get_record(record_id)?
+            .ok_or_else(|| crate::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}")))?;
+
+        let event = events::RecordEvent::new(
+            record_id,
+            actor,
+            events::RecordEventType::RecordUnpinned,
+            &events::PinPayload {},
+        );
+        self.apply_and_append(&event)
+    }
 }
 
 #[cfg(test)]
@@ -713,5 +808,204 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].record_id, "r1");
         assert_eq!(events[0].event_type, RecordEventType::RecordCreated);
+    }
+
+    // -- Helper for eviction/pin/retention tests --
+
+    fn make_store_with_objects(
+        dir: &tempfile::TempDir,
+    ) -> (RecordStore, objects::ObjectStore) {
+        let records_dir = dir.path().join("records");
+        let db = crate::db::Db::open_in_memory().unwrap();
+        let store = RecordStore::new(&records_dir, db).unwrap();
+        let objects = objects::ObjectStore::new(dir.path().join("objects")).unwrap();
+        (store, objects)
+    }
+
+    fn create_record_in_store(store: &RecordStore, record_id: &str, content_hash: &str, size: u64) {
+        let ev = RecordEvent::from_payload(
+            record_id,
+            "agent",
+            RecordCreatedPayload {
+                title: "Test Record".to_string(),
+                kind: "report".to_string(),
+                content_ref: ContentRefPayload {
+                    hash: content_hash.to_string(),
+                    size,
+                    media_type: None,
+                },
+                description: None,
+                task_id: None,
+                tags: vec![],
+                scope_type: None,
+                scope_id: None,
+                retention_class: None,
+                producer: None,
+            },
+        );
+        store.apply_and_append(&ev).unwrap();
+    }
+
+    // -- evict_payload tests --
+
+    #[test]
+    fn test_evict_payload_basic() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let data = b"hello eviction world";
+        let content_ref = objects.write(data).unwrap();
+        create_record_in_store(&store, "r1", &content_ref.hash, content_ref.size);
+
+        assert!(objects.exists(&content_ref.hash));
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert!(row.payload_available);
+
+        store.evict_payload("r1", "gc", "gc-agent", &objects).unwrap();
+
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert!(!row.payload_available);
+        // Blob should be deleted since r1 was the only reference
+        assert!(!objects.exists(&content_ref.hash));
+    }
+
+    #[test]
+    fn test_evict_pinned_record_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let data = b"pinned payload";
+        let content_ref = objects.write(data).unwrap();
+        create_record_in_store(&store, "r1", &content_ref.hash, content_ref.size);
+
+        store.pin_record("r1", "agent").unwrap();
+
+        let result = store.evict_payload("r1", "gc", "gc-agent", &objects);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot evict pinned record"));
+
+        // Blob must still exist
+        assert!(objects.exists(&content_ref.hash));
+    }
+
+    #[test]
+    fn test_evict_already_evicted_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let data = b"evict me twice";
+        let content_ref = objects.write(data).unwrap();
+        create_record_in_store(&store, "r1", &content_ref.hash, content_ref.size);
+
+        store.evict_payload("r1", "gc", "gc-agent", &objects).unwrap();
+
+        let result = store.evict_payload("r1", "gc", "gc-agent", &objects);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("payload already evicted"));
+    }
+
+    #[test]
+    fn test_evict_shared_blob_survives() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let data = b"shared payload data";
+        let content_ref = objects.write(data).unwrap();
+        // Two records sharing the same hash
+        create_record_in_store(&store, "r1", &content_ref.hash, content_ref.size);
+        create_record_in_store(&store, "r2", &content_ref.hash, content_ref.size);
+
+        // Evict r1 — blob should survive because r2 still references it
+        store.evict_payload("r1", "gc", "gc-agent", &objects).unwrap();
+
+        let row1 = store.get_record("r1").unwrap().unwrap();
+        assert!(!row1.payload_available);
+        let row2 = store.get_record("r2").unwrap().unwrap();
+        assert!(row2.payload_available);
+        assert!(objects.exists(&content_ref.hash));
+    }
+
+    #[test]
+    fn test_evict_shared_blob_both_evicted() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let data = b"shared payload both evicted";
+        let content_ref = objects.write(data).unwrap();
+        create_record_in_store(&store, "r1", &content_ref.hash, content_ref.size);
+        create_record_in_store(&store, "r2", &content_ref.hash, content_ref.size);
+
+        // Evict r1 first — blob survives
+        store.evict_payload("r1", "gc", "gc-agent", &objects).unwrap();
+        assert!(objects.exists(&content_ref.hash));
+
+        // Evict r2 — now blob can be deleted
+        store.evict_payload("r2", "gc", "gc-agent", &objects).unwrap();
+        assert!(!objects.exists(&content_ref.hash));
+    }
+
+    #[test]
+    fn test_evict_nonexistent_record_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let result = store.evict_payload("nonexistent", "gc", "gc-agent", &objects);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("record not found"));
+    }
+
+    // -- set_retention_class tests --
+
+    #[test]
+    fn test_set_retention_class() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert!(row.retention_class.is_none());
+
+        store.set_retention_class("r1", Some("permanent"), "agent").unwrap();
+
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert_eq!(row.retention_class.as_deref(), Some("permanent"));
+    }
+
+    #[test]
+    fn test_set_retention_class_clear() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        store.set_retention_class("r1", Some("ephemeral"), "agent").unwrap();
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert_eq!(row.retention_class.as_deref(), Some("ephemeral"));
+
+        store.set_retention_class("r1", None, "agent").unwrap();
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert!(row.retention_class.is_none());
+    }
+
+    // -- pin/unpin tests --
+
+    #[test]
+    fn test_pin_unpin_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert!(!row.pinned);
+
+        store.pin_record("r1", "agent").unwrap();
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert!(row.pinned);
+
+        store.unpin_record("r1", "agent").unwrap();
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert!(!row.pinned);
     }
 }
