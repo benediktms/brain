@@ -3,8 +3,12 @@
 //! Builds short text capsules from task metadata and stores them into
 //! SQLite for BM25/FTS keyword search alongside note chunks.
 
+use std::sync::Arc;
+
 use crate::db::Db;
+use crate::embedder::{Embed, embed_batch_async};
 use crate::error::Result;
+use crate::store::Store;
 
 /// Build a capsule string from a task's current state.
 ///
@@ -76,6 +80,61 @@ pub fn store_task_capsule(
     db.with_write_conn(|conn| {
         crate::db::chunks::upsert_task_chunk(conn, file_id, capsule_text)
     })
+}
+
+/// Metadata required to build and embed a task capsule.
+pub struct TaskCapsuleParams<'a> {
+    pub task_id: &'a str,
+    pub title: &'a str,
+    pub description: Option<&'a str>,
+    pub labels: &'a [String],
+    pub priority: i32,
+}
+
+/// Build, embed, and store a task capsule into LanceDB + SQLite.
+///
+/// Standalone version of the embedding logic (no `McpContext` dependency).
+/// Both stores use upsert semantics — safe to call repeatedly.
+pub async fn embed_task_capsule(
+    store: &Store,
+    embedder: &Arc<dyn Embed>,
+    db: &Db,
+    params: TaskCapsuleParams<'_>,
+) -> Result<()> {
+    let capsule_text = build_task_capsule(params.title, params.description, params.labels, params.priority);
+    let file_id = format!("task:{}", params.task_id);
+
+    let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
+    store
+        .upsert_chunks(&file_id, params.title, &[(0, &capsule_text)], &embeddings)
+        .await?;
+
+    store_task_capsule(db, &file_id, &capsule_text)?;
+    Ok(())
+}
+
+/// Build, embed, and store an outcome capsule into LanceDB + SQLite.
+///
+/// Standalone version of the embedding logic (no `McpContext` dependency).
+/// Both stores use upsert semantics — safe to call repeatedly.
+pub async fn embed_outcome_capsule(
+    store: &Store,
+    embedder: &Arc<dyn Embed>,
+    db: &Db,
+    task_id: &str,
+    title: &str,
+    completion_reason: Option<&str>,
+) -> Result<()> {
+    let capsule_text = build_outcome_capsule(title, completion_reason);
+    let file_id = format!("task-outcome:{task_id}");
+
+    let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
+    store
+        .upsert_chunks(&file_id, title, &[(0, &capsule_text)], &embeddings)
+        .await?;
+
+    store_task_capsule(db, &file_id, &capsule_text)?;
+    Ok(())
 }
 
 fn priority_label(p: i32) -> &'static str {

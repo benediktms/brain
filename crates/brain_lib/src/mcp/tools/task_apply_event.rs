@@ -32,6 +32,8 @@ struct ExecuteResult {
     /// Full task ID if the event succeeded (for capsule embedding).
     task_id: Option<String>,
     event_type: Option<EventType>,
+    /// True when a StatusChanged event transitioned to done/cancelled.
+    is_terminal: bool,
 }
 
 /// Validate all static (non-I/O) constraints on the incoming parameters.
@@ -208,7 +210,6 @@ async fn embed_capsule_for_task(ctx: &McpContext, task_id: &str) -> crate::error
         _ => return Ok(()), // No store/embedder — skip silently
     };
 
-    // Fetch current task state
     let task = match ctx.tasks.get_task(task_id)? {
         Some(t) => t,
         None => return Ok(()),
@@ -216,26 +217,35 @@ async fn embed_capsule_for_task(ctx: &McpContext, task_id: &str) -> crate::error
 
     let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
 
-    let capsule_text = crate::tasks::capsule::build_task_capsule(
-        &task.title,
-        task.description.as_deref(),
-        &labels,
-        task.priority,
-    );
+    crate::tasks::capsule::embed_task_capsule(
+        store,
+        embedder,
+        &ctx.db,
+        crate::tasks::capsule::TaskCapsuleParams {
+            task_id,
+            title: &task.title,
+            description: task.description.as_deref(),
+            labels: &labels,
+            priority: task.priority,
+        },
+    )
+    .await
+}
 
-    let file_id = format!("task:{task_id}");
+/// Build and embed an outcome capsule for a done/cancelled task.
+async fn embed_outcome_for_task(ctx: &McpContext, task_id: &str) -> crate::error::Result<()> {
+    let (store, embedder) = match (ctx.writable_store.as_ref(), ctx.embedder.as_ref()) {
+        (Some(s), Some(e)) => (s, e),
+        _ => return Ok(()),
+    };
 
-    // 1. Embed into LanceDB (vector search)
-    let embeddings =
-        crate::embedder::embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
-    store
-        .upsert_chunks(&file_id, &task.title, &[(0, &capsule_text)], &embeddings)
-        .await?;
+    let title = match ctx.tasks.get_task(task_id)? {
+        Some(t) => t.title,
+        None => return Ok(()),
+    };
 
-    // 2. Store in SQLite (BM25/FTS)
-    crate::tasks::capsule::store_task_capsule(&ctx.db, &file_id, &capsule_text)?;
-
-    Ok(())
+    crate::tasks::capsule::embed_outcome_capsule(store, embedder, &ctx.db, task_id, &title, None)
+        .await
 }
 
 pub(super) struct TaskApplyEvent;
@@ -249,6 +259,7 @@ impl TaskApplyEvent {
                     result: ToolCallResult::error(format!("Invalid parameters: {e}")),
                     task_id: None,
                     event_type: None,
+                    is_terminal: false,
                 };
             }
         };
@@ -261,6 +272,7 @@ impl TaskApplyEvent {
                     result: ToolCallResult::error(msg),
                     task_id: None,
                     event_type: None,
+                    is_terminal: false,
                 };
             }
         };
@@ -285,6 +297,7 @@ impl TaskApplyEvent {
                                 )),
                                 task_id: None,
                                 event_type: None,
+                                is_terminal: false,
                             };
                         }
                     }
@@ -301,6 +314,7 @@ impl TaskApplyEvent {
                                 )),
                                 task_id: None,
                                 event_type: None,
+                                is_terminal: false,
                             };
                         }
                     };
@@ -312,6 +326,7 @@ impl TaskApplyEvent {
                         ),
                         task_id: None,
                         event_type: None,
+                        is_terminal: false,
                     };
                 }
             }
@@ -330,6 +345,7 @@ impl TaskApplyEvent {
                         )),
                         task_id: None,
                         event_type: None,
+                        is_terminal: false,
                     };
                 }
             }
@@ -346,6 +362,7 @@ impl TaskApplyEvent {
                         )),
                         task_id: None,
                         event_type: None,
+                        is_terminal: false,
                     };
                 }
             }
@@ -362,6 +379,7 @@ impl TaskApplyEvent {
                         )),
                         task_id: None,
                         event_type: None,
+                        is_terminal: false,
                     };
                 }
             }
@@ -382,6 +400,7 @@ impl TaskApplyEvent {
                 result: ToolCallResult::error(format!("Task event failed: {e}")),
                 task_id: None,
                 event_type: None,
+                is_terminal: false,
             };
         }
 
@@ -403,26 +422,25 @@ impl TaskApplyEvent {
         };
 
         // Detect newly unblocked tasks after status_changed to done/cancelled
-        let unblocked_task_ids: Vec<String> = if event_type == EventType::StatusChanged {
+        let is_terminal = event_type == EventType::StatusChanged && {
             let new_status = event
                 .payload
                 .get("new_status")
                 .and_then(|v| v.as_str())
-                .unwrap_or(""); // Type coercion: extracting string from JSON Value, not a store error
-            if new_status == TaskStatus::Done.as_ref()
+                .unwrap_or("");
+            new_status == TaskStatus::Done.as_ref()
                 || new_status == TaskStatus::Cancelled.as_ref()
-            {
-                store_or_warn(
-                    ctx.tasks.list_newly_unblocked(&task_id),
-                    "list_newly_unblocked",
-                    &mut warnings,
-                )
-                .iter()
-                .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
-                .collect()
-            } else {
-                vec![]
-            }
+        };
+
+        let unblocked_task_ids: Vec<String> = if is_terminal {
+            store_or_warn(
+                ctx.tasks.list_newly_unblocked(&task_id),
+                "list_newly_unblocked",
+                &mut warnings,
+            )
+            .iter()
+            .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
+            .collect()
         } else {
             vec![]
         };
@@ -444,6 +462,7 @@ impl TaskApplyEvent {
             result: json_response(&response),
             task_id: Some(task_id),
             event_type: Some(event_type),
+            is_terminal,
         }
     }
 }
@@ -474,6 +493,12 @@ impl McpTool for TaskApplyEvent {
                 if should_embed_capsule(event_type) {
                     if let Err(e) = embed_capsule_for_task(ctx, task_id).await {
                         warn!(error = %e, task_id, "task capsule embedding failed (best-effort)");
+                    }
+                }
+                // Also emit an outcome capsule for done/cancelled transitions
+                if exec.is_terminal {
+                    if let Err(e) = embed_outcome_for_task(ctx, task_id).await {
+                        warn!(error = %e, task_id, "outcome capsule embedding failed (best-effort)");
                     }
                 }
             }

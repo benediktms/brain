@@ -124,7 +124,8 @@ impl TaskClose {
     }
 }
 
-async fn embed_outcome_capsule(
+/// Embed both task capsule (refresh) and outcome capsule for a closed task.
+async fn embed_capsules_for_closed_task(
     ctx: &crate::mcp::McpContext,
     task_id: &str,
     title: &str,
@@ -134,20 +135,31 @@ async fn embed_outcome_capsule(
         _ => return Ok(()), // No store/embedder — skip silently
     };
 
-    let capsule_text = crate::tasks::capsule::build_outcome_capsule(title, None);
-    let file_id = format!("task-outcome:{task_id}");
+    // Refresh the task capsule with current state
+    let task = ctx.tasks.get_task(task_id)?;
+    if let Some(task) = &task {
+        let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
+        if let Err(e) = crate::tasks::capsule::embed_task_capsule(
+            store,
+            embedder,
+            &ctx.db,
+            crate::tasks::capsule::TaskCapsuleParams {
+                task_id,
+                title: &task.title,
+                description: task.description.as_deref(),
+                labels: &labels,
+                priority: task.priority,
+            },
+        )
+        .await
+        {
+            tracing::warn!(error = %e, task_id, "task capsule refresh failed on close (best-effort)");
+        }
+    }
 
-    // 1. Embed into LanceDB
-    let embeddings =
-        crate::embedder::embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
-    store
-        .upsert_chunks(&file_id, title, &[(0, &capsule_text)], &embeddings)
-        .await?;
-
-    // 2. Store in SQLite (BM25/FTS)
-    crate::tasks::capsule::store_task_capsule(&ctx.db, &file_id, &capsule_text)?;
-
-    Ok(())
+    // Embed the outcome capsule
+    crate::tasks::capsule::embed_outcome_capsule(store, embedder, &ctx.db, task_id, title, None)
+        .await
 }
 
 impl McpTool for TaskClose {
@@ -183,10 +195,10 @@ impl McpTool for TaskClose {
         Box::pin(async move {
             let (result, closed_tasks) = self.execute_inner(params, ctx);
 
-            // Best-effort outcome capsule embedding for each closed task
+            // Best-effort capsule embedding for each closed task (task + outcome)
             for (task_id, title) in &closed_tasks {
-                if let Err(e) = embed_outcome_capsule(ctx, task_id, title).await {
-                    tracing::warn!(error = %e, task_id, "outcome capsule embedding failed (best-effort)");
+                if let Err(e) = embed_capsules_for_closed_task(ctx, task_id, title).await {
+                    tracing::warn!(error = %e, task_id, "capsule embedding failed on close (best-effort)");
                 }
             }
 
