@@ -53,7 +53,6 @@ async fn setup_mcp() -> (McpContext, TempDir) {
     let db = Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let store_reader = brain_lib::store::StoreReader::from_store(&store);
-    let _store = store; // keep alive so Arc<Table> remains valid
     let embedder = Arc::new(MockEmbedder);
     let tasks_db = Db::open(&sqlite_path).unwrap();
     let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
@@ -66,6 +65,7 @@ async fn setup_mcp() -> (McpContext, TempDir) {
     let ctx = McpContext {
         db,
         store: Some(store_reader),
+        writable_store: Some(store),
         embedder: Some(embedder),
         tasks,
         records,
@@ -573,9 +573,11 @@ async fn test_mcp_search_minimal_returns_results() {
     // Create fresh McpContext that sees the indexed data
     let tasks_dir2 = tmp.path().join("tasks2");
     let store2 = Store::open_or_create(&lance_path).await.unwrap();
+    let store2_reader = brain_lib::store::StoreReader::from_store(&store2);
     let ctx = McpContext {
         db: Db::open(&sqlite_path).unwrap(),
-        store: Some(brain_lib::store::StoreReader::from_store(&store2)),
+        store: Some(store2_reader),
+        writable_store: Some(store2),
         embedder: Some(Arc::new(MockEmbedder)),
         tasks: brain_lib::tasks::TaskStore::new(&tasks_dir2, Db::open(&sqlite_path).unwrap())
             .unwrap(),
@@ -643,9 +645,11 @@ async fn test_mcp_expand_returns_full_content() {
     // Create fresh McpContext that sees the indexed data
     let tasks_dir3 = tmp.path().join("tasks3");
     let store3 = Store::open_or_create(&lance_path).await.unwrap();
+    let store3_reader = brain_lib::store::StoreReader::from_store(&store3);
     let ctx = McpContext {
         db: Db::open(&sqlite_path).unwrap(),
-        store: Some(brain_lib::store::StoreReader::from_store(&store3)),
+        store: Some(store3_reader),
+        writable_store: Some(store3),
         embedder: Some(Arc::new(MockEmbedder)),
         tasks: brain_lib::tasks::TaskStore::new(&tasks_dir3, Db::open(&sqlite_path).unwrap())
             .unwrap(),

@@ -174,6 +174,7 @@ mod tests {
             McpContext {
                 db,
                 store: None,
+                writable_store: None,
                 embedder: None,
                 tasks,
                 records,
@@ -195,7 +196,6 @@ mod tests {
             .await
             .unwrap();
         let store_reader = crate::store::StoreReader::from_store(&store);
-        let _store = store;
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
         let records_dir = tmp.path().join("records");
@@ -209,6 +209,7 @@ mod tests {
             McpContext {
                 db,
                 store: Some(store_reader),
+                writable_store: Some(store),
                 embedder: None,
                 tasks,
                 records,

@@ -202,8 +202,6 @@ pub(super) mod tests {
             .await
             .unwrap();
         let store_reader = crate::store::StoreReader::from_store(&store);
-        // Keep store alive so the Arc<Table> remains valid.
-        let _store = store;
         let embedder = Arc::new(crate::embedder::MockEmbedder);
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
@@ -220,6 +218,7 @@ pub(super) mod tests {
             McpContext {
                 db,
                 store: Some(store_reader),
+                writable_store: Some(store),
                 embedder: Some(embedder),
                 tasks,
                 records,

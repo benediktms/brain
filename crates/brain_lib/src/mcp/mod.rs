@@ -34,6 +34,7 @@ use tools::ToolRegistry;
 pub struct McpContext {
     pub db: Db,
     pub store: Option<StoreReader>,
+    pub writable_store: Option<Store>,  // for task capsule embedding
     pub embedder: Option<Arc<dyn Embed>>,
     pub tasks: TaskStore,
     pub records: RecordStore,
@@ -86,19 +87,21 @@ impl McpContext {
 
         // Step 2: optionally load LanceDB + embedder. Failures are logged and
         // result in tasks-only mode — no hard error.
-        let (store, embedder) = match Self::try_load_search_layer(model_dir, lance_db, &db).await {
-            Ok((s, e)) => (Some(s), Some(e)),
-            Err(err) => {
-                info!("embedding model unavailable ({err}), starting in tasks-only mode");
-                (None, None)
-            }
-        };
+        let (writable_store, store, embedder) =
+            match Self::try_load_search_layer(model_dir, lance_db, &db).await {
+                Ok((ws, s, e)) => (Some(ws), Some(s), Some(e)),
+                Err(err) => {
+                    info!("embedding model unavailable ({err}), starting in tasks-only mode");
+                    (None, None, None)
+                }
+            };
 
         let metrics = Arc::new(Metrics::new());
 
         Ok(Arc::new(Self {
             db,
             store,
+            writable_store,
             embedder,
             tasks,
             records,
@@ -115,7 +118,7 @@ impl McpContext {
         model_dir: &Path,
         lance_db: &Path,
         db: &Db,
-    ) -> crate::error::Result<(StoreReader, Arc<dyn Embed>)> {
+    ) -> crate::error::Result<(Store, StoreReader, Arc<dyn Embed>)> {
         let mut store = Store::open_or_create(lance_db).await?;
 
         // Perform schema version check (same logic as IndexPipeline::new).
@@ -132,7 +135,7 @@ impl McpContext {
         };
 
         let store_reader = StoreReader::from_store(&store);
-        Ok((store_reader, embedder))
+        Ok((store, store_reader, embedder))
     }
 }
 
