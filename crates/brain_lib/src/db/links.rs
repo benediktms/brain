@@ -4,28 +4,51 @@ use ulid::Ulid;
 use crate::error::Result;
 use crate::links::Link;
 
-/// Resolve a link's `target_path` to a `file_id` by querying the files table.
+/// Resolve a link's `target_path` to a `file_id` using Obsidian-style disambiguation.
 ///
-/// For wiki/markdown links, tries three match strategies in order:
-/// 1. Exact path match (`files.path = target_path`)
-/// 2. Suffix match with `.md` extension (`files.path LIKE '%/' || target_path || '.md'`)
-/// 3. Suffix match without extension (`files.path LIKE '%/' || target_path`)
+/// Resolution order (for wiki/markdown links):
+/// 1. Exact `path` match (handles absolute paths stored as-is)
+/// 2. Path ends with `/<target>.md` (wiki bare stems, e.g. "headings" → .../headings.md)
+/// 3. Path ends with `/<target>` (markdown links that already carry an extension)
 ///
-/// Returns `None` for external links or when no matching file is found.
-fn resolve_target_file_id(conn: &Connection, target_path: &str, link_type: &str) -> Option<String> {
+/// When multiple files match the same rule, the shortest path wins (nearest-match
+/// semantics, mimicking Obsidian). Returns `None` for external links or no match.
+pub(crate) fn resolve_target_file_id(
+    conn: &Connection,
+    target_path: &str,
+    link_type: &str,
+) -> Option<String> {
     if link_type == "external" {
         return None;
     }
-    conn.query_row(
-        "SELECT file_id FROM files
-          WHERE path = ?1
-             OR path LIKE '%/' || ?1 || '.md'
-             OR path LIKE '%/' || ?1
-          LIMIT 1",
-        [target_path],
-        |row| row.get(0),
-    )
-    .ok()
+
+    // Collect all candidate (file_id, path) rows that match any of the three strategies.
+    let suffix_with_md = format!("/{}.md", target_path);
+    let suffix_bare = format!("/{}", target_path);
+
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT file_id, path FROM files
+              WHERE path = ?1
+                 OR path LIKE '%' || ?2
+                 OR path LIKE '%' || ?3",
+        )
+        .ok()?;
+
+    let candidates: Vec<(String, String)> = stmt
+        .query_map(
+            rusqlite::params![target_path, suffix_with_md, suffix_bare],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Pick the candidate with the shortest path (nearest-match).
+    candidates
+        .into_iter()
+        .min_by_key(|(_, path)| path.len())
+        .map(|(file_id, _)| file_id)
 }
 
 /// Returns true if the `links.target_file_id` column exists (i.e. v15+ schema).

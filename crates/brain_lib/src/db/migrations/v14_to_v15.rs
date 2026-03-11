@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 
+use crate::db::links::resolve_target_file_id;
 use crate::error::Result;
 
 /// v14 → v15: Add `target_file_id` to `links` and `pagerank_score` to `files`.
@@ -7,20 +8,20 @@ use crate::error::Result;
 /// - `links.target_file_id`: nullable FK to `files(file_id)`, resolved at index
 ///   time for wiki/markdown links. External links remain NULL.
 /// - `files.pagerank_score`: nullable REAL, populated by the optimize cycle.
+///
+/// The backfill uses the same Rust resolution logic as `replace_links()` rather
+/// than raw SQL pattern matching, because `files.path` stores absolute paths
+/// (e.g. `/vault/headings.md`) while `links.target_path` stores bare names or
+/// relative paths (`"headings"`, `"simple.md"`). Pure SQL LIKE patterns would
+/// produce double-extension matches and ambiguous multi-row subqueries.
 pub fn migrate_v14_to_v15(conn: &Connection) -> Result<()> {
+    // Step 1: DDL — add columns and index, bump version. Run in a single batch.
     conn.execute_batch(
         "
         BEGIN;
 
         ALTER TABLE links ADD COLUMN target_file_id TEXT REFERENCES files(file_id) ON DELETE SET NULL;
         CREATE INDEX idx_links_target_file ON links(target_file_id);
-
-        UPDATE links SET target_file_id = (
-            SELECT file_id FROM files
-            WHERE files.path = links.target_path
-               OR files.path LIKE '%/' || links.target_path || '.md'
-               OR files.path LIKE '%/' || links.target_path
-        ) WHERE link_type IN ('wiki', 'markdown');
 
         ALTER TABLE files ADD COLUMN pagerank_score REAL;
 
@@ -29,6 +30,37 @@ pub fn migrate_v14_to_v15(conn: &Connection) -> Result<()> {
         COMMIT;
     ",
     )?;
+
+    // Step 2: Backfill target_file_id for existing wiki/markdown links using the
+    // same Rust resolver used at index time, so resolution semantics are identical.
+    backfill_target_file_ids(conn)?;
+
+    Ok(())
+}
+
+/// Iterate over all wiki/markdown links and resolve target_file_id in Rust.
+fn backfill_target_file_ids(conn: &Connection) -> Result<()> {
+    // Collect links to backfill (avoid holding a read cursor while writing).
+    let links: Vec<(String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT link_id, target_path, link_type FROM links
+              WHERE link_type IN ('wiki', 'markdown')",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let mut update = conn.prepare_cached(
+        "UPDATE links SET target_file_id = ?1 WHERE link_id = ?2",
+    )?;
+
+    for (link_id, target_path, link_type) in &links {
+        let file_id = resolve_target_file_id(conn, target_path, link_type);
+        if let Some(fid) = file_id {
+            update.execute(rusqlite::params![fid, link_id])?;
+        }
+    }
+
     Ok(())
 }
 
@@ -36,7 +68,7 @@ pub fn migrate_v14_to_v15(conn: &Connection) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Minimal v14 schema: files + links tables only (no other dependencies needed).
+    /// Minimal v14 schema: files + links tables only.
     fn setup_v14(conn: &Connection) {
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -142,16 +174,16 @@ mod tests {
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         setup_v14(&conn);
 
-        // Seed files
+        // Seed files with absolute paths (as the real indexer stores them)
         conn.execute_batch(
             "INSERT INTO files (file_id, path) VALUES
-                 ('f1', '/notes/source.md'),
-                 ('f2', '/notes/headings.md'),
-                 ('f3', '/notes/simple.md');",
+                 ('f1', '/vault/notes/source.md'),
+                 ('f2', '/vault/notes/headings.md'),
+                 ('f3', '/vault/notes/simple.md');",
         )
         .unwrap();
 
-        // Seed links (pre-migration, no target_file_id column yet)
+        // Seed links with bare/relative target_path as the parser produces them
         conn.execute_batch(
             "INSERT INTO links (link_id, source_file_id, target_path, link_type) VALUES
                  ('l1', 'f1', 'headings', 'wiki'),
@@ -162,7 +194,7 @@ mod tests {
 
         migrate_v14_to_v15(&conn).unwrap();
 
-        // Wiki link "headings" should resolve to f2 (/notes/headings.md via LIKE '%/headings.md')
+        // Wiki bare stem "headings" → /vault/notes/headings.md → f2
         let wiki_target: Option<String> = conn
             .query_row(
                 "SELECT target_file_id FROM links WHERE link_id = 'l1'",
@@ -172,7 +204,7 @@ mod tests {
             .unwrap();
         assert_eq!(wiki_target, Some("f2".to_string()), "wiki link should resolve to f2");
 
-        // Markdown link "simple.md" should resolve to f3 (/notes/simple.md via path = target_path)
+        // Markdown relative "simple.md" → /vault/notes/simple.md → f3
         let md_target: Option<String> = conn
             .query_row(
                 "SELECT target_file_id FROM links WHERE link_id = 'l2'",
@@ -182,7 +214,7 @@ mod tests {
             .unwrap();
         assert_eq!(md_target, Some("f3".to_string()), "markdown link should resolve to f3");
 
-        // External link should remain NULL
+        // External link remains NULL
         let ext_target: Option<String> = conn
             .query_row(
                 "SELECT target_file_id FROM links WHERE link_id = 'l3'",
@@ -191,6 +223,73 @@ mod tests {
             )
             .unwrap();
         assert!(ext_target.is_none(), "external link should have NULL target_file_id");
+    }
+
+    #[test]
+    fn test_backfill_no_double_md_extension() {
+        // "simple.md" as target_path must NOT be treated as "simple.md.md"
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        setup_v14(&conn);
+
+        conn.execute_batch(
+            "INSERT INTO files (file_id, path) VALUES
+                 ('f1', '/vault/source.md'),
+                 ('f2', '/vault/simple.md');",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_type)
+             VALUES ('l1', 'f1', 'simple.md', 'markdown')",
+            [],
+        )
+        .unwrap();
+
+        migrate_v14_to_v15(&conn).unwrap();
+
+        let target: Option<String> = conn
+            .query_row(
+                "SELECT target_file_id FROM links WHERE link_id = 'l1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // Should resolve to f2 (/vault/simple.md), not fail or match a phantom .md.md
+        assert_eq!(target, Some("f2".to_string()), "simple.md should resolve without double extension");
+    }
+
+    #[test]
+    fn test_backfill_shortest_path_wins_on_ambiguity() {
+        // Two files both end with /notes.md; the shorter absolute path should win.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        setup_v14(&conn);
+
+        conn.execute_batch(
+            "INSERT INTO files (file_id, path) VALUES
+                 ('f1', '/vault/source.md'),
+                 ('f2', '/vault/notes.md'),
+                 ('f3', '/vault/subdir/archive/notes.md');",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO links (link_id, source_file_id, target_path, link_type)
+             VALUES ('l1', 'f1', 'notes', 'wiki')",
+            [],
+        )
+        .unwrap();
+
+        migrate_v14_to_v15(&conn).unwrap();
+
+        let target: Option<String> = conn
+            .query_row(
+                "SELECT target_file_id FROM links WHERE link_id = 'l1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // /vault/notes.md (len=14) is shorter than /vault/subdir/archive/notes.md
+        assert_eq!(target, Some("f2".to_string()), "shortest path should win");
     }
 
     #[test]
@@ -216,7 +315,7 @@ mod tests {
         setup_v14(&conn);
 
         conn.execute(
-            "INSERT INTO files (file_id, path) VALUES ('f1', '/notes/source.md')",
+            "INSERT INTO files (file_id, path) VALUES ('f1', '/vault/source.md')",
             [],
         )
         .unwrap();
