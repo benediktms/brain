@@ -374,9 +374,7 @@ impl TaskApplyEvent {
                 Ok(typed) => serde_json::to_value(typed).unwrap(),
                 Err(e) => {
                     return ExecuteResult {
-                        result: ToolCallResult::error(format!(
-                            "Invalid task_created payload: {e}"
-                        )),
+                        result: ToolCallResult::error(format!("Invalid task_created payload: {e}")),
                         task_id: None,
                         event_type: None,
                         is_terminal: false,
@@ -428,8 +426,7 @@ impl TaskApplyEvent {
                 .get("new_status")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            new_status == TaskStatus::Done.as_ref()
-                || new_status == TaskStatus::Cancelled.as_ref()
+            new_status == TaskStatus::Done.as_ref() || new_status == TaskStatus::Cancelled.as_ref()
         };
 
         let unblocked_task_ids: Vec<String> = if is_terminal {
@@ -490,16 +487,16 @@ impl McpTool for TaskApplyEvent {
 
             // Best-effort capsule embedding for relevant events
             if let (Some(task_id), Some(event_type)) = (&exec.task_id, &exec.event_type) {
-                if should_embed_capsule(event_type) {
-                    if let Err(e) = embed_capsule_for_task(ctx, task_id).await {
-                        warn!(error = %e, task_id, "task capsule embedding failed (best-effort)");
-                    }
+                if should_embed_capsule(event_type)
+                    && let Err(e) = embed_capsule_for_task(ctx, task_id).await
+                {
+                    warn!(error = %e, task_id, "task capsule embedding failed (best-effort)");
                 }
                 // Also emit an outcome capsule for done/cancelled transitions
-                if exec.is_terminal {
-                    if let Err(e) = embed_outcome_for_task(ctx, task_id).await {
-                        warn!(error = %e, task_id, "outcome capsule embedding failed (best-effort)");
-                    }
+                if exec.is_terminal
+                    && let Err(e) = embed_outcome_for_task(ctx, task_id).await
+                {
+                    warn!(error = %e, task_id, "outcome capsule embedding failed (best-effort)");
                 }
             }
 
