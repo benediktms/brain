@@ -1,10 +1,10 @@
 use crate::config::{get_or_generate_brain_id, open_remote_task_store, resolve_brain_entry};
 use crate::error::Result;
+use crate::tasks::TaskStore;
 use crate::tasks::events::{
     CrossBrainRefPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType,
     new_task_id,
 };
-use crate::tasks::TaskStore;
 
 /// Parameters for creating a task in a remote brain.
 pub struct CrossBrainCreateParams {
@@ -184,17 +184,14 @@ pub(crate) fn cross_brain_create_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{save_brain_toml, BrainToml};
+    use crate::config::{BrainToml, save_brain_toml};
     use crate::db::Db;
     use crate::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus};
     use tempfile::TempDir;
 
     /// Create a minimal brain setup: `.brain/brain.toml` with the given name
     /// and a task store backed by files on disk.
-    fn make_brain(
-        brain_home: &std::path::Path,
-        name: &str,
-    ) -> (TempDir, TaskStore) {
+    fn make_brain(brain_home: &std::path::Path, name: &str) -> (TempDir, TaskStore) {
         // Project root (simulates where the code lives).
         let project_tmp = TempDir::new().unwrap();
 
@@ -461,16 +458,20 @@ mod tests {
         .unwrap();
 
         // Task must exist in remote store.
-        assert!(remote_store
-            .get_task(&result.remote_task_id)
-            .unwrap()
-            .is_some());
+        assert!(
+            remote_store
+                .get_task(&result.remote_task_id)
+                .unwrap()
+                .is_some()
+        );
 
         // Task must NOT exist in local store.
-        assert!(local_store
-            .get_task(&result.remote_task_id)
-            .unwrap()
-            .is_none());
+        assert!(
+            local_store
+                .get_task(&result.remote_task_id)
+                .unwrap()
+                .is_none()
+        );
         assert!(local_store.list_all().unwrap().is_empty());
     }
 }

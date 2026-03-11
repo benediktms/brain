@@ -306,7 +306,9 @@ mod tests {
         let result = dispatch(&registry, "tasks.create_remote", params, &ctx).await;
         assert_eq!(result.is_error, Some(true));
         assert!(
-            result.content[0].text.contains("Failed to create remote task"),
+            result.content[0]
+                .text
+                .contains("Failed to create remote task"),
             "expected 'Failed to create remote task', got: {}",
             result.content[0].text
         );

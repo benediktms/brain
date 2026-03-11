@@ -268,11 +268,35 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
+**Cross-brain tools:**
+- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks.create_remote`.
+- `tasks.create_remote` — Create a task in another registered brain project. Required params: `brain` (registry name or 8-char brain ID) and `title`. Brain resolution tries the registry name first, then falls back to scanning by ID. Optional params: `description`, `priority` (0–4, default 4), `task_type`, `assignee`, `parent` (remote task ID). When `link_from` is provided (a local task ID), a cross-brain ref is added to that local task. `link_type` controls the ref direction (depends_on|blocks|related, default related). Returns `remote_task_id`, `remote_brain_name`, `remote_brain_id`, and `local_ref_created`.
+
+**Cross-brain workflow:**
+1. Call `brains.list` to discover registered brains and their prefixes.
+2. Call `tasks.create_remote` with the target brain name and task details.
+3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
+
 **Memory tools:**
 - `memory_search_minimal` — Semantic search across indexed notes. Returns compact stubs (title, summary, score). Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
+
+**Records tools:**
+- `records.create_artifact` — Create a new artifact record with base64-encoded content.
+- `records.save_snapshot` — Save an opaque state bundle as a snapshot record.
+- `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution).
+- `records.list` — List records with optional filters (kind, status, tag, task_id).
+- `records.fetch_content` — Fetch raw content of a record as base64-encoded data.
+- `records.archive` — Archive a record (metadata-only, payload preserved).
+- `records.tag_add` — Add a tag to a record (idempotent).
+- `records.tag_remove` — Remove a tag from a record (idempotent).
+- `records.link_add` — Link a record to a task or note chunk.
+- `records.link_remove` — Remove a link from a record.
+
+**Other tools:**
+- `status` — Health/status probe. Returns project name, brain ID, task counts, and index stats.
 
 ### CLI Commands (for human terminal use)
 
@@ -289,6 +313,14 @@ brain tasks show <id>          # Detailed task view
 brain tasks create --title="..." --description="..." --type=task --priority=2
 brain tasks update <id> --status=in_progress
 brain tasks comment <id> "comment text"
+
+# Cross-brain task creation
+brain tasks create --title="..." --brain=<NAME_OR_ID>          # Create in another brain
+brain tasks create --title="..." --brain=infra --link-from=BRN-01X --link-type=related  # Create + auto-link
+
+# Registry
+brain list                     # List registered brains
+brain list --json              # List as JSON (name, id, root, prefix)
 
 # Dependencies
 brain tasks dep add <task> <depends-on>

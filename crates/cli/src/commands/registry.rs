@@ -1,5 +1,7 @@
 use anyhow::Result;
-use brain_lib::config::{brain_home, load_global_config, open_remote_task_store, save_global_config};
+use brain_lib::config::{
+    brain_home, load_global_config, open_remote_task_store, save_global_config,
+};
 
 /// List all registered brains.
 pub fn run_list(json: bool) -> Result<()> {
@@ -7,10 +9,13 @@ pub fn run_list(json: bool) -> Result<()> {
 
     if global.brains.is_empty() {
         if json {
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "brains": [],
-                "count": 0
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "brains": [],
+                    "count": 0
+                }))?
+            );
         } else {
             println!("No brains registered. Run `brain init` in a project directory.");
         }

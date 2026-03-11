@@ -51,9 +51,7 @@ impl McpTool for BrainsList {
             let config = match load_global_config() {
                 Ok(c) => c,
                 Err(err) => {
-                    return ToolCallResult::error(format!(
-                        "Failed to load global config: {err}"
-                    ));
+                    return ToolCallResult::error(format!("Failed to load global config: {err}"));
                 }
             };
 
@@ -111,6 +109,9 @@ mod tests {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
         let result = registry.dispatch("brains_list", json!({}), &ctx).await;
-        assert!(result.is_error.is_none(), "brains_list alias should not error");
+        assert!(
+            result.is_error.is_none(),
+            "brains_list alias should not error"
+        );
     }
 }

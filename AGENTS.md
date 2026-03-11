@@ -112,8 +112,8 @@ brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
 
 # Registry
-brain registry list            # List registered brains (human-readable)
-brain registry list --json     # List registered brains as JSON (name, id, root, prefix)
+brain list                     # List registered brains
+brain list --json              # List as JSON (name, id, root, prefix)
 
 # Records
 brain artifacts <subcommand>   # Artifact management (alias: art)
