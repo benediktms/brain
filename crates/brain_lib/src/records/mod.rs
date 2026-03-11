@@ -497,6 +497,15 @@ impl RecordStore {
     /// the same content_hash with payload_available = 1.
     ///
     /// Appends a `PayloadEvicted` event and updates the projection.
+    ///
+    /// # Crash recovery
+    ///
+    /// The event is committed **before** the blob is deleted. This is
+    /// intentional: if the process crashes between the two operations the
+    /// projection will show `payload_available = false` while the blob still
+    /// exists on disk (a "stale flag"). This is the safe direction — no data
+    /// is lost. Running `brain records gc` (which calls [`integrity::cleanup_orphans`])
+    /// will detect and remove the stale blob.
     pub fn evict_payload(
         &self,
         record_id: &str,

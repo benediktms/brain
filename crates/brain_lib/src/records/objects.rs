@@ -153,11 +153,22 @@ impl ObjectStore {
         let original_size = data.len() as u64;
 
         // Fast path: blob already exists — skip write (deduplication).
+        // Detect the actual encoding by checking for zstd magic bytes, and
+        // report the real on-disk size so callers get accurate metadata.
         let dest = self.blob_path(&hex)?;
         if dest.exists() {
+            let stored_size = std::fs::metadata(&dest)
+                .map(|m| m.len())
+                .unwrap_or(original_size);
+            let raw = std::fs::read(&dest).unwrap_or_default();
+            let encoding = if raw.len() >= 4 && raw[..4] == [0x28, 0xB5, 0x2F, 0xFD] {
+                "zstd"
+            } else {
+                "identity"
+            };
             return Ok((
-                ContentRef::new(hex, original_size, media_type),
-                "identity".to_string(),
+                ContentRef::new(hex, stored_size, media_type),
+                encoding.to_string(),
                 original_size,
             ));
         }
@@ -507,21 +518,48 @@ mod tests {
         let data: Vec<u8> = b"repeated ".repeat(500);
         let threshold = 100;
 
-        let (ref1, enc1, _) = store
+        let (ref1, enc1, orig1) = store
             .write_compressed(&data, None, threshold)
             .unwrap();
-        let (ref2, enc2, _) = store
+        let (ref2, enc2, orig2) = store
             .write_compressed(&data, None, threshold)
             .unwrap();
 
         assert_eq!(ref1.hash, ref2.hash);
-        // Second write returns "identity" encoding (deduplicated — skipped write).
+        // Both writes must report the actual encoding ("zstd").
         assert_eq!(enc1, "zstd");
-        assert_eq!(enc2, "identity");
+        assert_eq!(enc2, "zstd");
+        // Stored size must match the compressed size on disk, not the original.
+        assert_eq!(ref1.size, ref2.size);
+        assert!(ref2.size < data.len() as u64, "dedup should return compressed stored size");
+        // Original sizes must match.
+        assert_eq!(orig1, orig2);
+        assert_eq!(orig1, data.len() as u64);
 
         // Exactly one blob on disk.
         let blob_path = store.blob_path(&ref1.hash).unwrap();
         assert!(blob_path.exists());
+    }
+
+    #[test]
+    fn test_write_compressed_dedup_uncompressed() {
+        let (_dir, store) = make_store();
+        // Data smaller than threshold — stored uncompressed.
+        let data = b"small data";
+        let threshold = 1024;
+
+        let (ref1, enc1, _) = store
+            .write_compressed(data, None, threshold)
+            .unwrap();
+        let (ref2, enc2, _) = store
+            .write_compressed(data, None, threshold)
+            .unwrap();
+
+        assert_eq!(ref1.hash, ref2.hash);
+        assert_eq!(enc1, "identity");
+        assert_eq!(enc2, "identity");
+        assert_eq!(ref1.size, ref2.size);
+        assert_eq!(ref1.size, data.len() as u64);
     }
 
     #[test]
