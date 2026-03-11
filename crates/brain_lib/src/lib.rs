@@ -10,6 +10,7 @@ pub mod hash_gate;
 pub mod links;
 pub mod mcp;
 pub mod metrics;
+pub mod pagerank;
 pub mod parser;
 pub mod pipeline;
 pub mod query_pipeline;
