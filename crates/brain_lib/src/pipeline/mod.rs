@@ -1,3 +1,4 @@
+pub mod consolidation;
 mod indexing;
 mod maintenance;
 mod scan;
