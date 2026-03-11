@@ -455,9 +455,9 @@ pub(crate) enum DaemonAction {
         writes its PID to ~/.brain/brain.pid. The child process runs the watcher \
         loop, logging to ~/.brain/brain.log.")]
     Start {
-        /// Path to the notes directory
-        #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
-        notes_path: PathBuf,
+        /// Path to notes directory. When omitted, watches all registered brains from the global registry.
+        #[arg(value_hint = ValueHint::DirPath)]
+        notes_path: Option<PathBuf>,
     },
     /// Stop the running daemon
     #[command(long_about = "Stop the running daemon.\n\n\
