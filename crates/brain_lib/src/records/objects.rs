@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use crate::error::{BrainCoreError, Result};
 use crate::records::ContentRef;
 
+/// Blobs smaller than this are stored uncompressed (zstd header overhead
+/// dominates at small sizes).  256 bytes is a conservative break-even point.
+pub const COMPRESSION_THRESHOLD: usize = 256;
+
 /// A content-addressed object store for record payloads (artifacts and snapshots).
 ///
 /// Objects are addressed by their BLAKE3 hash. The store uses a 2-character

@@ -388,12 +388,11 @@ mod tests {
             RecordCreatedPayload {
                 title: title.to_string(),
                 kind: kind.to_string(),
-                content_ref: ContentRefPayload {
-                    hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                        .to_string(),
-                    size: 42,
-                    media_type: Some("application/json".to_string()),
-                },
+                content_ref: ContentRefPayload::new(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                    42,
+                    Some("application/json".to_string()),
+                ),
                 description: None,
                 task_id: None,
                 tags: vec![],
@@ -419,12 +418,11 @@ mod tests {
             RecordCreatedPayload {
                 title: title.to_string(),
                 kind: kind.to_string(),
-                content_ref: ContentRefPayload {
-                    hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                        .to_string(),
-                    size: 42,
-                    media_type: None,
-                },
+                content_ref: ContentRefPayload::new(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                    42,
+                    None,
+                ),
                 description: None,
                 task_id: None,
                 tags: vec![tag.to_string()],

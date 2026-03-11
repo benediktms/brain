@@ -34,12 +34,11 @@ fn make_created_event(record_id: &str, title: &str, kind: &str) -> RecordEvent {
         RecordCreatedPayload {
             title: title.to_string(),
             kind: kind.to_string(),
-            content_ref: ContentRefPayload {
-                hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                    .to_string(),
-                size: 42,
-                media_type: Some("text/plain".to_string()),
-            },
+            content_ref: ContentRefPayload::new(
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                42,
+                Some("text/plain".to_string()),
+            ),
             description: None,
             task_id: None,
             tags: vec![],
@@ -63,12 +62,11 @@ fn make_created_event_with_tags(
         RecordCreatedPayload {
             title: title.to_string(),
             kind: kind.to_string(),
-            content_ref: ContentRefPayload {
-                hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                    .to_string(),
-                size: 42,
-                media_type: None,
-            },
+            content_ref: ContentRefPayload::new(
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                42,
+                None,
+            ),
             description: Some("A test record".to_string()),
             task_id: None,
             tags,
@@ -917,11 +915,11 @@ fn test_object_store_content_hash_matches_record() {
         RecordCreatedPayload {
             title: "Analysis Result".to_string(),
             kind: "analysis".to_string(),
-            content_ref: ContentRefPayload {
-                hash: content_ref.hash.clone(),
-                size: content_ref.size,
-                media_type: content_ref.media_type.clone(),
-            },
+            content_ref: ContentRefPayload::new(
+                content_ref.hash.clone(),
+                content_ref.size,
+                content_ref.media_type.clone(),
+            ),
             description: None,
             task_id: None,
             tags: vec![],
@@ -967,11 +965,11 @@ fn test_object_store_deduplication_with_multiple_records() {
             RecordCreatedPayload {
                 title: format!("Record {i}"),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload {
-                    hash: ref1.hash.clone(),
-                    size: ref1.size,
-                    media_type: None,
-                },
+                content_ref: ContentRefPayload::new(
+                    ref1.hash.clone(),
+                    ref1.size,
+                    None,
+                ),
                 description: None,
                 task_id: None,
                 tags: vec![],

@@ -81,11 +81,57 @@ pub struct RecordCreatedPayload {
 pub struct ContentRefPayload {
     /// BLAKE3 hex digest of the raw payload bytes (64 hex chars).
     pub hash: String,
-    /// Byte length of the payload.
+    /// Byte length of the stored blob (may be compressed).
     pub size: u64,
     /// Optional MIME type hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
+    /// Content encoding: `"identity"` or `"zstd"`.  Defaults to `"identity"`
+    /// for backward compatibility with events written before compression.
+    #[serde(default = "default_encoding", skip_serializing_if = "is_identity")]
+    pub content_encoding: String,
+    /// Original (pre-compression) byte length.  Defaults to `size` for
+    /// backward compatibility with events written before compression.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_size: Option<u64>,
+}
+
+impl ContentRefPayload {
+    /// Create a new `ContentRefPayload` for an uncompressed blob.
+    pub fn new(hash: String, size: u64, media_type: Option<String>) -> Self {
+        Self {
+            hash,
+            size,
+            media_type,
+            content_encoding: "identity".to_string(),
+            original_size: None,
+        }
+    }
+
+    /// Create a new `ContentRefPayload` for a (possibly) compressed blob.
+    pub fn compressed(
+        hash: String,
+        stored_size: u64,
+        media_type: Option<String>,
+        encoding: String,
+        original_size: u64,
+    ) -> Self {
+        Self {
+            hash,
+            size: stored_size,
+            media_type,
+            content_encoding: encoding,
+            original_size: Some(original_size),
+        }
+    }
+}
+
+fn default_encoding() -> String {
+    "identity".to_string()
+}
+
+fn is_identity(s: &str) -> bool {
+    s == "identity"
 }
 
 /// Payload for `RecordUpdated` events.
@@ -339,12 +385,11 @@ mod tests {
             RecordCreatedPayload {
                 title: "Test Artifact".to_string(),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload {
-                    hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                        .to_string(),
-                    size: 42,
-                    media_type: Some("application/json".to_string()),
-                },
+                content_ref: ContentRefPayload::new(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                    42,
+                    Some("application/json".to_string()),
+                ),
                 description: None,
                 task_id: None,
                 tags: vec![],
@@ -516,12 +561,11 @@ mod tests {
 
     #[test]
     fn test_content_ref_optional_media_type() {
-        let cr = ContentRefPayload {
-            hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                .to_string(),
-            size: 0,
-            media_type: None,
-        };
+        let cr = ContentRefPayload::new(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+            0,
+            None,
+        );
         let json = serde_json::to_string(&cr).unwrap();
         // media_type should be absent when None (skip_serializing_if)
         assert!(!json.contains("media_type"));

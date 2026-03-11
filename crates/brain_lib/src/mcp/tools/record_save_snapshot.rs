@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
+use crate::records::objects::COMPRESSION_THRESHOLD;
 
 use super::{McpTool, json_response};
 
@@ -42,7 +43,7 @@ impl RecordSaveSnapshot {
             Err(e) => return ToolCallResult::error(format!("Invalid base64 data: {e}")),
         };
 
-        let content_ref = match ctx.objects.write_with_media_type(&raw_bytes, Some(params.media_type.clone())) {
+        let (content_ref, encoding, original_size) = match ctx.objects.write_compressed(&raw_bytes, Some(params.media_type.clone()), COMPRESSION_THRESHOLD) {
             Ok(r) => r,
             Err(e) => return ToolCallResult::error(format!("Failed to write object: {e}")),
         };
@@ -56,11 +57,13 @@ impl RecordSaveSnapshot {
         let payload = RecordCreatedPayload {
             title: params.title,
             kind: "snapshot".to_string(),
-            content_ref: ContentRefPayload {
-                hash: content_ref.hash.clone(),
-                size: content_ref.size,
-                media_type: Some(params.media_type),
-            },
+            content_ref: ContentRefPayload::compressed(
+                content_ref.hash.clone(),
+                content_ref.size,
+                Some(params.media_type),
+                encoding,
+                original_size,
+            ),
             description: params.description,
             task_id: params.task_id,
             tags: params.tags,

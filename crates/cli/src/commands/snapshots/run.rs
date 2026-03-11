@@ -11,7 +11,7 @@ use brain_lib::records::events::{
     ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
     RecordEventType, TagPayload,
 };
-use brain_lib::records::objects::ObjectStore;
+use brain_lib::records::objects::{COMPRESSION_THRESHOLD, ObjectStore};
 use brain_lib::records::queries::RecordFilter;
 
 use crate::markdown_table::MarkdownTable;
@@ -91,16 +91,18 @@ pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
         .media_type
         .or_else(|| Some("application/octet-stream".to_string()));
 
-    let content_ref = ctx
+    let (content_ref, encoding, original_size) = ctx
         .object_store
-        .write_with_media_type(&data, media_type)
+        .write_compressed(&data, media_type, COMPRESSION_THRESHOLD)
         .context("Failed to write to object store")?;
 
-    let content_ref_payload = ContentRefPayload {
-        hash: content_ref.hash.clone(),
-        size: content_ref.size,
-        media_type: content_ref.media_type.clone(),
-    };
+    let content_ref_payload = ContentRefPayload::compressed(
+        content_ref.hash.clone(),
+        content_ref.size,
+        content_ref.media_type.clone(),
+        encoding,
+        original_size,
+    );
 
     let prefix = ctx
         .record_store
@@ -322,7 +324,7 @@ pub fn restore(ctx: &SnapshotCtx, id: &str, output: Option<std::path::PathBuf>) 
 
     let bytes = ctx
         .object_store
-        .read(&record.content_hash)
+        .read_auto(&record.content_hash)
         .with_context(|| format!("Failed to read object for snapshot {record_id}"))?;
 
     match output {

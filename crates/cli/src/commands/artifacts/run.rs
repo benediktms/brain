@@ -12,7 +12,7 @@ use brain_lib::records::events::{
     ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
     RecordEventType, TagPayload,
 };
-use brain_lib::records::objects::ObjectStore;
+use brain_lib::records::objects::{COMPRESSION_THRESHOLD, ObjectStore};
 use brain_lib::records::queries::RecordFilter;
 
 use crate::markdown_table::MarkdownTable;
@@ -92,18 +92,20 @@ pub fn create(ctx: &ArtifactCtx, params: CreateParams) -> Result<()> {
         bail!("Must provide either --file <path> or --stdin to supply payload");
     };
 
-    // Write to object store
-    let content_ref = ctx
+    // Write to object store (with transparent zstd compression)
+    let (content_ref, encoding, original_size) = ctx
         .object_store
-        .write_with_media_type(&data, params.media_type.clone())
+        .write_compressed(&data, params.media_type.clone(), COMPRESSION_THRESHOLD)
         .context("Failed to write to object store")?;
 
     // Convert ContentRef to ContentRefPayload
-    let content_ref_payload = ContentRefPayload {
-        hash: content_ref.hash.clone(),
-        size: content_ref.size,
-        media_type: content_ref.media_type.clone(),
-    };
+    let content_ref_payload = ContentRefPayload::compressed(
+        content_ref.hash.clone(),
+        content_ref.size,
+        content_ref.media_type.clone(),
+        encoding,
+        original_size,
+    );
 
     // Generate record ID
     let prefix = ctx

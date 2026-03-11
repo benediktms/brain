@@ -243,11 +243,11 @@ mod tests {
             RecordCreatedPayload {
                 title: format!("Record {record_id}"),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload {
-                    hash: content_ref.hash.clone(),
-                    size: content_ref.size,
-                    media_type: None,
-                },
+                content_ref: ContentRefPayload::new(
+                    content_ref.hash.clone(),
+                    content_ref.size,
+                    None,
+                ),
                 description: None,
                 task_id: None,
                 tags: vec![],
@@ -424,11 +424,11 @@ mod tests {
             RecordCreatedPayload {
                 title: format!("Record {record_id}"),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload {
-                    hash: content_ref.hash.clone(),
-                    size: content_ref.size,
-                    media_type: None,
-                },
+                content_ref: ContentRefPayload::new(
+                    content_ref.hash.clone(),
+                    content_ref.size,
+                    None,
+                ),
                 description: None,
                 task_id: None,
                 tags: vec![],

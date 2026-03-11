@@ -21,6 +21,11 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
                     BrainCoreError::RecordEvent(format!("bad RecordCreated payload: {e}"))
                 })?;
 
+            let original_size = p
+                .content_ref
+                .original_size
+                .unwrap_or(p.content_ref.size) as i64;
+
             conn.execute(
                 "INSERT INTO records
                     (record_id, title, kind, status, description,
@@ -28,7 +33,7 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
                      task_id, actor, created_at, updated_at,
                      retention_class, pinned, payload_available, content_encoding, original_size)
                  VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
-                         ?12, 0, 1, 'identity', ?13)",
+                         ?12, 0, 1, ?13, ?14)",
                 rusqlite::params![
                     event.record_id,
                     p.title,
@@ -42,7 +47,8 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
                     event.timestamp,
                     event.timestamp,
                     p.retention_class,
-                    p.content_ref.size as i64,
+                    p.content_ref.content_encoding,
+                    original_size,
                 ],
             )?;
 
@@ -270,12 +276,11 @@ mod tests {
             RecordCreatedPayload {
                 title: title.to_string(),
                 kind: kind.to_string(),
-                content_ref: ContentRefPayload {
-                    hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                        .to_string(),
-                    size: 42,
-                    media_type: Some("application/json".to_string()),
-                },
+                content_ref: ContentRefPayload::new(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                    42,
+                    Some("application/json".to_string()),
+                ),
                 description: None,
                 task_id: None,
                 tags: vec![],
@@ -314,12 +319,11 @@ mod tests {
             RecordCreatedPayload {
                 title: "Tagged".to_string(),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload {
-                    hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                        .to_string(),
-                    size: 10,
-                    media_type: None,
-                },
+                content_ref: ContentRefPayload::new(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                    10,
+                    None,
+                ),
                 description: None,
                 task_id: None,
                 tags: vec!["alpha".to_string(), "beta".to_string()],
@@ -779,11 +783,11 @@ mod tests {
             RecordCreatedPayload {
                 title: "T".to_string(),
                 kind: "report".to_string(),
-                content_ref: ContentRefPayload {
-                    hash: "abc123".to_string(),
-                    size: 512,
-                    media_type: None,
-                },
+                content_ref: ContentRefPayload::new(
+                    "abc123".to_string(),
+                    512,
+                    None,
+                ),
                 description: None,
                 task_id: None,
                 tags: vec![],

@@ -36,7 +36,7 @@ impl RecordFetchContent {
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         };
 
-        let raw_bytes = match ctx.objects.read(&record.content_hash) {
+        let raw_bytes = match ctx.objects.read_auto(&record.content_hash) {
             Ok(b) => b,
             Err(e) => return ToolCallResult::error(format!("Failed to read content: {e}")),
         };
