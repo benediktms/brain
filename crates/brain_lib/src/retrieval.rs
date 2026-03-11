@@ -38,6 +38,8 @@ pub struct MemoryStub {
     /// Result kind: "note" for indexed note chunks, "task" for task capsules,
     /// "task-outcome" for completed task outcome capsules.
     pub kind: String,
+    /// Which brain this result came from. `None` for single-brain search.
+    pub brain_name: Option<String>,
 }
 
 /// Result of a search_minimal call.
@@ -249,6 +251,7 @@ fn make_stub(result: &RankedResult) -> MemoryStub {
         token_estimate: stub_tokens,
         signal_scores: None,
         kind,
+        brain_name: None,
     }
 }
 

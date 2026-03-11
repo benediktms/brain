@@ -52,9 +52,16 @@ When running as an MCP server (`brain mcp`), these tools are available:
 2. Call `tasks.create_remote` with the target brain name and task details.
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
 
+**Federated search:**
+
+- Search across multiple brains in a single query via `--brain` (CLI) or `brains` parameter (MCP).
+- Results are merged by hybrid score and labeled with source brain name (`brain_name` field in stubs).
+- Architecture: `FederatedPipeline` in `query_pipeline.rs` fans out to each brain's `QueryPipeline`, merging results by `hybrid_score`. Each brain's `Db`/`StoreReader` is opened on demand using a shared embedder. `RemoteSearchContext` in `config/mod.rs` holds the per-brain context. `brain_name: Option<String>` on `MemoryStub` carries the source attribution.
+- Single-brain queries remain the default and have no performance impact.
+
 **Memory tools:**
 
-- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
+- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain. Omitting `brains` defaults to single-brain search (backward compatible).
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
@@ -127,6 +134,11 @@ brain records <subcommand>     # Records maintenance (verify, gc, evict, pin, un
 # Indexing
 brain backfill-tasks           # Embed all tasks into the vector store
 brain backfill-tasks --dry-run # Preview without writing
+
+# Federated search (query across brains)
+brain query "term"                              # Search current brain
+brain query "term" --brain work --brain personal  # Search specific brains
+brain query "term" --brain all                  # Search all registered brains
 
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
@@ -211,8 +223,14 @@ When running as an MCP server (`brain mcp`), these tools are available:
 2. Call `tasks.create_remote` with the target brain name and task details.
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
 
+**Federated search:**
+- Search across multiple brains in a single query via `--brain` (CLI) or `brains` parameter (MCP).
+- Results are merged by hybrid score and labeled with source brain name (`brain_name` field in stubs).
+- Architecture: `FederatedPipeline` in `query_pipeline.rs` fans out to each brain's `QueryPipeline`, merging results by `hybrid_score`. Each brain's `Db`/`StoreReader` is opened on demand using a shared embedder. `RemoteSearchContext` in `config/mod.rs` holds the per-brain context. `brain_name: Option<String>` on `MemoryStub` carries the source attribution.
+- Single-brain queries remain the default and have no performance impact.
+
 **Memory tools:**
-- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
+- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain. Omitting `brains` defaults to single-brain search (backward compatible).
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
@@ -272,6 +290,11 @@ brain tasks label purge old-label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Federated search (query across brains)
+brain query "term"                              # Search current brain
+brain query "term" --brain work --brain personal  # Search specific brains
+brain query "term" --brain all                  # Search all registered brains
 
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md

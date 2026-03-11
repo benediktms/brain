@@ -1363,6 +1363,8 @@ mod tests {
             records,
             objects,
             metrics: Arc::new(crate::metrics::Metrics::new()),
+            brain_home: tmp.path().to_path_buf(),
+            brain_name: "test-brain".to_string(),
         };
 
         let registry = ToolRegistry::new();

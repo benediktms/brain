@@ -193,6 +193,7 @@ pub(super) mod tests {
 
     pub(in crate::mcp) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
         let tmp = tempfile::TempDir::new().unwrap();
+        let brain_home = tmp.path().to_path_buf();
         let sqlite_path = tmp.path().join("test.db");
         let lance_path = tmp.path().join("test_lance");
         let tasks_dir = tmp.path().join("tasks");
@@ -224,6 +225,8 @@ pub(super) mod tests {
                 records,
                 objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
+                brain_home,
+                brain_name: "test-brain".to_string(),
             },
         )
     }

@@ -2,10 +2,14 @@ pub mod paths;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::db::Db;
+use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
+use crate::store::{Store, StoreReader};
 
 // ---------------------------------------------------------------------------
 // Global config (~/.brain/config.toml)
@@ -198,6 +202,90 @@ pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::
     let store = crate::tasks::TaskStore::new(&tasks_dir, db)?;
     store.rebuild_projections()?;
     Ok(store)
+}
+
+// ---------------------------------------------------------------------------
+// Remote search context
+// ---------------------------------------------------------------------------
+
+/// Context needed to perform search on a remote brain.
+pub struct RemoteSearchContext {
+    pub brain_name: String,
+    pub brain_id: String,
+    pub db: Db,
+    pub store: Option<StoreReader>,
+}
+
+/// Open a remote brain's search context (Db + StoreReader) by name or ID.
+///
+/// Returns `None` if the brain is not found in the registry.
+/// Errors if the brain is found but its stores cannot be opened.
+pub async fn open_remote_search_context(
+    brain_home: &Path,
+    brain_key: &str,
+    _model_dir: &Path,
+    _embedder: &Arc<dyn Embed>,
+) -> Result<Option<RemoteSearchContext>> {
+    let config = {
+        let path = brain_home.join("config.toml");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(&path).map_err(BrainCoreError::Io)?;
+        toml::from_str::<GlobalConfig>(&text).map_err(|e| {
+            BrainCoreError::Config(format!("failed to parse {}: {e}", path.display()))
+        })?
+    };
+
+    let (name, entry) = match resolve_brain_entry_from_config(brain_key, &config) {
+        Ok(pair) => pair,
+        Err(_) => return Ok(None),
+    };
+
+    let brain_id = entry.id.clone().unwrap_or_default();
+
+    let paths = resolve_paths_for_brain_with_home(&name, brain_home);
+
+    if let Some(parent) = paths.sqlite_db.parent() {
+        std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
+    }
+
+    let db = Db::open(&paths.sqlite_db)?;
+
+    let store = if paths.lance_db.exists() {
+        let s = Store::open_or_create(&paths.lance_db).await?;
+        Some(StoreReader::from_store(&s))
+    } else {
+        None
+    };
+
+    Ok(Some(RemoteSearchContext {
+        brain_name: name,
+        brain_id,
+        db,
+        store,
+    }))
+}
+
+/// Return all brain `(name, id)` pairs from the global registry.
+///
+/// The `id` field is the stable 8-char Nano ID stored in the config entry,
+/// or an empty string when no ID has been assigned yet.
+pub fn list_brain_keys(brain_home: &Path) -> Result<Vec<(String, String)>> {
+    let path = brain_home.join("config.toml");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path).map_err(BrainCoreError::Io)?;
+    let config: GlobalConfig = toml::from_str(&text)
+        .map_err(|e| BrainCoreError::Config(format!("failed to parse {}: {e}", path.display())))?;
+    let mut pairs: Vec<(String, String)> = config
+        .brains
+        .into_iter()
+        .map(|(name, entry)| (name, entry.id.unwrap_or_default()))
+        .collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(pairs)
 }
 
 // ---------------------------------------------------------------------------
@@ -628,5 +716,144 @@ mod tests {
 
         let id2 = get_or_generate_brain_id(&brain_dir).unwrap();
         assert_eq!(id1, id2, "second call should return same ID");
+    }
+
+    // -----------------------------------------------------------------------
+    // list_brain_keys
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn list_brain_keys_empty_when_no_config() {
+        let fake_home = TempDir::new().unwrap();
+        let keys = list_brain_keys(fake_home.path()).unwrap();
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn list_brain_keys_returns_name_and_id() {
+        let fake_home = TempDir::new().unwrap();
+        let home = fake_home.path();
+
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "alpha".to_string(),
+            BrainEntry {
+                root: home.to_path_buf(),
+                notes: vec![],
+                id: Some("id000001".to_string()),
+            },
+        );
+        cfg.brains.insert(
+            "beta".to_string(),
+            BrainEntry {
+                root: home.to_path_buf(),
+                notes: vec![],
+                id: None,
+            },
+        );
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        fs::write(home.join("config.toml"), text).unwrap();
+
+        let keys = list_brain_keys(home).unwrap();
+        // Sorted alphabetically
+        assert_eq!(keys[0], ("alpha".to_string(), "id000001".to_string()));
+        assert_eq!(keys[1], ("beta".to_string(), "".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // open_remote_search_context
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn open_remote_search_context_returns_none_when_not_found() {
+        let fake_home = TempDir::new().unwrap();
+        let home = fake_home.path();
+
+        // Write an empty config so the file exists but has no brains
+        fs::write(home.join("config.toml"), "[brains]\n").unwrap();
+
+        // Dummy embedder
+        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
+        let model_dir = home.join("models");
+
+        let result = open_remote_search_context(home, "nonexistent", &model_dir, &embedder)
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn open_remote_search_context_opens_db_without_lancedb() {
+        let fake_home = TempDir::new().unwrap();
+        let home = fake_home.path();
+
+        // Register "test-brain" in config
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "test-brain".to_string(),
+            BrainEntry {
+                root: home.to_path_buf(),
+                notes: vec![],
+                id: Some("testid01".to_string()),
+            },
+        );
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        fs::write(home.join("config.toml"), text).unwrap();
+
+        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
+        let model_dir = home.join("models");
+
+        let ctx = open_remote_search_context(home, "test-brain", &model_dir, &embedder)
+            .await
+            .unwrap()
+            .expect("should find test-brain");
+
+        assert_eq!(ctx.brain_name, "test-brain");
+        assert_eq!(ctx.brain_id, "testid01");
+        // LanceDB dir doesn't exist, so store should be None
+        assert!(ctx.store.is_none());
+    }
+
+    #[tokio::test]
+    async fn open_remote_search_context_lookup_by_id() {
+        let fake_home = TempDir::new().unwrap();
+        let home = fake_home.path();
+
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "my-brain".to_string(),
+            BrainEntry {
+                root: home.to_path_buf(),
+                notes: vec![],
+                id: Some("abc12345".to_string()),
+            },
+        );
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        fs::write(home.join("config.toml"), text).unwrap();
+
+        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
+        let model_dir = home.join("models");
+
+        // Look up by ID instead of name
+        let ctx = open_remote_search_context(home, "abc12345", &model_dir, &embedder)
+            .await
+            .unwrap()
+            .expect("should find brain by id");
+
+        assert_eq!(ctx.brain_name, "my-brain");
+        assert_eq!(ctx.brain_id, "abc12345");
+    }
+
+    /// Minimal no-op embedder for tests that need Arc<dyn Embed>.
+    struct DummyEmbedder;
+
+    impl crate::embedder::Embed for DummyEmbedder {
+        fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| vec![0.0f32; 384]).collect())
+        }
+
+        fn hidden_size(&self) -> usize {
+            384
+        }
     }
 }

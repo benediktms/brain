@@ -49,6 +49,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             intent,
             budget,
             verbose,
+            brains,
         } => {
             commands::query::run(commands::query::QueryParams {
                 query,
@@ -59,6 +60,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 model_dir: cli.model_dir,
                 db_path: cli.lance_db,
                 sqlite_path: cli.sqlite_db,
+                brains,
             })
             .await?
         }
