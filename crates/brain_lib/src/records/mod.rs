@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
 use crate::error::Result;
+use tracing;
 
 // -- Domain types --
 
@@ -413,8 +414,11 @@ impl RecordStore {
 
     /// Rebuild all records projection tables from the JSONL event log.
     ///
-    /// Wipes the four records tables (in FK-safe order), then replays every
-    /// event in `events.jsonl` in order. Returns the number of events applied.
+    /// Recovery and migration mechanism — not the primary read path. SQLite is
+    /// the runtime source of truth; this method replays the JSONL audit trail
+    /// to reconstruct projections after data loss or schema migration. Wipes
+    /// the four records tables (in FK-safe order), then replays every event in
+    /// `events.jsonl` in order. Returns the number of events applied.
     pub fn rebuild_projections(&self) -> Result<usize> {
         let events_path = self.events_path.clone();
         self.db
@@ -423,15 +427,20 @@ impl RecordStore {
 
     /// Apply a single event to the SQLite projection and append it to the log.
     ///
-    /// The event is written to the JSONL log first (durable), then projected
-    /// into SQLite. If the process crashes between the two writes, the next
-    /// call to `rebuild_projections` will recover the correct state.
+    /// SQLite is the authoritative write. The JSONL event log is a best-effort
+    /// audit trail appended after a successful SQLite write. If the JSONL
+    /// append fails, a warning is logged but the operation succeeds — the
+    /// SQLite record is the source of truth. If the SQLite write fails, the
+    /// whole operation fails and nothing is written to the log.
     pub fn apply_and_append(&self, event: &events::RecordEvent) -> Result<()> {
-        // Persist to the durable log first
-        events::append_event(&self.events_path, event)?;
-        // Then update the SQLite projection
+        // SQLite is the authoritative write — if this fails, the operation fails
         self.db
-            .with_write_conn(|conn| projections::apply_event(conn, event))
+            .with_write_conn(|conn| projections::apply_event(conn, event))?;
+        // JSONL emit is best-effort audit trail
+        if let Err(e) = events::append_event(&self.events_path, event) {
+            tracing::warn!("failed to append record event to audit log: {e}");
+        }
+        Ok(())
     }
 
     // -- Query methods --
