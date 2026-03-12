@@ -146,11 +146,11 @@ fn sync_id_to_registry(brain_name: &str, id: &str) {
     let Ok(mut global) = load_global_config() else {
         return;
     };
-    if let Some(entry) = global.brains.get_mut(brain_name) {
-        if entry.id.as_deref() != Some(id) {
-            entry.id = Some(id.to_string());
-            let _ = save_global_config(&global);
-        }
+    if let Some(entry) = global.brains.get_mut(brain_name)
+        && entry.id.as_deref() != Some(id)
+    {
+        entry.id = Some(id.to_string());
+        let _ = save_global_config(&global);
     }
 }
 
