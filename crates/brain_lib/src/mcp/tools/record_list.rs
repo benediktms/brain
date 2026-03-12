@@ -4,6 +4,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::config::RemoteBrainContext;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::queries::RecordFilter;
@@ -19,6 +20,7 @@ struct Params {
     task_id: Option<String>,
     #[serde(default = "default_limit")]
     limit: usize,
+    brain: Option<String>,
 }
 
 fn default_status() -> String {
@@ -38,6 +40,17 @@ impl RecordList {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
+        let remote_ctx;
+        let (records, remote_brain_name) = if let Some(ref brain) = params.brain {
+            remote_ctx = match RemoteBrainContext::open(brain) {
+                Ok(r) => r,
+                Err(e) => return ToolCallResult::error(format!("Failed to open remote brain: {e}")),
+            };
+            (&remote_ctx.records, Some(remote_ctx.brain_name.clone()))
+        } else {
+            (&ctx.records, None)
+        };
+
         let filter = RecordFilter {
             kind: params.kind,
             status: Some(params.status),
@@ -46,14 +59,14 @@ impl RecordList {
             limit: Some(params.limit),
         };
 
-        let records = match ctx.records.list_records(&filter) {
+        let record_list = match records.list_records(&filter) {
             Ok(r) => r,
             Err(e) => return ToolCallResult::error(format!("Failed to list records: {e}")),
         };
 
-        let compact_ids = ctx.records.compact_record_ids().unwrap_or_default();
+        let compact_ids = records.compact_record_ids().unwrap_or_default();
 
-        let records_json: Vec<Value> = records
+        let records_json: Vec<Value> = record_list
             .iter()
             .map(|r| {
                 let compact_id = compact_ids
@@ -75,10 +88,14 @@ impl RecordList {
             })
             .collect();
 
-        let result = json!({
+        let mut result = json!({
             "records": records_json,
             "count": records_json.len(),
         });
+
+        if let Some(name) = remote_brain_name {
+            result["brain"] = json!(name);
+        }
 
         json_response(&result)
     }
@@ -118,6 +135,10 @@ impl McpTool for RecordList {
                         "type": "integer",
                         "description": "Maximum number of records to return. Defaults to 50.",
                         "default": 50
+                    },
+                    "brain": {
+                        "type": "string",
+                        "description": "Target brain name or ID. When provided, lists records from that brain."
                     }
                 }
             }),
