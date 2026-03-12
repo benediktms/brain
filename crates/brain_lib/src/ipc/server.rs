@@ -2,7 +2,7 @@
 ///
 /// Listens on a Unix Domain Socket, accepts multiple concurrent connections,
 /// and dispatches newline-delimited JSON-RPC 2.0 requests through [`BrainRouter`].
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -23,15 +23,57 @@ pub struct IpcServer {
 }
 
 impl IpcServer {
-    /// Bind to `socket_path`, removing any stale socket file first.
+    /// Return the default daemon socket path: `~/.brain/brain.sock`.
+    pub fn default_socket_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        PathBuf::from(home).join(".brain").join("brain.sock")
+    }
+
+    /// Bind to `socket_path` with stale socket detection.
+    ///
+    /// - If socket file exists and a connection succeeds → another daemon is
+    ///   listening → returns an error.
+    /// - If socket file exists but connection fails → stale socket from a
+    ///   crashed daemon → removes it and proceeds to bind.
+    /// - Otherwise binds normally.
+    ///
+    /// Sets socket file permissions to 0o600 (owner-only) after binding.
     pub fn bind(socket_path: &Path, router: Arc<BrainRouter>) -> crate::error::Result<Self> {
-        // Remove stale socket so bind doesn't fail with AddrInUse.
+        use std::os::unix::fs::PermissionsExt;
+
         if socket_path.exists() {
-            std::fs::remove_file(socket_path).map_err(crate::error::BrainCoreError::Io)?;
+            // Attempt a synchronous probe to distinguish live vs stale.
+            // We use a std blocking connect: this is called outside the tokio
+            // runtime (from watch.rs before spawn), so std is safe here.
+            // If we are already inside a runtime context the connect is fast
+            // and won't block the executor for long (it either succeeds or
+            // fails with ECONNREFUSED immediately).
+            match std::os::unix::net::UnixStream::connect(socket_path) {
+                Ok(_) => {
+                    // Connection succeeded → another daemon is alive.
+                    return Err(crate::error::BrainCoreError::Io(std::io::Error::new(
+                        std::io::ErrorKind::AddrInUse,
+                        "daemon already running on this socket",
+                    )));
+                }
+                Err(_) => {
+                    // Connection failed → stale socket from crashed daemon.
+                    warn!(path = ?socket_path, "removing stale socket file");
+                    std::fs::remove_file(socket_path)
+                        .map_err(crate::error::BrainCoreError::Io)?;
+                }
+            }
         }
 
         let listener =
             UnixListener::bind(socket_path).map_err(crate::error::BrainCoreError::Io)?;
+
+        // Restrict socket access to owner only.
+        std::fs::set_permissions(
+            socket_path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .map_err(crate::error::BrainCoreError::Io)?;
 
         info!(path = ?socket_path, "IPC server bound");
 
