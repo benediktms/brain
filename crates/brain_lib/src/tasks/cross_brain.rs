@@ -1,4 +1,4 @@
-use crate::config::{get_or_generate_brain_id, open_remote_task_store, resolve_brain_entry};
+use crate::config::{RemoteBrainContext, get_or_generate_brain_id};
 use crate::error::{BrainCoreError, Result};
 use crate::tasks::TaskStore;
 use crate::tasks::events::{
@@ -35,6 +35,7 @@ pub struct CrossBrainCreateResult {
     pub remote_brain_name: String,
     pub remote_brain_id: String,
     pub local_ref_created: bool,
+    pub remote_ref_created: bool,
 }
 
 /// Create a task in a remote brain and optionally add a cross-brain reference
@@ -45,25 +46,23 @@ pub fn cross_brain_create(
     local_store: &TaskStore,
     params: CrossBrainCreateParams,
 ) -> Result<CrossBrainCreateResult> {
-    // 1. Resolve brain entry.
-    let (name, entry) = resolve_brain_entry(&params.target_brain)?;
+    // Open the remote brain context (resolves entry, opens DB, builds all stores).
+    // Done first so a missing-brain error surfaces before any local I/O.
+    let ctx = RemoteBrainContext::open(&params.target_brain)?;
 
-    // 2. Open the remote task store.
-    let remote_store = open_remote_task_store(&name, &entry)?;
+    // Resolve the local brain ID from the current working directory.
+    let local_brain_id = get_or_generate_brain_id(&std::env::current_dir()?.join(".brain"))?;
 
-    // 3. Get the remote prefix.
-    let remote_prefix = remote_store.get_project_prefix()?;
+    // Generate a task ID for the remote brain.
+    let remote_task_id = new_task_id(&ctx.tasks.get_project_prefix()?);
 
-    // 4. Generate a task ID for the remote brain.
-    let remote_task_id = new_task_id(&remote_prefix);
-
-    // 5. Resolve parent task ID in the remote brain (if provided).
+    // Resolve parent task ID in the remote brain (if provided).
     let parent_task_id = match params.parent {
-        Some(ref p) => Some(remote_store.resolve_task_id(p)?),
+        Some(ref p) => Some(ctx.tasks.resolve_task_id(p)?),
         None => None,
     };
 
-    // 6. Build and append the TaskCreated event to the remote store.
+    // Build and append the TaskCreated event to the remote store.
     let event = TaskEvent::from_payload(
         &remote_task_id,
         "cross-brain",
@@ -79,21 +78,39 @@ pub fn cross_brain_create(
             parent_task_id,
         },
     );
-    remote_store.append(&event)?;
+    ctx.tasks.append(&event)?;
 
-    // 7. Determine the remote brain ID.
-    let remote_brain_id = if let Some(ref id) = entry.id {
-        id.clone()
-    } else {
-        get_or_generate_brain_id(&entry.root.join(".brain"))?
+    // Add reverse cross-brain ref on the remote task pointing back to local brain.
+    let reverse_ref_type = params.link_type.as_deref().unwrap_or("related").to_string();
+    let reverse_remote_task = params
+        .link_from
+        .as_ref()
+        .map(|lf| {
+            local_store
+                .resolve_task_id(lf)
+                .unwrap_or_else(|_| lf.clone())
+        })
+        .unwrap_or_default();
+    let reverse_ref = CrossBrainRefPayload {
+        brain_id: local_brain_id,
+        remote_task: reverse_remote_task,
+        ref_type: reverse_ref_type,
+        note: None,
     };
+    let reverse_event = TaskEvent::new(
+        &remote_task_id,
+        "cross-brain",
+        EventType::CrossBrainRefAdded,
+        &reverse_ref,
+    );
+    ctx.tasks.append(&reverse_event)?;
 
-    // 8. Optionally create a cross-brain reference on the local task.
+    // Optionally create a cross-brain reference on the local task.
     let local_ref_created = if let Some(ref link_from) = params.link_from {
         let local_task_id = local_store.resolve_task_id(link_from)?;
         let ref_type = params.link_type.unwrap_or_else(|| "related".to_string());
         let ref_payload = CrossBrainRefPayload {
-            brain_id: remote_brain_id.clone(),
+            brain_id: ctx.brain_id.clone(),
             remote_task: remote_task_id.clone(),
             ref_type,
             note: None,
@@ -112,9 +129,10 @@ pub fn cross_brain_create(
 
     Ok(CrossBrainCreateResult {
         remote_task_id,
-        remote_brain_name: name,
-        remote_brain_id,
+        remote_brain_name: ctx.brain_name,
+        remote_brain_id: ctx.brain_id,
         local_ref_created,
+        remote_ref_created: true,
     })
 }
 
@@ -137,13 +155,7 @@ pub struct CrossBrainFetchResult {
 
 /// Fetch a task and its full enrichment from a remote brain.
 pub fn cross_brain_fetch(target_brain: &str, task_id: &str) -> Result<CrossBrainFetchResult> {
-    let (name, entry) = resolve_brain_entry(target_brain)?;
-    let remote_store = open_remote_task_store(&name, &entry)?;
-    let remote_brain_id = if let Some(ref id) = entry.id {
-        id.clone()
-    } else {
-        get_or_generate_brain_id(&entry.root.join(".brain"))?
-    };
+    let ctx = RemoteBrainContext::open(target_brain)?;
 
     let (
         task,
@@ -154,12 +166,12 @@ pub fn cross_brain_fetch(target_brain: &str, task_id: &str) -> Result<CrossBrain
         note_links,
         cross_refs,
         external_ids,
-    ) = cross_brain_fetch_inner(&remote_store, task_id)?;
+    ) = cross_brain_fetch_inner(&ctx.tasks, task_id)?;
 
     Ok(CrossBrainFetchResult {
         task,
-        remote_brain_name: name,
-        remote_brain_id,
+        remote_brain_name: ctx.brain_name,
+        remote_brain_id: ctx.brain_id,
         labels,
         comments,
         children,
@@ -256,19 +268,13 @@ pub fn cross_brain_close(
     _local_store: &TaskStore,
     params: CrossBrainCloseParams,
 ) -> Result<CrossBrainCloseResult> {
-    let (name, entry) = resolve_brain_entry(&params.target_brain)?;
-    let remote_store = open_remote_task_store(&name, &entry)?;
-    let remote_brain_id = if let Some(ref id) = entry.id {
-        id.clone()
-    } else {
-        get_or_generate_brain_id(&entry.root.join(".brain"))?
-    };
+    let ctx = RemoteBrainContext::open(&params.target_brain)?;
 
-    let (closed, failed, unblocked) = cross_brain_close_inner(&remote_store, &params.task_ids)?;
+    let (closed, failed, unblocked) = cross_brain_close_inner(&ctx.tasks, &params.task_ids)?;
 
     Ok(CrossBrainCloseResult {
-        remote_brain_name: name,
-        remote_brain_id,
+        remote_brain_name: ctx.brain_name,
+        remote_brain_id: ctx.brain_id,
         closed,
         failed,
         unblocked,
@@ -344,6 +350,7 @@ pub(crate) fn cross_brain_create_inner(
     remote_store: &TaskStore,
     remote_brain_id: String,
     remote_brain_name: String,
+    local_brain_id: String,
     params: CrossBrainCreateParams,
 ) -> Result<CrossBrainCreateResult> {
     let remote_prefix = remote_store.get_project_prefix()?;
@@ -371,6 +378,31 @@ pub(crate) fn cross_brain_create_inner(
     );
     remote_store.append(&event)?;
 
+    // Add reverse cross-brain ref on the remote task pointing back to local brain.
+    let reverse_ref_type = params.link_type.as_deref().unwrap_or("related").to_string();
+    let reverse_remote_task = params
+        .link_from
+        .as_ref()
+        .map(|lf| {
+            local_store
+                .resolve_task_id(lf)
+                .unwrap_or_else(|_| lf.clone())
+        })
+        .unwrap_or_default();
+    let reverse_ref = CrossBrainRefPayload {
+        brain_id: local_brain_id,
+        remote_task: reverse_remote_task,
+        ref_type: reverse_ref_type,
+        note: None,
+    };
+    let reverse_event = TaskEvent::new(
+        &remote_task_id,
+        "cross-brain",
+        EventType::CrossBrainRefAdded,
+        &reverse_ref,
+    );
+    remote_store.append(&reverse_event)?;
+
     let local_ref_created = if let Some(ref link_from) = params.link_from {
         let local_task_id = local_store.resolve_task_id(link_from)?;
         let ref_type = params.link_type.unwrap_or_else(|| "related".to_string());
@@ -397,6 +429,7 @@ pub(crate) fn cross_brain_create_inner(
         remote_brain_name,
         remote_brain_id,
         local_ref_created,
+        remote_ref_created: true,
     })
 }
 
@@ -484,6 +517,7 @@ mod tests {
             &remote_store,
             "remote-brain-id".to_string(),
             "remote-brain".to_string(),
+            "local-brain-id".to_string(),
             params,
         )
         .unwrap();
@@ -536,6 +570,7 @@ mod tests {
             &remote_store,
             "remote-brain-id".to_string(),
             "remote-brain".to_string(),
+            "local-brain-id".to_string(),
             params,
         )
         .unwrap();
@@ -588,6 +623,7 @@ mod tests {
             &remote_store,
             "remote-brain-id".to_string(),
             "remote-brain".to_string(),
+            "local-brain-id".to_string(),
             params,
         )
         .unwrap();
@@ -672,6 +708,7 @@ mod tests {
             &remote_store,
             "remote-brain-id".to_string(),
             "remote-brain".to_string(),
+            "local-brain-id".to_string(),
             params,
         )
         .unwrap();
@@ -831,5 +868,101 @@ mod tests {
         assert_eq!(closed.len(), 1);
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0].0, "nonexistent-99");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: reverse cross-brain ref is added to remote task when link_from set
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cross_brain_create_adds_reverse_ref() {
+        let brain_home_tmp = TempDir::new().unwrap();
+        let brain_home = brain_home_tmp.path();
+
+        let (_local_tmp, local_store) = make_brain(brain_home, "local-brain");
+        let (_remote_tmp, remote_store) = make_brain(brain_home, "remote-brain");
+
+        add_task(&local_store, "LOCAL-001", "Local parent task");
+
+        let params = CrossBrainCreateParams {
+            target_brain: "remote-brain".to_string(),
+            title: "Remote task with reverse ref".to_string(),
+            description: None,
+            priority: 4,
+            task_type: None,
+            assignee: None,
+            parent: None,
+            link_from: Some("LOCAL-001".to_string()),
+            link_type: Some("depends_on".to_string()),
+        };
+
+        let result = cross_brain_create_inner(
+            &local_store,
+            &remote_store,
+            "remote-brain-id".to_string(),
+            "remote-brain".to_string(),
+            "local-brain-id".to_string(),
+            params,
+        )
+        .unwrap();
+
+        assert!(result.remote_ref_created);
+
+        // The remote task must have a reverse cross-brain ref pointing back to local brain.
+        let remote_refs = remote_store
+            .get_cross_brain_refs(&result.remote_task_id)
+            .unwrap();
+        assert_eq!(remote_refs.len(), 1);
+        assert_eq!(remote_refs[0].brain_id, "local-brain-id");
+        assert_eq!(remote_refs[0].remote_task, "LOCAL-001");
+        assert_eq!(remote_refs[0].ref_type, "depends_on");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: reverse ref added even without link_from (provenance ref)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cross_brain_create_reverse_ref_without_link_from() {
+        let brain_home_tmp = TempDir::new().unwrap();
+        let brain_home = brain_home_tmp.path();
+
+        let (_local_tmp, local_store) = make_brain(brain_home, "local-brain");
+        let (_remote_tmp, remote_store) = make_brain(brain_home, "remote-brain");
+
+        let params = CrossBrainCreateParams {
+            target_brain: "remote-brain".to_string(),
+            title: "Remote task no link".to_string(),
+            description: None,
+            priority: 4,
+            task_type: None,
+            assignee: None,
+            parent: None,
+            link_from: None,
+            link_type: None,
+        };
+
+        let result = cross_brain_create_inner(
+            &local_store,
+            &remote_store,
+            "remote-brain-id".to_string(),
+            "remote-brain".to_string(),
+            "local-brain-id".to_string(),
+            params,
+        )
+        .unwrap();
+
+        assert!(result.remote_ref_created);
+        assert!(!result.local_ref_created);
+
+        // The remote task must have a provenance ref back to the local brain.
+        let remote_refs = remote_store
+            .get_cross_brain_refs(&result.remote_task_id)
+            .unwrap();
+        assert_eq!(remote_refs.len(), 1);
+        assert_eq!(remote_refs[0].brain_id, "local-brain-id");
+        // No link_from, so remote_task is empty string.
+        assert_eq!(remote_refs[0].remote_task, "");
+        assert_eq!(remote_refs[0].ref_type, "related");
     }
 }

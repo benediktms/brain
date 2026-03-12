@@ -88,6 +88,10 @@ pub(crate) enum TasksAction {
         /// Group output by a field (currently supports: label)
         #[arg(long)]
         group_by: Option<String>,
+
+        /// Target brain name or ID (lists tasks from that brain)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// Show details for a specific task
@@ -265,6 +269,10 @@ pub(crate) enum LabelAction {
 
         /// Label to add
         label: String,
+
+        /// Target brain name or ID (adds label in that brain instead of locally)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// Remove a label from a task
@@ -274,6 +282,10 @@ pub(crate) enum LabelAction {
 
         /// Label to remove
         label: String,
+
+        /// Target brain name or ID (removes label in that brain instead of locally)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// Add a label to multiple tasks at once
@@ -284,6 +296,10 @@ pub(crate) enum LabelAction {
 
         /// Label to add
         label: String,
+
+        /// Target brain name or ID (adds labels in that brain instead of locally)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// Remove a label from multiple tasks at once
@@ -294,6 +310,10 @@ pub(crate) enum LabelAction {
 
         /// Label to remove
         label: String,
+
+        /// Target brain name or ID (removes labels in that brain instead of locally)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// Rename a label across all tasks

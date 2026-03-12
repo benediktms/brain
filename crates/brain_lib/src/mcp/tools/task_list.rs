@@ -7,8 +7,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::error;
 
+use crate::config::RemoteBrainContext;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::tasks::TaskStore;
 use crate::tasks::enrichment::enrich_task_list;
 use crate::tasks::events::TaskType;
 use crate::tasks::queries::{TaskFilter, apply_filters};
@@ -56,6 +58,7 @@ struct Params {
     include_description: bool,
     #[serde(default = "default_limit")]
     limit: u64,
+    brain: Option<String>,
 }
 
 pub(super) struct TaskList;
@@ -67,12 +70,37 @@ impl TaskList {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
+        // Remote brain path
+        if let Some(ref brain) = params.brain {
+            let remote = match RemoteBrainContext::open(brain) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                }
+            };
+            let mut result = Self::execute_with_store(params, &remote.tasks);
+            // Inject brain name into response
+            if let Ok(ref mut val) =
+                serde_json::from_str::<serde_json::Value>(&result.content[0].text)
+            {
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert("brain".into(), json!(remote.brain_name));
+                }
+                result.content[0].text = val.to_string();
+            }
+            return result;
+        }
+
+        Self::execute_with_store(params, &ctx.tasks)
+    }
+
+    fn execute_with_store(params: Params, store: &TaskStore) -> ToolCallResult {
         let limit = params.limit as usize;
 
         // If task_ids provided, fetch those specifically
         if let Some(ref ids) = params.task_ids {
             let task_ids: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-            return Self::handle_batch(&task_ids, params.include_description, limit, ctx);
+            return Self::handle_batch(&task_ids, params.include_description, limit, store);
         }
 
         // Parse per-field filters
@@ -93,7 +121,7 @@ impl TaskList {
 
         // FTS pre-filter: get matching task_ids
         let fts_ids = if let Some(ref query) = filter.search {
-            match ctx.tasks.search_fts(query, 1000) {
+            match store.search_fts(query, 1000) {
                 Ok(ids) => Some(ids.into_iter().collect::<HashSet<String>>()),
                 Err(e) => {
                     error!(error = %e, "FTS search failed");
@@ -106,10 +134,10 @@ impl TaskList {
 
         let status = params.status;
         let tasks = match status {
-            StatusFilter::Open => ctx.tasks.list_open(),
-            StatusFilter::Ready => ctx.tasks.list_ready(),
-            StatusFilter::Blocked => ctx.tasks.list_blocked(),
-            StatusFilter::Done => ctx.tasks.list_done(),
+            StatusFilter::Open => store.list_open(),
+            StatusFilter::Ready => store.list_ready(),
+            StatusFilter::Blocked => store.list_blocked(),
+            StatusFilter::Done => store.list_done(),
         };
 
         let tasks = match tasks {
@@ -125,7 +153,7 @@ impl TaskList {
             // Batch-fetch labels if label filter is active
             let labels_map = if filter.label.is_some() {
                 let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
-                ctx.tasks.get_labels_for_tasks(&task_ids).ok()
+                store.get_labels_for_tasks(&task_ids).ok()
             } else {
                 None
             };
@@ -135,23 +163,23 @@ impl TaskList {
             tasks
         };
 
-        Self::build_response(&tasks, params.include_description, limit, ctx)
+        Self::build_response(&tasks, params.include_description, limit, store)
     }
 
     fn handle_batch(
         task_ids: &[&str],
         include_description: bool,
         limit: usize,
-        ctx: &McpContext,
+        store: &TaskStore,
     ) -> ToolCallResult {
         let mut tasks = Vec::new();
         for id in task_ids {
             // Resolve each ID (supports prefix matching)
-            let resolved = match ctx.tasks.resolve_task_id(id) {
+            let resolved = match store.resolve_task_id(id) {
                 Ok(r) => r,
                 Err(_) => continue, // skip unresolvable
             };
-            match ctx.tasks.get_task(&resolved) {
+            match store.get_task(&resolved) {
                 Ok(Some(t)) => tasks.push(t),
                 Ok(None) => {} // skip missing
                 Err(e) => {
@@ -159,14 +187,14 @@ impl TaskList {
                 }
             }
         }
-        Self::build_response(&tasks, include_description, limit, ctx)
+        Self::build_response(&tasks, include_description, limit, store)
     }
 
     fn build_response(
         tasks: &[crate::tasks::queries::TaskRow],
         include_description: bool,
         limit: usize,
-        ctx: &McpContext,
+        store: &TaskStore,
     ) -> ToolCallResult {
         let mut warnings: Vec<Warning> = Vec::new();
         let total = tasks.len();
@@ -179,12 +207,12 @@ impl TaskList {
         // Batch-fetch labels for displayed tasks (eliminates N+1 queries)
         let task_ids: Vec<&str> = capped.iter().map(|t| t.task_id.as_str()).collect();
         let labels_map = store_or_warn(
-            ctx.tasks.get_labels_for_tasks(&task_ids),
+            store.get_labels_for_tasks(&task_ids),
             "get_labels_for_tasks",
             &mut warnings,
         );
         let (mut tasks_json, ready_count, blocked_count) =
-            enrich_task_list(&ctx.tasks, capped, &labels_map);
+            enrich_task_list(store, capped, &labels_map);
 
         // Replace task_id with shortest unique prefix for compact display
         for task_val in &mut tasks_json {
@@ -194,7 +222,7 @@ impl TaskList {
                     .and_then(|v| v.as_str())
                     .map(String::from)
                 {
-                    let short = ctx.tasks.compact_id(&tid).unwrap_or_else(|_| tid.clone());
+                    let short = store.compact_id(&tid).unwrap_or_else(|_| tid.clone());
                     obj.insert("task_id".into(), json!(short));
                 }
                 if !include_description {
@@ -270,6 +298,10 @@ impl McpTool for TaskList {
                         "type": "integer",
                         "description": "Maximum number of tasks to return. Default: 50. Response includes 'total' and 'has_more' for pagination.",
                         "default": 50
+                    },
+                    "brain": {
+                        "type": "string",
+                        "description": "Target brain name or ID. When provided, lists tasks from that brain instead of locally."
                     }
                 }
             }),

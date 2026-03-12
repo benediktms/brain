@@ -4,8 +4,10 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::config::RemoteBrainContext;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::tasks::TaskStore;
 use crate::tasks::events::{EventType, LabelPayload, TaskEvent};
 
 use super::{McpTool, json_response};
@@ -21,6 +23,7 @@ struct Params {
     old_label: Option<String>,
     #[serde(default)]
     new_label: Option<String>,
+    brain: Option<String>,
 }
 
 pub(super) struct TaskLabelsBatch;
@@ -32,11 +35,26 @@ impl TaskLabelsBatch {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
+        // Remote brain path
+        if let Some(ref brain) = params.brain {
+            let remote = match RemoteBrainContext::open(brain) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                }
+            };
+            return self.execute_with_store(params, &remote.tasks);
+        }
+
+        self.execute_with_store(params, &ctx.tasks)
+    }
+
+    fn execute_with_store(&self, params: Params, store: &TaskStore) -> ToolCallResult {
         match params.action.as_str() {
-            "add" => self.label_add_remove(ctx, &params, EventType::LabelAdded),
-            "remove" => self.label_add_remove(ctx, &params, EventType::LabelRemoved),
-            "rename" => self.label_rename(ctx, &params),
-            "purge" => self.label_purge(ctx, &params),
+            "add" => self.label_add_remove(store, &params, EventType::LabelAdded),
+            "remove" => self.label_add_remove(store, &params, EventType::LabelRemoved),
+            "rename" => self.label_rename(store, &params),
+            "purge" => self.label_purge(store, &params),
             other => ToolCallResult::error(format!(
                 "Invalid action: '{other}'. Must be one of: add, remove, rename, purge"
             )),
@@ -45,7 +63,7 @@ impl TaskLabelsBatch {
 
     fn label_add_remove(
         &self,
-        ctx: &McpContext,
+        store: &TaskStore,
         params: &Params,
         event_type: EventType,
     ) -> ToolCallResult {
@@ -66,7 +84,7 @@ impl TaskLabelsBatch {
         let mut failed = Vec::new();
 
         for raw_id in task_ids {
-            match ctx.tasks.resolve_task_id(raw_id) {
+            match store.resolve_task_id(raw_id) {
                 Ok(resolved) => {
                     events.push(TaskEvent::new(
                         &resolved,
@@ -86,7 +104,7 @@ impl TaskLabelsBatch {
             }
         }
 
-        let results = ctx.tasks.append_batch(&events);
+        let results = store.append_batch(&events);
         let mut succeeded = Vec::new();
         for (i, result) in results.into_iter().enumerate() {
             match result {
@@ -103,7 +121,7 @@ impl TaskLabelsBatch {
         batch_response(succeeded, failed)
     }
 
-    fn label_rename(&self, ctx: &McpContext, params: &Params) -> ToolCallResult {
+    fn label_rename(&self, store: &TaskStore, params: &Params) -> ToolCallResult {
         let old_label = match &params.old_label {
             Some(l) if !l.is_empty() => l,
             _ => return ToolCallResult::error("Missing required parameter: old_label"),
@@ -113,7 +131,7 @@ impl TaskLabelsBatch {
             _ => return ToolCallResult::error("Missing required parameter: new_label"),
         };
 
-        let task_ids = match ctx.tasks.get_task_ids_with_label(old_label) {
+        let task_ids = match store.get_task_ids_with_label(old_label) {
             Ok(ids) => ids,
             Err(e) => return ToolCallResult::error(format!("Failed to query tasks: {e}")),
         };
@@ -142,7 +160,7 @@ impl TaskLabelsBatch {
             ));
         }
 
-        let results = ctx.tasks.append_batch(&events);
+        let results = store.append_batch(&events);
         let mut succeeded = Vec::new();
         let mut failed = Vec::new();
 
@@ -173,13 +191,13 @@ impl TaskLabelsBatch {
         batch_response(succeeded, failed)
     }
 
-    fn label_purge(&self, ctx: &McpContext, params: &Params) -> ToolCallResult {
+    fn label_purge(&self, store: &TaskStore, params: &Params) -> ToolCallResult {
         let label = match &params.label {
             Some(l) if !l.is_empty() => l,
             _ => return ToolCallResult::error("Missing required parameter: label"),
         };
 
-        let task_ids = match ctx.tasks.get_task_ids_with_label(label) {
+        let task_ids = match store.get_task_ids_with_label(label) {
             Ok(ids) => ids,
             Err(e) => return ToolCallResult::error(format!("Failed to query tasks: {e}")),
         };
@@ -202,7 +220,7 @@ impl TaskLabelsBatch {
             })
             .collect();
 
-        let results = ctx.tasks.append_batch(&events);
+        let results = store.append_batch(&events);
         let mut succeeded = Vec::new();
         let mut failed = Vec::new();
 
@@ -267,6 +285,10 @@ impl McpTool for TaskLabelsBatch {
                     "new_label": {
                         "type": "string",
                         "description": "New label name (required for rename)"
+                    },
+                    "brain": {
+                        "type": "string",
+                        "description": "Target brain name or ID. When provided, operates on that brain's task store instead of locally."
                     }
                 },
                 "required": ["action"]

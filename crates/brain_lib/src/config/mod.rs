@@ -195,6 +195,18 @@ pub fn resolve_brain_entry(name_or_id: &str) -> Result<(String, BrainEntry)> {
     resolve_brain_entry_from_config(name_or_id, &config)
 }
 
+/// Resolve the stable brain ID from a registry entry.
+///
+/// Uses the `id` field if already set; otherwise generates and persists a new
+/// 8-char Nano ID via [`get_or_generate_brain_id`].
+pub fn resolve_brain_id(entry: &BrainEntry, _name: &str) -> Result<String> {
+    if let Some(ref id) = entry.id {
+        Ok(id.clone())
+    } else {
+        get_or_generate_brain_id(&entry.root.join(".brain"))
+    }
+}
+
 /// Open a [`crate::tasks::TaskStore`] for a remote brain identified by `name`.
 ///
 /// Resolves the brain's data paths, creates the database directory if needed,
@@ -219,6 +231,63 @@ pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::
     let store = crate::tasks::TaskStore::new(&tasks_dir, db)?;
     store.rebuild_projections()?;
     Ok(store)
+}
+
+/// Unified context for accessing all stores of a remote brain.
+///
+/// Opens a single [`crate::db::Db`] and derives [`crate::tasks::TaskStore`],
+/// [`crate::records::RecordStore`], and [`crate::records::objects::ObjectStore`].
+pub struct RemoteBrainContext {
+    pub brain_name: String,
+    pub brain_id: String,
+    pub tasks: crate::tasks::TaskStore,
+    pub records: crate::records::RecordStore,
+    pub objects: crate::records::objects::ObjectStore,
+}
+
+impl RemoteBrainContext {
+    /// Open a remote brain by name or ID.
+    ///
+    /// Resolves the brain entry, opens the database, and constructs all stores.
+    pub fn open(name_or_id: &str) -> Result<Self> {
+        let (name, entry) = resolve_brain_entry(name_or_id)?;
+        let brain_id = resolve_brain_id(&entry, &name)?;
+        let paths = resolve_paths_for_brain(&name)?;
+
+        // Ensure the data directory exists.
+        if let Some(parent) = paths.sqlite_db.parent() {
+            std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
+        }
+
+        let db = crate::db::Db::open(&paths.sqlite_db)?;
+        let data_dir = paths
+            .sqlite_db
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
+
+        // TaskStore
+        let tasks_dir = data_dir.join("tasks");
+        let tasks = crate::tasks::TaskStore::new(&tasks_dir, db.clone())?;
+        tasks.rebuild_projections()?;
+
+        // RecordStore
+        let records_dir = data_dir.join("records");
+        let records = crate::records::RecordStore::new(&records_dir, db)?;
+        records.rebuild_projections()?;
+
+        // ObjectStore
+        let objects_dir = data_dir.join("objects");
+        let objects = crate::records::objects::ObjectStore::new(objects_dir)?;
+
+        Ok(Self {
+            brain_name: name,
+            brain_id,
+            tasks,
+            records,
+            objects,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -65,6 +65,7 @@ pub struct ListParams {
     pub blocked: bool,
     pub include_description: bool,
     pub group_by: Option<String>,
+    pub brain: Option<String>,
 }
 
 pub struct UpdateParams {

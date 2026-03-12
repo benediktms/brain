@@ -238,6 +238,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     blocked,
                     include_description,
                     group_by,
+                    brain,
                 } => {
                     let params = ListParams {
                         status,
@@ -250,6 +251,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         blocked,
                         include_description,
                         group_by,
+                        brain,
                     };
                     commands::tasks::run::list(&ctx, &params)?;
                 }
@@ -313,17 +315,48 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     commands::tasks::run::comment(&ctx, &task_id, &body)?;
                 }
                 TasksAction::Label { action } => match action {
-                    LabelAction::Add { task_id, label } => {
-                        commands::tasks::run::label_add(&ctx, &task_id, &label)?;
+                    LabelAction::Add {
+                        task_id,
+                        label,
+                        brain,
+                    } => {
+                        commands::tasks::run::label_add(&ctx, &task_id, &label, brain.as_deref())?;
                     }
-                    LabelAction::Remove { task_id, label } => {
-                        commands::tasks::run::label_remove(&ctx, &task_id, &label)?;
+                    LabelAction::Remove {
+                        task_id,
+                        label,
+                        brain,
+                    } => {
+                        commands::tasks::run::label_remove(
+                            &ctx,
+                            &task_id,
+                            &label,
+                            brain.as_deref(),
+                        )?;
                     }
-                    LabelAction::BatchAdd { tasks, label } => {
-                        commands::tasks::run::label_batch_add(&ctx, &tasks, &label)?;
+                    LabelAction::BatchAdd {
+                        tasks,
+                        label,
+                        brain,
+                    } => {
+                        commands::tasks::run::label_batch_add(
+                            &ctx,
+                            &tasks,
+                            &label,
+                            brain.as_deref(),
+                        )?;
                     }
-                    LabelAction::BatchRemove { tasks, label } => {
-                        commands::tasks::run::label_batch_remove(&ctx, &tasks, &label)?;
+                    LabelAction::BatchRemove {
+                        tasks,
+                        label,
+                        brain,
+                    } => {
+                        commands::tasks::run::label_batch_remove(
+                            &ctx,
+                            &tasks,
+                            &label,
+                            brain.as_deref(),
+                        )?;
                     }
                     LabelAction::Rename {
                         old_label,
@@ -360,6 +393,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             blocked: false,
                             include_description: false,
                             group_by: None,
+                            brain: None,
                         },
                     )?;
                 }
@@ -377,6 +411,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             blocked: true,
                             include_description: false,
                             group_by: None,
+                            brain: None,
                         },
                     )?;
                 }

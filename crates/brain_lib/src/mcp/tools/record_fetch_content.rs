@@ -6,6 +6,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::config::RemoteBrainContext;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
@@ -14,6 +15,7 @@ use super::{McpTool, json_response};
 #[derive(Deserialize)]
 struct Params {
     record_id: String,
+    brain: Option<String>,
 }
 
 pub(super) struct RecordFetchContent;
@@ -25,24 +27,40 @@ impl RecordFetchContent {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let record_id = match ctx.records.resolve_record_id(&params.record_id) {
+        let remote_ctx;
+        let (records, objects, remote_brain_name) = if let Some(ref brain) = params.brain {
+            remote_ctx = match RemoteBrainContext::open(brain) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                }
+            };
+            (
+                &remote_ctx.records,
+                &remote_ctx.objects,
+                Some(remote_ctx.brain_name.clone()),
+            )
+        } else {
+            (&ctx.records, &ctx.objects, None)
+        };
+
+        let record_id = match records.resolve_record_id(&params.record_id) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };
 
-        let record = match ctx.records.get_record(&record_id) {
+        let record = match records.get_record(&record_id) {
             Ok(Some(r)) => r,
             Ok(None) => return ToolCallResult::error(format!("Record not found: {record_id}")),
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         };
 
-        let raw_bytes = match ctx.objects.read_auto(&record.content_hash) {
+        let raw_bytes = match objects.read_auto(&record.content_hash) {
             Ok(b) => b,
             Err(e) => return ToolCallResult::error(format!("Failed to read content: {e}")),
         };
 
-        let compact_id = ctx
-            .records
+        let compact_id = records
             .compact_record_id(&record_id)
             .unwrap_or_else(|_| record_id.clone());
 
@@ -58,7 +76,7 @@ impl RecordFetchContent {
             })
             .unwrap_or(false);
 
-        let result = if is_text {
+        let mut result = if is_text {
             match std::str::from_utf8(&raw_bytes) {
                 Ok(text) => json!({
                     "record_id": compact_id,
@@ -99,6 +117,10 @@ impl RecordFetchContent {
             })
         };
 
+        if let Some(name) = remote_brain_name {
+            result["brain"] = json!(name);
+        }
+
         json_response(&result)
     }
 }
@@ -111,13 +133,17 @@ impl McpTool for RecordFetchContent {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Fetch the content of a record. For text content (media_type starting with 'text/' or 'application/json'), returns decoded UTF-8 text directly in the 'text' field. For binary content, returns base64-encoded data in the 'data' field. The 'encoding' field indicates how to interpret the content ('utf-8' or 'base64'). Includes title and kind metadata.".into(),
+            description: "Fetch the content of a record. For text content (media_type starting with 'text/' or 'application/json'), returns decoded UTF-8 text directly in the 'text' field. For binary content, returns base64-encoded data in the 'data' field. The 'encoding' field indicates how to interpret the content ('utf-8' or 'base64'). Includes title and kind metadata. Use the brain parameter to fetch from a remote brain instead of locally.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "record_id": {
                         "type": "string",
                         "description": "The record ID (full ID or unique prefix)"
+                    },
+                    "brain": {
+                        "type": "string",
+                        "description": "Target brain name or ID. When provided, fetches content from that brain."
                     }
                 },
                 "required": ["record_id"]
