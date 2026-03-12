@@ -154,6 +154,7 @@ impl McpContext {
     ///
     /// Used by the daemon to create per-brain MCP contexts without going
     /// through the full bootstrap sequence (which opens its own stores).
+    #[allow(clippy::too_many_arguments)]
     pub fn from_stores(
         db: Db,
         store: Option<StoreReader>,
@@ -356,8 +357,7 @@ async fn handle_request(req: JsonRpcRequest, mode: &DispatchMode, registry: &Too
                         }
                         Err(e) => {
                             error!(error = %e, tool = tool_name, "IPC dispatch failed");
-                            let fallback = protocol::ToolCallResult::error(format!("daemon error: {e}"));
-                            fallback
+                            protocol::ToolCallResult::error(format!("daemon error: {e}"))
                         }
                     }
                 }
