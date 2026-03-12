@@ -38,6 +38,12 @@ pub struct BrainEntry {
     /// Stable brain ID (8-char Nano ID).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Alternate names for this brain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Additional root paths for this brain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_roots: Vec<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +180,13 @@ pub fn resolve_brain_entry_from_config(
     // Scan by ID field.
     for (name, entry) in &config.brains {
         if entry.id.as_deref() == Some(name_or_id) {
+            return Ok((name.clone(), entry.clone()));
+        }
+    }
+
+    // Scan by alias.
+    for (name, entry) in &config.brains {
+        if entry.aliases.iter().any(|a| a == name_or_id) {
             return Ok((name.clone(), entry.clone()));
         }
     }
@@ -687,6 +700,8 @@ mod tests {
                 root: root.to_path_buf(),
                 notes: vec![],
                 id: id.map(str::to_string),
+                aliases: vec![],
+                extra_roots: vec![],
             },
         );
         cfg
@@ -749,6 +764,8 @@ mod tests {
             root: project_tmp.path().to_path_buf(),
             notes: vec![],
             id: Some("test1234".to_string()),
+            aliases: vec![],
+            extra_roots: vec![],
         };
 
         let store = open_remote_task_store("test-brain", &entry).unwrap();
@@ -842,6 +859,8 @@ mod tests {
                 root: home.to_path_buf(),
                 notes: vec![],
                 id: Some("id000001".to_string()),
+                aliases: vec![],
+                extra_roots: vec![],
             },
         );
         cfg.brains.insert(
@@ -850,6 +869,8 @@ mod tests {
                 root: home.to_path_buf(),
                 notes: vec![],
                 id: None,
+                aliases: vec![],
+                extra_roots: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -896,6 +917,8 @@ mod tests {
                 root: home.to_path_buf(),
                 notes: vec![],
                 id: Some("testid01".to_string()),
+                aliases: vec![],
+                extra_roots: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -927,6 +950,8 @@ mod tests {
                 root: home.to_path_buf(),
                 notes: vec![],
                 id: Some("abc12345".to_string()),
+                aliases: vec![],
+                extra_roots: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -943,6 +968,65 @@ mod tests {
 
         assert_eq!(ctx.brain_name, "my-brain");
         assert_eq!(ctx.brain_id, "abc12345");
+    }
+
+    // -----------------------------------------------------------------------
+    // alias resolution
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_brain_entry_by_alias() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "infra".to_string(),
+            BrainEntry {
+                root: tmp.path().to_path_buf(),
+                notes: vec![],
+                id: Some("abc12345".to_string()),
+                aliases: vec!["gateway".to_string(), "infra-alias".to_string()],
+                extra_roots: vec![],
+            },
+        );
+
+        let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
+        assert_eq!(name, "infra");
+        assert_eq!(entry.root, tmp.path());
+
+        let (name2, _) = resolve_brain_entry_from_config("infra-alias", &cfg).unwrap();
+        assert_eq!(name2, "infra");
+    }
+
+    #[test]
+    fn resolve_brain_entry_alias_does_not_shadow_name() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = GlobalConfig::default();
+        // "infra" registered with an alias that matches another brain's name "gateway"
+        cfg.brains.insert(
+            "infra".to_string(),
+            BrainEntry {
+                root: tmp.path().to_path_buf(),
+                notes: vec![],
+                id: Some("aaaaaaaa".to_string()),
+                aliases: vec!["gateway".to_string()],
+                extra_roots: vec![],
+            },
+        );
+        cfg.brains.insert(
+            "gateway".to_string(),
+            BrainEntry {
+                root: tmp.path().to_path_buf(),
+                notes: vec![],
+                id: Some("bbbbbbbb".to_string()),
+                aliases: vec![],
+                extra_roots: vec![],
+            },
+        );
+
+        // Name match wins over alias match.
+        let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
+        assert_eq!(name, "gateway");
+        assert_eq!(entry.id, Some("bbbbbbbb".to_string()));
     }
 
     /// Minimal no-op embedder for tests that need Arc<dyn Embed>.

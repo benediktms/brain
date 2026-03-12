@@ -66,6 +66,8 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
             root: cwd.clone(),
             notes: abs_notes,
             id: Some(brain_id.clone()),
+            aliases: vec![],
+            extra_roots: vec![],
         },
     );
     save_global_config(&global)?;
