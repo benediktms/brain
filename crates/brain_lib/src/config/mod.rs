@@ -297,7 +297,6 @@ pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::
         .join("tasks");
 
     let store = crate::tasks::TaskStore::new(&tasks_dir, db)?;
-    store.rebuild_projections()?;
     Ok(store)
 }
 
@@ -337,12 +336,10 @@ impl RemoteBrainContext {
         // TaskStore
         let tasks_dir = data_dir.join("tasks");
         let tasks = crate::tasks::TaskStore::new(&tasks_dir, db.clone())?;
-        tasks.rebuild_projections()?;
 
         // RecordStore
         let records_dir = data_dir.join("records");
         let records = crate::records::RecordStore::new(&records_dir, db)?;
-        records.rebuild_projections()?;
 
         // ObjectStore
         let objects_dir = data_dir.join("objects");
