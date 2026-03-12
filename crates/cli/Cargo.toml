@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 brain-lib = { path = "../brain_lib" }
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["signal", "net"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
