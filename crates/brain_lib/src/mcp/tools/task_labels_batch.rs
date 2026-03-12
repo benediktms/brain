@@ -39,7 +39,9 @@ impl TaskLabelsBatch {
         if let Some(ref brain) = params.brain {
             let remote = match RemoteBrainContext::open(brain) {
                 Ok(r) => r,
-                Err(e) => return ToolCallResult::error(format!("Failed to open remote brain: {e}")),
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                }
             };
             return self.execute_with_store(params, &remote.tasks);
         }

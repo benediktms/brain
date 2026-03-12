@@ -320,12 +320,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         label,
                         brain,
                     } => {
-                        commands::tasks::run::label_add(
-                            &ctx,
-                            &task_id,
-                            &label,
-                            brain.as_deref(),
-                        )?;
+                        commands::tasks::run::label_add(&ctx, &task_id, &label, brain.as_deref())?;
                     }
                     LabelAction::Remove {
                         task_id,

@@ -74,11 +74,15 @@ impl TaskList {
         if let Some(ref brain) = params.brain {
             let remote = match RemoteBrainContext::open(brain) {
                 Ok(r) => r,
-                Err(e) => return ToolCallResult::error(format!("Failed to open remote brain: {e}")),
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                }
             };
             let mut result = Self::execute_with_store(params, &remote.tasks);
             // Inject brain name into response
-            if let Ok(ref mut val) = serde_json::from_str::<serde_json::Value>(&result.content[0].text) {
+            if let Ok(ref mut val) =
+                serde_json::from_str::<serde_json::Value>(&result.content[0].text)
+            {
                 if let Some(obj) = val.as_object_mut() {
                     obj.insert("brain".into(), json!(remote.brain_name));
                 }

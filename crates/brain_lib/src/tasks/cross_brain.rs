@@ -51,8 +51,7 @@ pub fn cross_brain_create(
     let ctx = RemoteBrainContext::open(&params.target_brain)?;
 
     // Resolve the local brain ID from the current working directory.
-    let local_brain_id =
-        get_or_generate_brain_id(&std::env::current_dir()?.join(".brain"))?;
+    let local_brain_id = get_or_generate_brain_id(&std::env::current_dir()?.join(".brain"))?;
 
     // Generate a task ID for the remote brain.
     let remote_task_id = new_task_id(&ctx.tasks.get_project_prefix()?);

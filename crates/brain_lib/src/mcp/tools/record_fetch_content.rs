@@ -31,9 +31,15 @@ impl RecordFetchContent {
         let (records, objects, remote_brain_name) = if let Some(ref brain) = params.brain {
             remote_ctx = match RemoteBrainContext::open(brain) {
                 Ok(r) => r,
-                Err(e) => return ToolCallResult::error(format!("Failed to open remote brain: {e}")),
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                }
             };
-            (&remote_ctx.records, &remote_ctx.objects, Some(remote_ctx.brain_name.clone()))
+            (
+                &remote_ctx.records,
+                &remote_ctx.objects,
+                Some(remote_ctx.brain_name.clone()),
+            )
         } else {
             (&ctx.records, &ctx.objects, None)
         };

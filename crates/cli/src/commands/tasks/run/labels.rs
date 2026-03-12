@@ -81,12 +81,7 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
     Ok(())
 }
 
-pub fn label_remove(
-    ctx: &TaskCtx,
-    task_id: &str,
-    label: &str,
-    brain: Option<&str>,
-) -> Result<()> {
+pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
     if let Some(target_brain) = brain {
         use brain_lib::config::RemoteBrainContext;
         let remote = RemoteBrainContext::open(target_brain)?;
