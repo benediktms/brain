@@ -470,7 +470,7 @@ mod tests {
         let cli = Cli::try_parse_from(["brain", "tasks", "close", "t1", "t2"]).unwrap();
         match cli.command {
             Command::Tasks {
-                action: TasksAction::Close { ids },
+                action: TasksAction::Close { ids, .. },
                 ..
             } => {
                 assert_eq!(ids, vec!["t1", "t2"]);

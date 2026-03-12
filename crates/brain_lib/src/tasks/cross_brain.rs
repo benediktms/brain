@@ -1,9 +1,12 @@
 use crate::config::{get_or_generate_brain_id, open_remote_task_store, resolve_brain_entry};
-use crate::error::Result;
+use crate::error::{BrainCoreError, Result};
 use crate::tasks::TaskStore;
 use crate::tasks::events::{
-    CrossBrainRefPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType,
-    new_task_id,
+    CrossBrainRefPayload, EventType, StatusChangedPayload, TaskCreatedPayload, TaskEvent,
+    TaskStatus, TaskType, new_task_id,
+};
+use crate::tasks::queries::{
+    CrossBrainRef, DependencySummary, ExternalIdRow, TaskComment, TaskNoteLink, TaskRow,
 };
 
 /// Parameters for creating a task in a remote brain.
@@ -113,6 +116,218 @@ pub fn cross_brain_create(
         remote_brain_id,
         local_ref_created,
     })
+}
+
+// ── Cross-brain fetch ────────────────────────────────────────────────────────
+
+/// Full details returned from a cross-brain task fetch.
+#[derive(Debug)]
+pub struct CrossBrainFetchResult {
+    pub task: TaskRow,
+    pub remote_brain_name: String,
+    pub remote_brain_id: String,
+    pub labels: Vec<String>,
+    pub comments: Vec<TaskComment>,
+    pub children: Vec<TaskRow>,
+    pub dependency_summary: DependencySummary,
+    pub note_links: Vec<TaskNoteLink>,
+    pub cross_refs: Vec<CrossBrainRef>,
+    pub external_ids: Vec<ExternalIdRow>,
+}
+
+/// Fetch a task and its full enrichment from a remote brain.
+pub fn cross_brain_fetch(target_brain: &str, task_id: &str) -> Result<CrossBrainFetchResult> {
+    let (name, entry) = resolve_brain_entry(target_brain)?;
+    let remote_store = open_remote_task_store(&name, &entry)?;
+    let remote_brain_id = if let Some(ref id) = entry.id {
+        id.clone()
+    } else {
+        get_or_generate_brain_id(&entry.root.join(".brain"))?
+    };
+
+    let (task, labels, comments, children, dependency_summary, note_links, cross_refs, external_ids) =
+        cross_brain_fetch_inner(&remote_store, task_id)?;
+
+    Ok(CrossBrainFetchResult {
+        task,
+        remote_brain_name: name,
+        remote_brain_id,
+        labels,
+        comments,
+        children,
+        dependency_summary,
+        note_links,
+        cross_refs,
+        external_ids,
+    })
+}
+
+/// Internal implementation for testing — accepts an already-opened remote store.
+#[cfg(test)]
+pub(crate) fn cross_brain_fetch_inner(
+    remote_store: &TaskStore,
+    task_id: &str,
+) -> Result<(
+    TaskRow,
+    Vec<String>,
+    Vec<TaskComment>,
+    Vec<TaskRow>,
+    DependencySummary,
+    Vec<TaskNoteLink>,
+    Vec<CrossBrainRef>,
+    Vec<ExternalIdRow>,
+)> {
+    _cross_brain_fetch_inner(remote_store, task_id)
+}
+
+#[cfg(not(test))]
+fn cross_brain_fetch_inner(
+    remote_store: &TaskStore,
+    task_id: &str,
+) -> Result<(
+    TaskRow,
+    Vec<String>,
+    Vec<TaskComment>,
+    Vec<TaskRow>,
+    DependencySummary,
+    Vec<TaskNoteLink>,
+    Vec<CrossBrainRef>,
+    Vec<ExternalIdRow>,
+)> {
+    _cross_brain_fetch_inner(remote_store, task_id)
+}
+
+fn _cross_brain_fetch_inner(
+    remote_store: &TaskStore,
+    task_id: &str,
+) -> Result<(
+    TaskRow,
+    Vec<String>,
+    Vec<TaskComment>,
+    Vec<TaskRow>,
+    DependencySummary,
+    Vec<TaskNoteLink>,
+    Vec<CrossBrainRef>,
+    Vec<ExternalIdRow>,
+)> {
+    let resolved = remote_store.resolve_task_id(task_id)?;
+    let task = remote_store
+        .get_task(&resolved)?
+        .ok_or_else(|| BrainCoreError::TaskEvent(format!("task '{task_id}' not found in remote brain")))?;
+    let labels = remote_store.get_task_labels(&resolved).unwrap_or_default();
+    let comments = remote_store.get_task_comments(&resolved).unwrap_or_default();
+    let children = remote_store.get_children(&resolved).unwrap_or_default();
+    let dependency_summary = remote_store.get_dependency_summary(&resolved).unwrap_or_default();
+    let note_links = remote_store.get_task_note_links(&resolved).unwrap_or_default();
+    let cross_refs = remote_store.get_cross_brain_refs(&resolved).unwrap_or_default();
+    let external_ids = remote_store.get_external_ids(&resolved).unwrap_or_default();
+    Ok((task, labels, comments, children, dependency_summary, note_links, cross_refs, external_ids))
+}
+
+// ── Cross-brain close ────────────────────────────────────────────────────────
+
+/// Parameters for closing tasks in a remote brain.
+pub struct CrossBrainCloseParams {
+    pub target_brain: String,
+    pub task_ids: Vec<String>,
+}
+
+/// Result of a cross-brain close operation.
+#[derive(Debug)]
+pub struct CrossBrainCloseResult {
+    pub remote_brain_name: String,
+    pub remote_brain_id: String,
+    /// Task IDs that were successfully closed (short/resolved IDs).
+    pub closed: Vec<String>,
+    /// Task IDs that failed with their error message.
+    pub failed: Vec<(String, String)>,
+    /// Task IDs that became unblocked as a result.
+    pub unblocked: Vec<String>,
+}
+
+/// Close tasks in a remote brain.
+///
+/// `local_store` is accepted for API consistency with `cross_brain_create` and
+/// future cross-ref linking but is not mutated in this implementation.
+pub fn cross_brain_close(
+    _local_store: &TaskStore,
+    params: CrossBrainCloseParams,
+) -> Result<CrossBrainCloseResult> {
+    let (name, entry) = resolve_brain_entry(&params.target_brain)?;
+    let remote_store = open_remote_task_store(&name, &entry)?;
+    let remote_brain_id = if let Some(ref id) = entry.id {
+        id.clone()
+    } else {
+        get_or_generate_brain_id(&entry.root.join(".brain"))?
+    };
+
+    let (closed, failed, unblocked) =
+        cross_brain_close_inner(&remote_store, &params.task_ids)?;
+
+    Ok(CrossBrainCloseResult {
+        remote_brain_name: name,
+        remote_brain_id,
+        closed,
+        failed,
+        unblocked,
+    })
+}
+
+/// Internal implementation for testing — accepts an already-opened remote store.
+#[cfg(test)]
+pub(crate) fn cross_brain_close_inner(
+    remote_store: &TaskStore,
+    task_ids: &[String],
+) -> Result<(Vec<String>, Vec<(String, String)>, Vec<String>)> {
+    _cross_brain_close_inner(remote_store, task_ids)
+}
+
+#[cfg(not(test))]
+fn cross_brain_close_inner(
+    remote_store: &TaskStore,
+    task_ids: &[String],
+) -> Result<(Vec<String>, Vec<(String, String)>, Vec<String>)> {
+    _cross_brain_close_inner(remote_store, task_ids)
+}
+
+fn _cross_brain_close_inner(
+    remote_store: &TaskStore,
+    task_ids: &[String],
+) -> Result<(Vec<String>, Vec<(String, String)>, Vec<String>)> {
+    let mut closed = Vec::new();
+    let mut failed = Vec::new();
+    let mut unblocked = Vec::new();
+
+    for raw_id in task_ids {
+        let resolved = match remote_store.resolve_task_id(raw_id) {
+            Ok(id) => id,
+            Err(e) => {
+                failed.push((raw_id.clone(), e.to_string()));
+                continue;
+            }
+        };
+
+        let event = TaskEvent::from_payload(
+            &resolved,
+            "cross-brain",
+            StatusChangedPayload {
+                new_status: TaskStatus::Done,
+            },
+        );
+
+        if let Err(e) = remote_store.append(&event) {
+            failed.push((raw_id.clone(), e.to_string()));
+            continue;
+        }
+
+        let newly_unblocked = remote_store
+            .list_newly_unblocked(&resolved)
+            .unwrap_or_default();
+        unblocked.extend(newly_unblocked);
+        closed.push(resolved);
+    }
+
+    Ok((closed, failed, unblocked))
 }
 
 /// Internal implementation that accepts already-resolved parameters.
@@ -473,5 +688,142 @@ mod tests {
                 .is_none()
         );
         assert!(local_store.list_all().unwrap().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: cross-brain fetch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cross_brain_fetch_basic() {
+        let brain_home_tmp = TempDir::new().unwrap();
+        let brain_home = brain_home_tmp.path();
+
+        let (_remote_tmp, remote_store) = make_brain(brain_home, "remote-brain");
+
+        // Add a task with a label and a comment.
+        add_task(&remote_store, "REMOTE-001", "Fetchable task");
+
+        let label_event = TaskEvent::new(
+            "REMOTE-001",
+            "test",
+            crate::tasks::events::EventType::LabelAdded,
+            &crate::tasks::events::LabelPayload { label: "important".to_string() },
+        );
+        remote_store.append(&label_event).unwrap();
+
+        let comment_event = TaskEvent::from_payload(
+            "REMOTE-001",
+            "test",
+            crate::tasks::events::CommentPayload { body: "A comment".to_string() },
+        );
+        remote_store.append(&comment_event).unwrap();
+
+        let (task, labels, comments, children, dep_summary, note_links, cross_refs, external_ids) =
+            cross_brain_fetch_inner(&remote_store, "REMOTE-001").unwrap();
+
+        assert_eq!(task.task_id, "REMOTE-001");
+        assert_eq!(task.title, "Fetchable task");
+        assert_eq!(labels, vec!["important"]);
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body, "A comment");
+        assert!(children.is_empty());
+        assert_eq!(dep_summary.total_deps, 0);
+        assert!(note_links.is_empty());
+        assert!(cross_refs.is_empty());
+        assert!(external_ids.is_empty());
+    }
+
+    #[test]
+    fn test_cross_brain_fetch_not_found() {
+        let brain_home_tmp = TempDir::new().unwrap();
+        let brain_home = brain_home_tmp.path();
+
+        let (_remote_tmp, remote_store) = make_brain(brain_home, "remote-brain");
+
+        let result = cross_brain_fetch_inner(&remote_store, "nonexistent");
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: cross-brain close
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cross_brain_close_basic() {
+        let brain_home_tmp = TempDir::new().unwrap();
+        let brain_home = brain_home_tmp.path();
+
+        let (_remote_tmp, remote_store) = make_brain(brain_home, "remote-brain");
+
+        add_task(&remote_store, "REMOTE-001", "Task to close");
+        add_task(&remote_store, "REMOTE-002", "Another task to close");
+
+        let (closed, failed, unblocked) =
+            cross_brain_close_inner(&remote_store, &[
+                "REMOTE-001".to_string(),
+                "REMOTE-002".to_string(),
+            ])
+            .unwrap();
+
+        assert_eq!(closed.len(), 2);
+        assert!(failed.is_empty());
+        assert!(unblocked.is_empty());
+
+        // Verify both tasks are marked done in the remote store.
+        let t1 = remote_store.get_task("REMOTE-001").unwrap().unwrap();
+        let t2 = remote_store.get_task("REMOTE-002").unwrap().unwrap();
+        assert_eq!(t1.status, "done");
+        assert_eq!(t2.status, "done");
+    }
+
+    #[test]
+    fn test_cross_brain_close_unblocks_dependents() {
+        let brain_home_tmp = TempDir::new().unwrap();
+        let brain_home = brain_home_tmp.path();
+
+        let (_remote_tmp, remote_store) = make_brain(brain_home, "remote-brain");
+
+        add_task(&remote_store, "REMOTE-001", "Blocker");
+        add_task(&remote_store, "REMOTE-002", "Blocked");
+
+        // Make REMOTE-002 depend on REMOTE-001.
+        let dep_event = TaskEvent::new(
+            "REMOTE-002",
+            "test",
+            crate::tasks::events::EventType::DependencyAdded,
+            &crate::tasks::events::DependencyPayload {
+                depends_on_task_id: "REMOTE-001".to_string(),
+            },
+        );
+        remote_store.append(&dep_event).unwrap();
+
+        let (closed, failed, unblocked) =
+            cross_brain_close_inner(&remote_store, &["REMOTE-001".to_string()]).unwrap();
+
+        assert_eq!(closed, vec!["REMOTE-001"]);
+        assert!(failed.is_empty());
+        assert_eq!(unblocked, vec!["REMOTE-002"]);
+    }
+
+    #[test]
+    fn test_cross_brain_close_partial_failure() {
+        let brain_home_tmp = TempDir::new().unwrap();
+        let brain_home = brain_home_tmp.path();
+
+        let (_remote_tmp, remote_store) = make_brain(brain_home, "remote-brain");
+
+        add_task(&remote_store, "REMOTE-001", "Real task");
+
+        let (closed, failed, _) =
+            cross_brain_close_inner(&remote_store, &[
+                "REMOTE-001".to_string(),
+                "nonexistent-99".to_string(),
+            ])
+            .unwrap();
+
+        assert_eq!(closed.len(), 1);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].0, "nonexistent-99");
     }
 }

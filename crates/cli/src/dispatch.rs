@@ -253,8 +253,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     };
                     commands::tasks::run::list(&ctx, &params)?;
                 }
-                TasksAction::Show { id } => {
-                    commands::tasks::run::show(&ctx, &id)?;
+                TasksAction::Show { id, brain } => {
+                    commands::tasks::run::show(&ctx, &id, brain.as_deref())?;
                 }
                 TasksAction::Update {
                     id,
@@ -343,8 +343,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         anyhow::bail!("Unknown export format: {other}. Supported: markdown");
                     }
                 },
-                TasksAction::Close { ids } => {
-                    commands::tasks::run::close(&ctx, &ids)?;
+                TasksAction::Close { ids, brain } => {
+                    commands::tasks::run::close(&ctx, &ids, brain.as_deref())?;
                 }
                 TasksAction::Ready => {
                     commands::tasks::run::list(
