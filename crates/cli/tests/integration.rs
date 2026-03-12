@@ -161,9 +161,10 @@ fn init_detects_existing_brain_and_adds_path() {
     init_cmd(project.path(), home.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("already registered").or(
-            predicate::str::contains("Path added"),
-        ));
+        .stdout(
+            predicate::str::contains("already registered")
+                .or(predicate::str::contains("Path added")),
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -475,8 +476,7 @@ fn init_reregister_adds_extra_root() {
         .success();
 
     // Read the brain ID from the config created in A
-    let config_text =
-        std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+    let config_text = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
     let global: serde_json::Value = {
         // Parse via toml first then use brain_id
         let cfg: toml::Value = toml::from_str(&config_text).unwrap();
@@ -514,14 +514,13 @@ fn init_reregister_adds_extra_root() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     let brains = parsed["brains"].as_array().unwrap();
-    let entry = brains
-        .iter()
-        .find(|b| b["name"] == "shared-brain")
-        .unwrap();
+    let entry = brains.iter().find(|b| b["name"] == "shared-brain").unwrap();
     let extra_roots = entry["extra_roots"].as_array().unwrap();
     let b_path = project_b.path().to_string_lossy().to_string();
     assert!(
-        extra_roots.iter().any(|r| r.as_str().unwrap_or("").contains(&b_path)),
+        extra_roots
+            .iter()
+            .any(|r| r.as_str().unwrap_or("").contains(&b_path)),
         "extra_roots should contain project_b path: {extra_roots:?}"
     );
 }

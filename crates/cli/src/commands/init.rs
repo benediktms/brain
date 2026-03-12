@@ -19,8 +19,8 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     // If found: add cwd to that brain's roots and return.
     // If not found: fall through to re-register using the existing brain ID.
     let existing_brain_id: Option<String> = if marker_path.exists() {
-        let local_toml = load_brain_toml(&brain_dir)
-            .context("failed to read existing .brain/brain.toml")?;
+        let local_toml =
+            load_brain_toml(&brain_dir).context("failed to read existing .brain/brain.toml")?;
 
         if let Some(ref local_id) = local_toml.id {
             let mut global = load_global_config()?;
@@ -57,13 +57,9 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
 
         // Local brain.toml exists but its ID is not in the global config.
         // Re-register as a new brain entry, preserving the existing brain ID and name.
-        let local_toml = load_brain_toml(&brain_dir)
-            .context("failed to re-read existing .brain/brain.toml")?;
-        Some(
-            local_toml
-                .id
-                .unwrap_or_else(generate_brain_id),
-        )
+        let local_toml =
+            load_brain_toml(&brain_dir).context("failed to re-read existing .brain/brain.toml")?;
+        Some(local_toml.id.unwrap_or_else(generate_brain_id))
     } else {
         // Case B: No local .brain/brain.toml, but cwd is already registered as a root
         // of an existing brain (e.g. a second clone or worktree that wasn't init'd yet).

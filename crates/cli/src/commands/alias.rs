@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use brain_lib::config::{load_global_config, save_global_config};
 
 /// Add an alias to a brain entry.
