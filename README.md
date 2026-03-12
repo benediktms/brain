@@ -129,8 +129,8 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 | `tasks.get`             | Get a single task by ID with full details, relationships, comments, labels, and linked notes. |
 | `tasks.list`            | List tasks filtered by status (`all`, `ready`, `blocked`) or fetch specific tasks by ID.      |
 | `tasks.next`            | Return highest-priority ready tasks, sorted by priority or due date.                          |
-| `records.create_artifact` | Create a new artifact record with base64-encoded content in the object store.               |
-| `records.save_snapshot` | Save an opaque state bundle as a snapshot record in the object store.                         |
+| `records.create_artifact` | Create a new artifact record with `text` (plain) or `data` (base64) content.               |
+| `records.save_snapshot` | Save a snapshot record with `text` (plain) or `data` (base64) content.                        |
 | `records.get`           | Get a record by ID with full metadata, tags, and links. Supports prefix resolution.           |
 | `records.list`          | List records with optional filters (kind, status, tag, task\_id).                              |
 | `records.fetch_content` | Fetch the raw content of a record as base64-encoded data.                                     |
