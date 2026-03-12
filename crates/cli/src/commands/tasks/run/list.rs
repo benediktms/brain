@@ -118,6 +118,19 @@ fn fetch_filtered_tasks(
 // ── list ────────────────────────────────────────────────────
 
 pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
+    if let Some(ref brain) = params.brain {
+        use brain_lib::config::RemoteBrainContext;
+        let remote = RemoteBrainContext::open(brain)?;
+        let remote_ctx = TaskCtx {
+            store: remote.tasks,
+            json: ctx.json,
+        };
+        return list_inner(&remote_ctx, params);
+    }
+    list_inner(ctx, params)
+}
+
+fn list_inner(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
     if let Some(ref group) = params.group_by {
         if group == "label" {
             return list_grouped_by_label(ctx, params);
