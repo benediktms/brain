@@ -150,18 +150,20 @@ fn init_creates_sqlite_db() {
 }
 
 #[test]
-fn init_fails_if_already_initialized() {
+fn init_detects_existing_brain_and_adds_path() {
     let project = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
 
     // First init succeeds
     init_cmd(project.path(), home.path()).assert().success();
 
-    // Second init fails with a clear message
+    // Second init on same path: detects existing brain, prints info, succeeds
     init_cmd(project.path(), home.path())
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("already initialized"));
+        .success()
+        .stdout(predicate::str::contains("already registered").or(
+            predicate::str::contains("Path added"),
+        ));
 }
 
 // ---------------------------------------------------------------------------

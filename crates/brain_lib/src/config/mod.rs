@@ -421,6 +421,38 @@ pub async fn open_remote_search_context(
     }))
 }
 
+/// Find a registered brain whose `roots` list contains `path`.
+///
+/// Returns `(name, entry)` for the first match, or `None` if no brain
+/// has `path` in its roots.
+pub fn find_brain_by_path<'a>(
+    config: &'a GlobalConfig,
+    path: &Path,
+) -> Option<(String, &'a BrainEntry)> {
+    for (name, entry) in &config.brains {
+        if entry.roots.iter().any(|r| r == path) {
+            return Some((name.clone(), entry));
+        }
+    }
+    None
+}
+
+/// Find a registered brain whose `id` matches `brain_id`.
+///
+/// Returns `(name, entry)` for the first match, or `None` if no brain
+/// has that ID.
+pub fn find_brain_by_id<'a>(
+    config: &'a GlobalConfig,
+    brain_id: &str,
+) -> Option<(String, &'a BrainEntry)> {
+    for (name, entry) in &config.brains {
+        if entry.id.as_deref() == Some(brain_id) {
+            return Some((name.clone(), entry));
+        }
+    }
+    None
+}
+
 /// Return all brain `(name, id)` pairs from the global registry.
 ///
 /// The `id` field is the stable 8-char Nano ID stored in the config entry,
@@ -1073,6 +1105,84 @@ mod tests {
         let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
         assert_eq!(name, "gateway");
         assert_eq!(entry.id, Some("bbbbbbbb".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // find_brain_by_path / find_brain_by_id
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_brain_by_path_returns_none_when_empty() {
+        let cfg = GlobalConfig::default();
+        let path = PathBuf::from("/some/path");
+        assert!(find_brain_by_path(&cfg, &path).is_none());
+    }
+
+    #[test]
+    fn find_brain_by_path_finds_primary_root() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
+
+        let result = find_brain_by_path(&cfg, tmp.path());
+        assert!(result.is_some());
+        let (name, _entry) = result.unwrap();
+        assert_eq!(name, "my-brain");
+    }
+
+    #[test]
+    fn find_brain_by_path_finds_extra_root() {
+        let tmp = TempDir::new().unwrap();
+        let extra = TempDir::new().unwrap();
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "my-brain".to_string(),
+            BrainEntry {
+                roots: vec![tmp.path().to_path_buf(), extra.path().to_path_buf()],
+                notes: vec![],
+                id: Some("abcd1234".to_string()),
+                aliases: vec![],
+            },
+        );
+
+        let result = find_brain_by_path(&cfg, extra.path());
+        assert!(result.is_some());
+        let (name, _entry) = result.unwrap();
+        assert_eq!(name, "my-brain");
+    }
+
+    #[test]
+    fn find_brain_by_path_returns_none_for_unregistered_path() {
+        let tmp = TempDir::new().unwrap();
+        let other = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
+
+        let result = find_brain_by_path(&cfg, other.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn find_brain_by_id_returns_none_when_empty() {
+        let cfg = GlobalConfig::default();
+        assert!(find_brain_by_id(&cfg, "abcd1234").is_none());
+    }
+
+    #[test]
+    fn find_brain_by_id_finds_matching_entry() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
+
+        let result = find_brain_by_id(&cfg, "abcd1234");
+        assert!(result.is_some());
+        let (name, _entry) = result.unwrap();
+        assert_eq!(name, "my-brain");
+    }
+
+    #[test]
+    fn find_brain_by_id_returns_none_for_unknown_id() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
+
+        assert!(find_brain_by_id(&cfg, "xxxxxxxx").is_none());
     }
 
     /// Minimal no-op embedder for tests that need Arc<dyn Embed>.

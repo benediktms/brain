@@ -1,7 +1,8 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use brain_lib::config::{
-    BrainEntry, BrainToml, brain_home, generate_brain_id, load_global_config,
-    paths::normalize_note_paths, save_brain_toml, save_global_config,
+    BrainEntry, BrainToml, brain_home, find_brain_by_id, find_brain_by_path, generate_brain_id,
+    load_brain_toml, load_global_config, paths::normalize_note_paths, save_brain_toml,
+    save_global_config,
 };
 use std::fs;
 use std::path::Path;
@@ -13,12 +14,84 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     let brain_dir = cwd.join(".brain");
     let marker_path = brain_dir.join("brain.toml");
 
-    if marker_path.exists() {
-        bail!(
-            "Brain already initialized: {} exists",
-            marker_path.display()
-        );
-    }
+    // Case A: .brain/brain.toml already exists locally.
+    // Check if its brain ID is registered in the global config.
+    // If found: add cwd to that brain's roots and return.
+    // If not found: fall through to re-register using the existing brain ID.
+    let existing_brain_id: Option<String> = if marker_path.exists() {
+        let local_toml = load_brain_toml(&brain_dir)
+            .context("failed to read existing .brain/brain.toml")?;
+
+        if let Some(ref local_id) = local_toml.id {
+            let mut global = load_global_config()?;
+            // find_brain_by_id returns a reference — collect the name, then mutate.
+            let existing_name = find_brain_by_id(&global, local_id).map(|(n, _)| n);
+
+            if let Some(brain_name) = existing_name {
+                let root_count = {
+                    let entry = global.brains.get_mut(&brain_name).unwrap();
+                    if !entry.roots.contains(&cwd) {
+                        entry.roots.push(cwd.clone());
+                        entry.roots.len()
+                    } else {
+                        // already present — use negative sentinel to signal no-op
+                        usize::MAX
+                    }
+                };
+                if root_count == usize::MAX {
+                    let n = global.brains[&brain_name].roots.len();
+                    println!(
+                        "Path already registered in brain \"{}\" ({} roots)",
+                        brain_name, n
+                    );
+                } else {
+                    save_global_config(&global)?;
+                    println!(
+                        "Path added to existing brain \"{}\" (now has {} roots)",
+                        brain_name, root_count
+                    );
+                }
+                return Ok(());
+            }
+        }
+
+        // Local brain.toml exists but its ID is not in the global config.
+        // Re-register as a new brain entry, preserving the existing brain ID and name.
+        let local_toml = load_brain_toml(&brain_dir)
+            .context("failed to re-read existing .brain/brain.toml")?;
+        Some(
+            local_toml
+                .id
+                .unwrap_or_else(generate_brain_id),
+        )
+    } else {
+        // Case B: No local .brain/brain.toml, but cwd is already registered as a root
+        // of an existing brain (e.g. a second clone or worktree that wasn't init'd yet).
+        let mut global = load_global_config()?;
+        let existing_name = find_brain_by_path(&global, &cwd).map(|(n, _)| n);
+
+        if let Some(brain_name) = existing_name {
+            let entry = global.brains.get_mut(&brain_name).unwrap();
+            let brain_id = entry.id.clone().unwrap_or_default();
+            // Write local brain.toml so the directory is fully initialised.
+            fs::create_dir_all(&brain_dir)?;
+            let brain_toml = BrainToml {
+                name: brain_name.clone(),
+                notes: vec![],
+                id: Some(brain_id.clone()),
+            };
+            save_brain_toml(&brain_dir, &brain_toml)?;
+            // cwd is already in roots — nothing to add, just report.
+            println!(
+                "Path already registered in brain \"{}\" ({} roots) — local brain.toml created",
+                brain_name,
+                entry.roots.len()
+            );
+            return Ok(());
+        }
+
+        None
+    };
 
     // Derive brain name from explicit flag or directory name.
     let brain_name = name.unwrap_or_else(|| {
@@ -37,8 +110,8 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     // 1. Create .brain/ in the project root.
     fs::create_dir_all(&brain_dir)?;
 
-    // Generate a stable brain ID
-    let brain_id = generate_brain_id();
+    // Use preserved brain ID (from re-register path) or generate a new one.
+    let brain_id = existing_brain_id.unwrap_or_else(generate_brain_id);
 
     // 2. Write .brain/brain.toml
     let brain_toml = BrainToml {
