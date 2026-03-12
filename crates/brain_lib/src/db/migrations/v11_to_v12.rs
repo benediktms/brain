@@ -26,6 +26,10 @@ pub fn migrate_v11_to_v12(conn: &Connection) -> Result<()> {
             content_hash  TEXT NOT NULL,
             content_size  INTEGER NOT NULL,
             media_type    TEXT,
+            -- Intentional denormalization: fast-path for listing records by originating task
+            -- without joining record_links. record_links is the normalized form and supports
+            -- many-to-many record<->task associations. Both must be kept in sync by the
+            -- application layer.
             task_id       TEXT,
             actor         TEXT NOT NULL,
             created_at    INTEGER NOT NULL,
