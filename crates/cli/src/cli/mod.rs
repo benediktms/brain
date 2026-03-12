@@ -332,6 +332,13 @@ pub(crate) enum Command {
         purge: bool,
     },
 
+    /// Link the current directory as an additional root for an existing brain
+    #[command(name = "link")]
+    Link {
+        /// Brain name, ID, or alias to link to
+        name: String,
+    },
+
     /// Manage brain aliases (add/remove/list)
     Alias {
         #[command(subcommand)]
