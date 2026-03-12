@@ -152,6 +152,7 @@ impl TaskCreate {
                         "remote_brain_name": result.remote_brain_name,
                         "remote_brain_id": result.remote_brain_id,
                         "local_ref_created": result.local_ref_created,
+                        "remote_ref_created": result.remote_ref_created,
                     });
                     json_response(&response)
                 }
