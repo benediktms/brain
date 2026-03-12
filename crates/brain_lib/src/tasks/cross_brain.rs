@@ -171,11 +171,7 @@ pub fn cross_brain_fetch(target_brain: &str, task_id: &str) -> Result<CrossBrain
 }
 
 /// Internal implementation for testing — accepts an already-opened remote store.
-#[cfg(test)]
-pub(crate) fn cross_brain_fetch_inner(
-    remote_store: &TaskStore,
-    task_id: &str,
-) -> Result<(
+type FetchInnerResult = (
     TaskRow,
     Vec<String>,
     Vec<TaskComment>,
@@ -184,7 +180,13 @@ pub(crate) fn cross_brain_fetch_inner(
     Vec<TaskNoteLink>,
     Vec<CrossBrainRef>,
     Vec<ExternalIdRow>,
-)> {
+);
+
+#[cfg(test)]
+pub(crate) fn cross_brain_fetch_inner(
+    remote_store: &TaskStore,
+    task_id: &str,
+) -> Result<FetchInnerResult> {
     _cross_brain_fetch_inner(remote_store, task_id)
 }
 
@@ -192,32 +194,14 @@ pub(crate) fn cross_brain_fetch_inner(
 fn cross_brain_fetch_inner(
     remote_store: &TaskStore,
     task_id: &str,
-) -> Result<(
-    TaskRow,
-    Vec<String>,
-    Vec<TaskComment>,
-    Vec<TaskRow>,
-    DependencySummary,
-    Vec<TaskNoteLink>,
-    Vec<CrossBrainRef>,
-    Vec<ExternalIdRow>,
-)> {
+) -> Result<FetchInnerResult> {
     _cross_brain_fetch_inner(remote_store, task_id)
 }
 
 fn _cross_brain_fetch_inner(
     remote_store: &TaskStore,
     task_id: &str,
-) -> Result<(
-    TaskRow,
-    Vec<String>,
-    Vec<TaskComment>,
-    Vec<TaskRow>,
-    DependencySummary,
-    Vec<TaskNoteLink>,
-    Vec<CrossBrainRef>,
-    Vec<ExternalIdRow>,
-)> {
+) -> Result<FetchInnerResult> {
     let resolved = remote_store.resolve_task_id(task_id)?;
     let task = remote_store.get_task(&resolved)?.ok_or_else(|| {
         BrainCoreError::TaskEvent(format!("task '{task_id}' not found in remote brain"))
@@ -297,12 +281,14 @@ pub fn cross_brain_close(
     })
 }
 
+type CloseInnerResult = (Vec<String>, Vec<(String, String)>, Vec<String>);
+
 /// Internal implementation for testing — accepts an already-opened remote store.
 #[cfg(test)]
 pub(crate) fn cross_brain_close_inner(
     remote_store: &TaskStore,
     task_ids: &[String],
-) -> Result<(Vec<String>, Vec<(String, String)>, Vec<String>)> {
+) -> Result<CloseInnerResult> {
     _cross_brain_close_inner(remote_store, task_ids)
 }
 
@@ -310,14 +296,14 @@ pub(crate) fn cross_brain_close_inner(
 fn cross_brain_close_inner(
     remote_store: &TaskStore,
     task_ids: &[String],
-) -> Result<(Vec<String>, Vec<(String, String)>, Vec<String>)> {
+) -> Result<CloseInnerResult> {
     _cross_brain_close_inner(remote_store, task_ids)
 }
 
 fn _cross_brain_close_inner(
     remote_store: &TaskStore,
     task_ids: &[String],
-) -> Result<(Vec<String>, Vec<(String, String)>, Vec<String>)> {
+) -> Result<CloseInnerResult> {
     let mut closed = Vec::new();
     let mut failed = Vec::new();
     let mut unblocked = Vec::new();
