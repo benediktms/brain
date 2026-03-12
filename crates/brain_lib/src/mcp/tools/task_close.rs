@@ -61,9 +61,15 @@ impl TaskClose {
             }
             return match cross_brain_close(
                 &ctx.tasks,
-                CrossBrainCloseParams { target_brain: brain, task_ids },
+                CrossBrainCloseParams {
+                    target_brain: brain,
+                    task_ids,
+                },
             ) {
-                Err(e) => (ToolCallResult::error(format!("cross-brain close failed: {e}")), vec![]),
+                Err(e) => (
+                    ToolCallResult::error(format!("cross-brain close failed: {e}")),
+                    vec![],
+                ),
                 Ok(r) => {
                     let response = json!({
                         "remote_brain_name": r.remote_brain_name,

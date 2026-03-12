@@ -89,7 +89,10 @@ pub fn close(ctx: &TaskCtx, ids: &[String], brain: Option<&str>) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&out)?);
         } else {
-            println!("Brain: {} ({})", result.remote_brain_name, result.remote_brain_id);
+            println!(
+                "Brain: {} ({})",
+                result.remote_brain_name, result.remote_brain_id
+            );
             for id in &result.closed {
                 println!("Closed task {id}");
             }

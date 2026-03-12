@@ -145,8 +145,16 @@ pub fn cross_brain_fetch(target_brain: &str, task_id: &str) -> Result<CrossBrain
         get_or_generate_brain_id(&entry.root.join(".brain"))?
     };
 
-    let (task, labels, comments, children, dependency_summary, note_links, cross_refs, external_ids) =
-        cross_brain_fetch_inner(&remote_store, task_id)?;
+    let (
+        task,
+        labels,
+        comments,
+        children,
+        dependency_summary,
+        note_links,
+        cross_refs,
+        external_ids,
+    ) = cross_brain_fetch_inner(&remote_store, task_id)?;
 
     Ok(CrossBrainFetchResult {
         task,
@@ -211,17 +219,34 @@ fn _cross_brain_fetch_inner(
     Vec<ExternalIdRow>,
 )> {
     let resolved = remote_store.resolve_task_id(task_id)?;
-    let task = remote_store
-        .get_task(&resolved)?
-        .ok_or_else(|| BrainCoreError::TaskEvent(format!("task '{task_id}' not found in remote brain")))?;
+    let task = remote_store.get_task(&resolved)?.ok_or_else(|| {
+        BrainCoreError::TaskEvent(format!("task '{task_id}' not found in remote brain"))
+    })?;
     let labels = remote_store.get_task_labels(&resolved).unwrap_or_default();
-    let comments = remote_store.get_task_comments(&resolved).unwrap_or_default();
+    let comments = remote_store
+        .get_task_comments(&resolved)
+        .unwrap_or_default();
     let children = remote_store.get_children(&resolved).unwrap_or_default();
-    let dependency_summary = remote_store.get_dependency_summary(&resolved).unwrap_or_default();
-    let note_links = remote_store.get_task_note_links(&resolved).unwrap_or_default();
-    let cross_refs = remote_store.get_cross_brain_refs(&resolved).unwrap_or_default();
+    let dependency_summary = remote_store
+        .get_dependency_summary(&resolved)
+        .unwrap_or_default();
+    let note_links = remote_store
+        .get_task_note_links(&resolved)
+        .unwrap_or_default();
+    let cross_refs = remote_store
+        .get_cross_brain_refs(&resolved)
+        .unwrap_or_default();
     let external_ids = remote_store.get_external_ids(&resolved).unwrap_or_default();
-    Ok((task, labels, comments, children, dependency_summary, note_links, cross_refs, external_ids))
+    Ok((
+        task,
+        labels,
+        comments,
+        children,
+        dependency_summary,
+        note_links,
+        cross_refs,
+        external_ids,
+    ))
 }
 
 // ── Cross-brain close ────────────────────────────────────────────────────────
@@ -261,8 +286,7 @@ pub fn cross_brain_close(
         get_or_generate_brain_id(&entry.root.join(".brain"))?
     };
 
-    let (closed, failed, unblocked) =
-        cross_brain_close_inner(&remote_store, &params.task_ids)?;
+    let (closed, failed, unblocked) = cross_brain_close_inner(&remote_store, &params.task_ids)?;
 
     Ok(CrossBrainCloseResult {
         remote_brain_name: name,
@@ -708,14 +732,18 @@ mod tests {
             "REMOTE-001",
             "test",
             crate::tasks::events::EventType::LabelAdded,
-            &crate::tasks::events::LabelPayload { label: "important".to_string() },
+            &crate::tasks::events::LabelPayload {
+                label: "important".to_string(),
+            },
         );
         remote_store.append(&label_event).unwrap();
 
         let comment_event = TaskEvent::from_payload(
             "REMOTE-001",
             "test",
-            crate::tasks::events::CommentPayload { body: "A comment".to_string() },
+            crate::tasks::events::CommentPayload {
+                body: "A comment".to_string(),
+            },
         );
         remote_store.append(&comment_event).unwrap();
 
@@ -759,12 +787,11 @@ mod tests {
         add_task(&remote_store, "REMOTE-001", "Task to close");
         add_task(&remote_store, "REMOTE-002", "Another task to close");
 
-        let (closed, failed, unblocked) =
-            cross_brain_close_inner(&remote_store, &[
-                "REMOTE-001".to_string(),
-                "REMOTE-002".to_string(),
-            ])
-            .unwrap();
+        let (closed, failed, unblocked) = cross_brain_close_inner(
+            &remote_store,
+            &["REMOTE-001".to_string(), "REMOTE-002".to_string()],
+        )
+        .unwrap();
 
         assert_eq!(closed.len(), 2);
         assert!(failed.is_empty());
@@ -815,12 +842,11 @@ mod tests {
 
         add_task(&remote_store, "REMOTE-001", "Real task");
 
-        let (closed, failed, _) =
-            cross_brain_close_inner(&remote_store, &[
-                "REMOTE-001".to_string(),
-                "nonexistent-99".to_string(),
-            ])
-            .unwrap();
+        let (closed, failed, _) = cross_brain_close_inner(
+            &remote_store,
+            &["REMOTE-001".to_string(), "nonexistent-99".to_string()],
+        )
+        .unwrap();
 
         assert_eq!(closed.len(), 1);
         assert_eq!(failed.len(), 1);

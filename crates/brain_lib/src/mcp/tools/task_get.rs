@@ -83,10 +83,27 @@ impl TaskGet {
                         obj.insert("remote_brain_name".into(), json!(r.remote_brain_name));
                         obj.insert("remote_brain_id".into(), json!(r.remote_brain_id));
                         obj.insert("comments".into(), json!(comments_to_json(&r.comments)));
-                        obj.insert("children".into(), json!(r.children.iter().map(|c| json!({"task_id": c.task_id, "title": c.title})).collect::<Vec<_>>()));
-                        obj.insert("linked_notes".into(), json!(note_links_to_json(&r.note_links)));
-                        obj.insert("dependency_summary".into(), dep_summary_to_json(&r.dependency_summary));
-                        obj.insert("cross_refs".into(), json!(cross_refs_to_json(&r.cross_refs)));
+                        obj.insert(
+                            "children".into(),
+                            json!(
+                                r.children
+                                    .iter()
+                                    .map(|c| json!({"task_id": c.task_id, "title": c.title}))
+                                    .collect::<Vec<_>>()
+                            ),
+                        );
+                        obj.insert(
+                            "linked_notes".into(),
+                            json!(note_links_to_json(&r.note_links)),
+                        );
+                        obj.insert(
+                            "dependency_summary".into(),
+                            dep_summary_to_json(&r.dependency_summary),
+                        );
+                        obj.insert(
+                            "cross_refs".into(),
+                            json!(cross_refs_to_json(&r.cross_refs)),
+                        );
                         obj.insert("external_ids".into(), json!(r.external_ids.iter().map(|e| json!({"source": e.source, "external_id": e.external_id, "external_url": e.external_url})).collect::<Vec<_>>()));
                         obj.insert("parent".into(), serde_json::Value::Null);
                         obj.insert("blocked_by".into(), json!([]));
