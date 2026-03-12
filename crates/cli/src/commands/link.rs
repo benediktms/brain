@@ -14,13 +14,16 @@ pub fn run(name: &str) -> Result<()> {
 
     let mut config = load_global_config()?;
 
-    let (brain_name, entry) = resolve_brain_entry_from_config(name, &config).map_err(|_| {
-        anyhow::anyhow!("Error: brain '{}' not found in registry", name)
-    })?;
+    let (brain_name, entry) = resolve_brain_entry_from_config(name, &config)
+        .map_err(|_| anyhow::anyhow!("Error: brain '{}' not found in registry", name))?;
 
     // Error if cwd is already a root of this brain.
     if entry.roots.contains(&cwd) {
-        anyhow::bail!("'{}' is already a root of brain '{}'", cwd.display(), brain_name);
+        anyhow::bail!(
+            "'{}' is already a root of brain '{}'",
+            cwd.display(),
+            brain_name
+        );
     }
 
     let brain_dir = cwd.join(".brain");
