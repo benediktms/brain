@@ -723,4 +723,88 @@ mod tests {
         let task = store.get_task("AAA-001").unwrap();
         assert!(task.is_some());
     }
+
+    // ─── B2: SQLite-first write semantics ────────────────────────────
+
+    #[test]
+    fn test_sqlite_write_succeeds_when_jsonl_dir_is_read_only() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let tasks_dir = dir.path().join("tasks");
+        let db = Db::open_in_memory().unwrap();
+        let store = TaskStore::new(&tasks_dir, db).unwrap();
+
+        // Make the tasks directory read-only so JSONL append will fail
+        let perms = fs::Permissions::from_mode(0o555);
+        fs::set_permissions(&tasks_dir, perms).unwrap();
+
+        // SQLite write must succeed even though JSONL is unavailable
+        let result = store.append(&created_event("t1", "Read-only Test", 2));
+        assert!(result.is_ok(), "append must succeed when JSONL dir is read-only");
+
+        // Task exists in SQLite
+        let task = store.get_task("t1").unwrap();
+        assert!(task.is_some(), "task must be in SQLite after write");
+        assert_eq!(task.unwrap().title, "Read-only Test");
+
+        // Restore permissions so TempDir cleanup works
+        let perms = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&tasks_dir, perms).unwrap();
+    }
+
+    #[test]
+    fn test_jsonl_audit_trail_populated_on_success() {
+        use std::fs;
+
+        let dir = TempDir::new().unwrap();
+        let tasks_dir = dir.path().join("tasks");
+        let db = Db::open_in_memory().unwrap();
+        let store = TaskStore::new(&tasks_dir, db).unwrap();
+
+        store.append(&created_event("t1", "Audit Task", 3)).unwrap();
+
+        // SQLite has the task
+        assert!(store.get_task("t1").unwrap().is_some());
+
+        // JSONL also has the event
+        let jsonl_path = tasks_dir.join("events.jsonl");
+        assert!(jsonl_path.exists(), "events.jsonl must exist after successful write");
+        let content = fs::read_to_string(&jsonl_path).unwrap();
+        assert!(!content.is_empty(), "events.jsonl must contain the event");
+        assert!(content.contains("t1"), "events.jsonl must reference the task id");
+    }
+
+    #[test]
+    fn test_rebuild_from_jsonl_recovers_projections() {
+        let dir = TempDir::new().unwrap();
+        let tasks_dir = dir.path().join("tasks");
+        let db = Db::open_in_memory().unwrap();
+        let store = TaskStore::new(&tasks_dir, db).unwrap();
+
+        store.append(&created_event("t1", "Task One", 2)).unwrap();
+        store.append(&created_event("t2", "Task Two", 1)).unwrap();
+
+        // Verify both exist
+        assert_eq!(store.list_all().unwrap().len(), 2);
+
+        // Wipe SQLite projections manually
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute_batch("DELETE FROM tasks").map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(store.list_all().unwrap().len(), 0, "SQLite wiped");
+
+        // Rebuild from JSONL
+        store.rebuild_projections().unwrap();
+
+        // All tasks restored
+        let all = store.list_all().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(store.get_task("t1").unwrap().is_some());
+        assert_eq!(store.get_task("t2").unwrap().unwrap().title, "Task Two");
+    }
 }
