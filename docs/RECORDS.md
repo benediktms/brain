@@ -7,7 +7,7 @@ The records domain introduces durable work products and opaque state bundles as 
 Brain has two existing durable domains:
 
 - **Notes** — Markdown files are the source of truth. SQLite and LanceDB are derived projections.
-- **Tasks** — An append-only JSONL event log is the source of truth. SQLite tables are derived projections.
+- **Tasks** — SQLite is the runtime source of truth. The append-only JSONL event log is a best-effort audit trail. `rebuild_projections()` can reconstruct SQLite from the log as a recovery mechanism.
 
 Records is a third parallel domain serving a different purpose: **capturing the outputs of work**, not the work itself.
 
@@ -211,7 +211,7 @@ Pins or unpins a record. Pinned records are exempt from payload eviction. Payloa
 ~/.brain/brains/<brain-name>/records/events.jsonl
 ```
 
-Append-only JSONL, one event per line. ULID event IDs provide monotonic time ordering. This file is the authoritative source of truth for all record metadata. The SQLite projection is always rebuildable from this file.
+Append-only JSONL, one event per line. ULID event IDs provide monotonic time ordering. SQLite is the runtime source of truth; writes go to SQLite first, then the event log is appended as a best-effort audit trail. If the JSONL append fails, the operation still succeeds. `rebuild_projections()` can reconstruct SQLite from this file as a recovery mechanism.
 
 The records event log is kept separate from the tasks event log (`.brain/tasks/events.jsonl`) to preserve domain isolation and allow independent rebuild operations.
 
@@ -342,9 +342,9 @@ This is identical to the tasks domain rebuild pattern.
 
 ### Invariants
 
-- The event log is the only source of truth for record metadata. Never write directly to SQLite projection tables.
-- Object payloads are written before their `RecordCreated` event is appended. If the process crashes between payload write and event append, the payload exists but no record references it — this is safe (the object is an orphan blob, not a corrupted record). `brain records gc` will clean it up.
-- If the process crashes after event append but before the SQLite projection is updated, the rebuild from the event log recovers the correct state.
+- SQLite is the runtime source of truth for record metadata. Writes go to SQLite first, then the event log as a best-effort audit trail. If JSONL append fails, the operation still succeeds (a `tracing::warn!` is emitted).
+- Object payloads are written before the SQLite insert. If the process crashes between payload write and SQLite insert, the payload exists but no record references it — this is safe (the object is an orphan blob, not a corrupted record). `brain records gc` will clean it up.
+- `rebuild_projections()` can reconstruct SQLite from the event log as a recovery mechanism if the database is lost or corrupted.
 - Object store entries are immutable. Never overwrite an existing object at a given hash path.
 
 ### Crash Recovery
