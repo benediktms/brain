@@ -63,11 +63,10 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     global.brains.insert(
         brain_name.clone(),
         BrainEntry {
-            root: cwd.clone(),
+            roots: vec![cwd.clone()],
             notes: abs_notes,
             id: Some(brain_id.clone()),
             aliases: vec![],
-            extra_roots: vec![],
         },
     );
     save_global_config(&global)?;

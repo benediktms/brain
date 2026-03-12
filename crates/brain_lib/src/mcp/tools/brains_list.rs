@@ -66,8 +66,8 @@ impl McpTool for BrainsList {
 
                     BrainInfo {
                         name,
+                        root: entry.primary_root().display().to_string(),
                         id: entry.id,
-                        root: entry.root.display().to_string(),
                         prefix,
                     }
                 })

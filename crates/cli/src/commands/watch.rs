@@ -725,7 +725,7 @@ fn event_primary_path(event: &FileEvent) -> PathBuf {
 /// `brain.toml` and the global registry. Generates missing IDs on the fly.
 fn sync_brain_ids(global_cfg: &brain_lib::config::GlobalConfig) {
     for (name, entry) in &global_cfg.brains {
-        let brain_dir = entry.root.join(".brain");
+        let brain_dir = entry.primary_root().join(".brain");
         match get_or_generate_brain_id(&brain_dir) {
             Ok(id) => {
                 if entry.id.as_deref() != Some(&id) {

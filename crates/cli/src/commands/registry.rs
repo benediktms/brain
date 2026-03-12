@@ -43,7 +43,7 @@ pub fn run_list(json: bool) -> Result<()> {
                 serde_json::json!({
                     "name": name,
                     "id": entry.id,
-                    "root": entry.root.display().to_string(),
+                    "root": entry.primary_root().display().to_string(),
                     "prefix": prefix,
                 })
             })
@@ -65,7 +65,7 @@ pub fn run_list(json: bool) -> Result<()> {
         } else {
             println!("{name}");
         }
-        println!("  root:   {}", entry.root.display());
+        println!("  root:   {}", entry.primary_root().display());
         if let Some(p) = prefix {
             println!("  prefix: {p}");
         }

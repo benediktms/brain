@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::db::Db;
 use crate::embedder::Embed;
@@ -28,10 +28,14 @@ pub struct GlobalConfig {
 }
 
 /// An entry for a registered brain inside the global config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Serialization always writes `roots = [...]`. For backward compatibility,
+/// deserialization accepts either the old `root = "..."` scalar form or the
+/// new `roots = [...]` array form.
+#[derive(Debug, Clone, Serialize)]
 pub struct BrainEntry {
-    /// Absolute path to the project root.
-    pub root: PathBuf,
+    /// Root paths for this brain. Index 0 is the primary root.
+    pub roots: Vec<PathBuf>,
     /// Note directory paths (absolute).
     #[serde(default)]
     pub notes: Vec<PathBuf>,
@@ -41,9 +45,60 @@ pub struct BrainEntry {
     /// Alternate names for this brain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    /// Additional root paths for this brain.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub extra_roots: Vec<PathBuf>,
+}
+
+impl BrainEntry {
+    /// Return the primary root path (first element of `roots`).
+    ///
+    /// # Panics
+    /// Panics if `roots` is empty, which should never happen for a valid entry.
+    pub fn primary_root(&self) -> &Path {
+        &self.roots[0]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compatible deserialization for BrainEntry
+// ---------------------------------------------------------------------------
+
+impl<'de> Deserialize<'de> for BrainEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct BrainEntryRaw {
+            // New format: roots = [...]
+            roots: Option<Vec<PathBuf>>,
+            // Old format: root = "..."
+            root: Option<PathBuf>,
+            #[serde(default)]
+            notes: Vec<PathBuf>,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            id: Option<String>,
+            #[serde(default, skip_serializing_if = "Vec::is_empty")]
+            aliases: Vec<String>,
+            // Accept but ignore legacy extra_roots field.
+            #[serde(default)]
+            extra_roots: Vec<PathBuf>,
+        }
+
+        let raw = BrainEntryRaw::deserialize(deserializer)?;
+
+        let roots = if let Some(r) = raw.roots {
+            r
+        } else if let Some(r) = raw.root {
+            let mut v = vec![r];
+            v.extend(raw.extra_roots);
+            v
+        } else {
+            return Err(serde::de::Error::missing_field("roots"));
+        };
+
+        Ok(BrainEntry {
+            roots,
+            notes: raw.notes,
+            id: raw.id,
+            aliases: raw.aliases,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +271,7 @@ pub fn resolve_brain_id(entry: &BrainEntry, _name: &str) -> Result<String> {
     if let Some(ref id) = entry.id {
         Ok(id.clone())
     } else {
-        get_or_generate_brain_id(&entry.root.join(".brain"))
+        get_or_generate_brain_id(&entry.primary_root().join(".brain"))
     }
 }
 
@@ -697,11 +752,10 @@ mod tests {
         cfg.brains.insert(
             name.to_string(),
             BrainEntry {
-                root: root.to_path_buf(),
+                roots: vec![root.to_path_buf()],
                 notes: vec![],
                 id: id.map(str::to_string),
                 aliases: vec![],
-                extra_roots: vec![],
             },
         );
         cfg
@@ -714,7 +768,7 @@ mod tests {
 
         let (name, entry) = resolve_brain_entry_from_config("infra", &cfg).unwrap();
         assert_eq!(name, "infra");
-        assert_eq!(entry.root, tmp.path());
+        assert_eq!(entry.primary_root(), tmp.path());
         assert_eq!(entry.id, Some("abc12345".to_string()));
     }
 
@@ -725,7 +779,7 @@ mod tests {
 
         let (name, entry) = resolve_brain_entry_from_config("abc12345", &cfg).unwrap();
         assert_eq!(name, "infra");
-        assert_eq!(entry.root, tmp.path());
+        assert_eq!(entry.primary_root(), tmp.path());
     }
 
     #[test]
@@ -761,11 +815,10 @@ mod tests {
         }
 
         let entry = BrainEntry {
-            root: project_tmp.path().to_path_buf(),
+            roots: vec![project_tmp.path().to_path_buf()],
             notes: vec![],
             id: Some("test1234".to_string()),
             aliases: vec![],
-            extra_roots: vec![],
         };
 
         let store = open_remote_task_store("test-brain", &entry).unwrap();
@@ -856,21 +909,19 @@ mod tests {
         cfg.brains.insert(
             "alpha".to_string(),
             BrainEntry {
-                root: home.to_path_buf(),
+                roots: vec![home.to_path_buf()],
                 notes: vec![],
                 id: Some("id000001".to_string()),
                 aliases: vec![],
-                extra_roots: vec![],
             },
         );
         cfg.brains.insert(
             "beta".to_string(),
             BrainEntry {
-                root: home.to_path_buf(),
+                roots: vec![home.to_path_buf()],
                 notes: vec![],
                 id: None,
                 aliases: vec![],
-                extra_roots: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -914,11 +965,10 @@ mod tests {
         cfg.brains.insert(
             "test-brain".to_string(),
             BrainEntry {
-                root: home.to_path_buf(),
+                roots: vec![home.to_path_buf()],
                 notes: vec![],
                 id: Some("testid01".to_string()),
                 aliases: vec![],
-                extra_roots: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -947,11 +997,10 @@ mod tests {
         cfg.brains.insert(
             "my-brain".to_string(),
             BrainEntry {
-                root: home.to_path_buf(),
+                roots: vec![home.to_path_buf()],
                 notes: vec![],
                 id: Some("abc12345".to_string()),
                 aliases: vec![],
-                extra_roots: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -981,17 +1030,16 @@ mod tests {
         cfg.brains.insert(
             "infra".to_string(),
             BrainEntry {
-                root: tmp.path().to_path_buf(),
+                roots: vec![tmp.path().to_path_buf()],
                 notes: vec![],
                 id: Some("abc12345".to_string()),
                 aliases: vec!["gateway".to_string(), "infra-alias".to_string()],
-                extra_roots: vec![],
             },
         );
 
         let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
         assert_eq!(name, "infra");
-        assert_eq!(entry.root, tmp.path());
+        assert_eq!(entry.primary_root(), tmp.path());
 
         let (name2, _) = resolve_brain_entry_from_config("infra-alias", &cfg).unwrap();
         assert_eq!(name2, "infra");
@@ -1005,21 +1053,19 @@ mod tests {
         cfg.brains.insert(
             "infra".to_string(),
             BrainEntry {
-                root: tmp.path().to_path_buf(),
+                roots: vec![tmp.path().to_path_buf()],
                 notes: vec![],
                 id: Some("aaaaaaaa".to_string()),
                 aliases: vec!["gateway".to_string()],
-                extra_roots: vec![],
             },
         );
         cfg.brains.insert(
             "gateway".to_string(),
             BrainEntry {
-                root: tmp.path().to_path_buf(),
+                roots: vec![tmp.path().to_path_buf()],
                 notes: vec![],
                 id: Some("bbbbbbbb".to_string()),
                 aliases: vec![],
-                extra_roots: vec![],
             },
         );
 
