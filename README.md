@@ -127,14 +127,14 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 | `memory.reflect`        | Two-phase: returns source material for synthesis, then stores the agent-generated reflection. |
 | `tasks.apply_event`     | Apply a task event (create, update, status change, dependency, label, comment) via event sourcing. |
 | `tasks.get`             | Get a single task by ID with full details, relationships, comments, labels, and linked notes. Supports `brain` param for cross-brain fetch. |
-| `tasks.list`            | List tasks filtered by status (`all`, `ready`, `blocked`) or fetch specific tasks by ID.      |
+| `tasks.list`            | List tasks filtered by status (`all`, `ready`, `blocked`) or fetch specific tasks by ID. Supports `brain` param for cross-brain listing. |
 | `tasks.close`           | Close one or more tasks by ID. Supports `brain` param for cross-brain close.                  |
 | `tasks.next`            | Return highest-priority ready tasks, sorted by priority or due date.                          |
 | `records.create_artifact` | Create a new artifact record with `text` (plain) or `data` (base64) content.               |
 | `records.save_snapshot` | Save a snapshot record with `text` (plain) or `data` (base64) content.                        |
-| `records.get`           | Get a record by ID with full metadata, tags, and links. Supports prefix resolution.           |
-| `records.list`          | List records with optional filters (kind, status, tag, task\_id).                              |
-| `records.fetch_content` | Fetch the raw content of a record as base64-encoded data.                                     |
+| `records.get`           | Get a record by ID with full metadata, tags, and links. Supports prefix resolution and `brain` param for cross-brain access. |
+| `records.list`          | List records with optional filters (kind, status, tag, task\_id). Supports `brain` param for cross-brain access. |
+| `records.fetch_content` | Fetch the raw content of a record as base64-encoded data. Supports `brain` param for cross-brain access. |
 | `records.archive`       | Archive a record (metadata-only operation, payload preserved).                                |
 | `records.tag_add`       | Add a tag to a record. Idempotent.                                                            |
 | `records.tag_remove`    | Remove a tag from a record. Idempotent.                                                       |
@@ -247,10 +247,20 @@ Tasks can be created, fetched, and closed across brains:
 ```sh
 brain tasks create --title="..." --brain=work           # Create a task in another brain
 brain tasks show <id> --brain=work                      # Fetch task details from another brain
+brain tasks list --brain=work                           # List tasks from another brain
 brain tasks close <id> --brain=work                     # Close a task in another brain
+brain tasks label batch-add area:infra BRN-01ABC --brain=work  # Add label to remote tasks
 ```
 
-The MCP tools `tasks.create`, `tasks.get`, and `tasks.close` all accept an optional `brain` parameter for the same cross-brain operations.
+Records can also be accessed across brains:
+
+```sh
+brain records list --brain=work                         # List records from another brain
+brain records get <id> --brain=work                     # Get record details from another brain
+brain records fetch-content <id> --brain=work           # Fetch record content from another brain
+```
+
+The MCP tools `tasks.create`, `tasks.get`, `tasks.list`, `tasks.close`, `tasks_labels_batch`, `records.list`, `records.get`, and `records.fetch_content` all accept an optional `brain` parameter for cross-brain operations.
 
 ---
 

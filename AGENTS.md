@@ -35,7 +35,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_next` — Get highest-priority ready tasks sorted by priority then due date. Use for "what should I work on?" queries.
 - `tasks_close` — Close one or more tasks by ID/prefix. Accepts a single string or array of task IDs. Returns closed tasks and newly unblocked task IDs.
 - `tasks_labels_summary` — Get all unique labels with counts and associated task IDs (short prefixes). No parameters. Use for label discovery and taxonomy overview.
-- `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
+- `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Supports `brain` param for cross-brain label management. Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
 **Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Done/cancelled tasks get both a task capsule and an outcome capsule. Tasks become discoverable via `memory_search_minimal` without any extra steps. For tasks created before this feature, run `brain backfill-tasks` to index them.
@@ -52,7 +52,12 @@ When running as an MCP server (`brain mcp`), these tools are available:
 2. Call `tasks_create` with the target `brain` name and task details.
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
 4. Call `tasks_get` with a `brain` parameter to fetch a task and its full enrichment from a remote brain.
-5. Call `tasks_close` with a `brain` parameter to close tasks in a remote brain.
+5. Call `tasks_list` with a `brain` parameter to list tasks from a remote brain.
+6. Call `tasks_close` with a `brain` parameter to close tasks in a remote brain.
+7. Call `tasks_labels_batch` with a `brain` parameter to manage labels on remote brain tasks.
+8. Call `records.list`, `records.get`, or `records.fetch_content` with a `brain` parameter to access records from remote brains.
+
+When tasks are created remotely using `tasks_create` with a `brain` parameter, both the local and remote tasks receive `CrossBrainRefAdded` events for bidirectional provenance tracking.
 
 **Federated search:**
 
@@ -74,9 +79,9 @@ When running as an MCP server (`brain mcp`), these tools are available:
 | --- | --- |
 | `records.create_artifact` | Create a new artifact record with `text` (plain) or `data` (base64) content |
 | `records.save_snapshot` | Save a snapshot record with `text` (plain) or `data` (base64) content |
-| `records.get` | Get a record by ID with full metadata, tags, and links (supports prefix resolution) |
-| `records.list` | List records with optional filters (kind, status, tag, task_id) |
-| `records.fetch_content` | Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata. |
+| `records.get` | Get a record by ID with full metadata, tags, and links (supports prefix resolution). Supports `brain` param for cross-brain access. |
+| `records.list` | List records with optional filters (kind, status, tag, task_id). Supports `brain` param for cross-brain access. |
+| `records.fetch_content` | Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata. Supports `brain` param for cross-brain access. |
 | `records.archive` | Archive a record (metadata-only, payload preserved) |
 | `records.tag_add` | Add a tag to a record (idempotent) |
 | `records.tag_remove` | Remove a tag from a record (idempotent) |
@@ -214,7 +219,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_next` — Get highest-priority ready tasks sorted by priority then due date. Use for "what should I work on?" queries.
 - `tasks_close` — Close one or more tasks by ID/prefix. Accepts a single string or array of task IDs. Returns closed tasks and newly unblocked task IDs.
 - `tasks_labels_summary` — Get all unique labels with counts and associated task IDs (short prefixes). No parameters. Use for label discovery and taxonomy overview.
-- `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
+- `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Supports `brain` param for cross-brain label management. Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
 **Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Done/cancelled tasks get both a task capsule and an outcome capsule. Tasks become discoverable via `memory_search_minimal` without any extra steps. For tasks created before this feature, run `brain backfill-tasks` to index them.
@@ -281,6 +286,8 @@ brain tasks create --title="..." --brain=infra --link-from=BRN-01X --link-type=r
 # Cross-brain fetch and close
 brain tasks show <id> --brain=<NAME_OR_ID>    # Show task details from a remote brain
 brain tasks close <id> --brain=<NAME_OR_ID>   # Close a task in a remote brain
+brain tasks list --brain=<NAME_OR_ID>         # List tasks from a remote brain
+brain tasks label batch-add area:infra BRN-01ABC --brain=<NAME_OR_ID>  # Add label to remote tasks
 
 # Registry
 brain list                     # List registered brains
