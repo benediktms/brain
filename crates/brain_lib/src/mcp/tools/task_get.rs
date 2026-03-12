@@ -9,6 +9,7 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::tasks::cross_brain::cross_brain_fetch;
 use crate::tasks::enrichment::{
     comments_to_json, cross_refs_to_json, dep_summary_to_json, note_links_to_json,
 };
@@ -42,6 +43,7 @@ struct Params {
     task_id: String,
     #[serde(default)]
     expand: HashSet<ExpandField>,
+    brain: Option<String>,
 }
 
 /// Build a compact stub: `{task_id, title}`.
@@ -70,6 +72,47 @@ impl TaskGet {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
+
+        // Cross-brain fetch path
+        if let Some(ref brain) = params.brain {
+            return match cross_brain_fetch(brain, &params.task_id) {
+                Err(e) => ToolCallResult::error(format!("cross-brain fetch failed: {e}")),
+                Ok(r) => {
+                    let mut task_json = task_row_to_json(&r.task, r.labels);
+                    if let Some(obj) = task_json.as_object_mut() {
+                        obj.insert("remote_brain_name".into(), json!(r.remote_brain_name));
+                        obj.insert("remote_brain_id".into(), json!(r.remote_brain_id));
+                        obj.insert("comments".into(), json!(comments_to_json(&r.comments)));
+                        obj.insert(
+                            "children".into(),
+                            json!(
+                                r.children
+                                    .iter()
+                                    .map(|c| json!({"task_id": c.task_id, "title": c.title}))
+                                    .collect::<Vec<_>>()
+                            ),
+                        );
+                        obj.insert(
+                            "linked_notes".into(),
+                            json!(note_links_to_json(&r.note_links)),
+                        );
+                        obj.insert(
+                            "dependency_summary".into(),
+                            dep_summary_to_json(&r.dependency_summary),
+                        );
+                        obj.insert(
+                            "cross_refs".into(),
+                            json!(cross_refs_to_json(&r.cross_refs)),
+                        );
+                        obj.insert("external_ids".into(), json!(r.external_ids.iter().map(|e| json!({"source": e.source, "external_id": e.external_id, "external_url": e.external_url})).collect::<Vec<_>>()));
+                        obj.insert("parent".into(), serde_json::Value::Null);
+                        obj.insert("blocked_by".into(), json!([]));
+                        obj.insert("blocks".into(), json!([]));
+                    }
+                    json_response(&task_json)
+                }
+            };
+        }
 
         // 1. Resolve task_id
         let task_id = match ctx.tasks.resolve_task_id(&params.task_id) {
@@ -307,7 +350,7 @@ impl McpTool for TaskGet {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Get a single task by ID (full or prefix) with full details including relationships, comments, labels, linked notes, and cross_refs (cross-brain references). Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects.".into(),
+            description: "Get a single task by ID (full or prefix) with full details including relationships, comments, labels, linked notes, and cross_refs (cross-brain references). Relationships (parent, children, blocked_by, blocks) are returned as compact stubs by default; use the expand parameter to get full task objects. Use the brain parameter to fetch from a remote brain instead of locally.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -322,6 +365,10 @@ impl McpTool for TaskGet {
                             "enum": ["parent", "children", "blocked_by", "blocks"]
                         },
                         "description": "Expand relationship stubs to full task objects. Pass as a JSON array, e.g. [\"parent\", \"blocked_by\"]"
+                    },
+                    "brain": {
+                        "type": "string",
+                        "description": "Target brain name or ID (fetches from that brain instead of locally)"
                     }
                 },
                 "required": ["task_id"]

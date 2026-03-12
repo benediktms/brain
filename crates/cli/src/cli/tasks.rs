@@ -94,6 +94,10 @@ pub(crate) enum TasksAction {
     Show {
         /// Task ID
         id: String,
+
+        /// Target brain name or ID (fetches from that brain instead of locally)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// Update a task's fields or status
@@ -185,6 +189,10 @@ pub(crate) enum TasksAction {
         /// Task IDs to close
         #[arg(required = true)]
         ids: Vec<String>,
+
+        /// Target brain name or ID (closes tasks in that brain instead of locally)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// Show ready tasks (no blockers)

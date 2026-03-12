@@ -51,6 +51,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 1. Call `brains.list` to discover registered brains and their prefixes.
 2. Call `tasks_create` with the target `brain` name and task details.
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
+4. Call `tasks_get` with a `brain` parameter to fetch a task and its full enrichment from a remote brain.
+5. Call `tasks_close` with a `brain` parameter to close tasks in a remote brain.
 
 **Federated search:**
 
@@ -61,7 +63,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 
 **Memory tools:**
 
-- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain. Omitting `brains` defaults to single-brain search (backward compatible).
+- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain. Omitting `brains` defaults to single-brain search (backward compatible). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain. Omitting `brains` defaults to single-brain search (backward compatible).
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
@@ -101,6 +103,10 @@ brain tasks comment <id> "comment text"
 brain tasks create --title="..." --brain=<NAME_OR_ID>          # Create in another brain
 brain tasks create --title="..." --brain=infra --link-from=BRN-01JPHABC --link-type=related
                                                                 # Create remote + auto-link local task
+
+# Cross-brain fetch and close
+brain tasks show <id> --brain=<NAME_OR_ID>    # Show task details from a remote brain
+brain tasks close <id> --brain=<NAME_OR_ID>   # Close a task in a remote brain
 
 # Dependencies
 brain tasks dep add <task> <depends-on>
@@ -222,6 +228,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 1. Call `brains.list` to discover registered brains and their prefixes.
 2. Call `tasks_create` with the target `brain` name and task details.
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
+4. Call `tasks_get` with a `brain` parameter to fetch a task and its full enrichment from a remote brain.
+5. Call `tasks_close` with a `brain` parameter to close tasks in a remote brain.
 
 **Federated search:**
 - Search across multiple brains in a single query via `--brain` (CLI) or `brains` parameter (MCP).
@@ -269,6 +277,10 @@ brain tasks comment <id> "comment text"
 # Cross-brain task creation
 brain tasks create --title="..." --brain=<NAME_OR_ID>          # Create in another brain
 brain tasks create --title="..." --brain=infra --link-from=BRN-01X --link-type=related  # Create + auto-link
+
+# Cross-brain fetch and close
+brain tasks show <id> --brain=<NAME_OR_ID>    # Show task details from a remote brain
+brain tasks close <id> --brain=<NAME_OR_ID>   # Close a task in a remote brain
 
 # Registry
 brain list                     # List registered brains

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::json;
 
+use brain_lib::tasks::cross_brain::cross_brain_fetch;
 use brain_lib::tasks::enrichment::{
     children_stubs_to_json, comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
 };
@@ -10,7 +11,10 @@ use super::{TaskCtx, format_ts, format_ts_short, priority_label};
 
 // ── show ────────────────────────────────────────────────────
 
-pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
+pub fn show(ctx: &TaskCtx, id: &str, brain: Option<&str>) -> Result<()> {
+    if let Some(target_brain) = brain {
+        return show_remote(ctx, id, target_brain);
+    }
     let id = ctx.store.resolve_task_id(id)?;
     let task = ctx
         .store
@@ -135,6 +139,58 @@ pub fn show(ctx: &TaskCtx, id: &str) -> Result<()> {
         if !comments.is_empty() {
             println!("\nComments ({}):", comments.len());
             for c in &comments {
+                println!(
+                    "  [{}] {}: {}",
+                    format_ts_short(c.created_at),
+                    c.author,
+                    c.body
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn show_remote(ctx: &TaskCtx, id: &str, target_brain: &str) -> Result<()> {
+    let r = cross_brain_fetch(target_brain, id)?;
+
+    if ctx.json {
+        let comments_json = comments_to_json(&r.comments);
+        let note_links_json = note_links_to_json(&r.note_links);
+        let children_json = children_stubs_to_json(&r.children);
+        let out = json!({
+            "remote_brain_name": r.remote_brain_name,
+            "remote_brain_id": r.remote_brain_id,
+            "task": task_row_to_json(&r.task, r.labels),
+            "dependency_summary": dep_summary_to_json_with_blocking(&r.dependency_summary),
+            "linked_notes": note_links_json,
+            "comments": comments_json,
+            "children": children_json,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Brain: {} ({})", r.remote_brain_name, r.remote_brain_id);
+        println!("Task: {}", r.task.task_id);
+        println!("Title: {}", r.task.title);
+        println!("Status: {}", r.task.status);
+        println!("Priority: {}", priority_label(r.task.priority));
+        println!("Type: {}", r.task.task_type);
+        println!("Assignee: {}", r.task.assignee.as_deref().unwrap_or("-"));
+        if let Some(ref parent) = r.task.parent_task_id {
+            println!("Parent: {parent}");
+        }
+        println!("Created: {}", format_ts(r.task.created_at));
+        println!("Updated: {}", format_ts(r.task.updated_at));
+        if let Some(ref desc) = r.task.description {
+            println!("\nDescription:\n  {}", desc.replace('\n', "\n  "));
+        }
+        if !r.labels.is_empty() {
+            println!("\nLabels: {}", r.labels.join(", "));
+        }
+        if !r.comments.is_empty() {
+            println!("\nComments ({}):", r.comments.len());
+            for c in &r.comments {
                 println!(
                     "  [{}] {}: {}",
                     format_ts_short(c.created_at),

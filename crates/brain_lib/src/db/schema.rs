@@ -21,6 +21,7 @@ pub(crate) const SCHEMA_VERSION: i32 = 16;
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.pragma_update(None, "busy_timeout", 5000)?;
 
     let current: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
 
