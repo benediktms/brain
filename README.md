@@ -126,8 +126,9 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 | `memory.write_episode`  | Record an episodic memory (goal, actions, outcome) with tags and importance.                  |
 | `memory.reflect`        | Two-phase: returns source material for synthesis, then stores the agent-generated reflection. |
 | `tasks.apply_event`     | Apply a task event (create, update, status change, dependency, label, comment) via event sourcing. |
-| `tasks.get`             | Get a single task by ID with full details, relationships, comments, labels, and linked notes. |
+| `tasks.get`             | Get a single task by ID with full details, relationships, comments, labels, and linked notes. Supports `brain` param for cross-brain fetch. |
 | `tasks.list`            | List tasks filtered by status (`all`, `ready`, `blocked`) or fetch specific tasks by ID.      |
+| `tasks.close`           | Close one or more tasks by ID. Supports `brain` param for cross-brain close.                  |
 | `tasks.next`            | Return highest-priority ready tasks, sorted by priority or due date.                          |
 | `records.create_artifact` | Create a new artifact record with base64-encoded content in the object store.               |
 | `records.save_snapshot` | Save an opaque state bundle as a snapshot record in the object store.                         |
@@ -238,6 +239,18 @@ notes = ["~/code/my-project/docs", "~/code/my-project/notes"]
 ```
 
 All derived data lives in `~/.brain/brains/<name>/`, not in the project directory.
+
+### Cross-brain Operations
+
+Tasks can be created, fetched, and closed across brains:
+
+```sh
+brain tasks create --title="..." --brain=work           # Create a task in another brain
+brain tasks show <id> --brain=work                      # Fetch task details from another brain
+brain tasks close <id> --brain=work                     # Close a task in another brain
+```
+
+The MCP tools `tasks.create`, `tasks.get`, and `tasks.close` all accept an optional `brain` parameter for the same cross-brain operations.
 
 ---
 
