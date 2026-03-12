@@ -113,8 +113,9 @@ impl IpcClient {
 
     /// Issue a `tools/call` JSON-RPC request and return the raw `result` value.
     ///
-    /// `brain` is injected into `arguments` so the server can route to the
-    /// correct brain context.
+    /// `__ipc_brain` is injected into `arguments` so the server can route to
+    /// the correct brain context. The original `brain` tool parameter, if
+    /// present, passes through untouched.
     pub async fn tools_call(
         &mut self,
         tool_name: &str,
@@ -123,7 +124,7 @@ impl IpcClient {
     ) -> Result<Value, IpcClientError> {
         // Inject the brain routing field.
         if let Some(obj) = arguments.as_object_mut() {
-            obj.insert("brain".into(), Value::String(brain.into()));
+            obj.insert("__ipc_brain".into(), Value::String(brain.into()));
         }
 
         let id = self.next_id;
