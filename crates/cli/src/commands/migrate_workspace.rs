@@ -281,7 +281,7 @@ fn migrate_one_brain(
             |row| row.get(0),
         )?;
 
-        tx.execute_batch(&format!(
+        tx.execute(
             "INSERT INTO tasks
                  (task_id, title, description, status, priority,
                   blocked_reason, due_ts, task_type, assignee, defer_until,
@@ -289,9 +289,10 @@ fn migrate_one_brain(
              SELECT
                  task_id, title, description, status, priority,
                  blocked_reason, due_ts, task_type, assignee, defer_until,
-                 parent_task_id, child_seq, created_at, updated_at, '{brain_id}'
-             FROM src.tasks"
-        ))?;
+                 parent_task_id, child_seq, created_at, updated_at, ?1
+             FROM src.tasks",
+            [&brain_id],
+        )?;
 
         // task_deps
         tx.execute_batch(
@@ -325,7 +326,7 @@ fn migrate_one_brain(
             |row| row.get(0),
         )?;
 
-        tx.execute_batch(&format!(
+        tx.execute(
             "INSERT OR IGNORE INTO records
                  (record_id, title, kind, status, description,
                   content_hash, content_size, media_type, task_id, actor,
@@ -335,9 +336,10 @@ fn migrate_one_brain(
                  record_id, title, kind, status, description,
                  content_hash, content_size, media_type, task_id, actor,
                  created_at, updated_at, retention_class, pinned,
-                 payload_available, content_encoding, original_size, '{brain_id}'
-             FROM src.records"
-        ))?;
+                 payload_available, content_encoding, original_size, ?1
+             FROM src.records",
+            [&brain_id],
+        )?;
 
         // record_tags
         tx.execute_batch(
@@ -352,11 +354,12 @@ fn migrate_one_brain(
         )?;
 
         // record_events
-        tx.execute_batch(&format!(
+        tx.execute(
             "INSERT OR IGNORE INTO record_events (event_id, record_id, event_type, timestamp, actor, payload, brain_id)
-             SELECT event_id, record_id, event_type, timestamp, actor, payload, '{brain_id}'
-             FROM src.record_events"
-        ))?;
+             SELECT event_id, record_id, event_type, timestamp, actor, payload, ?1
+             FROM src.record_events",
+            [&brain_id],
+        )?;
 
         tx.commit()?;
 
