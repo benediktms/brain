@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 pub struct Daemon {
     pid_path: PathBuf,
     log_path: PathBuf,
+    sock_path: PathBuf,
 }
 
 impl Daemon {
@@ -17,7 +18,8 @@ impl Daemon {
         brain_lib::fs_permissions::ensure_private_dir(&home).map_err(|e| anyhow::anyhow!("{e}"))?;
         let pid_path = home.join("brain.pid");
         let log_path = home.join("brain.log");
-        Ok(Self { pid_path, log_path })
+        let sock_path = home.join("brain.sock");
+        Ok(Self { pid_path, log_path, sock_path })
     }
 
     /// Fork, setsid, redirect fds, write PID. Parent exits; child returns.
@@ -100,6 +102,7 @@ impl Daemon {
             std::thread::sleep(std::time::Duration::from_millis(500));
             if !self.is_alive(pid) {
                 let _ = fs::remove_file(&self.pid_path);
+                let _ = fs::remove_file(&self.sock_path);
                 println!("Daemon stopped");
                 return Ok(());
             }

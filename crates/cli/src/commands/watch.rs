@@ -6,14 +6,22 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use brain_lib::config::paths::normalize_note_paths_lenient;
-use brain_lib::config::{get_or_generate_brain_id, load_global_config, resolve_paths_for_brain};
+use brain_lib::config::{
+    brain_home, get_or_generate_brain_id, load_global_config, resolve_paths_for_brain,
+};
 use brain_lib::db::Db;
 use brain_lib::embedder::Embedder;
+use brain_lib::ipc::router::BrainRouter;
+use brain_lib::ipc::server::IpcServer;
+use brain_lib::mcp::McpContext;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::pipeline::consolidation::ConsolidationScheduler;
 use brain_lib::prelude::*;
-use brain_lib::store::Store;
+use brain_lib::records::RecordStore;
+use brain_lib::records::objects::ObjectStore;
+use brain_lib::store::{Store, StoreReader};
 use brain_lib::summarizer::FlanT5Summarizer;
+use brain_lib::tasks::TaskStore;
 use tracing::{debug, info, warn};
 
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
@@ -323,6 +331,7 @@ struct BrainInstance {
     work_queue: WorkQueue,
     note_dirs: Vec<PathBuf>,
     consolidator: ConsolidationScheduler,
+    mcp_context: Arc<McpContext>,
 }
 
 /// Watch all registered brains from the global config for changes and
@@ -380,6 +389,30 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     }
 
     info!(brains = brains.len(), "multi-brain daemon started");
+
+    // ── 3b. Start IPC server ─────────────────────────────────────────────
+    let ipc_ctx_map: HashMap<String, Arc<McpContext>> = brains
+        .iter()
+        .map(|(name, inst)| (name.clone(), Arc::clone(&inst.mcp_context)))
+        .collect();
+    let router = BrainRouter::new(ipc_ctx_map);
+
+    let sock_path = brain_home()
+        .map(|h| h.join("brain.sock"))
+        .unwrap_or_else(|_| PathBuf::from("/tmp/brain.sock"));
+
+    let ipc_cancel = match IpcServer::bind(&sock_path, Arc::clone(&router)) {
+        Ok(server) => {
+            let token = server.cancellation_token();
+            tokio::spawn(async move { server.run().await });
+            info!(path = ?sock_path, "IPC server started");
+            Some(token)
+        }
+        Err(e) => {
+            warn!(error = %e, "failed to start IPC server; continuing without IPC");
+            None
+        }
+    };
 
     // ── 4. Build path-to-brain lookup (longest prefix first) ────────────
     let mut prefix_map = build_prefix_map(&brains);
@@ -494,6 +527,12 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                 match reload_brains(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
                     Ok(()) => {
                         prefix_map = build_prefix_map(&brains);
+                        // Rebuild MCP contexts and update the IPC router.
+                        let updated_ctx_map: HashMap<String, Arc<McpContext>> = brains
+                            .iter()
+                            .map(|(name, inst)| (name.clone(), Arc::clone(&inst.mcp_context)))
+                            .collect();
+                        router.update_brains(updated_ctx_map).await;
                         info!(brains = brains.len(), "brain registry reloaded");
                     }
                     Err(e) => {
@@ -593,12 +632,18 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         info!("shutdown phases 3-5: skipped (force shutdown)");
     }
 
-    // Phase 5: Done
+    // Phase 5: Stop IPC server and remove socket file
+    info!("shutdown phase 5/5: stopping IPC server");
+    if let Some(token) = ipc_cancel {
+        token.cancel();
+    }
+    let _ = std::fs::remove_file(&sock_path);
+
     let clean = !force_shutdown && total_dropped == 0;
     info!(
         clean,
         dropped_items = total_dropped,
-        "shutdown phase 5/5: shutdown complete"
+        "shutdown complete"
     );
 
     Ok(ShutdownOutcome {
@@ -674,12 +719,42 @@ async fn init_brain_instance(
     let last_event_ts = Arc::new(AtomicU64::new(0));
     let consolidator = ConsolidationScheduler::new(last_event_ts);
 
+    // Build MCP context from the pipeline's stores + task/record/object stores.
+    let brain_data_dir = paths.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
+    let tasks = TaskStore::new(&brain_data_dir.join("tasks"), pipeline.db().clone())?;
+    tasks.rebuild_projections()?;
+    let records = RecordStore::new(&brain_data_dir.join("records"), pipeline.db().clone())?;
+    records.rebuild_projections()?;
+    let objects = ObjectStore::new(&brain_data_dir.join("objects"))?;
+    let store_reader = StoreReader::from_store(pipeline.store());
+    let metrics = Arc::clone(pipeline.metrics());
+
+    let brain_home_path = brain_data_dir
+        .parent() // brains/
+        .and_then(|p| p.parent()) // $BRAIN_HOME
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let mcp_context = McpContext::from_stores(
+        pipeline.db().clone(),
+        Some(store_reader),
+        None, // writable_store: pipeline.store() is owned by pipeline; IPC is read-only
+        None, // embedder: not needed for task/record operations via IPC
+        tasks,
+        records,
+        objects,
+        metrics,
+        brain_home_path,
+        name.to_string(),
+    );
+
     Ok(BrainInstance {
         name: name.to_string(),
         pipeline,
         work_queue: WorkQueue::default(),
         note_dirs,
         consolidator,
+        mcp_context,
     })
 }
 
