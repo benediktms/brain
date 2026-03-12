@@ -40,10 +40,18 @@ pub fn run_list(json: bool) -> Result<()> {
         let brains: Vec<serde_json::Value> = entries
             .iter()
             .map(|(name, entry, prefix)| {
+                let extra_roots: Vec<String> = entry
+                    .roots
+                    .iter()
+                    .skip(1)
+                    .map(|p| p.display().to_string())
+                    .collect();
                 serde_json::json!({
                     "name": name,
                     "id": entry.id,
-                    "root": entry.root.display().to_string(),
+                    "root": entry.primary_root().display().to_string(),
+                    "aliases": entry.aliases,
+                    "extra_roots": extra_roots,
                     "prefix": prefix,
                 })
             })
@@ -65,7 +73,13 @@ pub fn run_list(json: bool) -> Result<()> {
         } else {
             println!("{name}");
         }
-        println!("  root:   {}", entry.root.display());
+        if !entry.aliases.is_empty() {
+            println!("  aka:    {}", entry.aliases.join(", "));
+        }
+        println!("  root:   {}", entry.primary_root().display());
+        for extra in entry.roots.iter().skip(1) {
+            println!("          {}", extra.display());
+        }
         if let Some(p) = prefix {
             println!("  prefix: {p}");
         }

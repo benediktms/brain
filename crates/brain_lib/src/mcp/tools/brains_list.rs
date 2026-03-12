@@ -17,6 +17,8 @@ struct BrainInfo {
     name: String,
     id: Option<String>,
     root: String,
+    aliases: Vec<String>,
+    extra_roots: Vec<String>,
     prefix: Option<String>,
 }
 
@@ -34,7 +36,7 @@ impl McpTool for BrainsList {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "List all registered brain projects from the global registry (~/.brain/config.toml). Returns name, ID, root path, and task prefix for each brain. Use this to discover available brains before cross-brain operations (federated search via memory.search_minimal with brains parameter, or cross-brain task creation).".into(),
+            description: "List all registered brain projects from the global registry (~/.brain/config.toml). Returns name, ID, root path, aliases, extra_roots, and task prefix for each brain. Use this to discover available brains before cross-brain operations (federated search via memory.search_minimal with brains parameter, or cross-brain task creation).".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {}
@@ -64,10 +66,18 @@ impl McpTool for BrainsList {
                         .ok()
                         .and_then(|store| store.get_project_prefix().ok());
 
+                    let extra_roots: Vec<String> = entry
+                        .roots
+                        .iter()
+                        .skip(1)
+                        .map(|p| p.display().to_string())
+                        .collect();
                     BrainInfo {
                         name,
+                        root: entry.primary_root().display().to_string(),
+                        aliases: entry.aliases,
+                        extra_roots,
                         id: entry.id,
-                        root: entry.root.display().to_string(),
                         prefix,
                     }
                 })

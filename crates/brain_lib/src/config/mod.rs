@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::db::Db;
 use crate::embedder::Embed;
@@ -28,16 +28,77 @@ pub struct GlobalConfig {
 }
 
 /// An entry for a registered brain inside the global config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Serialization always writes `roots = [...]`. For backward compatibility,
+/// deserialization accepts either the old `root = "..."` scalar form or the
+/// new `roots = [...]` array form.
+#[derive(Debug, Clone, Serialize)]
 pub struct BrainEntry {
-    /// Absolute path to the project root.
-    pub root: PathBuf,
+    /// Root paths for this brain. Index 0 is the primary root.
+    pub roots: Vec<PathBuf>,
     /// Note directory paths (absolute).
     #[serde(default)]
     pub notes: Vec<PathBuf>,
     /// Stable brain ID (8-char Nano ID).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Alternate names for this brain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+}
+
+impl BrainEntry {
+    /// Return the primary root path (first element of `roots`).
+    ///
+    /// # Panics
+    /// Panics if `roots` is empty, which should never happen for a valid entry.
+    pub fn primary_root(&self) -> &Path {
+        &self.roots[0]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compatible deserialization for BrainEntry
+// ---------------------------------------------------------------------------
+
+impl<'de> Deserialize<'de> for BrainEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct BrainEntryRaw {
+            // New format: roots = [...]
+            roots: Option<Vec<PathBuf>>,
+            // Old format: root = "..."
+            root: Option<PathBuf>,
+            #[serde(default)]
+            notes: Vec<PathBuf>,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            id: Option<String>,
+            #[serde(default, skip_serializing_if = "Vec::is_empty")]
+            aliases: Vec<String>,
+            // Accept but ignore legacy extra_roots field.
+            #[serde(default)]
+            extra_roots: Vec<PathBuf>,
+        }
+
+        let raw = BrainEntryRaw::deserialize(deserializer)?;
+
+        let roots = if let Some(r) = raw.roots {
+            r
+        } else if let Some(r) = raw.root {
+            let mut v = vec![r];
+            v.extend(raw.extra_roots);
+            v
+        } else {
+            return Err(serde::de::Error::missing_field("roots"));
+        };
+
+        Ok(BrainEntry {
+            roots,
+            notes: raw.notes,
+            id: raw.id,
+            aliases: raw.aliases,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +239,13 @@ pub fn resolve_brain_entry_from_config(
         }
     }
 
+    // Scan by alias.
+    for (name, entry) in &config.brains {
+        if entry.aliases.iter().any(|a| a == name_or_id) {
+            return Ok((name.clone(), entry.clone()));
+        }
+    }
+
     let available: Vec<&str> = config.brains.keys().map(String::as_str).collect();
     Err(BrainCoreError::Config(format!(
         "brain '{}' not found in registry; available: [{}]",
@@ -203,7 +271,7 @@ pub fn resolve_brain_id(entry: &BrainEntry, _name: &str) -> Result<String> {
     if let Some(ref id) = entry.id {
         Ok(id.clone())
     } else {
-        get_or_generate_brain_id(&entry.root.join(".brain"))
+        get_or_generate_brain_id(&entry.primary_root().join(".brain"))
     }
 }
 
@@ -351,6 +419,38 @@ pub async fn open_remote_search_context(
         db,
         store,
     }))
+}
+
+/// Find a registered brain whose `roots` list contains `path`.
+///
+/// Returns `(name, entry)` for the first match, or `None` if no brain
+/// has `path` in its roots.
+pub fn find_brain_by_path<'a>(
+    config: &'a GlobalConfig,
+    path: &Path,
+) -> Option<(String, &'a BrainEntry)> {
+    for (name, entry) in &config.brains {
+        if entry.roots.iter().any(|r| r == path) {
+            return Some((name.clone(), entry));
+        }
+    }
+    None
+}
+
+/// Find a registered brain whose `id` matches `brain_id`.
+///
+/// Returns `(name, entry)` for the first match, or `None` if no brain
+/// has that ID.
+pub fn find_brain_by_id<'a>(
+    config: &'a GlobalConfig,
+    brain_id: &str,
+) -> Option<(String, &'a BrainEntry)> {
+    for (name, entry) in &config.brains {
+        if entry.id.as_deref() == Some(brain_id) {
+            return Some((name.clone(), entry));
+        }
+    }
+    None
 }
 
 /// Return all brain `(name, id)` pairs from the global registry.
@@ -684,9 +784,10 @@ mod tests {
         cfg.brains.insert(
             name.to_string(),
             BrainEntry {
-                root: root.to_path_buf(),
+                roots: vec![root.to_path_buf()],
                 notes: vec![],
                 id: id.map(str::to_string),
+                aliases: vec![],
             },
         );
         cfg
@@ -699,7 +800,7 @@ mod tests {
 
         let (name, entry) = resolve_brain_entry_from_config("infra", &cfg).unwrap();
         assert_eq!(name, "infra");
-        assert_eq!(entry.root, tmp.path());
+        assert_eq!(entry.primary_root(), tmp.path());
         assert_eq!(entry.id, Some("abc12345".to_string()));
     }
 
@@ -710,7 +811,7 @@ mod tests {
 
         let (name, entry) = resolve_brain_entry_from_config("abc12345", &cfg).unwrap();
         assert_eq!(name, "infra");
-        assert_eq!(entry.root, tmp.path());
+        assert_eq!(entry.primary_root(), tmp.path());
     }
 
     #[test]
@@ -746,9 +847,10 @@ mod tests {
         }
 
         let entry = BrainEntry {
-            root: project_tmp.path().to_path_buf(),
+            roots: vec![project_tmp.path().to_path_buf()],
             notes: vec![],
             id: Some("test1234".to_string()),
+            aliases: vec![],
         };
 
         let store = open_remote_task_store("test-brain", &entry).unwrap();
@@ -839,17 +941,19 @@ mod tests {
         cfg.brains.insert(
             "alpha".to_string(),
             BrainEntry {
-                root: home.to_path_buf(),
+                roots: vec![home.to_path_buf()],
                 notes: vec![],
                 id: Some("id000001".to_string()),
+                aliases: vec![],
             },
         );
         cfg.brains.insert(
             "beta".to_string(),
             BrainEntry {
-                root: home.to_path_buf(),
+                roots: vec![home.to_path_buf()],
                 notes: vec![],
                 id: None,
+                aliases: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -893,9 +997,10 @@ mod tests {
         cfg.brains.insert(
             "test-brain".to_string(),
             BrainEntry {
-                root: home.to_path_buf(),
+                roots: vec![home.to_path_buf()],
                 notes: vec![],
                 id: Some("testid01".to_string()),
+                aliases: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -924,9 +1029,10 @@ mod tests {
         cfg.brains.insert(
             "my-brain".to_string(),
             BrainEntry {
-                root: home.to_path_buf(),
+                roots: vec![home.to_path_buf()],
                 notes: vec![],
                 id: Some("abc12345".to_string()),
+                aliases: vec![],
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -943,6 +1049,229 @@ mod tests {
 
         assert_eq!(ctx.brain_name, "my-brain");
         assert_eq!(ctx.brain_id, "abc12345");
+    }
+
+    // -----------------------------------------------------------------------
+    // roots backward compat and serialization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_roots_backward_compat() {
+        // Old format: root = "..." scalar
+        let toml_str = r#"
+[brains.my-brain]
+root = "/some/path"
+"#;
+        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
+        let entry = cfg.brains.get("my-brain").unwrap();
+        assert_eq!(entry.roots, vec![PathBuf::from("/some/path")]);
+    }
+
+    #[test]
+    fn test_roots_new_format() {
+        // New format: roots = [...]
+        let toml_str = r#"
+[brains.my-brain]
+roots = ["/path1", "/path2"]
+"#;
+        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
+        let entry = cfg.brains.get("my-brain").unwrap();
+        assert_eq!(
+            entry.roots,
+            vec![PathBuf::from("/path1"), PathBuf::from("/path2")]
+        );
+    }
+
+    #[test]
+    fn test_primary_root() {
+        let entry = BrainEntry {
+            roots: vec![PathBuf::from("/primary"), PathBuf::from("/secondary")],
+            notes: vec![],
+            id: None,
+            aliases: vec![],
+        };
+        assert_eq!(entry.primary_root(), PathBuf::from("/primary").as_path());
+    }
+
+    #[test]
+    fn test_roots_serialization() {
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "my-brain".to_string(),
+            BrainEntry {
+                roots: vec![PathBuf::from("/path1"), PathBuf::from("/path2")],
+                notes: vec![],
+                id: None,
+                aliases: vec![],
+            },
+        );
+        let serialized = toml::to_string_pretty(&cfg).unwrap();
+        // Should use roots = [...] not root = "..."
+        assert!(
+            serialized.contains("roots"),
+            "serialized TOML should contain 'roots': {serialized}"
+        );
+        assert!(
+            !serialized.contains("root ="),
+            "serialized TOML should not contain legacy 'root =' field: {serialized}"
+        );
+        assert!(
+            serialized.contains("/path1"),
+            "serialized TOML should contain first path: {serialized}"
+        );
+        assert!(
+            serialized.contains("/path2"),
+            "serialized TOML should contain second path: {serialized}"
+        );
+    }
+
+    #[test]
+    fn test_aliases_default_empty() {
+        // Config without aliases field — should deserialize to empty vec
+        let toml_str = r#"
+[brains.my-brain]
+roots = ["/some/path"]
+"#;
+        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
+        let entry = cfg.brains.get("my-brain").unwrap();
+        assert!(
+            entry.aliases.is_empty(),
+            "aliases should default to empty vec"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // alias resolution
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_brain_entry_by_alias() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "infra".to_string(),
+            BrainEntry {
+                roots: vec![tmp.path().to_path_buf()],
+                notes: vec![],
+                id: Some("abc12345".to_string()),
+                aliases: vec!["gateway".to_string(), "infra-alias".to_string()],
+            },
+        );
+
+        let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
+        assert_eq!(name, "infra");
+        assert_eq!(entry.primary_root(), tmp.path());
+
+        let (name2, _) = resolve_brain_entry_from_config("infra-alias", &cfg).unwrap();
+        assert_eq!(name2, "infra");
+    }
+
+    #[test]
+    fn resolve_brain_entry_alias_does_not_shadow_name() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = GlobalConfig::default();
+        // "infra" registered with an alias that matches another brain's name "gateway"
+        cfg.brains.insert(
+            "infra".to_string(),
+            BrainEntry {
+                roots: vec![tmp.path().to_path_buf()],
+                notes: vec![],
+                id: Some("aaaaaaaa".to_string()),
+                aliases: vec!["gateway".to_string()],
+            },
+        );
+        cfg.brains.insert(
+            "gateway".to_string(),
+            BrainEntry {
+                roots: vec![tmp.path().to_path_buf()],
+                notes: vec![],
+                id: Some("bbbbbbbb".to_string()),
+                aliases: vec![],
+            },
+        );
+
+        // Name match wins over alias match.
+        let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
+        assert_eq!(name, "gateway");
+        assert_eq!(entry.id, Some("bbbbbbbb".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // find_brain_by_path / find_brain_by_id
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_brain_by_path_returns_none_when_empty() {
+        let cfg = GlobalConfig::default();
+        let path = PathBuf::from("/some/path");
+        assert!(find_brain_by_path(&cfg, &path).is_none());
+    }
+
+    #[test]
+    fn find_brain_by_path_finds_primary_root() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
+
+        let result = find_brain_by_path(&cfg, tmp.path());
+        assert!(result.is_some());
+        let (name, _entry) = result.unwrap();
+        assert_eq!(name, "my-brain");
+    }
+
+    #[test]
+    fn find_brain_by_path_finds_extra_root() {
+        let tmp = TempDir::new().unwrap();
+        let extra = TempDir::new().unwrap();
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "my-brain".to_string(),
+            BrainEntry {
+                roots: vec![tmp.path().to_path_buf(), extra.path().to_path_buf()],
+                notes: vec![],
+                id: Some("abcd1234".to_string()),
+                aliases: vec![],
+            },
+        );
+
+        let result = find_brain_by_path(&cfg, extra.path());
+        assert!(result.is_some());
+        let (name, _entry) = result.unwrap();
+        assert_eq!(name, "my-brain");
+    }
+
+    #[test]
+    fn find_brain_by_path_returns_none_for_unregistered_path() {
+        let tmp = TempDir::new().unwrap();
+        let other = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
+
+        let result = find_brain_by_path(&cfg, other.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn find_brain_by_id_returns_none_when_empty() {
+        let cfg = GlobalConfig::default();
+        assert!(find_brain_by_id(&cfg, "abcd1234").is_none());
+    }
+
+    #[test]
+    fn find_brain_by_id_finds_matching_entry() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
+
+        let result = find_brain_by_id(&cfg, "abcd1234");
+        assert!(result.is_some());
+        let (name, _entry) = result.unwrap();
+        assert_eq!(name, "my-brain");
+    }
+
+    #[test]
+    fn find_brain_by_id_returns_none_for_unknown_id() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
+
+        assert!(find_brain_by_id(&cfg, "xxxxxxxx").is_none());
     }
 
     /// Minimal no-op embedder for tests that need Arc<dyn Embed>.

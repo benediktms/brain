@@ -332,6 +332,12 @@ pub(crate) enum Command {
         purge: bool,
     },
 
+    /// Manage brain aliases (add/remove/list)
+    Alias {
+        #[command(subcommand)]
+        action: AliasAction,
+    },
+
     /// Get or set brain configuration
     Config {
         #[command(subcommand)]
@@ -409,6 +415,31 @@ pub(crate) enum ConfigAction {
     Get {
         /// Configuration key (e.g. "prefix")
         key: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AliasAction {
+    /// Add an alias to a brain
+    Add {
+        /// Brain name to add the alias to
+        brain: String,
+        /// Alias to add
+        alias: String,
+    },
+
+    /// Remove an alias from a brain
+    Remove {
+        /// Brain name to remove the alias from
+        brain: String,
+        /// Alias to remove
+        alias: String,
+    },
+
+    /// List aliases (all brains, or a specific brain)
+    List {
+        /// Brain name (omit to list all aliases)
+        brain: Option<String>,
     },
 }
 

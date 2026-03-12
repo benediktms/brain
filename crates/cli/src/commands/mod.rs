@@ -1,4 +1,5 @@
 pub mod agent_schema;
+pub mod alias;
 pub mod artifacts;
 pub mod backfill_tasks;
 pub mod config;
