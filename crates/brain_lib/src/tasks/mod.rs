@@ -741,7 +741,10 @@ mod tests {
 
         // SQLite write must succeed even though JSONL is unavailable
         let result = store.append(&created_event("t1", "Read-only Test", 2));
-        assert!(result.is_ok(), "append must succeed when JSONL dir is read-only");
+        assert!(
+            result.is_ok(),
+            "append must succeed when JSONL dir is read-only"
+        );
 
         // Task exists in SQLite
         let task = store.get_task("t1").unwrap();
@@ -769,10 +772,16 @@ mod tests {
 
         // JSONL also has the event
         let jsonl_path = tasks_dir.join("events.jsonl");
-        assert!(jsonl_path.exists(), "events.jsonl must exist after successful write");
+        assert!(
+            jsonl_path.exists(),
+            "events.jsonl must exist after successful write"
+        );
         let content = fs::read_to_string(&jsonl_path).unwrap();
         assert!(!content.is_empty(), "events.jsonl must contain the event");
-        assert!(content.contains("t1"), "events.jsonl must reference the task id");
+        assert!(
+            content.contains("t1"),
+            "events.jsonl must reference the task id"
+        );
     }
 
     #[test]
@@ -791,9 +800,7 @@ mod tests {
         // Wipe SQLite projections manually
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute_batch("DELETE FROM tasks").map_err(Into::into)
-            })
+            .with_write_conn(|conn| conn.execute_batch("DELETE FROM tasks").map_err(Into::into))
             .unwrap();
         assert_eq!(store.list_all().unwrap().len(), 0, "SQLite wiped");
 

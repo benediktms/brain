@@ -1149,7 +1149,10 @@ fn test_record_sqlite_write_succeeds_when_jsonl_dir_is_read_only() {
 
     // apply_and_append must succeed even though JSONL dir is read-only
     let result = store.apply_and_append(&ev);
-    assert!(result.is_ok(), "apply_and_append must succeed when JSONL dir is read-only");
+    assert!(
+        result.is_ok(),
+        "apply_and_append must succeed when JSONL dir is read-only"
+    );
 
     // Record exists in SQLite
     let record = store.get_record(&rid).unwrap();
@@ -1179,10 +1182,16 @@ fn test_record_jsonl_audit_trail_populated_on_success() {
 
     // JSONL also has the event
     let jsonl_path = records_dir.join("events.jsonl");
-    assert!(jsonl_path.exists(), "events.jsonl must exist after successful write");
+    assert!(
+        jsonl_path.exists(),
+        "events.jsonl must exist after successful write"
+    );
     let content = fs::read_to_string(&jsonl_path).unwrap();
     assert!(!content.is_empty(), "events.jsonl must contain the event");
-    assert!(content.contains(rid.as_str()), "events.jsonl must reference the record id");
+    assert!(
+        content.contains(rid.as_str()),
+        "events.jsonl must reference the record id"
+    );
 }
 
 #[test]
@@ -1208,7 +1217,8 @@ fn test_record_rebuild_from_jsonl_recovers_projections() {
     store
         .db()
         .with_write_conn(|conn| {
-            conn.execute_batch("DELETE FROM records").map_err(Into::into)
+            conn.execute_batch("DELETE FROM records")
+                .map_err(Into::into)
         })
         .unwrap();
     assert_eq!(count_records(store.db()), 0, "SQLite wiped");
