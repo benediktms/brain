@@ -126,7 +126,7 @@ impl ToolRegistry {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use serde_json::json;
@@ -193,7 +193,7 @@ pub(super) mod tests {
         assert_ne!(result.is_error, Some(true));
     }
 
-    pub(in crate::mcp) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
+    pub(crate) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
         let tmp = tempfile::TempDir::new().unwrap();
         let brain_home = tmp.path().to_path_buf();
         let sqlite_path = tmp.path().join("test.db");

@@ -1,4 +1,5 @@
 pub mod capsule;
+pub mod ipc;
 pub mod chunker;
 pub mod config;
 pub mod db;
