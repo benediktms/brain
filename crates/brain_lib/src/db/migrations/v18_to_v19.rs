@@ -10,10 +10,8 @@ use crate::error::Result;
 ///                      CHECK (indexing_state IN ('idle', 'indexing_started', 'indexed'))
 /// 2. `chunks`        — fill NULLs in heading_path/byte_start/byte_end/token_estimate,
 ///                      recreate with NOT NULL DEFAULT on those 4 columns
-/// 3. `task_events`   — recreate with FK task_id → tasks(task_id) ON DELETE CASCADE;
-///                      normalise columns to (event_id, task_id, event_type, payload, created_at)
-/// 4. `record_events` — recreate with FK record_id → records(record_id) ON DELETE CASCADE;
-///                      drop brain_id; normalise to (event_id, record_id, event_type, payload, created_at)
+/// 3. `task_events`   — recreate with FK task_id → tasks(task_id) ON DELETE CASCADE
+/// 4. `record_events` — recreate with FK record_id → records(record_id) ON DELETE CASCADE
 /// 5. `task_note_links` — recreate with FK chunk_id → chunks(chunk_id) ON DELETE CASCADE
 /// 6. `reflection_sources` — recreate with FK source_id → summaries(summary_id) ON DELETE CASCADE
 /// 7. `record_links`  — recreate with composite UNIQUE (record_id, task_id, chunk_id)
@@ -37,12 +35,13 @@ pub fn migrate_v18_to_v19(conn: &Connection) -> Result<()> {
             deleted_at      INTEGER,
             indexing_state  TEXT NOT NULL DEFAULT 'idle'
                             CHECK (indexing_state IN ('idle', 'indexing_started', 'indexed')),
+            chunker_version INTEGER,
             pagerank_score  REAL
         );
 
         INSERT INTO files_new
             SELECT file_id, path, content_hash, last_indexed_at, deleted_at,
-                   indexing_state, pagerank_score
+                   indexing_state, chunker_version, pagerank_score
             FROM files;
 
         DROP TABLE files;
@@ -94,13 +93,13 @@ pub fn migrate_v18_to_v19(conn: &Connection) -> Result<()> {
             event_id   TEXT PRIMARY KEY,
             task_id    TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
             event_type TEXT NOT NULL,
-            payload    TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL
+            timestamp  INTEGER NOT NULL,
+            actor      TEXT NOT NULL,
+            payload    TEXT NOT NULL DEFAULT '{}'
         );
 
-        INSERT INTO task_events_new (event_id, task_id, event_type, payload, created_at)
-            SELECT event_id, task_id, event_type, payload,
-                   CAST(timestamp AS TEXT)
+        INSERT INTO task_events_new (event_id, task_id, event_type, timestamp, actor, payload)
+            SELECT event_id, task_id, event_type, timestamp, actor, payload
             FROM task_events;
 
         DROP TABLE task_events;
@@ -108,19 +107,20 @@ pub fn migrate_v18_to_v19(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
 
-        -- ── 4. record_events: add FK, drop brain_id, normalise columns ─────────────
+        -- ── 4. record_events: add FK on record_id ─────────────────────────────────
 
         CREATE TABLE record_events_new (
             event_id   TEXT PRIMARY KEY,
             record_id  TEXT NOT NULL REFERENCES records(record_id) ON DELETE CASCADE,
             event_type TEXT NOT NULL,
+            timestamp  INTEGER NOT NULL,
+            actor      TEXT NOT NULL,
             payload    TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL
+            brain_id   TEXT NOT NULL DEFAULT ''
         );
 
-        INSERT INTO record_events_new (event_id, record_id, event_type, payload, created_at)
-            SELECT event_id, record_id, event_type, payload,
-                   CAST(timestamp AS TEXT)
+        INSERT INTO record_events_new (event_id, record_id, event_type, timestamp, actor, payload, brain_id)
+            SELECT event_id, record_id, event_type, timestamp, actor, payload, brain_id
             FROM record_events;
 
         DROP TABLE record_events;
@@ -161,11 +161,11 @@ pub fn migrate_v18_to_v19(conn: &Connection) -> Result<()> {
             task_id    TEXT,
             chunk_id   TEXT,
             created_at INTEGER NOT NULL,
-            CHECK (task_id IS NOT NULL OR chunk_id IS NOT NULL),
-            UNIQUE (record_id, task_id, chunk_id)
+            CHECK (task_id IS NOT NULL OR chunk_id IS NOT NULL)
         );
 
-        INSERT OR IGNORE INTO record_links_new SELECT record_id, task_id, chunk_id, created_at FROM record_links;
+        INSERT INTO record_links_new SELECT record_id, task_id, chunk_id, created_at FROM record_links
+            GROUP BY record_id, COALESCE(task_id, ''), COALESCE(chunk_id, '');
 
         DROP TABLE record_links;
         ALTER TABLE record_links_new RENAME TO record_links;
@@ -173,6 +173,14 @@ pub fn migrate_v18_to_v19(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS record_links_record_id ON record_links(record_id);
         CREATE INDEX IF NOT EXISTS record_links_task_id   ON record_links(task_id)  WHERE task_id  IS NOT NULL;
         CREATE INDEX IF NOT EXISTS record_links_chunk_id  ON record_links(chunk_id) WHERE chunk_id IS NOT NULL;
+        -- Partial unique indexes: SQLite treats NULLs as distinct in UNIQUE, so we
+        -- need separate indexes for each nullable column combination.
+        CREATE UNIQUE INDEX IF NOT EXISTS record_links_uniq_task
+            ON record_links(record_id, task_id) WHERE chunk_id IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS record_links_uniq_chunk
+            ON record_links(record_id, chunk_id) WHERE task_id IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS record_links_uniq_both
+            ON record_links(record_id, task_id, chunk_id) WHERE task_id IS NOT NULL AND chunk_id IS NOT NULL;
 
         PRAGMA user_version = 19;
 
@@ -202,6 +210,7 @@ mod tests {
                  last_indexed_at INTEGER,
                  deleted_at      INTEGER,
                  indexing_state  TEXT NOT NULL DEFAULT 'idle',
+                 chunker_version INTEGER,
                  pagerank_score  REAL
              );
 
@@ -472,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn test_task_events_fk_and_created_at() {
+    fn test_task_events_fk_preserves_columns() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v18(&conn);
 
@@ -491,27 +500,28 @@ mod tests {
         migrate_v18_to_v19(&conn).unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
 
-        // created_at should exist and hold the old timestamp as text
-        let created_at: String = conn
+        // timestamp and actor preserved
+        let (ts, actor): (i64, String) = conn
             .query_row(
-                "SELECT created_at FROM task_events WHERE event_id = 'e1'",
+                "SELECT timestamp, actor FROM task_events WHERE event_id = 'e1'",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(created_at, "1000");
+        assert_eq!(ts, 1000);
+        assert_eq!(actor, "agent");
 
         // FK should reject orphan insert
         let result = conn.execute(
-            "INSERT INTO task_events (event_id, task_id, event_type, payload, created_at)
-             VALUES ('e2', 'no_such_task', 'task_created', '{}', '2000')",
+            "INSERT INTO task_events (event_id, task_id, event_type, timestamp, actor, payload)
+             VALUES ('e2', 'no_such_task', 'task_created', 2000, 'agent', '{}')",
             [],
         );
         assert!(result.is_err(), "orphan task_id should be rejected by FK");
     }
 
     #[test]
-    fn test_record_events_fk_brain_id_dropped_created_at() {
+    fn test_record_events_fk_brain_id_preserved() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v18(&conn);
 
@@ -531,28 +541,31 @@ mod tests {
         migrate_v18_to_v19(&conn).unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
 
-        // brain_id column should be gone
-        let result = conn.execute(
-            "INSERT INTO record_events (event_id, record_id, event_type, payload, created_at, brain_id)
-             VALUES ('ev2', 'r1', 'updated', '{}', '3000', 'b1')",
-            [],
-        );
-        assert!(result.is_err(), "brain_id column should not exist");
-
-        // created_at preserved from timestamp
-        let created_at: String = conn
+        // brain_id preserved
+        let brain_id: String = conn
             .query_row(
-                "SELECT created_at FROM record_events WHERE event_id = 'ev1'",
+                "SELECT brain_id FROM record_events WHERE event_id = 'ev1'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(created_at, "2000");
+        assert_eq!(brain_id, "b1");
+
+        // timestamp and actor preserved
+        let (ts, actor): (i64, String) = conn
+            .query_row(
+                "SELECT timestamp, actor FROM record_events WHERE event_id = 'ev1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ts, 2000);
+        assert_eq!(actor, "agent");
 
         // FK should reject orphan
         let result = conn.execute(
-            "INSERT INTO record_events (event_id, record_id, event_type, payload, created_at)
-             VALUES ('ev3', 'no_such_record', 'created', '{}', '3000')",
+            "INSERT INTO record_events (event_id, record_id, event_type, timestamp, actor, payload)
+             VALUES ('ev3', 'no_such_record', 'created', 3000, 'agent', '{}')",
             [],
         );
         assert!(result.is_err(), "orphan record_id should be rejected by FK");
@@ -694,24 +707,26 @@ mod tests {
             .unwrap();
         assert_eq!(content, "hello world");
 
-        // task_event row preserved with created_at
-        let created_at: String = conn
+        // task_event row preserved with timestamp and actor
+        let (ts, actor): (i64, String) = conn
             .query_row(
-                "SELECT created_at FROM task_events WHERE event_id = 'ev1'",
+                "SELECT timestamp, actor FROM task_events WHERE event_id = 'ev1'",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(created_at, "42");
+        assert_eq!(ts, 42);
+        assert_eq!(actor, "agent");
 
-        // record_event row preserved
-        let re_created_at: String = conn
+        // record_event row preserved (including brain_id)
+        let (re_ts, re_actor): (i64, String) = conn
             .query_row(
-                "SELECT created_at FROM record_events WHERE event_id = 're1'",
+                "SELECT timestamp, actor FROM record_events WHERE event_id = 're1'",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(re_created_at, "77");
+        assert_eq!(re_ts, 77);
+        assert_eq!(re_actor, "agent");
     }
 }

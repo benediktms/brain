@@ -206,8 +206,8 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
     // Record the event itself in the queryable audit log
     let payload_json = serde_json::to_string(&event.payload).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        "INSERT INTO record_events (event_id, record_id, event_type, timestamp, actor, payload)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO record_events (event_id, record_id, event_type, timestamp, actor, payload, brain_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             event.event_id,
             event.record_id,
@@ -217,6 +217,7 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
             event.timestamp,
             event.actor,
             payload_json,
+            brain_id,
         ],
     )?;
 

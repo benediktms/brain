@@ -467,6 +467,18 @@ mod tests {
         let conn = setup();
         apply_event(&conn, &make_created_event("t1", "Task", 2), "").unwrap();
 
+        // Create a file and chunk to satisfy FK constraint on task_note_links
+        conn.execute(
+            "INSERT INTO files (file_id, path, indexing_state) VALUES ('f1', '/test.md', 'idle')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content) VALUES ('c1', 'f1', 0, 'h0', 'test')",
+            [],
+        )
+        .unwrap();
+
         let link = TaskEvent::new(
             "t1",
             "user",
