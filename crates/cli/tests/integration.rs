@@ -358,6 +358,175 @@ fn tasks_json_output_is_valid() {
 }
 
 // ---------------------------------------------------------------------------
+// brain alias (add / remove / list / collision)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn alias_add_and_list() {
+    let (project, home) = setup_brain();
+    let _ = project;
+
+    // Add alias
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["alias", "add", "test-brain", "tb"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tb"));
+
+    // list --json shows the alias
+    let output = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let brains = parsed["brains"].as_array().unwrap();
+    let entry = brains.iter().find(|b| b["name"] == "test-brain").unwrap();
+    let aliases = entry["aliases"].as_array().unwrap();
+    assert!(
+        aliases.iter().any(|a| a == "tb"),
+        "aliases should contain 'tb': {aliases:?}"
+    );
+}
+
+#[test]
+fn alias_remove() {
+    let (project, home) = setup_brain();
+    let _ = project;
+
+    // Add then remove
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["alias", "add", "test-brain", "tb"])
+        .assert()
+        .success();
+
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["alias", "remove", "test-brain", "tb"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    // Verify alias is gone from list --json
+    let output = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let brains = parsed["brains"].as_array().unwrap();
+    let entry = brains.iter().find(|b| b["name"] == "test-brain").unwrap();
+    let aliases = entry["aliases"].as_array().unwrap();
+    assert!(
+        !aliases.iter().any(|a| a == "tb"),
+        "alias 'tb' should have been removed: {aliases:?}"
+    );
+}
+
+#[test]
+fn alias_collision_with_name() {
+    let project1 = TempDir::new().unwrap();
+    let project2 = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    // Init brain1
+    brain_cmd()
+        .current_dir(project1.path())
+        .env("BRAIN_HOME", home.path())
+        .args(["init", "--name", "brain1"])
+        .assert()
+        .success();
+
+    // Init brain2
+    brain_cmd()
+        .current_dir(project2.path())
+        .env("BRAIN_HOME", home.path())
+        .args(["init", "--name", "brain2"])
+        .assert()
+        .success();
+
+    // Attempt to alias brain2 with brain1's name — must fail
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["alias", "add", "brain2", "brain1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("collides").or(predicate::str::contains("exists")));
+}
+
+#[test]
+fn init_reregister_adds_extra_root() {
+    let project_a = TempDir::new().unwrap();
+    let project_b = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    // Init brain in dir A
+    brain_cmd()
+        .current_dir(project_a.path())
+        .env("BRAIN_HOME", home.path())
+        .args(["init", "--name", "shared-brain"])
+        .assert()
+        .success();
+
+    // Read the brain ID from the config created in A
+    let config_text =
+        std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+    let global: serde_json::Value = {
+        // Parse via toml first then use brain_id
+        let cfg: toml::Value = toml::from_str(&config_text).unwrap();
+        let id = cfg["brains"]["shared-brain"]["id"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        serde_json::json!({"id": id})
+    };
+    let brain_id = global["id"].as_str().unwrap().to_string();
+
+    // Create .brain/brain.toml in dir B with the same ID
+    std::fs::create_dir_all(project_b.path().join(".brain")).unwrap();
+    std::fs::write(
+        project_b.path().join(".brain").join("brain.toml"),
+        format!("name = \"shared-brain\"\nid = \"{brain_id}\"\n"),
+    )
+    .unwrap();
+
+    // Run init in dir B — should detect existing brain and add path
+    brain_cmd()
+        .current_dir(project_b.path())
+        .env("BRAIN_HOME", home.path())
+        .args(["init", "--name", "shared-brain"])
+        .assert()
+        .success();
+
+    // Verify list --json shows project_b in extra_roots
+    let output = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let brains = parsed["brains"].as_array().unwrap();
+    let entry = brains
+        .iter()
+        .find(|b| b["name"] == "shared-brain")
+        .unwrap();
+    let extra_roots = entry["extra_roots"].as_array().unwrap();
+    let b_path = project_b.path().to_string_lossy().to_string();
+    assert!(
+        extra_roots.iter().any(|r| r.as_str().unwrap_or("").contains(&b_path)),
+        "extra_roots should contain project_b path: {extra_roots:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Error cases
 // ---------------------------------------------------------------------------
 

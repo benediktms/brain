@@ -1052,6 +1052,95 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // roots backward compat and serialization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_roots_backward_compat() {
+        // Old format: root = "..." scalar
+        let toml_str = r#"
+[brains.my-brain]
+root = "/some/path"
+"#;
+        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
+        let entry = cfg.brains.get("my-brain").unwrap();
+        assert_eq!(entry.roots, vec![PathBuf::from("/some/path")]);
+    }
+
+    #[test]
+    fn test_roots_new_format() {
+        // New format: roots = [...]
+        let toml_str = r#"
+[brains.my-brain]
+roots = ["/path1", "/path2"]
+"#;
+        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
+        let entry = cfg.brains.get("my-brain").unwrap();
+        assert_eq!(
+            entry.roots,
+            vec![PathBuf::from("/path1"), PathBuf::from("/path2")]
+        );
+    }
+
+    #[test]
+    fn test_primary_root() {
+        let entry = BrainEntry {
+            roots: vec![PathBuf::from("/primary"), PathBuf::from("/secondary")],
+            notes: vec![],
+            id: None,
+            aliases: vec![],
+        };
+        assert_eq!(entry.primary_root(), PathBuf::from("/primary").as_path());
+    }
+
+    #[test]
+    fn test_roots_serialization() {
+        let mut cfg = GlobalConfig::default();
+        cfg.brains.insert(
+            "my-brain".to_string(),
+            BrainEntry {
+                roots: vec![PathBuf::from("/path1"), PathBuf::from("/path2")],
+                notes: vec![],
+                id: None,
+                aliases: vec![],
+            },
+        );
+        let serialized = toml::to_string_pretty(&cfg).unwrap();
+        // Should use roots = [...] not root = "..."
+        assert!(
+            serialized.contains("roots"),
+            "serialized TOML should contain 'roots': {serialized}"
+        );
+        assert!(
+            !serialized.contains("root ="),
+            "serialized TOML should not contain legacy 'root =' field: {serialized}"
+        );
+        assert!(
+            serialized.contains("/path1"),
+            "serialized TOML should contain first path: {serialized}"
+        );
+        assert!(
+            serialized.contains("/path2"),
+            "serialized TOML should contain second path: {serialized}"
+        );
+    }
+
+    #[test]
+    fn test_aliases_default_empty() {
+        // Config without aliases field — should deserialize to empty vec
+        let toml_str = r#"
+[brains.my-brain]
+roots = ["/some/path"]
+"#;
+        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
+        let entry = cfg.brains.get("my-brain").unwrap();
+        assert!(
+            entry.aliases.is_empty(),
+            "aliases should default to empty vec"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // alias resolution
     // -----------------------------------------------------------------------
 
