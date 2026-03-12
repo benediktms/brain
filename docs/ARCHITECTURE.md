@@ -9,8 +9,8 @@ A **brain** is a named knowledge container with its own notes, tasks, indexes, a
 **Core invariant**: Each domain has exactly one source of truth, and sync is always unidirectional:
 
 - **Notes**: Markdown files are the source of truth. SQLite metadata, LanceDB embeddings, and FTS indexes are derived projections, rebuildable from source.
-- **Tasks**: The append-only event log (`.brain/tasks/events.jsonl`, git-tracked) is the source of truth. SQLite task tables are derived projections, rebuildable by replaying the log.
-- **Records**: The append-only event log (`~/.brain/brains/<name>/records/events.jsonl`) is the source of truth for artifact and snapshot metadata. Payloads are stored out-of-line in a content-addressed object store (`~/.brain/brains/<name>/objects/`). SQLite record tables are derived projections, rebuildable by replaying the log. See [docs/RECORDS.md](./RECORDS.md) for the full design.
+- **Tasks**: SQLite is now the runtime source of truth — writes are applied to SQLite first. The append-only event log (`.brain/tasks/events.jsonl`, git-tracked) is a best-effort audit trail. Event log failures are logged but do not fail the operation. The event log is retained as a recovery mechanism only — `rebuild_projections()` is removed from read/startup paths and retained only for recovery operations.
+- **Records**: SQLite is the runtime source of truth — writes are applied to SQLite first. The append-only event log (`~/.brain/brains/<name>/records/events.jsonl`) is a best-effort audit trail. Payloads are stored out-of-line in a content-addressed object store (`~/.brain/brains/<name>/objects/`). Event log failures are logged but do not fail the operation. See [docs/RECORDS.md](./RECORDS.md) for the full design.
 
 Notes, tasks, and records are parallel subsystems that can cross-reference each other (tasks link to note chunks, records link to tasks and note chunks) but have decoupled lifecycles and mutation patterns.
 
@@ -60,7 +60,10 @@ notes = ["~/notes"]
 **Key design decisions:**
 - `brain init` in a project creates `.brain/brain.toml` and registers the brain centrally
 - All derived data (SQLite, LanceDB) lives in `~/.brain/brains/<name>/`, not in the project
-- The task event log lives in-repo at `.brain/tasks/events.jsonl` (git-tracked source of truth)
+- SQLite is the runtime source of truth for notes, tasks, and records. Writes are applied to SQLite first.
+- The task event log (`.brain/tasks/events.jsonl`, git-tracked) is a best-effort audit trail. Event log failures do not block operations.
+- The record event log (`~/.brain/brains/<name>/records/events.jsonl`) is a best-effort audit trail. Event log failures do not block operations.
+- `rebuild_projections()` is retained only for recovery; normal startup reads hit SQLite directly without rebuilding.
 - A brain can index multiple note directories (e.g., `docs/` and `notes/` from one project)
 - Moving a project just means updating the path in the registry
 - No symlinks — just paths in config files
@@ -143,13 +146,13 @@ graph TB
 
 ## Storage Role Separation
 
-| Concern | SQLite (Control Plane) | LanceDB (Data Plane) | Task Event Log | Record Event Log | Object Store |
+| Concern | SQLite (Runtime Source of Truth) | LanceDB (Data Plane) | Task Event Log | Record Event Log | Object Store |
 |---------|----------------------|---------------------|----------------|-----------------|--------------|
-| **Role** | Transactional bookkeeping | Vector similarity search | Task source of truth | Record metadata source of truth | Record payload storage |
-| **Stores** | File identity, content hashes, chunk metadata, links, task projections, record projections, FTS5 index, summaries, schema versions | Chunk text, 384-dim embeddings, tags, timestamps, scores | Append-only task events (ULID-ordered JSONL) | Append-only record events (ULID-ordered JSONL) | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
-| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 | kNN vector search, batch upserts | Sequential append, full replay for rebuild | Sequential append, full replay for rebuild | Write-once keyed by hash, read by hash path |
+| **Role** | Transactional runtime state — writes succeed here first | Vector similarity search | Best-effort audit trail (note/task events) | Best-effort audit trail (record events) | Record payload storage |
+| **Stores** | File identity, content hashes, chunk metadata, links, tasks, records, FTS5 index, summaries, schema versions | Chunk text, 384-dim embeddings, tags, timestamps, scores | Append-only task events (ULID-ordered JSONL, git-tracked) | Append-only record events (ULID-ordered JSONL) | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
+| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 (reads hit directly, no rebuild) | kNN vector search, batch upserts | Sequential append (failures logged but non-blocking) | Sequential append (failures logged but non-blocking) | Write-once keyed by hash, read by hash path |
 | **Concurrency** | WAL mode (concurrent readers, single writer) | Arc\<Table\> shared across threads | Single writer (append-only) | Single writer (append-only) | Atomic rename on write; concurrent reads safe |
-| **Consistency anchor** | content_hash gates note re-indexing | Derived from SQLite state | Log is authoritative; SQLite task tables are derived projections | Log is authoritative; SQLite record tables are derived projections | Hash is the identity; write-before-event-append ordering prevents dangling refs |
+| **Consistency anchor** | SQLite is authoritative for all runtime state. LanceDB and event logs are kept consistent, but failures are non-fatal. | Derived from SQLite state; may lag during vector index failures | Event log is audit trail only. Failures do not block operations. Retained for recovery via rebuild_projections(). | Event log is audit trail only. Failures do not block operations. Payloads are write-before-event-append. | Hash is the identity; write-before-event-append ordering prevents dangling refs |
 
 ## Sequence Diagrams
 
@@ -172,7 +175,8 @@ sequenceDiagram
     Main->>Vec: Connect LanceDB (open/create chunks table)
     Main->>Vec: Check lancedb_schema_version vs expected
     alt Schema mismatch
-        Vec-->>Main: Trigger full rebuild
+        Vec-->>Main: Full rebuild required
+        Main->>DB: Trigger rebuild_projections() (recovery only)
         Main->>DB: Clear all content_hash values
     end
     Main->>Model: Load BGE-small weights (mmap safetensors)
@@ -192,6 +196,7 @@ sequenceDiagram
         end
     end
     Scanner->>Main: Scan complete (X changed, Y deleted)
+    Note over Main: No rebuild on normal startup — reads hit SQLite directly
 
     par Start concurrent services
         Main->>Watcher: Start watching vault (recursive, 250ms debounce)
@@ -392,11 +397,11 @@ sequenceDiagram
 
 ### 5. Dual-Store Consistency (Indexing State Machine)
 
-Partial failures across SQLite and LanceDB are the hardest correctness problem. The indexing state machine ensures recovery.
+SQLite is the runtime source of truth. The indexing state machine ensures that SQLite updates succeed before attempting to update LanceDB or JSONL event logs.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> idle: File exists, hash stored
+    [*] --> idle: File exists, hash stored in SQLite
 
     idle --> indexing_started: Hash changed / new file
     note right of indexing_started
@@ -408,6 +413,7 @@ stateDiagram-v2
     note right of sqlite_written
         chunks, links, tasks updated
         FTS5 triggers fired
+        State is now authoritative
     end note
 
     sqlite_written --> indexed: LanceDB merge_insert succeeded
@@ -417,11 +423,12 @@ stateDiagram-v2
         last_indexed_at updated
     end note
 
-    sqlite_written --> indexing_started: LanceDB write failed
-    note left of indexing_started
-        Hash NOT updated
-        On restart: detected as
-        'indexing_started' → re-index
+    sqlite_written --> indexed: LanceDB write failed
+    note left of indexed
+        Log failure but succeed the operation
+        SQLite is authoritative
+        Vector index is inconsistent
+        On next vector query: full scan
     end note
 
     indexing_started --> indexing_started: SQLite write failed
@@ -434,6 +441,8 @@ stateDiagram-v2
     indexed --> idle: Ready for next change
     indexed --> indexing_started: File changed again
 ```
+
+The event log (JSONL) updates occur after SQLite and are best-effort. Event log failures are logged but do not fail the operation — SQLite is the source of truth.
 
 ### 6. Graceful Shutdown
 

@@ -220,12 +220,10 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_next` — Get highest-priority ready tasks sorted by priority then due date. Use for "what should I work on?" queries.
 - `tasks_close` — Close one or more tasks by ID/prefix. Accepts a single string or array of task IDs. Returns closed tasks and newly unblocked task IDs.
 - `tasks_labels_summary` — Get all unique labels with counts and associated task IDs (short prefixes). No parameters. Use for label discovery and taxonomy overview.
-- `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Supports `brain` param for cross-brain label management. Returns succeeded/failed/summary.
+- `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
-**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Done/cancelled tasks get both a task capsule and an outcome capsule. Tasks become discoverable via `memory_search_minimal` without any extra steps. For tasks created before this feature, run `brain backfill-tasks` to index them.
-
-**Tip:** Tasks live in the same vector store as notes. Use `memory_search_minimal` to find tasks by semantic meaning (e.g. "what was done about search ranking?"), or `tasks_list` with `search` for keyword matching. Task results have `kind: "task"` or `kind: "task-outcome"` — outcome capsules capture what was done and what was learned.
+**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
 
 **Cross-brain tools:**
 - `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks_create` with a `brain` parameter. Also callable as `brains_list`.
@@ -234,24 +232,16 @@ When running as an MCP server (`brain mcp`), these tools are available:
 1. Call `brains.list` to discover registered brains and their prefixes.
 2. Call `tasks_create` with the target `brain` name and task details.
 3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
-4. Call `tasks_get` with a `brain` parameter to fetch a task and its full enrichment from a remote brain.
-5. Call `tasks_close` with a `brain` parameter to close tasks in a remote brain.
-
-**Federated search:**
-- Search across multiple brains in a single query via `--brain` (CLI) or `brains` parameter (MCP).
-- Results are merged by hybrid score and labeled with source brain name (`brain_name` field in stubs).
-- Architecture: `FederatedPipeline` in `query_pipeline.rs` fans out to each brain's `QueryPipeline`, merging results by `hybrid_score`. Each brain's `Db`/`StoreReader` is opened on demand using a shared embedder. `RemoteSearchContext` in `config/mod.rs` holds the per-brain context. `brain_name: Option<String>` on `MemoryStub` carries the source attribution.
-- Single-brain queries remain the default and have no performance impact.
 
 **Memory tools:**
-- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain. Omitting `brains` defaults to single-brain search (backward compatible).
+- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
 **Records tools:**
-- `records.create_artifact` — Create a new artifact record with `text` (plain) or `data` (base64) content.
-- `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content.
+- `records.create_artifact` — Create a new artifact record with base64-encoded content.
+- `records.save_snapshot` — Save an opaque state bundle as a snapshot record.
 - `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution).
 - `records.list` — List records with optional filters (kind, status, tag, task_id).
 - `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata.
@@ -284,12 +274,6 @@ brain tasks comment <id> "comment text"
 brain tasks create --title="..." --brain=<NAME_OR_ID>          # Create in another brain
 brain tasks create --title="..." --brain=infra --link-from=BRN-01X --link-type=related  # Create + auto-link
 
-# Cross-brain fetch and close
-brain tasks show <id> --brain=<NAME_OR_ID>    # Show task details from a remote brain
-brain tasks close <id> --brain=<NAME_OR_ID>   # Close a task in a remote brain
-brain tasks list --brain=<NAME_OR_ID>         # List tasks from a remote brain
-brain tasks label batch-add area:infra BRN-01ABC --brain=<NAME_OR_ID>  # Add label to remote tasks
-
 # Registry
 brain list                     # List registered brains
 brain list --json              # List as JSON (name, id, root, prefix)
@@ -311,11 +295,6 @@ brain tasks label purge old-label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
-
-# Federated search (query across brains)
-brain query "term"                              # Search current brain
-brain query "term" --brain work --brain personal  # Search specific brains
-brain query "term" --brain all                  # Search all registered brains
 
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
