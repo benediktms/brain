@@ -132,6 +132,36 @@ impl McpContext {
         }))
     }
 
+    /// Build an McpContext from pre-opened stores.
+    ///
+    /// Used by the daemon to create per-brain MCP contexts without going
+    /// through the full bootstrap sequence (which opens its own stores).
+    pub fn from_stores(
+        db: Db,
+        store: Option<StoreReader>,
+        writable_store: Option<Store>,
+        embedder: Option<Arc<dyn Embed>>,
+        tasks: TaskStore,
+        records: RecordStore,
+        objects: ObjectStore,
+        metrics: Arc<Metrics>,
+        brain_home: std::path::PathBuf,
+        brain_name: String,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            db,
+            store,
+            writable_store,
+            embedder,
+            tasks,
+            records,
+            objects,
+            metrics,
+            brain_home,
+            brain_name,
+        })
+    }
+
     /// Attempt to open the LanceDB store and load the embedder.
     ///
     /// Returns both as a pair on success. Any error causes the entire search
