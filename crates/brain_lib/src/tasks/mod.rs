@@ -53,14 +53,13 @@ impl TaskStore {
 
             // SQLite is the source of truth — write first
             projections::apply_event(conn, event)?;
-
-            // JSONL emit is best-effort audit trail — failure does not roll back SQLite
-            if let Err(e) = events::append_event(&self.events_path, event) {
-                tracing::warn!("failed to append task event to audit log: {e}");
-            }
-
             Ok(())
-        })
+        })?;
+        // JSONL emit is best-effort audit trail — outside the write lock
+        if let Err(e) = events::append_event(&self.events_path, event) {
+            tracing::warn!("failed to append task event to audit log: {e}");
+        }
+        Ok(())
     }
 
     /// Rebuild all SQLite projections from the event log.
