@@ -16,7 +16,7 @@ use super::migrations::{
     migrate_v0_to_v1, migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5,
     migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
     migrate_v10_to_v11, migrate_v11_to_v12, migrate_v12_to_v13, migrate_v13_to_v14,
-    migrate_v14_to_v15, migrate_v15_to_v16, migrate_v16_to_v17,
+    migrate_v14_to_v15, migrate_v15_to_v16, migrate_v16_to_v17, migrate_v17_to_v18,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -50,6 +50,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             14 => migrate_v14_to_v15(&conn).unwrap(),
             15 => migrate_v15_to_v16(&conn).unwrap(),
             16 => migrate_v16_to_v17(&conn).unwrap(),
+            17 => migrate_v17_to_v18(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -153,7 +154,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "record_tags",
     "record_links",
     "record_events",
-    "task_cross_refs",
+    "brains",
 ];
 
 /// All named indexes that must exist at the current schema version.
@@ -170,7 +171,10 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_task_events_task_id",
     "idx_external_lookup",
     "idx_tasks_status_priority",
-    "idx_cross_refs_brain",
+    "idx_tasks_brain_status",
+    "idx_tasks_brain_priority",
+    "idx_records_brain",
+    "idx_records_brain_status",
 ];
 
 /// FTS5 triggers that must exist.

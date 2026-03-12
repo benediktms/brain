@@ -1,7 +1,6 @@
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use brain_lib::tasks::cross_brain::{CrossBrainCloseParams, cross_brain_close};
 use brain_lib::tasks::events::*;
 use brain_lib::utils::task_row_to_json;
 
@@ -69,42 +68,7 @@ pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
 
 // ── close ────────────────────────────────────────────────────
 
-pub fn close(ctx: &TaskCtx, ids: &[String], brain: Option<&str>) -> Result<()> {
-    if let Some(target_brain) = brain {
-        let result = cross_brain_close(
-            &ctx.store,
-            CrossBrainCloseParams {
-                target_brain: target_brain.to_string(),
-                task_ids: ids.to_vec(),
-            },
-        )?;
-
-        if ctx.json {
-            let out = json!({
-                "remote_brain_name": result.remote_brain_name,
-                "remote_brain_id": result.remote_brain_id,
-                "closed": result.closed,
-                "failed": result.failed.iter().map(|(id, err)| json!({"task_id": id, "error": err})).collect::<Vec<_>>(),
-                "unblocked": result.unblocked,
-            });
-            println!("{}", serde_json::to_string_pretty(&out)?);
-        } else {
-            println!(
-                "Brain: {} ({})",
-                result.remote_brain_name, result.remote_brain_id
-            );
-            for id in &result.closed {
-                println!("Closed task {id}");
-            }
-            for (id, err) in &result.failed {
-                println!("Failed to close {id}: {err}");
-            }
-            for id in &result.unblocked {
-                println!("  Unblocked: {id}");
-            }
-        }
-        return Ok(());
-    }
+pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> {
     let mut closed = Vec::new();
     let mut all_unblocked = Vec::new();
 

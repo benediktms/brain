@@ -229,6 +229,7 @@ pub(crate) mod tests {
                 metrics: Arc::new(crate::metrics::Metrics::new()),
                 brain_home,
                 brain_name: "test-brain".to_string(),
+                brain_id: String::new(),
             },
         )
     }

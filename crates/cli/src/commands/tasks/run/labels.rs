@@ -47,10 +47,10 @@ pub fn labels(ctx: &TaskCtx) -> Result<()> {
 
 pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
     if let Some(target_brain) = brain {
-        use brain_lib::config::RemoteBrainContext;
-        let remote = RemoteBrainContext::open(target_brain)?;
+        let (_name, _id, tasks, _records, _objects) =
+            brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
-            store: remote.tasks,
+            store: tasks,
             json: ctx.json,
         };
         return label_add(&remote_ctx, task_id, label, None);
@@ -83,10 +83,10 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
 
 pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
     if let Some(target_brain) = brain {
-        use brain_lib::config::RemoteBrainContext;
-        let remote = RemoteBrainContext::open(target_brain)?;
+        let (_name, _id, tasks, _records, _objects) =
+            brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
-            store: remote.tasks,
+            store: tasks,
             json: ctx.json,
         };
         return label_remove(&remote_ctx, task_id, label, None);
@@ -179,10 +179,10 @@ pub fn label_batch_add(
     brain: Option<&str>,
 ) -> Result<()> {
     if let Some(target_brain) = brain {
-        use brain_lib::config::RemoteBrainContext;
-        let remote = RemoteBrainContext::open(target_brain)?;
+        let (_name, _id, tasks, _records, _objects) =
+            brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
-            store: remote.tasks,
+            store: tasks,
             json: ctx.json,
         };
         return label_batch_add(&remote_ctx, task_ids, label, None);
@@ -197,10 +197,10 @@ pub fn label_batch_remove(
     brain: Option<&str>,
 ) -> Result<()> {
     if let Some(target_brain) = brain {
-        use brain_lib::config::RemoteBrainContext;
-        let remote = RemoteBrainContext::open(target_brain)?;
+        let (_name, _id, tasks, _records, _objects) =
+            brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
-            store: remote.tasks,
+            store: tasks,
             json: ctx.json,
         };
         return label_batch_remove(&remote_ctx, task_ids, label, None);

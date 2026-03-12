@@ -123,7 +123,7 @@ mod tests {
                 parent_task_id: None,
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     fn set_status(conn: &Connection, task_id: &str, status: &str) {
@@ -134,7 +134,7 @@ mod tests {
                 new_status: status.parse().unwrap(),
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     fn add_dep(conn: &Connection, task_id: &str, depends_on: &str) {
@@ -146,7 +146,7 @@ mod tests {
                 depends_on_task_id: depends_on.to_string(),
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     #[test]
@@ -155,7 +155,7 @@ mod tests {
         create_task(&conn, "t1", "Task 1", 2);
         create_task(&conn, "t2", "Task 2", 1);
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert_eq!(ready.len(), 2);
         // Lower priority number first
         assert_eq!(ready[0].task_id, "t2");
@@ -169,7 +169,7 @@ mod tests {
         create_task(&conn, "t2", "Blocked", 1);
         add_dep(&conn, "t2", "t1");
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].task_id, "t1");
     }
@@ -184,7 +184,7 @@ mod tests {
         // Complete the blocker
         set_status(&conn, "t1", "done");
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].task_id, "t2");
     }
@@ -198,7 +198,7 @@ mod tests {
 
         set_status(&conn, "t1", "cancelled");
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].task_id, "t2");
     }
@@ -210,7 +210,7 @@ mod tests {
         create_task(&conn, "t2", "Blocked by dep", 1);
         add_dep(&conn, "t2", "t1");
 
-        let blocked = list_blocked(&conn).unwrap();
+        let blocked = list_blocked(&conn, None).unwrap();
         assert_eq!(blocked.len(), 1);
         assert_eq!(blocked[0].task_id, "t2");
     }
@@ -234,9 +234,9 @@ mod tests {
                 defer_until: None,
             },
         );
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
-        let blocked = list_blocked(&conn).unwrap();
+        let blocked = list_blocked(&conn, None).unwrap();
         assert_eq!(blocked.len(), 1);
         assert_eq!(
             blocked[0].blocked_reason.as_deref(),
@@ -251,7 +251,7 @@ mod tests {
         create_task(&conn, "t2", "Task 2", 1);
         set_status(&conn, "t1", "done");
 
-        let all = list_all(&conn).unwrap();
+        let all = list_all(&conn, None).unwrap();
         assert_eq!(all.len(), 2);
     }
 
@@ -328,11 +328,11 @@ mod tests {
             },
         );
 
-        apply_event(&conn, &ev1).unwrap();
-        apply_event(&conn, &ev2).unwrap();
-        apply_event(&conn, &ev3).unwrap();
+        apply_event(&conn, &ev1, "").unwrap();
+        apply_event(&conn, &ev2, "").unwrap();
+        apply_event(&conn, &ev3, "").unwrap();
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert_eq!(ready.len(), 3);
         // Earlier due first, later due second, null due last
         assert_eq!(ready[0].task_id, "t2");
@@ -582,7 +582,7 @@ mod tests {
                 parent_task_id: Some(parent_id.to_string()),
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     fn create_epic(conn: &Connection, task_id: &str, title: &str, priority: i32) {
@@ -601,7 +601,7 @@ mod tests {
                 parent_task_id: None,
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     fn set_blocked_reason(conn: &Connection, task_id: &str, reason: Option<&str>) {
@@ -619,7 +619,7 @@ mod tests {
                 defer_until: None,
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     fn set_defer_until(conn: &Connection, task_id: &str, ts: Option<i64>) {
@@ -637,7 +637,7 @@ mod tests {
                 defer_until: ts,
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     #[test]
@@ -648,7 +648,7 @@ mod tests {
         add_dep(&conn, "epic1", "blocker"); // epic blocked by dep
         create_child_task(&conn, "child1", "epic1", "Child 1", 2);
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         let ready_ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
         assert!(
             !ready_ids.contains(&"child1"),
@@ -665,7 +665,7 @@ mod tests {
         add_dep(&conn, "epic1", "blocker");
         create_child_task(&conn, "child1", "epic1", "Child 1", 2);
 
-        let blocked = list_blocked(&conn).unwrap();
+        let blocked = list_blocked(&conn, None).unwrap();
         let blocked_ids: Vec<&str> = blocked.iter().map(|t| t.task_id.as_str()).collect();
         assert!(
             blocked_ids.contains(&"child1"),
@@ -686,14 +686,14 @@ mod tests {
         create_child_task(&conn, "child1", "epic1", "Child 1", 2);
 
         // Child should NOT be ready while epic is blocked
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert!(!ready.iter().any(|t| t.task_id == "child1"));
 
         // Complete the blocker
         set_status(&conn, "blocker", "done");
 
         // Now child should be ready
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert!(
             ready.iter().any(|t| t.task_id == "child1"),
             "child should be ready after epic's dep is resolved"
@@ -709,13 +709,13 @@ mod tests {
         create_child_task(&conn, "parent", "grandparent", "Parent", 2);
         create_child_task(&conn, "grandchild", "parent", "Grandchild", 2);
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert!(
             !ready.iter().any(|t| t.task_id == "grandchild"),
             "grandchild should NOT be ready when grandparent is blocked"
         );
 
-        let blocked = list_blocked(&conn).unwrap();
+        let blocked = list_blocked(&conn, None).unwrap();
         assert!(
             blocked.iter().any(|t| t.task_id == "grandchild"),
             "grandchild should be in blocked list"
@@ -723,7 +723,7 @@ mod tests {
 
         // Resolve grandparent's dep
         set_status(&conn, "blocker", "done");
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert!(
             ready.iter().any(|t| t.task_id == "grandchild"),
             "grandchild should be ready after grandparent unblocked"
@@ -739,13 +739,13 @@ mod tests {
         // Parent gets an explicit blocked_reason
         set_blocked_reason(&conn, "parent", Some("waiting on external"));
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert!(
             !ready.iter().any(|t| t.task_id == "child1"),
             "child should NOT be ready when parent has blocked_reason"
         );
 
-        let blocked = list_blocked(&conn).unwrap();
+        let blocked = list_blocked(&conn, None).unwrap();
         assert!(blocked.iter().any(|t| t.task_id == "child1"));
     }
 
@@ -758,13 +758,13 @@ mod tests {
         // Set defer_until far in the future
         set_defer_until(&conn, "parent", Some(i64::MAX));
 
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         assert!(
             !ready.iter().any(|t| t.task_id == "child1"),
             "child should NOT be ready when parent has future defer_until"
         );
 
-        let blocked = list_blocked(&conn).unwrap();
+        let blocked = list_blocked(&conn, None).unwrap();
         assert!(blocked.iter().any(|t| t.task_id == "child1"));
     }
 
@@ -790,7 +790,7 @@ mod tests {
         create_child_task(&conn, "child1", "parent", "Child", 2);
 
         // Parent has no deps, no blocked_reason, no defer_until — child should be ready
-        let ready = list_ready(&conn).unwrap();
+        let ready = list_ready(&conn, None).unwrap();
         let ready_ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
         assert!(
             ready_ids.contains(&"child1"),

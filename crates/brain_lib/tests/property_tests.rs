@@ -342,7 +342,7 @@ proptest! {
                     })
                     .unwrap(),
                 );
-                apply_event(conn, &event)?;
+                apply_event(conn, &event, "")?;
             }
 
             for (i, &do_change) in do_status_changes.iter().enumerate() {
@@ -362,7 +362,7 @@ proptest! {
                     })
                     .unwrap(),
                 );
-                let _ = apply_event(conn, &event);
+                let _ = apply_event(conn, &event, "");
             }
 
             let count: i64 =
@@ -412,7 +412,7 @@ proptest! {
                     })
                     .unwrap(),
                 );
-                apply_event(conn, &event)?;
+                apply_event(conn, &event, "")?;
             }
 
             for (from, to) in &edges {
@@ -432,12 +432,12 @@ proptest! {
                     .unwrap(),
                 );
                 // Gracefully skip duplicate/cycle errors
-                let _ = apply_event(conn, &event);
+                let _ = apply_event(conn, &event, "");
             }
 
-            let ready = list_ready(conn)?;
-            let blocked = list_blocked(conn)?;
-            let open = list_open(conn)?;
+            let ready = list_ready(conn, None)?;
+            let blocked = list_blocked(conn, None)?;
+            let open = list_open(conn, None)?;
 
             let ready_ids: HashSet<String> = ready.iter().map(|r| r.task_id.clone()).collect();
             let blocked_ids: HashSet<String> =

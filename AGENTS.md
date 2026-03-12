@@ -330,6 +330,70 @@ When working on tasks:
 - **Statuses**: open, in_progress, blocked, done, cancelled
 <!-- brain:end -->
 
+## Storage Architecture
+
+Brain uses a **unified single-database model** where all brains share a centralized SQLite instance alongside per-brain vector indexes and a shared object store.
+
+### Directory Layout
+
+```
+~/.brain/                                  # Central registry
+  config.toml                              # Global config + registered brains
+  brain.db                                 # Unified SQLite (all brains partitioned by brain_id)
+  objects/                                 # Shared content-addressed object store (BLAKE3-keyed)
+    <2-char prefix>/
+      <full 64-char BLAKE3 hex>            # Immutable payload bytes
+  brains/
+    <brain-name>/
+      config.toml                          # Per-brain config (overrides global)
+      lancedb/                             # Per-brain vector index (semantic space is distinct)
+      tasks/
+        events.jsonl                       # Task event log (audit trail, git-tracked from project)
+      records/
+        events.jsonl                       # Record event log (audit trail)
+~/.brain/tasks/events.jsonl                # Global task event log
+```
+
+### Core Principles
+
+1. **Unified SQLite (`~/.brain/brain.db`)**: Single database instance shared by all brains. Tasks and records tables include a `brain_id` column for partitioning. Queries filter by `brain_id` to isolate results per brain.
+
+2. **Per-Brain Vector Store (`~/.brain/brains/<name>/lancedb/`)**: Each brain maintains separate LanceDB indexes. Semantic spaces are distinct — vectors from different brains are not comparable.
+
+3. **Unified Object Store (`~/.brain/objects/`)**: Content-addressed blobs shared across all brains. Deduplication is global: two brains creating identical artifacts point to the same object on disk.
+
+4. **`brain` Parameter = `brain_id` Filter**: When MCP tools or CLI commands receive a `brain` parameter (name or ID), it resolves to a `brain_id` and filters all queries. No per-brain database routing is needed.
+
+5. **Event Logs**: Task events from project repos (`.brain/tasks/events.jsonl`) are git-tracked locally. Record events are stored per-brain (`~/.brain/brains/<name>/records/events.jsonl`). The global task event log (`~/.brain/tasks/events.jsonl`) is appended when tasks are created/modified.
+
+6. **No Cross-Brain Concept**: The `cross_brain` module was eliminated. All brains exist in the same database. Cross-brain task references are regular task dependencies with the `brain_id` field indicating the target brain.
+
+### Migration Path
+
+Existing single-brain users upgrading from per-brain storage to unified storage run:
+
+```bash
+brain migrate
+```
+
+This command:
+- Merges all per-brain `brain.db` databases into the central `~/.brain/brain.db`
+- Migrates object stores from per-brain to unified `~/.brain/objects/`
+- Preserves all event logs and task/record metadata
+- Registers all brains in the central `~/.brain/config.toml`
+
+### Relationship to Notes, Tasks, and Records
+
+Three parallel domains with decoupled lifecycles:
+
+| Domain | Source of Truth | Derived State | Purpose |
+|--------|---|---|---|
+| Notes | Markdown files in repo | SQLite metadata + LanceDB embeddings | Semantic search, indexing |
+| Tasks | SQLite (writes go here first) | Event log (`.brain/tasks/events.jsonl` git-tracked) | Intent, execution state, dependencies |
+| Records | SQLite (writes go here first) | Event log + object store (`~/.brain/brains/<name>/records/events.jsonl`) | Work products, artifacts, snapshots |
+
+All three domains live in the unified SQLite instance, partitioned by `brain_id`. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) and [docs/RECORDS.md](./docs/RECORDS.md) for detailed design.
+
 ## Project Conventions
 
 ### Label Schema (3-Dimensional Taxonomy)

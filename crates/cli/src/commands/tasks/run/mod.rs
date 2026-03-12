@@ -1,3 +1,5 @@
+use anyhow::bail;
+
 mod deps;
 mod labels;
 mod list;
@@ -50,8 +52,6 @@ pub struct CreateParams {
     pub assignee: Option<String>,
     pub parent: Option<String>,
     pub brain: Option<String>,
-    pub link_from: Option<String>,
-    pub link_type: Option<String>,
 }
 
 pub struct ListParams {
@@ -105,40 +105,8 @@ pub(super) fn priority_label(p: i32) -> &'static str {
 // ── create ──────────────────────────────────────────────────
 
 pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
-    if let Some(ref target_brain) = params.brain {
-        use brain_lib::tasks::cross_brain::{CrossBrainCreateParams, cross_brain_create};
-        let result = cross_brain_create(
-            &ctx.store,
-            CrossBrainCreateParams {
-                target_brain: target_brain.clone(),
-                title: params.title,
-                description: params.description,
-                priority: params.priority,
-                task_type: Some(params.task_type),
-                assignee: params.assignee,
-                parent: params.parent,
-                link_from: params.link_from,
-                link_type: params.link_type,
-            },
-        )?;
-        if ctx.json {
-            let out = serde_json::json!({
-                "remote_task_id": result.remote_task_id,
-                "remote_brain_name": result.remote_brain_name,
-                "remote_brain_id": result.remote_brain_id,
-                "local_ref_created": result.local_ref_created,
-            });
-            println!("{}", serde_json::to_string_pretty(&out)?);
-        } else {
-            println!(
-                "Created task {} in brain '{}'",
-                result.remote_task_id, result.remote_brain_name
-            );
-            if result.local_ref_created {
-                println!("  Cross-brain ref added to local task");
-            }
-        }
-        return Ok(());
+    if params.brain.is_some() {
+        bail!("cross-brain creation removed — all brains share a unified DB");
     }
 
     let prefix = ctx.store.get_project_prefix()?;

@@ -16,6 +16,8 @@ pub mod init;
 pub mod link;
 pub mod mcp;
 pub mod mcp_setup;
+pub mod migrate;
+pub mod migrate_workspace;
 pub mod query;
 pub mod records;
 pub mod registry;

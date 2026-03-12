@@ -4,11 +4,32 @@ use crate::error::Result;
 
 use super::{ANCESTOR_BLOCKED_CTE, TASK_COLUMNS, TaskRow, row_to_task};
 
+/// Build a brain_id filter clause and push the param value.
+///
+/// Returns `(clause, params)` where `clause` is either `""` (all brains)
+/// or `" AND t.brain_id = ?"` / `" WHERE brain_id = ?"` depending on the
+/// `prefix` argument, and `params` is a `Vec<String>` with 0 or 1 element.
+fn brain_id_filter(brain_id: Option<&str>) -> (String, Vec<String>) {
+    match brain_id {
+        Some(id) if !id.is_empty() => (" AND t.brain_id = ?".to_string(), vec![id.to_string()]),
+        _ => (String::new(), vec![]),
+    }
+}
+
+/// Build a brain_id filter for queries that use bare table alias (no `t.`).
+fn brain_id_filter_bare(brain_id: Option<&str>) -> (String, Vec<String>) {
+    match brain_id {
+        Some(id) if !id.is_empty() => (" AND brain_id = ?".to_string(), vec![id.to_string()]),
+        _ => (String::new(), vec![]),
+    }
+}
+
 /// List tasks that are ready to work on: open/in_progress, no blocked_reason,
 /// and all dependencies are done or cancelled.
 ///
 /// Ordered by priority ASC, epics first within tier, due_ts ASC NULLS LAST, updated_at DESC.
-pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
+pub fn list_ready(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
          SELECT {TASK_COLUMNS}
@@ -23,19 +44,21 @@ pub fn list_ready(conn: &Connection) -> Result<Vec<TaskRow>> {
                  AND dep.status NOT IN ('done', 'cancelled')
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
+           {brain_clause}
          ORDER BY t.priority ASC,
                   CASE WHEN t.task_type = 'epic' THEN 0 ELSE 1 END ASC,
                   t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map([], row_to_task)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
 
 /// Like `list_ready` but excludes epics — returns only actionable work items.
 /// Used by `tasks.next` so epics don't occupy top-k slots.
-pub fn list_ready_actionable(conn: &Connection) -> Result<Vec<TaskRow>> {
+pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
          SELECT {TASK_COLUMNS}
@@ -51,16 +74,18 @@ pub fn list_ready_actionable(conn: &Connection) -> Result<Vec<TaskRow>> {
                  AND dep.status NOT IN ('done', 'cancelled')
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
+           {brain_clause}
          ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map([], row_to_task)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
 
 /// List tasks that are blocked: have unresolved deps or an explicit blocked_reason.
-pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
+pub fn list_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
          SELECT {TASK_COLUMNS}
@@ -77,58 +102,68 @@ pub fn list_blocked(conn: &Connection) -> Result<Vec<TaskRow>> {
                )
                OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
            )
+           {brain_clause}
          ORDER BY t.priority ASC,
                   CASE WHEN t.task_type = 'epic' THEN 0 ELSE 1 END ASC,
                   t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map([], row_to_task)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
 
 /// List all tasks.
-pub fn list_all(conn: &Connection) -> Result<Vec<TaskRow>> {
+pub fn list_all(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter_bare(brain_id);
+    let where_clause = if brain_clause.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE 1=1{brain_clause}")
+    };
     let sql = format!(
         "SELECT {TASK_COLUMNS}
          FROM tasks
+         {where_clause}
          ORDER BY priority ASC,
                   CASE WHEN task_type = 'epic' THEN 0 ELSE 1 END ASC,
                   due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map([], row_to_task)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
 
 /// List open tasks (excludes done/cancelled).
-pub fn list_open(conn: &Connection) -> Result<Vec<TaskRow>> {
+pub fn list_open(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter_bare(brain_id);
     let sql = format!(
         "SELECT {TASK_COLUMNS}
          FROM tasks
-         WHERE status IN ('open', 'in_progress', 'blocked')
+         WHERE status IN ('open', 'in_progress', 'blocked'){brain_clause}
          ORDER BY priority ASC,
                   CASE WHEN task_type = 'epic' THEN 0 ELSE 1 END ASC,
                   due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map([], row_to_task)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
 
 /// List done/cancelled tasks, most recently updated first.
-pub fn list_done(conn: &Connection) -> Result<Vec<TaskRow>> {
+pub fn list_done(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter_bare(brain_id);
     let sql = format!(
         "SELECT {TASK_COLUMNS}
          FROM tasks
-         WHERE status IN ('done', 'cancelled')
+         WHERE status IN ('done', 'cancelled'){brain_clause}
          ORDER BY updated_at DESC, task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map([], row_to_task)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
 

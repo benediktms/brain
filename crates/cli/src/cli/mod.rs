@@ -403,6 +403,29 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: RecordsAction,
     },
+
+    /// Migrate all per-brain SQLite databases into the unified ~/.brain/brain.db (polished)
+    #[command(
+        name = "migrate",
+        long_about = "Migrate all per-brain SQLite databases into the unified ~/.brain/brain.db.\n\n\
+            Runs pre-flight checks, creates a backup of the existing unified DB, \
+            migrates each registered brain's tasks and records, verifies the result, \
+            and optionally removes the per-brain DB files.\n\n\
+            Safe to re-run: already-migrated brains are detected and skipped."
+    )]
+    Migrate {
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Remove per-brain brain.db files after successful migration
+        #[arg(long)]
+        cleanup: bool,
+    },
+
+    /// Migrate all per-brain SQLite databases into the unified ~/.brain/brain.db
+    #[command(name = "migrate-workspace")]
+    MigrateWorkspace,
 }
 
 // ── non-task subcommand enums ───────────────────────────────

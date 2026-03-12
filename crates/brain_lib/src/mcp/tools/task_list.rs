@@ -7,7 +7,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::error;
 
-use crate::config::RemoteBrainContext;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
@@ -72,19 +71,25 @@ impl TaskList {
 
         // Remote brain path
         if let Some(ref brain) = params.brain {
-            let remote = match RemoteBrainContext::open(brain) {
+            let (remote_brain_name, bid) = match ctx.resolve_brain_id(brain) {
                 Ok(r) => r,
                 Err(e) => {
-                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                    return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            let mut result = Self::execute_with_store(params, &remote.tasks);
+            let remote_tasks = match ctx.tasks_for_brain(&bid) {
+                Ok(t) => t,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
+                }
+            };
+            let mut result = Self::execute_with_store(params, &remote_tasks);
             // Inject brain name into response
             if let Ok(ref mut val) =
                 serde_json::from_str::<serde_json::Value>(&result.content[0].text)
             {
                 if let Some(obj) = val.as_object_mut() {
-                    obj.insert("brain".into(), json!(remote.brain_name));
+                    obj.insert("brain".into(), json!(remote_brain_name));
                 }
                 result.content[0].text = val.to_string();
             }

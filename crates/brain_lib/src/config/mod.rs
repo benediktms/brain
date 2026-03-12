@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::db::Db;
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::store::{Store, StoreReader};
@@ -300,59 +299,73 @@ pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::
     Ok(store)
 }
 
-/// Unified context for accessing all stores of a remote brain.
+/// Open all stores for a brain identified by name or ID.
 ///
-/// Opens a single [`crate::db::Db`] and derives [`crate::tasks::TaskStore`],
-/// [`crate::records::RecordStore`], and [`crate::records::objects::ObjectStore`].
-pub struct RemoteBrainContext {
-    pub brain_name: String,
-    pub brain_id: String,
-    pub tasks: crate::tasks::TaskStore,
-    pub records: crate::records::RecordStore,
-    pub objects: crate::records::objects::ObjectStore,
-}
+/// Resolves the brain entry, opens the unified SQLite database, and constructs
+/// [`crate::tasks::TaskStore`], [`crate::records::RecordStore`], and
+/// [`crate::records::objects::ObjectStore`] — each scoped to `brain_id`.
+///
+/// Returns `(brain_name, brain_id, tasks, records, objects)`.
+pub fn open_brain_stores(
+    name_or_id: &str,
+) -> Result<(
+    String,
+    String,
+    crate::tasks::TaskStore,
+    crate::records::RecordStore,
+    crate::records::objects::ObjectStore,
+)> {
+    let (name, entry) = resolve_brain_entry(name_or_id)?;
+    let brain_id = resolve_brain_id(&entry, &name)?;
+    let paths = resolve_paths_for_brain(&name)?;
 
-impl RemoteBrainContext {
-    /// Open a remote brain by name or ID.
-    ///
-    /// Resolves the brain entry, opens the database, and constructs all stores.
-    pub fn open(name_or_id: &str) -> Result<Self> {
-        let (name, entry) = resolve_brain_entry(name_or_id)?;
-        let brain_id = resolve_brain_id(&entry, &name)?;
-        let paths = resolve_paths_for_brain(&name)?;
-
-        // Ensure the data directory exists.
-        if let Some(parent) = paths.sqlite_db.parent() {
-            std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
-        }
-
-        let db = crate::db::Db::open(&paths.sqlite_db)?;
-        let data_dir = paths
-            .sqlite_db
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .to_path_buf();
-
-        // TaskStore
-        let tasks_dir = data_dir.join("tasks");
-        let tasks = crate::tasks::TaskStore::new(&tasks_dir, db.clone())?;
-
-        // RecordStore
-        let records_dir = data_dir.join("records");
-        let records = crate::records::RecordStore::new(&records_dir, db)?;
-
-        // ObjectStore
-        let objects_dir = data_dir.join("objects");
-        let objects = crate::records::objects::ObjectStore::new(objects_dir)?;
-
-        Ok(Self {
-            brain_name: name,
-            brain_id,
-            tasks,
-            records,
-            objects,
-        })
+    // Ensure the data directory exists.
+    if let Some(parent) = paths.sqlite_db.parent() {
+        std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
     }
+
+    let db = crate::db::Db::open(&paths.sqlite_db)?;
+    let data_dir = paths
+        .sqlite_db
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+
+    // TaskStore scoped to brain_id, with project-local audit trail if a root is available.
+    let tasks_dir = data_dir.join("tasks");
+    let audit_path = entry
+        .roots
+        .first()
+        .map(|root| root.join(".brain").join("tasks").join("events.jsonl"));
+    let tasks = {
+        let store = crate::tasks::TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id)?;
+        if let Some(p) = audit_path {
+            store.with_audit_path(p)
+        } else {
+            store
+        }
+    };
+
+    // RecordStore scoped to brain_id
+    let records_dir = data_dir.join("records");
+    let records =
+        crate::records::RecordStore::with_brain_id(&records_dir, db, &brain_id)?;
+
+    // ObjectStore — prefer unified ~/.brain/objects/ when available.
+    let brain_home_for_objects = data_dir
+        .parent() // brains/
+        .and_then(|p| p.parent()) // $BRAIN_HOME
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| data_dir.clone());
+    let unified_objects_dir = brain_home_for_objects.join("objects");
+    let objects_dir = if unified_objects_dir.exists() {
+        unified_objects_dir
+    } else {
+        data_dir.join("objects")
+    };
+    let objects = crate::records::objects::ObjectStore::new(objects_dir)?;
+
+    Ok((name, brain_id, tasks, records, objects))
 }
 
 // ---------------------------------------------------------------------------
@@ -360,17 +373,23 @@ impl RemoteBrainContext {
 // ---------------------------------------------------------------------------
 
 /// Context needed to perform search on a remote brain.
+///
+/// The `db` field has been removed — callers pass a shared `Db` reference
+/// to `FederatedPipeline` so that a single unified SQLite connection is
+/// reused across all brains. Only the per-brain LanceDB store is kept here.
 pub struct RemoteSearchContext {
     pub brain_name: String,
     pub brain_id: String,
-    pub db: Db,
     pub store: Option<StoreReader>,
 }
 
-/// Open a remote brain's search context (Db + StoreReader) by name or ID.
+/// Open a remote brain's search context (StoreReader) by name or ID.
 ///
 /// Returns `None` if the brain is not found in the registry.
-/// Errors if the brain is found but its stores cannot be opened.
+/// Errors if the brain is found but its vector store cannot be opened.
+///
+/// No separate SQLite connection is opened — callers should pass the shared
+/// unified `Db` to `FederatedPipeline` instead.
 pub async fn open_remote_search_context(
     brain_home: &Path,
     brain_key: &str,
@@ -397,12 +416,6 @@ pub async fn open_remote_search_context(
 
     let paths = resolve_paths_for_brain_with_home(&name, brain_home);
 
-    if let Some(parent) = paths.sqlite_db.parent() {
-        std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
-    }
-
-    let db = Db::open(&paths.sqlite_db)?;
-
     let store = if paths.lance_db.exists() {
         let s = Store::open_or_create(&paths.lance_db).await?;
         Some(StoreReader::from_store(&s))
@@ -413,7 +426,6 @@ pub async fn open_remote_search_context(
     Ok(Some(RemoteSearchContext {
         brain_name: name,
         brain_id,
-        db,
         store,
     }))
 }

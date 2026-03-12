@@ -51,6 +51,9 @@ pub struct RecordFilter {
     pub tag: Option<String>,
     pub task_id: Option<String>,
     pub limit: Option<usize>,
+    /// When `Some`, restrict results to records belonging to this brain.
+    /// When `None`, no brain filter is applied (all brains).
+    pub brain_id: Option<String>,
 }
 
 // -- Column constant --
@@ -97,6 +100,10 @@ pub fn list_records(conn: &Connection, filter: &RecordFilter) -> Result<Vec<Reco
     let mut conditions: Vec<&str> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
+    if filter.brain_id.is_some() {
+        conditions.push("r.brain_id = ?");
+        params.push(filter.brain_id.clone().unwrap());
+    }
     if filter.kind.is_some() {
         conditions.push("r.kind = ?");
         params.push(filter.kind.clone().unwrap());
@@ -407,7 +414,7 @@ mod tests {
                 producer: None,
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     fn create_record_with_tag(
@@ -437,7 +444,7 @@ mod tests {
                 producer: None,
             },
         );
-        apply_event(conn, &ev).unwrap();
+        apply_event(conn, &ev, "").unwrap();
     }
 
     // -- get_record tests --
@@ -483,6 +490,7 @@ mod tests {
             tag: None,
             task_id: None,
             limit: None,
+            brain_id: None,
         };
         let rows = list_records(&conn, &filter).unwrap();
         assert_eq!(rows.len(), 3);
@@ -501,6 +509,7 @@ mod tests {
             tag: None,
             task_id: None,
             limit: None,
+            brain_id: None,
         };
         let rows = list_records(&conn, &filter).unwrap();
         assert_eq!(rows.len(), 2);
@@ -516,7 +525,7 @@ mod tests {
         // Archive r2
         let archive_ev =
             RecordEvent::from_payload("r2", "agent", RecordArchivedPayload { reason: None });
-        apply_event(&conn, &archive_ev).unwrap();
+        apply_event(&conn, &archive_ev, "").unwrap();
 
         let filter = RecordFilter {
             kind: None,
@@ -524,6 +533,7 @@ mod tests {
             tag: None,
             task_id: None,
             limit: None,
+            brain_id: None,
         };
         let rows = list_records(&conn, &filter).unwrap();
         assert_eq!(rows.len(), 1);
@@ -535,6 +545,7 @@ mod tests {
             tag: None,
             task_id: None,
             limit: None,
+            brain_id: None,
         };
         let archived = list_records(&conn, &filter_archived).unwrap();
         assert_eq!(archived.len(), 1);
@@ -554,6 +565,7 @@ mod tests {
             tag: Some("important".to_string()),
             task_id: None,
             limit: None,
+            brain_id: None,
         };
         let rows = list_records(&conn, &filter).unwrap();
         assert_eq!(rows.len(), 2);
@@ -576,6 +588,7 @@ mod tests {
             tag: None,
             task_id: None,
             limit: Some(2),
+            brain_id: None,
         };
         let rows = list_records(&conn, &filter).unwrap();
         assert_eq!(rows.len(), 2);
@@ -605,8 +618,8 @@ mod tests {
                 tag: "alpha".to_string(),
             },
         );
-        apply_event(&conn, &ev1).unwrap();
-        apply_event(&conn, &ev2).unwrap();
+        apply_event(&conn, &ev1, "").unwrap();
+        apply_event(&conn, &ev2, "").unwrap();
 
         let tags = get_record_tags(&conn, "r1").unwrap();
         assert_eq!(tags, vec!["alpha", "beta"]); // sorted
@@ -636,7 +649,7 @@ mod tests {
                 chunk_id: None,
             },
         );
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let links = get_record_links(&conn, "r1").unwrap();
         assert_eq!(links.len(), 1);
@@ -794,6 +807,7 @@ mod tests {
             tag: None,
             task_id: None,
             limit: None,
+            brain_id: None,
         };
         let rows = list_records(&conn, &filter).unwrap();
         assert_eq!(rows.len(), 1);
@@ -858,7 +872,7 @@ mod tests {
                 reason: "gc".to_string(),
             },
         );
-        apply_event(&conn, &evict).unwrap();
+        apply_event(&conn, &evict, "").unwrap();
 
         // Now excluding r1, r2's payload_available=0 so it doesn't count
         let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";

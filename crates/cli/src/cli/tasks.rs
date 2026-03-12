@@ -34,17 +34,9 @@ pub(crate) enum TasksAction {
         #[arg(long)]
         parent: Option<String>,
 
-        /// Target brain name or ID (creates task in that brain instead of locally)
+        /// Target brain name or ID
         #[arg(long)]
         brain: Option<String>,
-
-        /// Local task ID to link back from (creates a cross-brain ref)
-        #[arg(long, requires = "brain")]
-        link_from: Option<String>,
-
-        /// Cross-brain ref type when linking (depends_on, blocks, related; default: related)
-        #[arg(long, requires = "link_from")]
-        link_type: Option<String>,
     },
 
     /// List tasks with optional filters

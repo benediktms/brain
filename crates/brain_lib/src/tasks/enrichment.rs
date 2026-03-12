@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::TaskStore;
-use super::queries::{CrossBrainRef, DependencySummary, TaskComment, TaskNoteLink, TaskRow};
+use super::queries::{DependencySummary, TaskComment, TaskNoteLink, TaskRow};
 use crate::utils::{ts_to_iso, ts_to_json};
 
 /// Serialize a `TaskRow` and its labels into a JSON object with ISO timestamps.
@@ -55,24 +55,6 @@ pub fn note_links_to_json(links: &[TaskNoteLink]) -> Vec<Value> {
                 "chunk_id": nl.chunk_id,
                 "file_path": nl.file_path,
             })
-        })
-        .collect()
-}
-
-/// Convert a slice of cross-brain references to a JSON array.
-pub fn cross_refs_to_json(refs: &[CrossBrainRef]) -> Vec<Value> {
-    refs.iter()
-        .map(|r| {
-            let mut obj = json!({
-                "brain_id": r.brain_id,
-                "remote_task": r.remote_task,
-                "ref_type": r.ref_type,
-                "created_at": ts_to_iso(r.created_at),
-            });
-            if let Some(ref note) = r.note {
-                obj["note"] = json!(note);
-            }
-            obj
         })
         .collect()
 }
@@ -390,41 +372,4 @@ mod tests {
         assert_eq!(ln[0]["chunk_id"], "c1");
     }
 
-    #[test]
-    fn test_cross_refs_to_json_shape() {
-        let refs = vec![CrossBrainRef {
-            brain_id: "abc12345".to_string(),
-            remote_task: "INF-01KK7".to_string(),
-            ref_type: "depends_on".to_string(),
-            note: Some("needs infra".to_string()),
-            created_at: 1_700_000_000,
-        }];
-        let result = cross_refs_to_json(&refs);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0]["brain_id"], "abc12345");
-        assert_eq!(result[0]["remote_task"], "INF-01KK7");
-        assert_eq!(result[0]["ref_type"], "depends_on");
-        assert_eq!(result[0]["note"], "needs infra");
-        assert!(result[0]["created_at"].is_string());
-    }
-
-    #[test]
-    fn test_cross_refs_to_json_without_note() {
-        let refs = vec![CrossBrainRef {
-            brain_id: "xyz99999".to_string(),
-            remote_task: "OTH-01ABC".to_string(),
-            ref_type: "related".to_string(),
-            note: None,
-            created_at: 1_700_000_000,
-        }];
-        let result = cross_refs_to_json(&refs);
-        assert_eq!(result.len(), 1);
-        assert!(result[0].get("note").is_none());
-    }
-
-    #[test]
-    fn test_cross_refs_to_json_empty() {
-        let result = cross_refs_to_json(&[]);
-        assert!(result.is_empty());
-    }
 }

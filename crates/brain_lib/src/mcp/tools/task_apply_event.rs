@@ -54,8 +54,7 @@ fn parse_and_validate_event(params: &Params) -> Result<ValidatedEvent, String> {
             "Invalid event_type: '{}'. Must be one of: task_created, \
              task_updated, status_changed, dependency_added, dependency_removed, \
              note_linked, note_unlinked, label_added, label_removed, comment_added, \
-             parent_set, external_id_added, external_id_removed, \
-             cross_brain_ref_added, cross_brain_ref_removed",
+             parent_set, external_id_added, external_id_removed",
             params.event_type
         )
     })?;
@@ -96,18 +95,6 @@ fn parse_and_validate_event(params: &Params) -> Result<ValidatedEvent, String> {
         ));
     }
 
-    // Validate ref_type for cross-brain ref events
-    if matches!(
-        event_type,
-        EventType::CrossBrainRefAdded | EventType::CrossBrainRefRemoved
-    ) && let Some(rt) = payload.get("ref_type").and_then(|v| v.as_str())
-        && !matches!(rt, "depends_on" | "blocks" | "related")
-    {
-        return Err(format!(
-            "Invalid ref_type: '{rt}'. Must be one of: depends_on, blocks, related"
-        ));
-    }
-
     Ok(ValidatedEvent {
         event_type,
         task_id_raw: params.task_id.clone(),
@@ -137,8 +124,6 @@ fn apply_event_schema() -> Value {
         "parent_set",
         "external_id_added",
         "external_id_removed",
-        "cross_brain_ref_added",
-        "cross_brain_ref_removed",
     ];
 
     json!({
@@ -170,8 +155,7 @@ fn apply_event_schema() -> Value {
                 - label_added/label_removed: {label (required)}\n\
                 - comment_added: {body (required)}\n\
                 - parent_set: {parent_task_id (string or null to clear)}\n\
-                - external_id_added/external_id_removed: {source (required), external_id (required), external_url}\n\
-                - cross_brain_ref_added/cross_brain_ref_removed: {brain_id (required), remote_task (required), ref_type (depends_on|blocks|related, default related), note}"
+                - external_id_added/external_id_removed: {source (required), external_id (required), external_url}"
             }
         },
         "required": ["event_type", "payload"]
@@ -1371,6 +1355,7 @@ mod tests {
             metrics: Arc::new(crate::metrics::Metrics::new()),
             brain_home: tmp.path().to_path_buf(),
             brain_name: "test-brain".to_string(),
+            brain_id: String::new(),
         };
 
         let registry = ToolRegistry::new();

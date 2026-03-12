@@ -351,17 +351,30 @@ impl<'a> QueryPipeline<'a> {
 
 /// Federated search across multiple brain projects.
 ///
-/// Fans out queries to each brain's `QueryPipeline` in parallel,
-/// then merges results by `hybrid_score` (descending).
+/// Task/record metadata queries use the single shared SQLite `db` (with
+/// brain_id scoping where applicable). Vector search fans out concurrently
+/// to each brain's per-brain LanceDB `StoreReader`.
+///
+/// Construct via the builder or directly:
+/// ```ignore
+/// let pipeline = FederatedPipeline {
+///     db: &ctx.db,
+///     brains: vec![
+///         ("local".into(), Some(local_store)),
+///         ("remote".into(), remote_ctx.store),
+///     ],
+///     embedder: &embedder,
+///     metrics: &metrics,
+/// };
+/// ```
 pub struct FederatedPipeline<'a> {
-    /// The local brain's SQLite database.
-    pub local_db: &'a crate::db::Db,
-    /// The local brain's vector store reader.
-    pub local_store: &'a StoreReader,
-    /// Human-readable name of the local brain (for attribution).
-    pub local_brain_name: String,
-    /// Remote brain search contexts opened via `open_remote_search_context`.
-    pub remotes: Vec<crate::config::RemoteSearchContext>,
+    /// Shared unified SQLite database (covers all brains for task/record data).
+    pub db: &'a crate::db::Db,
+    /// Per-brain entries: `(brain_name, store_reader)`.
+    ///
+    /// `store_reader` is `None` when the brain's LanceDB has not yet been
+    /// initialised — that brain is skipped for vector search with a warning.
+    pub brains: Vec<(String, Option<StoreReader>)>,
     /// Shared embedder — query is embedded once, used across all brains.
     pub embedder: &'a Arc<dyn crate::embedder::Embed>,
     /// Shared metrics handle.
@@ -369,15 +382,15 @@ pub struct FederatedPipeline<'a> {
 }
 
 impl<'a> FederatedPipeline<'a> {
-    /// Search across the local brain and all configured remote brains.
+    /// Search across all configured brains.
     ///
-    /// The query is embedded once and each brain's `QueryPipeline` is run
-    /// concurrently. Results are merged by `hybrid_score` (descending) and
+    /// The query is embedded once. Vector search fans out concurrently to
+    /// each brain's LanceDB store. FTS and chunk enrichment run against the
+    /// shared `db`. Results are merged by `hybrid_score` (descending) and
     /// packed into a single `SearchResult` within the token budget.
     ///
-    /// Remote brains whose vector store is `None` (LanceDB not yet initialised)
-    /// are skipped with a warning — the search continues with the remaining
-    /// brains.
+    /// Brains whose `store` is `None` (LanceDB not yet initialised) are
+    /// skipped with a warning — the search continues with the remaining brains.
     pub async fn search(
         &self,
         query: &str,
@@ -386,47 +399,29 @@ impl<'a> FederatedPipeline<'a> {
         k: usize,
         query_tags: &[String],
     ) -> Result<crate::retrieval::SearchResult> {
-        // ── 1. Build per-brain futures ────────────────────────────────────────
+        // ── 1. Build per-brain vector-search futures ──────────────────────────
         type BrainResult = (String, Vec<crate::ranking::RankedResult>);
 
         let mut futs: Vec<
             std::pin::Pin<Box<dyn std::future::Future<Output = BrainResult> + Send + '_>>,
         > = Vec::new();
 
-        // Local brain
-        {
-            let pipeline =
-                QueryPipeline::new(self.local_db, self.local_store, self.embedder, self.metrics);
-            let brain_name = self.local_brain_name.clone();
-            let query = query.to_string();
-            let intent = intent.to_string();
-            let query_tags = query_tags.to_vec();
-            futs.push(Box::pin(async move {
-                match pipeline.search_ranked(&query, &intent, &query_tags).await {
-                    Ok((ranked, _confidence)) => (brain_name, ranked),
-                    Err(e) => {
-                        warn!(brain = %brain_name, error = %e, "local brain search failed");
-                        (brain_name, vec![])
-                    }
-                }
-            }));
-        }
-
-        // Remote brains — skip those without a vector store
-        for remote in &self.remotes {
-            let store = match &remote.store {
+        for (brain_name, store_opt) in &self.brains {
+            let store = match store_opt {
                 Some(s) => s,
                 None => {
                     warn!(
-                        brain = %remote.brain_name,
-                        "skipping remote brain: LanceDB not initialised"
+                        brain = %brain_name,
+                        "skipping brain: LanceDB not initialised"
                     );
                     continue;
                 }
             };
 
-            let pipeline = QueryPipeline::new(&remote.db, store, self.embedder, self.metrics);
-            let brain_name = remote.brain_name.clone();
+            // Each brain gets a QueryPipeline backed by the SHARED db so that
+            // FTS and chunk-enrichment queries run against the unified SQLite.
+            let pipeline = QueryPipeline::new(self.db, store, self.embedder, self.metrics);
+            let brain_name = brain_name.clone();
             let query = query.to_string();
             let intent = intent.to_string();
             let query_tags = query_tags.to_vec();
@@ -434,7 +429,7 @@ impl<'a> FederatedPipeline<'a> {
                 match pipeline.search_ranked(&query, &intent, &query_tags).await {
                     Ok((ranked, _confidence)) => (brain_name, ranked),
                     Err(e) => {
-                        warn!(brain = %brain_name, error = %e, "remote brain search failed");
+                        warn!(brain = %brain_name, error = %e, "brain search failed");
                         (brain_name, vec![])
                     }
                 }
@@ -445,7 +440,6 @@ impl<'a> FederatedPipeline<'a> {
         let all_results: Vec<BrainResult> = join_all(futs).await;
 
         // ── 3. Merge: pair each RankedResult with its source brain name ───────
-        // Use a map from chunk_id → brain_name for post-processing.
         let mut chunk_brain: HashMap<String, String> = HashMap::new();
         let mut merged: Vec<crate::ranking::RankedResult> = Vec::new();
 
@@ -464,8 +458,8 @@ impl<'a> FederatedPipeline<'a> {
         });
 
         // ── 5. Pack into SearchResult ─────────────────────────────────────────
-        // ML summary preloading is not applied for federated search (multi-brain
-        // results have no single DB to batch-load from).
+        // ML summary preloading skipped for federated search — results span
+        // multiple brain namespaces.
         let mut search_result =
             crate::retrieval::pack_minimal(&merged, budget_tokens, k, false, &HashMap::new());
 

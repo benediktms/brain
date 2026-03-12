@@ -5,8 +5,6 @@
 
 use std::sync::Arc;
 
-use brain_lib::config::RemoteSearchContext;
-use brain_lib::db::Db;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::metrics::Metrics;
 use brain_lib::pipeline::IndexPipeline;
@@ -21,7 +19,7 @@ use tempfile::TempDir;
 struct BrainFixture {
     /// Kept alive to prevent temp directory cleanup.
     _tmp: TempDir,
-    db: Db,
+    db: brain_lib::db::Db,
     store_reader: StoreReader,
 }
 
@@ -36,7 +34,7 @@ async fn setup_brain(notes: &[(&str, &str)]) -> BrainFixture {
         std::fs::write(notes_dir.join(name), content).unwrap();
     }
 
-    let db = Db::open(&sqlite_path).unwrap();
+    let db = brain_lib::db::Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
     let pipeline = IndexPipeline::with_embedder(db, store, embedder)
@@ -46,7 +44,7 @@ async fn setup_brain(notes: &[(&str, &str)]) -> BrainFixture {
     pipeline.full_scan(&[notes_dir]).await.unwrap();
 
     // Re-open separate handles for the query path
-    let db2 = Db::open(&sqlite_path).unwrap();
+    let db2 = brain_lib::db::Db::open(&sqlite_path).unwrap();
     let store2 = Store::open_or_create(&lance_path).await.unwrap();
     let store_reader = StoreReader::from_store(&store2);
 
@@ -76,16 +74,14 @@ async fn test_federated_search_merges_results_from_multiple_brains() {
     let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
+    // brain_a's Db is the shared Db (FTS covers brain_a content).
+    // brain_b contributes via vector search only.
     let pipeline = FederatedPipeline {
-        local_db: &brain_a.db,
-        local_store: &brain_a.store_reader,
-        local_brain_name: "brain-a".to_string(),
-        remotes: vec![RemoteSearchContext {
-            brain_name: "brain-b".to_string(),
-            brain_id: "brainb001".to_string(),
-            db: Db::open(&brain_b._tmp.path().join("brain.db")).unwrap(),
-            store: Some(brain_b.store_reader),
-        }],
+        db: &brain_a.db,
+        brains: vec![
+            ("brain-a".to_string(), Some(brain_a.store_reader)),
+            ("brain-b".to_string(), Some(brain_b.store_reader)),
+        ],
         embedder: &embedder,
         metrics: &metrics,
     };
@@ -152,15 +148,11 @@ async fn test_federated_search_brain_attribution() {
     let metrics = Arc::new(Metrics::new());
 
     let pipeline = FederatedPipeline {
-        local_db: &brain_a.db,
-        local_store: &brain_a.store_reader,
-        local_brain_name: "systems-brain".to_string(),
-        remotes: vec![RemoteSearchContext {
-            brain_name: "web-brain".to_string(),
-            brain_id: "webbrain1".to_string(),
-            db: Db::open(&brain_b._tmp.path().join("brain.db")).unwrap(),
-            store: Some(brain_b.store_reader),
-        }],
+        db: &brain_a.db,
+        brains: vec![
+            ("systems-brain".to_string(), Some(brain_a.store_reader)),
+            ("web-brain".to_string(), Some(brain_b.store_reader)),
+        ],
         embedder: &embedder,
         metrics: &metrics,
     };
@@ -198,7 +190,7 @@ async fn test_federated_search_brain_attribution() {
     }
 }
 
-// ─── 3. Single brain fallback (empty remotes) ────────────────────────────────
+// ─── 3. Single brain fallback (empty brains list with just local) ─────────────
 
 #[tokio::test]
 async fn test_federated_search_single_brain_fallback() {
@@ -211,12 +203,10 @@ async fn test_federated_search_single_brain_fallback() {
     let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
-    // No remotes — only the local brain
+    // Only the local brain — no remotes
     let pipeline = FederatedPipeline {
-        local_db: &brain.db,
-        local_store: &brain.store_reader,
-        local_brain_name: "solo-brain".to_string(),
-        remotes: vec![],
+        db: &brain.db,
+        brains: vec![("solo-brain".to_string(), Some(brain.store_reader))],
         embedder: &embedder,
         metrics: &metrics,
     };
@@ -300,15 +290,11 @@ async fn test_federated_search_respects_budget() {
     let tight_budget = 200; // Very tight budget
 
     let pipeline = FederatedPipeline {
-        local_db: &brain_a.db,
-        local_store: &brain_a.store_reader,
-        local_brain_name: "brain-a".to_string(),
-        remotes: vec![RemoteSearchContext {
-            brain_name: "brain-b".to_string(),
-            brain_id: "brainb002".to_string(),
-            db: Db::open(&brain_b._tmp.path().join("brain.db")).unwrap(),
-            store: Some(brain_b.store_reader),
-        }],
+        db: &brain_a.db,
+        brains: vec![
+            ("brain-a".to_string(), Some(brain_a.store_reader)),
+            ("brain-b".to_string(), Some(brain_b.store_reader)),
+        ],
         embedder: &embedder,
         metrics: &metrics,
     };
@@ -336,23 +322,15 @@ async fn test_federated_search_skips_brain_without_lancedb() {
     )])
     .await;
 
-    // Create a remote brain context with store=None (LanceDB not initialised)
-    let no_store_tmp = TempDir::new().unwrap();
-    let no_store_db = Db::open(&no_store_tmp.path().join("brain.db")).unwrap();
-
     let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
     let pipeline = FederatedPipeline {
-        local_db: &brain_a.db,
-        local_store: &brain_a.store_reader,
-        local_brain_name: "valid-brain".to_string(),
-        remotes: vec![RemoteSearchContext {
-            brain_name: "no-store-brain".to_string(),
-            brain_id: "nostore1".to_string(),
-            db: no_store_db,
-            store: None, // LanceDB not initialised
-        }],
+        db: &brain_a.db,
+        brains: vec![
+            ("valid-brain".to_string(), Some(brain_a.store_reader)),
+            ("no-store-brain".to_string(), None), // LanceDB not initialised
+        ],
         embedder: &embedder,
         metrics: &metrics,
     };
@@ -390,9 +368,6 @@ async fn test_federated_search_skips_brain_without_lancedb() {
         no_store_results.is_empty(),
         "brain without store should contribute no results"
     );
-
-    // Keep temp dir alive
-    drop(no_store_tmp);
 }
 
 // ─── 6. Ranks by hybrid_score across brains ──────────────────────────────────
@@ -417,15 +392,11 @@ async fn test_federated_search_ranks_by_hybrid_score() {
     let metrics = Arc::new(Metrics::new());
 
     let pipeline = FederatedPipeline {
-        local_db: &brain_a.db,
-        local_store: &brain_a.store_reader,
-        local_brain_name: "brain-a".to_string(),
-        remotes: vec![RemoteSearchContext {
-            brain_name: "brain-b".to_string(),
-            brain_id: "brainb003".to_string(),
-            db: Db::open(&brain_b._tmp.path().join("brain.db")).unwrap(),
-            store: Some(brain_b.store_reader),
-        }],
+        db: &brain_a.db,
+        brains: vec![
+            ("brain-a".to_string(), Some(brain_a.store_reader)),
+            ("brain-b".to_string(), Some(brain_b.store_reader)),
+        ],
         embedder: &embedder,
         metrics: &metrics,
     };

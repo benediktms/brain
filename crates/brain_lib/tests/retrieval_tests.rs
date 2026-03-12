@@ -74,6 +74,7 @@ async fn setup_mcp() -> (McpContext, TempDir) {
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
         brain_home,
         brain_name: "test-brain".to_string(),
+        brain_id: String::new(),
     };
     (ctx, tmp)
 }
@@ -591,6 +592,7 @@ async fn test_mcp_search_minimal_returns_results() {
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
         brain_home: tmp.path().to_path_buf(),
         brain_name: "test-brain".to_string(),
+        brain_id: String::new(),
     };
 
     // Search — MockEmbedder won't give semantic results, but pipeline should not error.
@@ -665,6 +667,7 @@ async fn test_mcp_expand_returns_full_content() {
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
         brain_home: tmp.path().to_path_buf(),
         brain_name: "test-brain".to_string(),
+        brain_id: String::new(),
     };
 
     // Get the chunk_id

@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::cross_brain::{CrossBrainCloseParams, cross_brain_close};
 use crate::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
@@ -31,7 +30,6 @@ impl TaskIds {
 #[derive(Deserialize)]
 struct Params {
     task_ids: TaskIds,
-    brain: Option<String>,
 }
 
 pub(super) struct TaskClose;
@@ -52,36 +50,6 @@ impl TaskClose {
                 );
             }
         };
-
-        // Cross-brain close path — skip local close and capsule embedding entirely.
-        if let Some(brain) = params.brain {
-            let task_ids = params.task_ids.into_vec();
-            if task_ids.is_empty() {
-                return (ToolCallResult::error("task_ids must not be empty"), vec![]);
-            }
-            return match cross_brain_close(
-                &ctx.tasks,
-                CrossBrainCloseParams {
-                    target_brain: brain,
-                    task_ids,
-                },
-            ) {
-                Err(e) => (
-                    ToolCallResult::error(format!("cross-brain close failed: {e}")),
-                    vec![],
-                ),
-                Ok(r) => {
-                    let response = json!({
-                        "remote_brain_name": r.remote_brain_name,
-                        "remote_brain_id": r.remote_brain_id,
-                        "closed": r.closed,
-                        "failed": r.failed.iter().map(|(id, err)| json!({"task_id": id, "error": err})).collect::<Vec<_>>(),
-                        "unblocked": r.unblocked,
-                    });
-                    (json_response(&response), vec![])
-                }
-            };
-        }
 
         let ids = params.task_ids.into_vec();
         if ids.is_empty() {
@@ -207,7 +175,7 @@ impl McpTool for TaskClose {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Close one or more tasks (set status to done). Returns closed tasks and any newly unblocked task IDs. Partial failures (e.g. invalid IDs) return a success response with separate 'closed' and 'failed' arrays. Convenience shortcut for tasks.apply_event with status_changed. Use the brain parameter to close tasks in a remote brain.".into(),
+            description: "Close one or more tasks (set status to done). Returns closed tasks and any newly unblocked task IDs. Partial failures (e.g. invalid IDs) return a success response with separate 'closed' and 'failed' arrays. Convenience shortcut for tasks.apply_event with status_changed.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -217,10 +185,6 @@ impl McpTool for TaskClose {
                             { "type": "string" },
                             { "type": "array", "items": { "type": "string" } }
                         ]
-                    },
-                    "brain": {
-                        "type": "string",
-                        "description": "Target brain name or ID (closes tasks in that brain instead of locally)"
                     }
                 },
                 "required": ["task_ids"]

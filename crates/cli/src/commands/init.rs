@@ -148,7 +148,15 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
 
     // Seed project_prefix at init time so first task IDs are stable and derived
     // from init context (`--name` or current directory basename).
-    seed_project_prefix_if_missing(&brains_dir.join("brain.db"), &brain_name)?;
+    let db_path = brains_dir.join("brain.db");
+    seed_project_prefix_if_missing(&db_path, &brain_name)?;
+
+    // 5b. One-time import: if the project already has a .brain/tasks/events.jsonl
+    // (e.g. this is a cloned repo), replay those events into the unified SQLite.
+    let project_jsonl = brain_dir.join("tasks").join("events.jsonl");
+    if project_jsonl.exists() {
+        import_project_jsonl(&db_path, &brain_id, &project_jsonl);
+    }
 
     // 6. Upsert AGENTS.md (unless --no-agents-md)
     if !no_agents_md {
@@ -176,6 +184,36 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     );
 
     Ok(())
+}
+
+/// Import task events from a project-local JSONL file into the unified SQLite.
+///
+/// Used during `brain init` to replay events from a cloned repo's
+/// `.brain/tasks/events.jsonl` into the unified database. Errors are logged
+/// as warnings — init should not fail due to import issues.
+fn import_project_jsonl(db_path: &Path, brain_id: &str, jsonl_path: &Path) {
+    let result = (|| -> Result<usize> {
+        let db = brain_lib::db::Db::open(db_path)?;
+        let tasks_dir = db_path
+            .parent()
+            .map(|p| p.join("tasks"))
+            .unwrap_or_else(|| PathBuf::from("tasks"));
+        let store = brain_lib::tasks::TaskStore::with_brain_id(&tasks_dir, db, brain_id)?;
+        Ok(store.import_from_jsonl(jsonl_path)?)
+    })();
+    match result {
+        Ok(n) => {
+            if n > 0 {
+                println!("Imported {n} task events from {}", jsonl_path.display());
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: failed to import task events from {}: {e}",
+                jsonl_path.display()
+            );
+        }
+    }
 }
 
 fn seed_project_prefix_if_missing(db_path: &Path, seed_name: &str) -> Result<()> {
@@ -329,10 +367,10 @@ This project uses `brain` for task tracking. **Always use MCP tools for task ope
 When running as an MCP server (`brain mcp`), these tools are available:
 
 **Task tools:**
-- `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`, `cross_brain_ref_added`, `cross_brain_ref_removed`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
-- `tasks_create` — Create a task with a flat schema (no event envelope). Required param: `title`. Optional: `description`, `priority` (0-4, default 4), `task_type` (task|bug|feature|epic|spike), `assignee`, `parent` (task ID prefix), `due_ts` (ISO 8601), `defer_until` (ISO 8601), `actor` (default: mcp). For remote creation: add `brain` (target brain name or ID from registry); optionally `link_from` (local task ID) and `link_type` (depends_on|blocks|related, default: related). Returns `{task_id, task, unblocked_task_ids}` for local creation, or `{remote_task_id, remote_brain_name, remote_brain_id, local_ref_created}` for remote creation. Subsumes `tasks_create_remote`.
+- `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
+- `tasks_create` — Create a task with a flat schema (no event envelope). Required param: `title`. Optional: `description`, `priority` (0-4, default 4), `task_type` (task|bug|feature|epic|spike), `assignee`, `parent` (task ID prefix), `due_ts` (ISO 8601), `defer_until` (ISO 8601), `actor` (default: mcp). Returns `{task_id, task, unblocked_task_ids}`.
 - `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`. Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description).
-- `tasks_get` — Get full task details including relationships, comments, labels, linked notes, and cross-brain references (`cross_refs`). Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
+- `tasks_get` — Get full task details including relationships, comments, labels, and linked notes. Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
 - `tasks_next` — Get highest-priority ready tasks sorted by priority then due date. Use for "what should I work on?" queries.
 - `tasks_close` — Close one or more tasks by ID/prefix. Accepts a single string or array of task IDs. Returns closed tasks and newly unblocked task IDs.
 - `tasks_labels_summary` — Get all unique labels with counts and associated task IDs (short prefixes). No parameters. Use for label discovery and taxonomy overview.
@@ -341,13 +379,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 
 **Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
 
-**Cross-brain tools:**
-- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Use this to discover available targets before calling `tasks_create` with a `brain` parameter. Also callable as `brains_list`.
-
-**Cross-brain workflow:**
-1. Call `brains.list` to discover registered brains and their prefixes.
-2. Call `tasks_create` with the target `brain` name and task details.
-3. Optionally pass `link_from` (a local task ID) to auto-create a cross-brain reference on the local task.
+**Brain tools:**
+- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Also callable as `brains_list`.
 
 **Memory tools:**
 - `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).

@@ -4,7 +4,6 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::RemoteBrainContext;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
@@ -37,13 +36,19 @@ impl TaskLabelsBatch {
 
         // Remote brain path
         if let Some(ref brain) = params.brain {
-            let remote = match RemoteBrainContext::open(brain) {
+            let (_brain_name, bid) = match ctx.resolve_brain_id(brain) {
                 Ok(r) => r,
                 Err(e) => {
-                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                    return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            return self.execute_with_store(params, &remote.tasks);
+            let remote_tasks = match ctx.tasks_for_brain(&bid) {
+                Ok(t) => t,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
+                }
+            };
+            return self.execute_with_store(params, &remote_tasks);
         }
 
         self.execute_with_store(params, &ctx.tasks)

@@ -292,8 +292,8 @@ mod integration_tests {
 
         let (_dir, ctx) = create_test_context().await;
         let mut map = HashMap::new();
-        map.insert("test-brain".to_string(), Arc::new(ctx));
-        let router = BrainRouter::new(map);
+        map.insert("test-brain".to_string(), String::new());
+        let router = BrainRouter::new(Arc::new(ctx), map);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
         let token = server.cancellation_token();
         tokio::spawn(async move { server.run().await });
@@ -316,8 +316,8 @@ mod integration_tests {
 
         let (_dir, ctx) = create_test_context().await;
         let mut map = HashMap::new();
-        map.insert("test-brain".to_string(), Arc::new(ctx));
-        let router = BrainRouter::new(map);
+        map.insert("test-brain".to_string(), String::new());
+        let router = BrainRouter::new(Arc::new(ctx), map);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
         let token = server.cancellation_token();
         tokio::spawn(async move { server.run().await });
@@ -335,8 +335,8 @@ mod integration_tests {
 
         let (_dir, ctx) = create_test_context().await;
         let mut map = HashMap::new();
-        map.insert("my-brain".to_string(), Arc::new(ctx));
-        let router = BrainRouter::new(map);
+        map.insert("my-brain".to_string(), String::new());
+        let router = BrainRouter::new(Arc::new(ctx), map);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
         let token = server.cancellation_token();
         tokio::spawn(async move { server.run().await });

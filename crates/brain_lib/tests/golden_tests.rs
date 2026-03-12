@@ -380,11 +380,11 @@ fn golden_generate() {
     let (tasks_out, dep_list, ready_ids, blocked_ids, label_map) = db
         .with_write_conn(|conn| {
             for event in &events {
-                apply_event(conn, event)?;
+                apply_event(conn, event, "")?;
             }
 
-            let ready = list_ready(conn)?;
-            let blocked = list_blocked(conn)?;
+            let ready = list_ready(conn, None)?;
+            let blocked = list_blocked(conn, None)?;
             let deps = list_all_deps(conn)?;
             let labels_raw = list_all_labels(conn)?;
 
@@ -528,7 +528,7 @@ fn golden_task_replay() {
     let (actual_tasks, actual_deps, actual_ready, actual_blocked, actual_labels) = db
         .with_write_conn(|conn| {
             for event in &events {
-                apply_event(conn, event)?;
+                apply_event(conn, event, "")?;
             }
 
             // Query tasks
@@ -558,11 +558,11 @@ fn golden_task_replay() {
             dep_list.sort_by(|a, b| (&a.task_id, &a.depends_on).cmp(&(&b.task_id, &b.depends_on)));
 
             // Query ready/blocked
-            let ready = list_ready(conn)?;
+            let ready = list_ready(conn, None)?;
             let mut ready_ids: Vec<String> = ready.iter().map(|r| r.task_id.clone()).collect();
             ready_ids.sort();
 
-            let blocked = list_blocked(conn)?;
+            let blocked = list_blocked(conn, None)?;
             let mut blocked_ids: Vec<String> = blocked.iter().map(|r| r.task_id.clone()).collect();
             blocked_ids.sort();
 
@@ -612,10 +612,10 @@ fn golden_task_replay_idempotent() {
     let (count1, ready1, deps1_len, labels1) = db
         .with_write_conn(|conn| {
             for event in &events {
-                apply_event(conn, event)?;
+                apply_event(conn, event, "")?;
             }
             let count: i64 = conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))?;
-            let ready: Vec<String> = list_ready(conn)?
+            let ready: Vec<String> = list_ready(conn, None)?
                 .iter()
                 .map(|r| r.task_id.clone())
                 .collect();
@@ -629,7 +629,7 @@ fn golden_task_replay_idempotent() {
         .with_write_conn(|conn| {
             rebuild(conn, &events)?;
             let count: i64 = conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))?;
-            let ready: Vec<String> = list_ready(conn)?
+            let ready: Vec<String> = list_ready(conn, None)?
                 .iter()
                 .map(|r| r.task_id.clone())
                 .collect();

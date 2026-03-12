@@ -164,16 +164,21 @@ pub async fn run(params: QueryParams) -> Result<()> {
     let local_store_reader = brain_lib::store::StoreReader::from_store(&local_store);
     let local_db = brain_lib::db::Db::open(&params.sqlite_path)?;
 
-    // Open remote search contexts for all requested brains that are not the local brain.
-    let mut remotes = Vec::new();
+    // Build brain list: local first, then each remote.
+    // All share the same unified `local_db`.
+    let mut brains: Vec<(String, Option<brain_lib::store::StoreReader>)> = Vec::new();
+    brains.push((local_brain_name.clone(), Some(local_store_reader)));
+
     for key in &brain_keys {
         if key == &local_brain_name {
-            // Local brain is already included via local_db / local_store_reader.
+            // Local brain already added above.
             continue;
         }
         match open_remote_search_context(&brain_home, key, &params.model_dir, &embedder_arc).await?
         {
-            Some(ctx) => remotes.push(ctx),
+            Some(ctx) => {
+                brains.push((ctx.brain_name, ctx.store));
+            }
             None => {
                 eprintln!("warning: brain '{key}' not found in registry, skipping");
             }
@@ -181,10 +186,8 @@ pub async fn run(params: QueryParams) -> Result<()> {
     }
 
     let federated = FederatedPipeline {
-        local_db: &local_db,
-        local_store: &local_store_reader,
-        local_brain_name: local_brain_name.clone(),
-        remotes,
+        db: &local_db,
+        brains,
         embedder: &embedder_arc,
         metrics: &metrics,
     };

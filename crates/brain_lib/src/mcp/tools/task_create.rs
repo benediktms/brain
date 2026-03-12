@@ -7,7 +7,6 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::cross_brain::{CrossBrainCreateParams, cross_brain_create};
 use crate::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id};
 use crate::utils::{parse_timestamp, task_row_to_json};
 
@@ -51,18 +50,6 @@ fn create_schema() -> Value {
                 "type": "string",
                 "description": "Defer until date as ISO 8601 string"
             },
-            "brain": {
-                "type": "string",
-                "description": "Target brain name or ID for remote creation. When omitted, creates locally."
-            },
-            "link_from": {
-                "type": "string",
-                "description": "Local task ID to create a cross-brain reference from (requires brain param)"
-            },
-            "link_type": {
-                "type": "string",
-                "description": "Cross-brain ref type: depends_on|blocks|related. Default: related"
-            },
             "actor": {
                 "type": "string",
                 "description": "Who is creating the task. Default: mcp",
@@ -84,9 +71,6 @@ struct Params {
     parent: Option<String>,
     due_ts: Option<Value>,
     defer_until: Option<Value>,
-    brain: Option<String>,
-    link_from: Option<String>,
-    link_type: Option<String>,
     #[serde(default = "default_actor")]
     actor: String,
 }
@@ -122,44 +106,7 @@ impl TaskCreate {
             None
         };
 
-        // Validate link_type if provided
-        if let Some(ref lt) = params.link_type
-            && !matches!(lt.as_str(), "depends_on" | "blocks" | "related")
         {
-            return ToolCallResult::error(format!(
-                "Invalid link_type: '{lt}'. Must be one of: depends_on, blocks, related"
-            ));
-        }
-
-        if let Some(brain) = params.brain {
-            // Remote creation path
-            let cross_params = CrossBrainCreateParams {
-                target_brain: brain,
-                title: params.title,
-                description: params.description,
-                priority: params.priority,
-                task_type,
-                assignee: params.assignee,
-                parent: params.parent,
-                link_from: params.link_from,
-                link_type: params.link_type,
-            };
-
-            match cross_brain_create(&ctx.tasks, cross_params) {
-                Ok(result) => {
-                    let response = json!({
-                        "remote_task_id": result.remote_task_id,
-                        "remote_brain_name": result.remote_brain_name,
-                        "remote_brain_id": result.remote_brain_id,
-                        "local_ref_created": result.local_ref_created,
-                        "remote_ref_created": result.remote_ref_created,
-                    });
-                    json_response(&response)
-                }
-                Err(e) => ToolCallResult::error(format!("Failed to create remote task: {e}")),
-            }
-        } else {
-            // Local creation path
             let mut warnings: Vec<Warning> = Vec::new();
 
             // Parse timestamps
@@ -256,7 +203,7 @@ impl McpTool for TaskCreate {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Create a task. When 'brain' is omitted, creates a task in the current brain's event store and returns the resulting task state (same as tasks.apply_event with event_type: task_created, but with a simpler flat schema). When 'brain' is provided, creates the task in the specified remote brain (resolved from the global registry at ~/.brain/config.toml) and optionally links it to a local task via link_from/link_type. Use brains.list to discover available brain names. Defaults: priority=4 (backlog), status=open, actor=mcp.".into(),
+            description: "Create a task in the current brain's event store and returns the resulting task state (same as tasks.apply_event with event_type: task_created, but with a simpler flat schema). Defaults: priority=4 (backlog), status=open, actor=mcp.".into(),
             input_schema: create_schema(),
         }
     }
@@ -396,65 +343,6 @@ mod tests {
         );
         let child_parsed: Value = serde_json::from_str(&child_result.content[0].text).unwrap();
         assert_eq!(child_parsed["task"]["title"], "Child task");
-    }
-
-    #[tokio::test]
-    async fn test_create_remote_missing_brain_lookup() {
-        let (_dir, ctx) = create_test_context().await;
-
-        // No real brain registry is set up in the test context, so any brain
-        // lookup will fail. This verifies that the error is surfaced correctly.
-        let params = json!({
-            "brain": "nonexistent-brain",
-            "title": "Should fail"
-        });
-        let result = call(params, &ctx).await;
-        assert_eq!(result.is_error, Some(true));
-        assert!(
-            result.content[0]
-                .text
-                .contains("Failed to create remote task"),
-            "expected 'Failed to create remote task', got: {}",
-            result.content[0].text
-        );
-    }
-
-    #[tokio::test]
-    async fn test_create_remote_invalid_task_type() {
-        let (_dir, ctx) = create_test_context().await;
-
-        let params = json!({
-            "brain": "infra",
-            "title": "My task",
-            "task_type": "story"
-        });
-        let result = call(params, &ctx).await;
-        assert_eq!(result.is_error, Some(true));
-        assert!(
-            result.content[0].text.contains("Invalid task_type"),
-            "expected 'Invalid task_type', got: {}",
-            result.content[0].text
-        );
-        assert!(result.content[0].text.contains("story"));
-    }
-
-    #[tokio::test]
-    async fn test_create_remote_invalid_link_type() {
-        let (_dir, ctx) = create_test_context().await;
-
-        let params = json!({
-            "brain": "infra",
-            "title": "My task",
-            "link_type": "references"
-        });
-        let result = call(params, &ctx).await;
-        assert_eq!(result.is_error, Some(true));
-        assert!(
-            result.content[0].text.contains("Invalid link_type"),
-            "expected 'Invalid link_type', got: {}",
-            result.content[0].text
-        );
-        assert!(result.content[0].text.contains("references"));
     }
 
     #[tokio::test]

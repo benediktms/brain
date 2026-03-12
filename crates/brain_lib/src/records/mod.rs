@@ -372,6 +372,11 @@ pub struct SnapshotRecord {
 pub struct RecordStore {
     events_path: PathBuf,
     db: Db,
+    /// Brain ID that scopes this store's reads and writes.
+    ///
+    /// Empty string means "all brains" (legacy / single-brain mode).
+    /// Non-empty means filter reads by this brain_id and stamp it on writes.
+    pub brain_id: String,
 }
 
 impl RecordStore {
@@ -384,6 +389,17 @@ impl RecordStore {
         Ok(Self {
             events_path: records_dir.join("events.jsonl"),
             db,
+            brain_id: String::new(),
+        })
+    }
+
+    /// Create a new `RecordStore` with an explicit brain_id scope.
+    pub fn with_brain_id(records_dir: &std::path::Path, db: Db, brain_id: &str) -> Result<Self> {
+        std::fs::create_dir_all(records_dir)?;
+        Ok(Self {
+            events_path: records_dir.join("events.jsonl"),
+            db,
+            brain_id: brain_id.to_string(),
         })
     }
 
@@ -433,9 +449,10 @@ impl RecordStore {
     /// SQLite record is the source of truth. If the SQLite write fails, the
     /// whole operation fails and nothing is written to the log.
     pub fn apply_and_append(&self, event: &events::RecordEvent) -> Result<()> {
+        let brain_id = self.brain_id.clone();
         // SQLite is the authoritative write — if this fails, the operation fails
         self.db
-            .with_write_conn(|conn| projections::apply_event(conn, event))?;
+            .with_write_conn(|conn| projections::apply_event(conn, event, &brain_id))?;
         // JSONL emit is best-effort audit trail
         if let Err(e) = events::append_event(&self.events_path, event) {
             tracing::warn!("failed to append record event to audit log: {e}");
@@ -450,9 +467,27 @@ impl RecordStore {
             .with_read_conn(|conn| queries::get_record(conn, record_id))
     }
 
+    /// Return `Some(brain_id)` when this store is scoped to a specific brain,
+    /// or `None` when it operates in unscoped mode.
+    fn brain_id_filter(&self) -> Option<String> {
+        if self.brain_id.is_empty() {
+            None
+        } else {
+            Some(self.brain_id.clone())
+        }
+    }
+
     pub fn list_records(&self, filter: &queries::RecordFilter) -> Result<Vec<queries::RecordRow>> {
+        let scoped = queries::RecordFilter {
+            brain_id: self.brain_id_filter().or_else(|| filter.brain_id.clone()),
+            kind: filter.kind.clone(),
+            status: filter.status.clone(),
+            tag: filter.tag.clone(),
+            task_id: filter.task_id.clone(),
+            limit: filter.limit,
+        };
         self.db
-            .with_read_conn(|conn| queries::list_records(conn, filter))
+            .with_read_conn(|conn| queries::list_records(conn, &scoped))
     }
 
     pub fn get_record_tags(&self, record_id: &str) -> Result<Vec<String>> {

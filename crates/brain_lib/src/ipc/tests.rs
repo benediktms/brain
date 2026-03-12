@@ -27,8 +27,8 @@ async fn start_server(
 ) -> (tempfile::TempDir, tokio_util::sync::CancellationToken) {
     let (dir, ctx) = create_test_context().await;
     let mut map = HashMap::new();
-    map.insert("test-brain".to_string(), Arc::new(ctx));
-    let router = BrainRouter::new(map);
+    map.insert("test-brain".to_string(), String::new());
+    let router = BrainRouter::new(Arc::new(ctx), map);
     let server = IpcServer::bind(sock, router).expect("bind failed");
     let token = server.cancellation_token();
     let token2 = token.clone();
@@ -314,8 +314,8 @@ async fn ipc_stale_socket_cleanup() {
     // Bind should detect the stale file, remove it, and succeed.
     let (dir, ctx) = create_test_context().await;
     let mut map = HashMap::new();
-    map.insert("test-brain".to_string(), Arc::new(ctx));
-    let router = BrainRouter::new(map);
+    map.insert("test-brain".to_string(), String::new());
+    let router = BrainRouter::new(Arc::new(ctx), map);
 
     let server = IpcServer::bind(&sock, router).expect("bind should succeed after stale removal");
     let token = server.cancellation_token();
@@ -387,8 +387,8 @@ async fn ipc_graceful_shutdown() {
 
     let (dir, ctx) = create_test_context().await;
     let mut map = HashMap::new();
-    map.insert("test-brain".to_string(), Arc::new(ctx));
-    let router = BrainRouter::new(map);
+    map.insert("test-brain".to_string(), String::new());
+    let router = BrainRouter::new(Arc::new(ctx), map);
 
     let server = IpcServer::bind(&sock, router).expect("bind failed");
     let token = server.cancellation_token();

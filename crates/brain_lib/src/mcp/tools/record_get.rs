@@ -4,7 +4,6 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::RemoteBrainContext;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
@@ -25,18 +24,28 @@ impl RecordGet {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let remote_ctx;
-        let (records, remote_brain_name) = if let Some(ref brain) = params.brain {
-            remote_ctx = match RemoteBrainContext::open(brain) {
-                Ok(r) => r,
-                Err(e) => {
-                    return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+        let remote_brain: Option<(String, crate::records::RecordStore)> =
+            if let Some(ref brain) = params.brain {
+                let (brain_name, bid) = match ctx.resolve_brain_id(brain) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
+                    }
+                };
+                match ctx.records_for_brain(&bid) {
+                    Ok(recs) => Some((brain_name, recs)),
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
+                    }
                 }
+            } else {
+                None
             };
-            (&remote_ctx.records, Some(remote_ctx.brain_name.clone()))
-        } else {
-            (&ctx.records, None)
-        };
+        let (records, remote_brain_name): (&crate::records::RecordStore, Option<String>) =
+            match remote_brain {
+                Some((ref name, ref recs)) => (recs, Some(name.clone())),
+                None => (&ctx.records, None),
+            };
 
         let record_id = match records.resolve_record_id(&params.record_id) {
             Ok(id) => id,

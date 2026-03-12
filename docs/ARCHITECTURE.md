@@ -19,16 +19,16 @@ Notes, tasks, and records are parallel subsystems that can cross-reference each 
 ```
 ~/.brain/                                  # Central registry
   config.toml                              # Global config + registered brains
+  brain.db                                 # Unified SQLite (all brains partitioned by brain_id)
+  objects/                                 # Shared content-addressed object store (BLAKE3-keyed)
+    <2-char prefix>/
+      <full 64-char BLAKE3 hex>            # Payload bytes, immutable
   brains/
     <brain-name>/                          # Per-brain derived data
       config.toml                          # Per-brain config (overrides global)
-      brain.db                             # SQLite projections (notes + tasks + records)
-      lancedb/                             # Vector indexes
+      lancedb/                             # Per-brain vector index (semantic space is distinct)
       records/
         events.jsonl                       # Record event log (audit trail)
-      objects/                             # Content-addressed payload store (BLAKE3)
-        <2-char prefix>/
-          <full 64-char BLAKE3 hex>        # Payload bytes, immutable
 ~/code/my-project/                         # A project with brain notes
   .brain/
     brain.toml                             # Brain marker: name + note paths
@@ -59,15 +59,17 @@ notes = ["~/notes"]
 
 **Key design decisions:**
 - `brain init` in a project creates `.brain/brain.toml` and registers the brain centrally
-- All derived data (SQLite, LanceDB) lives in `~/.brain/brains/<name>/`, not in the project
+- **Unified SQLite** (`~/.brain/brain.db`) is shared by all brains. Tasks and records tables partition by `brain_id`.
+- Per-brain vector indexes (`~/.brain/brains/<name>/lancedb/`) maintain distinct semantic spaces — vectors from different brains are not comparable.
+- Object store (`~/.brain/objects/`) is shared globally — deduplication is across all brains.
 - SQLite is the runtime source of truth for tasks and records. Writes are applied to SQLite first.
-- The task event log (`.brain/tasks/events.jsonl`, git-tracked) is a best-effort audit trail. Event log failures do not block operations.
+- Task event logs (`.brain/tasks/events.jsonl` in project repos) are git-tracked for local audit trails. Record event logs (`~/.brain/brains/<name>/records/events.jsonl`) are per-brain best-effort audit trails.
 - `rebuild_projections()` is retained only for recovery; normal startup reads hit SQLite directly.
 - A brain can index multiple note directories (e.g., `docs/` and `notes/` from one project)
 - Moving a project just means updating the path in the registry
 - No symlinks — just paths in config files
 - Note links (`NoteLinked` events) are intentionally soft references — no chunk existence validation at write time. This enables future cross-brain chunk references without schema changes
-- Cross-brain references (Phase 4): separate `Option<String>` brain field on dependency/note-link payloads, not composite `brain:id` strings. NULL = local (zero-cost common case), non-NULL = cross-brain soft reference. Separate field enables efficient SQLite indexing, clean JOINs, and `WHERE brain IS NOT NULL` stale-ref queries
+- Cross-brain task references use a `brain_id` field on dependency payloads. NULL = local brain (zero-cost common case), non-NULL = remote brain ID. Separate field enables efficient SQLite indexing and clean JOINs to filter by brain
 
 ## System Architecture
 
@@ -145,13 +147,13 @@ graph TB
 
 ## Storage Role Separation
 
-| Concern | SQLite (Runtime Source of Truth) | LanceDB (Data Plane) | Task Event Log | Record Event Log | Object Store |
+| Concern | SQLite (Runtime Source of Truth) | LanceDB (Per-Brain Data Plane) | Task Event Log | Record Event Log | Object Store (Global) |
 |---------|----------------------|---------------------|----------------|-----------------|--------------|
-| **Role** | Transactional runtime state — writes succeed here first | Vector similarity search | Best-effort audit trail (task events) | Best-effort audit trail (record events) | Record payload storage |
-| **Stores** | File identity, content hashes, chunk metadata, links, tasks, records, FTS5 index, summaries, schema versions | Chunk text, 384-dim embeddings, tags, timestamps, scores | Append-only task events (ULID-ordered JSONL, git-tracked) | Append-only record events (ULID-ordered JSONL) | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
-| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 (reads hit directly, no rebuild) | kNN vector search, batch upserts | Sequential append (failures logged but non-blocking) | Sequential append (failures logged but non-blocking) | Write-once keyed by hash, read by hash path |
-| **Concurrency** | WAL mode (concurrent readers, single writer) | Arc\<Table\> shared across threads | Single writer (append-only) | Single writer (append-only) | Atomic rename on write; concurrent reads safe |
-| **Consistency anchor** | SQLite is authoritative for all runtime state. LanceDB and event logs are kept consistent, but failures are non-fatal. | Derived from SQLite state; may lag during vector index failures | Event log is audit trail only. Failures do not block operations. Retained for recovery via rebuild_projections(). | Event log is audit trail only. Failures do not block operations. Payloads are write-before-event-append. | Hash is the identity; write-before-event-append ordering prevents dangling refs |
+| **Role** | Transactional runtime state — partitioned by brain_id, writes succeed here first | Per-brain vector similarity search — semantic spaces are independent | Best-effort audit trail (task events, git-tracked) | Best-effort audit trail (record events per brain) | Global payload storage — deduplication across all brains |
+| **Stores** | File identity, content hashes, chunk metadata, links, tasks (partitioned by brain_id), records (partitioned by brain_id), FTS5 index, summaries, schema versions | Per-brain chunk text, 384-dim embeddings, tags, timestamps, scores | Append-only task events (ULID-ordered JSONL, git-tracked in project) | Append-only record events per brain (ULID-ordered JSONL) | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
+| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 (reads hit directly, no rebuild). Queries filter by brain_id to isolate results. | Per-brain kNN vector search, batch upserts | Sequential append (failures logged but non-blocking) | Sequential append (failures logged but non-blocking) | Write-once keyed by hash, read by hash path. Shared across all brains. |
+| **Concurrency** | WAL mode (concurrent readers, single writer across all brains) | Arc\<Table\> per brain, shared across threads | Single writer per project (append-only) | Single writer per brain (append-only) | Atomic rename on write; concurrent reads safe |
+| **Consistency anchor** | SQLite is authoritative for all runtime state across all brains. LanceDB and event logs are kept consistent per-brain, but failures are non-fatal. | Derived per-brain from SQLite state; may lag during vector index failures | Event log is audit trail only. Failures do not block operations. Retained for recovery via rebuild_projections(). | Event log is audit trail only. Failures do not block operations. Payloads are write-before-event-append. | Hash is the identity; write-before-event-append ordering prevents dangling refs. Deduplication is global. |
 
 ## Sequence Diagrams
 
@@ -169,33 +171,34 @@ sequenceDiagram
     participant MCP as MCP Server
 
     Main->>Config: Load brain.toml / env vars / defaults
-    Main->>DB: Open SQLite (WAL mode, foreign keys)
+    Main->>Config: Resolve brain_id from registry
+    Main->>DB: Open unified SQLite (~/.brain/brain.db, WAL mode, foreign keys)
     Main->>DB: Run schema migrations (check schema_version)
-    Main->>Vec: Connect LanceDB (open/create chunks table)
+    Main->>Vec: Connect per-brain LanceDB (~/.brain/brains/&lt;name&gt;/lancedb/)
     Main->>Vec: Check lancedb_schema_version vs expected
     alt Schema mismatch
         Vec-->>Main: Full rebuild required
-        Main->>DB: Trigger rebuild_projections() (recovery only)
-        Main->>DB: Clear all content_hash values
+        Main->>DB: Trigger rebuild_projections() for this brain (recovery only)
+        Main->>DB: Clear all content_hash values for brain_id = ?
     end
     Main->>Model: Load BGE-small weights (mmap safetensors)
     Main->>Model: Load tokenizer.json
     Main->>Model: Validate hidden_size == 384
     Note over Model: Model kept hot in RAM for session lifetime
 
-    Main->>Scanner: Full vault scan (catch offline changes)
+    Main->>Scanner: Full vault scan (catch offline changes, filtered by brain_id)
     loop Each *.md file
-        Scanner->>DB: Check content_hash
+        Scanner->>DB: Check content_hash WHERE file_id = ? AND brain_id = ?
         alt Hash changed or new file
             Scanner->>Scanner: Queue for indexing
         end
         alt File in DB but not on disk
-            Scanner->>DB: Soft-delete (set deleted_at)
-            Scanner->>Vec: Delete chunks for file_id
+            Scanner->>DB: Soft-delete (set deleted_at WHERE file_id = ? AND brain_id = ?)
+            Scanner->>Vec: Delete chunks for file_id from per-brain LanceDB
         end
     end
     Scanner->>Main: Scan complete (X changed, Y deleted)
-    Note over Main: No rebuild on normal startup — reads hit SQLite directly
+    Note over Main: No rebuild on normal startup — reads hit SQLite directly<br/>Unified DB is queried by (file_id, brain_id) tuples
 
     par Start concurrent services
         Main->>Watcher: Start watching vault (recursive, 250ms debounce)
@@ -224,11 +227,11 @@ sequenceDiagram
 
     HG->>HG: Read file, normalize whitespace
     HG->>HG: Compute BLAKE3 hash
-    HG->>DB: SELECT content_hash FROM files WHERE path = ?
+    HG->>DB: SELECT content_hash FROM files WHERE path = ? AND brain_id = ?
     alt Hash unchanged
         HG-->>HG: Skip (log at debug level)
     else Hash changed or new file
-        HG->>DB: SET indexing_state = 'indexing_started'
+        HG->>DB: SET indexing_state = 'indexing_started' WHERE brain_id = ?
 
         HG->>Parser: Parse markdown content
         Parser->>Parser: Extract YAML frontmatter
@@ -243,13 +246,13 @@ sequenceDiagram
 
         par SQLite metadata update
             Chunker->>DB: BEGIN TRANSACTION
-            Chunker->>DB: Upsert files row (file_id, path, hash)
-            Chunker->>DB: Delete old chunks for file_id
-            Chunker->>DB: Insert new chunk metadata
-            Chunker->>DB: Delete old links, insert new links
-            Chunker->>DB: Delete old tasks, insert new tasks
+            Chunker->>DB: Upsert files row (file_id, brain_id, path, hash)
+            Chunker->>DB: Delete old chunks for (file_id, brain_id)
+            Chunker->>DB: Insert new chunk metadata with brain_id
+            Chunker->>DB: Delete old links, insert new links (all partitioned by brain_id)
+            Chunker->>DB: Delete old tasks, insert new tasks (all partitioned by brain_id)
             Chunker->>DB: COMMIT
-            Note over DB: FTS5 triggers auto-update fts_chunks
+            Note over DB: FTS5 triggers auto-update fts_chunks<br/>All writes include brain_id partition key
         and Embedding
             Chunker->>Emb: embed_batch(chunk_contents)
             Emb->>Emb: Tokenize (padding, attention masks)
@@ -259,8 +262,8 @@ sequenceDiagram
             Emb-->>Chunker: Vec<Vec<f32>> (batch_size x 384)
         end
 
-        Chunker->>Vec: merge_insert(chunks + embeddings)
-        Note over Vec: on chunk_id:<br/>matched → update_all<br/>not matched → insert_all<br/>not matched by source<br/>  WHERE file_id = ? → delete
+        Chunker->>Vec: merge_insert(chunks + embeddings to per-brain LanceDB)
+        Note over Vec: Per-brain index:<br/>on chunk_id:<br/>matched → update_all<br/>not matched → insert_all<br/>not matched by source<br/>  WHERE file_id = ? → delete
 
         alt merge_insert fails (CommitConflict)
             Vec-->>Chunker: Retry (3x, exponential backoff)
@@ -287,14 +290,14 @@ sequenceDiagram
     LLM->>MCP: tools/call: memory.search_minimal
     Note over LLM,MCP: { query, intent: "lookup", filters,<br/>budget_tokens: 600, k: 12 }
 
-    MCP->>HR: search_minimal(query, intent, filters, budget)
+    MCP->>HR: search_minimal(query, intent, filters, budget, brain_id=?)
     HR->>HR: Resolve intent to weight profile
 
     par Vector retrieval
-        HR->>Vec: vector_search(embed(query), limit=50, metric=dot)
+        HR->>Vec: vector_search(embed(query), limit=50, metric=dot, per-brain LanceDB)
         Vec-->>HR: top-50 by vector similarity (chunk_id, sim_v)
     and Keyword retrieval
-        HR->>DB: FTS5 query (BM25 ranking, limit=50)
+        HR->>DB: FTS5 query (BM25 ranking, limit=50) WHERE brain_id = ?
         DB-->>HR: top-50 by BM25 (chunk_id, bm25_score)
     end
 
@@ -302,12 +305,12 @@ sequenceDiagram
 
     opt Graph expansion (1-hop, Phase 3+)
         HR->>HR: Take top-10 seeds from initial fusion
-        HR->>DB: SELECT linked chunk_ids FROM links<br/>WHERE src_chunk_id IN (seeds)<br/>OR dst_chunk_id IN (seeds)
+        HR->>DB: SELECT linked chunk_ids FROM links<br/>WHERE (src_chunk_id IN (seeds) OR dst_chunk_id IN (seeds))<br/>AND brain_id = ?
         DB-->>HR: Neighbor chunk_ids (capped at 100)
         HR->>HR: Add neighbors to candidate pool, deduplicate
     end
 
-    HR->>DB: Batch enrich: SELECT backlink_count, tags,<br/>updated_at, importance<br/>WHERE chunk_id IN (...)
+    HR->>DB: Batch enrich: SELECT backlink_count, tags,<br/>updated_at, importance<br/>WHERE chunk_id IN (...) AND brain_id = ?
     DB-->>HR: Metadata for all candidates
 
     loop Each candidate
@@ -358,37 +361,37 @@ sequenceDiagram
     Note over LLM: Agent completes a task and wants to record what happened
 
     LLM->>MCP: tools/call: memory.write_episode
-    Note over LLM,MCP: { goal: "Investigate indexing latency",<br/>actions: ["profiled embed_batch", "found bottleneck"],<br/>outcome: "Batch size 32 is optimal for CPU",<br/>tags: ["performance", "embedding"],<br/>importance: 0.8 }
+    Note over LLM,MCP: { goal: "Investigate indexing latency",<br/>actions: ["profiled embed_batch", "found bottleneck"],<br/>outcome: "Batch size 32 is optimal for CPU",<br/>tags: ["performance", "embedding"],<br/>importance: 0.8,<br/>brain_id: "..." }
 
     MCP->>MCP: Generate episode_id (UUID v7)
     MCP->>MCP: Auto-extract additional tags from content
-    MCP->>DB: INSERT INTO summaries (kind='episode', ...)
+    MCP->>DB: INSERT INTO summaries (kind='episode', brain_id, ...)
     MCP->>Emb: embed(goal + " " + outcome)
     Emb-->>MCP: 384-dim vector
-    MCP->>Vec: Insert episode embedding row
+    MCP->>Vec: Insert episode embedding row into per-brain LanceDB
     MCP-->>LLM: { episode_id, created_at, tags, importance }
 
     Note over LLM: Later, after accumulating several episodes...<br/>Agent decides to consolidate
 
     LLM->>MCP: tools/call: memory.reflect
-    Note over LLM,MCP: { memory_ids: [ep_1, ep_2, ep_3],<br/>reflection_prompt: "Summarize perf findings",<br/>budget_tokens: 500 }
+    Note over LLM,MCP: { memory_ids: [ep_1, ep_2, ep_3],<br/>reflection_prompt: "Summarize perf findings",<br/>budget_tokens: 500,<br/>brain_id: "..." }
 
-    MCP->>DB: Fetch episodes by IDs from summaries table
-    MCP->>Vec: Fetch episode content
+    MCP->>DB: Fetch episodes by IDs from summaries table WHERE brain_id = ?
+    MCP->>Vec: Fetch episode content from per-brain LanceDB
     MCP-->>LLM: Source material formatted for synthesis
     Note over MCP,LLM: { sources: [{ id, goal, outcome, ... }],<br/>prompt: "Synthesize into a summary" }
 
     Note over LLM: LLM generates the reflection summary<br/>(brain does NOT run a generative model)
 
     LLM->>MCP: tools/call: memory.reflect (store result)
-    Note over LLM,MCP: { summary: "Embedding batch size 32 is optimal...",<br/>source_ids: [ep_1, ep_2, ep_3] }
+    Note over LLM,MCP: { summary: "Embedding batch size 32 is optimal...",<br/>source_ids: [ep_1, ep_2, ep_3],<br/>brain_id: "..." }
 
     MCP->>MCP: Generate reflection_id (UUID v7)
-    MCP->>DB: INSERT INTO summaries (kind='reflection', ...)
+    MCP->>DB: INSERT INTO summaries (kind='reflection', brain_id, ...)
     MCP->>DB: INSERT INTO reflection_sources (reflection_id, source_id) x3
     MCP->>Emb: embed(summary)
     Emb-->>MCP: 384-dim vector
-    MCP->>Vec: Insert reflection embedding row
+    MCP->>Vec: Insert reflection embedding row into per-brain LanceDB
     MCP-->>LLM: { reflection_id, created_at }
 
     Note over LLM: Future searches return reflections<br/>as low-token, high-signal results
@@ -441,7 +444,7 @@ stateDiagram-v2
     indexed --> indexing_started: File changed again
 ```
 
-The event log (JSONL) updates occur after SQLite and are best-effort. Event log failures are logged but do not fail the operation — SQLite is the source of truth.
+The event log (JSONL) updates occur after SQLite and are best-effort. Event log failures are logged but do not fail the operation — unified SQLite is the source of truth for all brains. Task events are appended to the project's `.brain/tasks/events.jsonl` file (git-tracked). Record events are appended to the per-brain `~/.brain/brains/<name>/records/events.jsonl` file.
 
 ### 6. Graceful Shutdown
 
@@ -467,11 +470,11 @@ sequenceDiagram
     end
 
     Main->>DB: PRAGMA wal_checkpoint(TRUNCATE)
-    Note over DB: Flush WAL to main database
+    Note over DB: Flush WAL to unified main database
 
-    Main->>Vec: optimize() (if pending unoptimized rows)
-    Main->>Vec: Close table handles
-    Main->>DB: Close connections
+    Main->>Vec: optimize() for this brain's LanceDB (if pending unoptimized rows)
+    Main->>Vec: Close per-brain table handles
+    Main->>DB: Close unified DB connections
     Main-->>Signal: Exit code 0 (clean)
 
     Note over Signal: Second SIGINT = force shutdown<br/>(skip drain, close immediately, exit 1)
@@ -566,6 +569,26 @@ The `intent` parameter on `memory.search_minimal` selects a weight profile that 
 Weight profiles are stored as a lookup table and are configurable via `brain.toml`.
 
 **Invariant**: All weight profiles MUST sum to 1.0. Validate at load time; normalize by dividing each weight by the sum if needed. Hand-tuned profiles can silently drift, biasing retrieval without runtime errors.
+
+## Unified Storage Model: Brain Partitioning
+
+The unified SQLite database uses `brain_id` as a partition key on all shared tables (files, chunks, tasks, records, summaries). This enables:
+
+1. **Single database instance** — All brains' metadata coexist in `~/.brain/brain.db` with no per-brain database files.
+2. **Efficient filtering** — Queries include `WHERE brain_id = ?` to isolate results to a single brain.
+3. **Shared object store** — Records from any brain can reference the same payload object, enabling deduplication across brain boundaries.
+4. **Independent vector indexes** — Each brain maintains its own LanceDB instance at `~/.brain/brains/<name>/lancedb/`. Semantic spaces are distinct (vectors from different brains are not comparable).
+5. **No cross-brain routing** — The old `RemoteBrainContext` and `cross_brain` modules were eliminated. Cross-brain task references use a `brain_id` column on dependency payloads — NULL = local, non-NULL = remote brain ID.
+
+### Migration Command
+
+Existing users upgrading from per-brain storage to unified storage run:
+
+```bash
+brain migrate
+```
+
+This command merges all per-brain `brain.db` files into the central unified database, migrates object stores to `~/.brain/objects/`, and re-registers all brains in the central config.
 
 **Edge cases in signal computation**:
 - `bm25` normalization: divide by `max(max_bm25_in_result_set, 1e-12)` — zero FTS matches means all BM25 scores should be 0.0, not NaN.

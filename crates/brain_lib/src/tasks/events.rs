@@ -45,8 +45,6 @@ pub enum EventType {
     ParentSet,
     ExternalIdAdded,
     ExternalIdRemoved,
-    CrossBrainRefAdded,
-    CrossBrainRefRemoved,
 }
 
 /// Valid task statuses.
@@ -228,20 +226,6 @@ pub struct ExternalIdPayload {
     pub external_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CrossBrainRefPayload {
-    pub brain_id: String,
-    pub remote_task: String,
-    #[serde(default = "default_ref_type")]
-    pub ref_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-}
-
-fn default_ref_type() -> String {
-    "related".to_string()
 }
 
 // -- EventPayload trait --

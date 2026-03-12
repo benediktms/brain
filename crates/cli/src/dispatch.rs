@@ -223,8 +223,6 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     assignee,
                     parent,
                     brain,
-                    link_from,
-                    link_type,
                 } => {
                     commands::tasks::run::create(
                         &ctx,
@@ -236,8 +234,6 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             assignee,
                             parent,
                             brain,
-                            link_from,
-                            link_type,
                         },
                     )?;
                 }
@@ -562,6 +558,12 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     }
                 },
             }
+        }
+        Command::Migrate { yes, cleanup } => {
+            commands::migrate::run(commands::migrate::MigrateArgs { yes, cleanup })?;
+        }
+        Command::MigrateWorkspace => {
+            commands::migrate_workspace::run()?;
         }
         Command::Records { json, action } => {
             use commands::records::RecordsCtx;

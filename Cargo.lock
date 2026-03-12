@@ -628,6 +628,7 @@ dependencies = [
  "dirs",
  "libc",
  "predicates",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "tokio",

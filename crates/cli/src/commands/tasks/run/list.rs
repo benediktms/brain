@@ -119,10 +119,10 @@ fn fetch_filtered_tasks(
 
 pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
     if let Some(ref brain) = params.brain {
-        use brain_lib::config::RemoteBrainContext;
-        let remote = RemoteBrainContext::open(brain)?;
+        let (_name, _id, tasks, _records, _objects) =
+            brain_lib::config::open_brain_stores(brain)?;
         let remote_ctx = TaskCtx {
-            store: remote.tasks,
+            store: tasks,
             json: ctx.json,
         };
         return list_inner(&remote_ctx, params);

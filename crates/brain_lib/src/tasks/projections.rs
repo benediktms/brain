@@ -3,14 +3,18 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    CommentPayload, CrossBrainRefPayload, DependencyPayload, EventType, ExternalIdPayload,
+    CommentPayload, DependencyPayload, EventType, ExternalIdPayload,
     LabelPayload, NoteLinkPayload, ParentSetPayload, StatusChangedPayload, TaskCreatedPayload,
     TaskEvent, TaskUpdatedPayload,
 };
 use super::queries::next_child_seq;
 
 /// Apply a single event to the SQLite projection tables.
-pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
+///
+/// `brain_id` is stamped on the `tasks` row for all `TaskCreated` events.
+/// For all other event types the brain_id is not re-written (the row already
+/// carries the brain_id set at creation time).
+pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
     match event.event_type {
         EventType::TaskCreated => {
             let p: TaskCreatedPayload = serde_json::from_value(event.payload.clone())
@@ -23,11 +27,12 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
                 .transpose()?;
 
             conn.execute(
-                "INSERT INTO tasks (task_id, title, description, status, priority, due_ts,
+                "INSERT INTO tasks (task_id, brain_id, title, description, status, priority, due_ts,
                                     task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 rusqlite::params![
                     event.task_id,
+                    brain_id,
                     p.title,
                     p.description,
                     p.status.as_ref(),
@@ -238,37 +243,6 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
             )?;
         }
 
-        EventType::CrossBrainRefAdded => {
-            let p: CrossBrainRefPayload =
-                serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad CrossBrainRefAdded payload: {e}"))
-                })?;
-
-            conn.execute(
-                "INSERT OR IGNORE INTO task_cross_refs (task_id, brain_id, remote_task, ref_type, note, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    event.task_id,
-                    p.brain_id,
-                    p.remote_task,
-                    p.ref_type,
-                    p.note,
-                    event.timestamp,
-                ],
-            )?;
-        }
-
-        EventType::CrossBrainRefRemoved => {
-            let p: CrossBrainRefPayload =
-                serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad CrossBrainRefRemoved payload: {e}"))
-                })?;
-
-            conn.execute(
-                "DELETE FROM task_cross_refs WHERE task_id = ?1 AND brain_id = ?2 AND remote_task = ?3",
-                rusqlite::params![event.task_id, p.brain_id, p.remote_task],
-            )?;
-        }
     }
 
     // Record the event itself
@@ -294,9 +268,6 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent) -> Result<()> {
 /// Drops FTS task triggers before the bulk delete to avoid content-sync
 /// deletes on a potentially corrupt index, then rebuilds the FTS index
 /// and re-creates triggers after commit.
-// NOTE: If task purging/compaction is added in the future, cross-brain refs
-// to purged tasks will become dangling. Consider a tombstone mechanism
-// (e.g. task_tombstones table) so remote brains can detect deleted tasks.
 pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
     // Drop FTS triggers to avoid content-sync deletes on potentially corrupt index
     conn.execute_batch(
@@ -314,13 +285,14 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
          DELETE FROM task_labels;
          DELETE FROM task_note_links;
          DELETE FROM task_external_ids;
-         DELETE FROM task_cross_refs;
          DELETE FROM task_deps;
          DELETE FROM tasks;",
     )?;
 
     for event in events {
-        apply_event(&tx, event)?;
+        // During rebuild, preserve the existing brain_id value from the event log
+        // by reading it from the DB if available, or default to empty string.
+        apply_event(&tx, event, "")?;
     }
 
     tx.commit()?;
@@ -368,7 +340,7 @@ mod tests {
     fn test_apply_task_created() {
         let conn = setup();
         let ev = make_created_event("t1", "My Task", 2);
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let title: String = conn
             .query_row("SELECT title FROM tasks WHERE task_id = 't1'", [], |row| {
@@ -391,7 +363,7 @@ mod tests {
     fn test_apply_task_updated() {
         let conn = setup();
         let ev = make_created_event("t1", "Original", 4);
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let update = TaskEvent::from_payload(
             "t1",
@@ -407,7 +379,7 @@ mod tests {
                 defer_until: None,
             },
         );
-        apply_event(&conn, &update).unwrap();
+        apply_event(&conn, &update, "").unwrap();
 
         let (title, desc, priority): (String, Option<String>, i32) = conn
             .query_row(
@@ -425,7 +397,7 @@ mod tests {
     fn test_apply_status_changed() {
         let conn = setup();
         let ev = make_created_event("t1", "Task", 2);
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let status_ev = TaskEvent::from_payload(
             "t1",
@@ -434,7 +406,7 @@ mod tests {
                 new_status: TaskStatus::Done,
             },
         );
-        apply_event(&conn, &status_ev).unwrap();
+        apply_event(&conn, &status_ev, "").unwrap();
 
         let status: String = conn
             .query_row("SELECT status FROM tasks WHERE task_id = 't1'", [], |row| {
@@ -447,8 +419,8 @@ mod tests {
     #[test]
     fn test_apply_dependency_added_removed() {
         let conn = setup();
-        apply_event(&conn, &make_created_event("t1", "Task 1", 2)).unwrap();
-        apply_event(&conn, &make_created_event("t2", "Task 2", 2)).unwrap();
+        apply_event(&conn, &make_created_event("t1", "Task 1", 2), "").unwrap();
+        apply_event(&conn, &make_created_event("t2", "Task 2", 2), "").unwrap();
 
         let dep_add = TaskEvent::new(
             "t1",
@@ -458,7 +430,7 @@ mod tests {
                 depends_on_task_id: "t2".to_string(),
             },
         );
-        apply_event(&conn, &dep_add).unwrap();
+        apply_event(&conn, &dep_add, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -478,7 +450,7 @@ mod tests {
                 depends_on_task_id: "t2".to_string(),
             },
         );
-        apply_event(&conn, &dep_rm).unwrap();
+        apply_event(&conn, &dep_rm, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -493,7 +465,7 @@ mod tests {
     #[test]
     fn test_apply_note_linked_unlinked() {
         let conn = setup();
-        apply_event(&conn, &make_created_event("t1", "Task", 2)).unwrap();
+        apply_event(&conn, &make_created_event("t1", "Task", 2), "").unwrap();
 
         let link = TaskEvent::new(
             "t1",
@@ -503,7 +475,7 @@ mod tests {
                 chunk_id: "c1".to_string(),
             },
         );
-        apply_event(&conn, &link).unwrap();
+        apply_event(&conn, &link, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -522,7 +494,7 @@ mod tests {
                 chunk_id: "c1".to_string(),
             },
         );
-        apply_event(&conn, &unlink).unwrap();
+        apply_event(&conn, &unlink, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -538,7 +510,7 @@ mod tests {
     fn test_event_recorded_in_task_events() {
         let conn = setup();
         let ev = make_created_event("t1", "Task", 2);
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -610,79 +582,4 @@ mod tests {
         assert_eq!(count, 1);
     }
 
-    #[test]
-    fn test_apply_cross_brain_ref_added_removed() {
-        let conn = setup();
-        apply_event(&conn, &make_created_event("t1", "Task", 2)).unwrap();
-
-        let add = TaskEvent::new(
-            "t1",
-            "user",
-            EventType::CrossBrainRefAdded,
-            &CrossBrainRefPayload {
-                brain_id: "abc12345".to_string(),
-                remote_task: "INF-01KK7".to_string(),
-                ref_type: "depends_on".to_string(),
-                note: Some("needs infra work first".to_string()),
-            },
-        );
-        apply_event(&conn, &add).unwrap();
-
-        let (brain_id, remote_task, ref_type, note): (String, String, String, Option<String>) =
-            conn.query_row(
-                "SELECT brain_id, remote_task, ref_type, note FROM task_cross_refs WHERE task_id = 't1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(brain_id, "abc12345");
-        assert_eq!(remote_task, "INF-01KK7");
-        assert_eq!(ref_type, "depends_on");
-        assert_eq!(note.as_deref(), Some("needs infra work first"));
-
-        // Duplicate add is idempotent (INSERT OR IGNORE)
-        let add2 = TaskEvent::new(
-            "t1",
-            "user",
-            EventType::CrossBrainRefAdded,
-            &CrossBrainRefPayload {
-                brain_id: "abc12345".to_string(),
-                remote_task: "INF-01KK7".to_string(),
-                ref_type: "depends_on".to_string(),
-                note: Some("different note".to_string()),
-            },
-        );
-        apply_event(&conn, &add2).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM task_cross_refs WHERE task_id = 't1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-
-        // Remove
-        let rm = TaskEvent::new(
-            "t1",
-            "user",
-            EventType::CrossBrainRefRemoved,
-            &CrossBrainRefPayload {
-                brain_id: "abc12345".to_string(),
-                remote_task: "INF-01KK7".to_string(),
-                ref_type: "depends_on".to_string(),
-                note: None,
-            },
-        );
-        apply_event(&conn, &rm).unwrap();
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM task_cross_refs WHERE task_id = 't1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 0);
-    }
 }

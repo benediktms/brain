@@ -165,6 +165,7 @@ pub fn list(ctx: &SnapshotCtx, params: &ListParams) -> Result<()> {
         tag: params.tag.clone(),
         task_id: None,
         limit: Some(params.limit),
+        brain_id: None,
     };
 
     let records = ctx

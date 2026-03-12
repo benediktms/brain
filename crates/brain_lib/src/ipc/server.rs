@@ -213,8 +213,8 @@ mod tests {
     async fn start_test_server(socket_path: &Path) -> CancellationToken {
         let (_dir, ctx) = create_test_context().await;
         let mut map = HashMap::new();
-        map.insert("test-brain".to_string(), Arc::new(ctx));
-        let router = BrainRouter::new(map);
+        map.insert("test-brain".to_string(), String::new());
+        let router = BrainRouter::new(Arc::new(ctx), map);
         let server = IpcServer::bind(socket_path, router).expect("bind failed");
         let token = server.cancellation_token();
         let token2 = token.clone();

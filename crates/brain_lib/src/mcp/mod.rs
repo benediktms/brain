@@ -13,6 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
+use crate::config::resolve_brain_entry;
 use crate::db::Db;
 use crate::embedder::{Embed, Embedder};
 use crate::ipc::client::IpcClient;
@@ -62,6 +63,8 @@ pub struct McpContext {
     pub brain_home: std::path::PathBuf,
     /// Human-readable name of the current brain (from its data directory path).
     pub brain_name: String,
+    /// Stable ID of the current brain (from the `.brain/brain_id` file).
+    pub brain_id: String,
 }
 
 impl McpContext {
@@ -101,10 +104,25 @@ impl McpContext {
         let records = RecordStore::new(&records_dir, db.clone())?;
         // SQLite is the source of truth (B2) — no rebuild needed on open
 
-        let objects_dir = sqlite_db
+        // Derive brain_home early so we can resolve the unified object store path.
+        // Convention: sqlite_db = $BRAIN_HOME/brains/<name>/brain.db
+        // So: brain_home = sqlite_db.parent().parent().parent()
+        let brain_data_dir_for_objects = sqlite_db
             .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("objects");
+            .unwrap_or(std::path::Path::new("."));
+        let brain_home_for_objects = brain_data_dir_for_objects
+            .parent() // brains/
+            .and_then(|p| p.parent()) // $BRAIN_HOME
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        // Use unified ~/.brain/objects/ when it exists; fall back to per-brain
+        // path for pre-migration installations.
+        let unified_objects_dir = brain_home_for_objects.join("objects");
+        let objects_dir = if unified_objects_dir.exists() {
+            unified_objects_dir
+        } else {
+            brain_data_dir_for_objects.join("objects")
+        };
         let objects = ObjectStore::new(&objects_dir)?;
 
         // Step 2: optionally load LanceDB + embedder. Failures are logged and
@@ -136,6 +154,10 @@ impl McpContext {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
 
+        // Derive brain_id: read from the TaskStore (populated by with_brain_id
+        // in workspace mode, empty in single-brain mode).
+        let brain_id = tasks.brain_id.clone();
+
         Ok(Arc::new(Self {
             db,
             store,
@@ -147,6 +169,7 @@ impl McpContext {
             metrics,
             brain_home,
             brain_name,
+            brain_id,
         }))
     }
 
@@ -167,6 +190,7 @@ impl McpContext {
         brain_home: std::path::PathBuf,
         brain_name: String,
     ) -> Arc<Self> {
+        let brain_id = tasks.brain_id.clone();
         Arc::new(Self {
             db,
             store,
@@ -178,6 +202,7 @@ impl McpContext {
             metrics,
             brain_home,
             brain_name,
+            brain_id,
         })
     }
 
@@ -207,6 +232,56 @@ impl McpContext {
 
         let store_reader = StoreReader::from_store(&store);
         Ok((store, store_reader, embedder))
+    }
+
+    /// Resolve a brain name or ID to a `(brain_name, brain_id)` pair.
+    ///
+    /// Looks up the global config registry to find the brain entry, then
+    /// resolves its stable ID.
+    pub fn resolve_brain_id(&self, name_or_id: &str) -> crate::error::Result<(String, String)> {
+        let (name, entry) = resolve_brain_entry(name_or_id)?;
+        let bid = crate::config::resolve_brain_id(&entry, &name)?;
+        Ok((name, bid))
+    }
+
+    /// Create a brain_id-scoped TaskStore sharing this context's DB.
+    pub fn tasks_for_brain(&self, brain_id: &str) -> crate::error::Result<TaskStore> {
+        let tasks_dir = self.brain_home.join("tasks");
+        TaskStore::with_brain_id(&tasks_dir, self.db.clone(), brain_id)
+    }
+
+    /// Create a brain_id-scoped RecordStore sharing this context's DB.
+    pub fn records_for_brain(&self, brain_id: &str) -> crate::error::Result<RecordStore> {
+        let records_dir = self.brain_home.join("records");
+        RecordStore::with_brain_id(&records_dir, self.db.clone(), brain_id)
+    }
+
+    /// Clone this context with a different brain_id.
+    ///
+    /// All shared resources (Db, embedder, metrics, LanceDB store) are
+    /// re-used. TaskStore and RecordStore are re-created scoped to
+    /// `brain_id`. ObjectStore is re-opened at the same root path.
+    pub fn with_brain_id(
+        &self,
+        brain_id: &str,
+        brain_name: &str,
+    ) -> crate::error::Result<Arc<Self>> {
+        let tasks = self.tasks_for_brain(brain_id)?;
+        let records = self.records_for_brain(brain_id)?;
+        let objects = ObjectStore::new(self.objects.root())?;
+        Ok(Arc::new(Self {
+            db: self.db.clone(),
+            store: self.store.clone(),
+            writable_store: None, // shared read-only via IPC
+            embedder: self.embedder.clone(),
+            tasks,
+            records,
+            objects,
+            metrics: Arc::clone(&self.metrics),
+            brain_home: self.brain_home.clone(),
+            brain_name: brain_name.to_string(),
+            brain_id: brain_id.to_string(),
+        }))
     }
 }
 

@@ -1,7 +1,8 @@
 /// Multi-brain JSON-RPC router.
 ///
 /// Resolves the `brain` parameter on each request to the appropriate
-/// `McpContext`, then delegates to the shared `ToolRegistry`.
+/// brain_id, then clones the shared `McpContext` with that brain_id
+/// before delegating to the shared `ToolRegistry`.
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -12,25 +13,34 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 use crate::mcp::tools::ToolRegistry;
 
-/// Routes JSON-RPC tool calls to the correct brain's `McpContext`.
+/// Routes JSON-RPC tool calls by resolving brain name → brain_id, then
+/// dispatching with a per-request McpContext scoped to that brain_id.
 pub struct BrainRouter {
-    /// Map of brain name → context.
-    brains: RwLock<HashMap<String, Arc<McpContext>>>,
-    /// Name of the default brain (used when no `brain` param is supplied).
-    default_brain: RwLock<Option<String>>,
+    /// Single shared context (Db, embedder, object store, metrics).
+    ctx: Arc<McpContext>,
+    /// Map of brain name → brain_id.
+    brain_map: RwLock<HashMap<String, String>>,
+    /// brain_id of the default brain (used when no `brain` param is supplied).
+    default_brain_id: RwLock<Option<String>>,
     /// Shared tool registry (stateless; all handlers receive context at call time).
     registry: ToolRegistry,
 }
 
 impl BrainRouter {
-    /// Create a new router with an initial brain map.
+    /// Create a new router with a shared context and brain name→id map.
     ///
-    /// The first entry in `brains` becomes the default brain.
-    pub fn new(brains: HashMap<String, Arc<McpContext>>) -> Arc<Self> {
-        let default_brain = brains.keys().next().cloned();
+    /// The first entry in `brain_map` whose value becomes the default brain_id,
+    /// unless `ctx.brain_id` is non-empty (in which case that is used).
+    pub fn new(ctx: Arc<McpContext>, brain_map: HashMap<String, String>) -> Arc<Self> {
+        let default_brain_id = if !ctx.brain_id.is_empty() {
+            Some(ctx.brain_id.clone())
+        } else {
+            brain_map.values().next().cloned()
+        };
         Arc::new(Self {
-            brains: RwLock::new(brains),
-            default_brain: RwLock::new(default_brain),
+            ctx,
+            brain_map: RwLock::new(brain_map),
+            default_brain_id: RwLock::new(default_brain_id),
             registry: ToolRegistry::new(),
         })
     }
@@ -45,19 +55,27 @@ impl BrainRouter {
         tool_name: &str,
         params: Value,
     ) -> ToolCallResult {
-        let ctx = {
-            let brains = self.brains.read().await;
+        let (brain_id, brain_name) = {
+            let map = self.brain_map.read().await;
             match brain {
-                Some(name) => match brains.get(name) {
-                    Some(ctx) => Arc::clone(ctx),
+                Some(name) => match map.get(name) {
+                    Some(id) => (id.clone(), name.to_string()),
                     None => {
                         return ToolCallResult::error(format!("Brain not found: {name}"));
                     }
                 },
                 None => {
-                    let default = self.default_brain.read().await;
-                    match default.as_deref().and_then(|n| brains.get(n)) {
-                        Some(ctx) => Arc::clone(ctx),
+                    let default = self.default_brain_id.read().await;
+                    match default.as_deref() {
+                        Some(id) => {
+                            // Reverse-lookup name for the default brain_id.
+                            let name = map
+                                .iter()
+                                .find(|(_, v)| v.as_str() == id)
+                                .map(|(k, _)| k.clone())
+                                .unwrap_or_default();
+                            (id.to_string(), name)
+                        }
                         None => {
                             return ToolCallResult::error(
                                 "No default brain registered".to_string(),
@@ -68,23 +86,33 @@ impl BrainRouter {
             }
         };
 
+        let ctx = match self.ctx.with_brain_id(&brain_id, &brain_name) {
+            Ok(c) => c,
+            Err(e) => {
+                return ToolCallResult::error(format!(
+                    "Failed to create context for brain {brain_name}: {e}"
+                ));
+            }
+        };
+
         self.registry.dispatch(tool_name, params, &ctx).await
     }
 
-    /// Replace the brain registry (called on SIGHUP reload).
+    /// Replace the brain map (called on SIGHUP reload).
     ///
-    /// The new default brain is the first entry in the updated map,
-    /// unless the previous default is still present (in which case it is kept).
-    pub async fn update_brains(&self, map: HashMap<String, Arc<McpContext>>) {
+    /// The new default brain_id is the first entry in the updated map,
+    /// unless the previous default_brain_id is still present (in which case
+    /// it is kept).
+    pub async fn update_brains(&self, map: HashMap<String, String>) {
         let new_default = {
-            let old_default = self.default_brain.read().await;
+            let old_default = self.default_brain_id.read().await;
             match old_default.as_deref() {
-                Some(name) if map.contains_key(name) => Some(name.to_string()),
-                _ => map.keys().next().cloned(),
+                Some(id) if map.values().any(|v| v == id) => Some(id.to_string()),
+                _ => map.values().next().cloned(),
             }
         };
-        *self.brains.write().await = map;
-        *self.default_brain.write().await = new_default;
+        *self.brain_map.write().await = map;
+        *self.default_brain_id.write().await = new_default;
     }
 }
 
@@ -93,12 +121,22 @@ mod tests {
     use super::*;
     use crate::mcp::tools::tests::create_test_context;
 
+    fn make_router(name: &str, ctx: McpContext) -> Arc<BrainRouter> {
+        let mut map = HashMap::new();
+        // Use brain_id if set, otherwise use name as a stand-in.
+        let brain_id = if ctx.brain_id.is_empty() {
+            name.to_string()
+        } else {
+            ctx.brain_id.clone()
+        };
+        map.insert(name.to_string(), brain_id);
+        BrainRouter::new(Arc::new(ctx), map)
+    }
+
     #[tokio::test]
     async fn test_dispatch_default_brain_status() {
         let (_dir, ctx) = create_test_context().await;
-        let mut map = HashMap::new();
-        map.insert("test-brain".to_string(), Arc::new(ctx));
-        let router = BrainRouter::new(map);
+        let router = make_router("test-brain", ctx);
 
         let result = router.dispatch(None, "status", serde_json::json!({})).await;
         assert_ne!(result.is_error, Some(true), "status call should succeed");
@@ -107,9 +145,7 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_nonexistent_brain_returns_error() {
         let (_dir, ctx) = create_test_context().await;
-        let mut map = HashMap::new();
-        map.insert("test-brain".to_string(), Arc::new(ctx));
-        let router = BrainRouter::new(map);
+        let router = make_router("test-brain", ctx);
 
         let result = router
             .dispatch(Some("no-such-brain"), "status", serde_json::json!({}))
@@ -125,9 +161,7 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_explicit_brain_name() {
         let (_dir, ctx) = create_test_context().await;
-        let mut map = HashMap::new();
-        map.insert("my-brain".to_string(), Arc::new(ctx));
-        let router = BrainRouter::new(map);
+        let router = make_router("my-brain", ctx);
 
         let result = router
             .dispatch(Some("my-brain"), "status", serde_json::json!({}))
@@ -138,22 +172,19 @@ mod tests {
     #[tokio::test]
     async fn test_update_brains_keeps_default_when_present() {
         let (_dir, ctx1) = create_test_context().await;
-        let (_dir2, ctx2) = create_test_context().await;
+        let (_dir2, _ctx2) = create_test_context().await;
 
         let mut initial = HashMap::new();
-        initial.insert("alpha".to_string(), Arc::new(ctx1));
-        let router = BrainRouter::new(initial);
+        initial.insert("alpha".to_string(), "id-alpha".to_string());
+        let router = BrainRouter::new(Arc::new(ctx1), initial);
 
-        // Default should be "alpha" now.
+        // Default should be "id-alpha" now.
         let mut updated = HashMap::new();
-        updated.insert("alpha".to_string(), Arc::new(ctx2));
-        updated.insert("beta".to_string(), {
-            let (_d, c) = create_test_context().await;
-            Arc::new(c)
-        });
+        updated.insert("alpha".to_string(), "id-alpha".to_string());
+        updated.insert("beta".to_string(), "id-beta".to_string());
         router.update_brains(updated).await;
 
-        // Default still "alpha" — it survived the reload.
+        // Default still "id-alpha" — it survived the reload.
         let result = router
             .dispatch(Some("alpha"), "status", serde_json::json!({}))
             .await;

@@ -1,5 +1,4 @@
 pub mod capsule;
-pub mod cross_brain;
 pub mod cycle;
 pub mod enrichment;
 pub mod events;
@@ -20,6 +19,18 @@ use events::{EventType, TaskEvent};
 pub struct TaskStore {
     events_path: PathBuf,
     db: Db,
+    /// Brain ID that scopes this store's reads and writes.
+    ///
+    /// Empty string means "all brains" (legacy / single-brain mode).
+    /// Non-empty means filter reads by this brain_id and stamp it on writes.
+    pub brain_id: String,
+    /// Optional path to the project-local audit trail JSONL file.
+    ///
+    /// When set, every successful `append()` also emits the event to this
+    /// path (`.brain/tasks/events.jsonl` inside the project repo), making
+    /// task history git-trackable. Emission is best-effort: failures are
+    /// logged as warnings and do not affect the SQLite write.
+    pub audit_path: Option<PathBuf>,
 }
 
 impl TaskStore {
@@ -27,12 +38,37 @@ impl TaskStore {
     ///
     /// `tasks_dir` is the directory containing (or that will contain) `events.jsonl`.
     /// It will be created if it does not exist.
+    /// `brain_id` scopes reads and writes to a specific brain. Pass `""` for
+    /// legacy single-brain mode (no filter on reads, empty string on writes).
     pub fn new(tasks_dir: &std::path::Path, db: Db) -> Result<Self> {
         std::fs::create_dir_all(tasks_dir)?;
         Ok(Self {
             events_path: tasks_dir.join("events.jsonl"),
             db,
+            brain_id: String::new(),
+            audit_path: None,
         })
+    }
+
+    /// Create a new TaskStore with an explicit brain_id scope.
+    pub fn with_brain_id(tasks_dir: &std::path::Path, db: Db, brain_id: &str) -> Result<Self> {
+        std::fs::create_dir_all(tasks_dir)?;
+        Ok(Self {
+            events_path: tasks_dir.join("events.jsonl"),
+            db,
+            brain_id: brain_id.to_string(),
+            audit_path: None,
+        })
+    }
+
+    /// Set the project-local audit trail path.
+    ///
+    /// When set, successful `append()` calls also emit the event to this path
+    /// (typically `<project_root>/.brain/tasks/events.jsonl`) as a best-effort
+    /// git-trackable audit trail. Parent directories are created on first write.
+    pub fn with_audit_path(mut self, path: PathBuf) -> Self {
+        self.audit_path = Some(path);
+        self
     }
 
     /// Append a validated event: write to SQLite first, then emit to the JSONL audit log.
@@ -48,16 +84,27 @@ impl TaskStore {
     /// append is a best-effort audit trail; failure is logged as a warning but does not
     /// roll back the SQLite write.
     pub fn append(&self, event: &TaskEvent) -> Result<()> {
+        let brain_id = self.brain_id.clone();
         self.db.with_write_conn(|conn| {
             self.validate(conn, event)?;
 
             // SQLite is the source of truth — write first
-            projections::apply_event(conn, event)?;
+            projections::apply_event(conn, event, &brain_id)?;
             Ok(())
         })?;
         // JSONL emit is best-effort audit trail — outside the write lock
         if let Err(e) = events::append_event(&self.events_path, event) {
             tracing::warn!("failed to append task event to audit log: {e}");
+        }
+        // Project-local audit trail (git-trackable) — also best-effort
+        if let Some(ref audit) = self.audit_path
+            && let Some(parent) = audit.parent()
+        {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!("failed to create project audit dir: {e}");
+            } else if let Err(e) = events::append_event(audit, event) {
+                tracing::warn!("failed to append task event to project audit log: {e}");
+            }
         }
         Ok(())
     }
@@ -125,32 +172,80 @@ impl TaskStore {
 
     /// List tasks that are ready to work on (no unresolved deps, not blocked).
     pub fn list_ready(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_read_conn(queries::list_ready)
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::list_ready(conn, filter)
+        })
     }
 
     /// List tasks that are blocked (unresolved deps or explicit blocked_reason).
     pub fn list_blocked(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_read_conn(queries::list_blocked)
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::list_blocked(conn, filter)
+        })
     }
 
     /// List all tasks.
     pub fn list_all(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_read_conn(queries::list_all)
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::list_all(conn, filter)
+        })
     }
 
     /// List open tasks (excludes done/cancelled).
     pub fn list_open(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_read_conn(queries::list_open)
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::list_open(conn, filter)
+        })
     }
 
     /// List done/cancelled tasks.
     pub fn list_done(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_read_conn(queries::list_done)
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::list_done(conn, filter)
+        })
     }
 
     /// List ready tasks excluding epics (actionable work items only).
     pub fn list_ready_actionable(&self) -> Result<Vec<queries::TaskRow>> {
-        self.db.with_read_conn(queries::list_ready_actionable)
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::list_ready_actionable(conn, filter)
+        })
     }
 
     /// Get a single task by ID.
@@ -221,12 +316,6 @@ impl TaskStore {
     pub fn get_external_ids(&self, task_id: &str) -> Result<Vec<queries::ExternalIdRow>> {
         self.db
             .with_read_conn(|conn| queries::get_external_ids(conn, task_id))
-    }
-
-    /// Get cross-brain references for a task.
-    pub fn get_cross_brain_refs(&self, task_id: &str) -> Result<Vec<queries::CrossBrainRef>> {
-        self.db
-            .with_read_conn(|conn| queries::get_cross_brain_refs(conn, task_id))
     }
 
     /// Resolve an external ID to a brain task_id.
@@ -308,6 +397,45 @@ impl TaskStore {
                 .unwrap_or(std::path::Path::new("."));
             crate::db::meta::get_or_init_project_prefix(conn, brain_dir)
         })
+    }
+
+    /// Import events from a JSONL file into the unified SQLite database.
+    ///
+    /// Reads the given path as a JSONL event log and replays all events into
+    /// SQLite via `projections::apply_event`. Events that already exist (by
+    /// `event_id`) or would violate constraints are silently skipped to make
+    /// this safe to call multiple times (idempotent).
+    ///
+    /// This is intended for one-time migration when `brain init` is run on a
+    /// cloned repo that already has a `.brain/tasks/events.jsonl` file.
+    pub fn import_from_jsonl(&self, path: &std::path::Path) -> Result<usize> {
+        if !path.exists() {
+            return Ok(0);
+        }
+        let all_events = events::read_all_events(path)?;
+        if all_events.is_empty() {
+            return Ok(0);
+        }
+        let brain_id = self.brain_id.clone();
+        let mut imported = 0usize;
+        self.db.with_write_conn(|conn| {
+            for event in &all_events {
+                // Skip events that already exist in SQLite (idempotent import).
+                // We detect duplicates by attempting the apply and swallowing
+                // constraint violations.
+                match projections::apply_event(conn, event, &brain_id) {
+                    Ok(()) => imported += 1,
+                    Err(e) => {
+                        tracing::debug!(
+                            event_id = %event.event_id,
+                            "skipping event during import: {e}"
+                        );
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(imported)
     }
 
     /// Validate an event before writing it to the log.
@@ -393,23 +521,6 @@ impl TaskStore {
                 }
             }
 
-            EventType::CrossBrainRefAdded => {
-                if !queries::task_exists(conn, &event.task_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "task not found: {}",
-                        event.task_id
-                    )));
-                }
-                // Validate ref_type before it hits the SQL CHECK constraint
-                if let Some(rt) = event.payload.get("ref_type").and_then(|v| v.as_str())
-                    && !matches!(rt, "depends_on" | "blocks" | "related")
-                {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "invalid ref_type: '{rt}'. Must be one of: depends_on, blocks, related"
-                    )));
-                }
-            }
-
             EventType::DependencyRemoved
             | EventType::NoteLinked
             | EventType::NoteUnlinked
@@ -417,8 +528,7 @@ impl TaskStore {
             | EventType::LabelRemoved
             | EventType::CommentAdded
             | EventType::ExternalIdAdded
-            | EventType::ExternalIdRemoved
-            | EventType::CrossBrainRefRemoved => {
+            | EventType::ExternalIdRemoved => {
                 if !queries::task_exists(conn, &event.task_id)? {
                     return Err(BrainCoreError::TaskEvent(format!(
                         "task not found: {}",

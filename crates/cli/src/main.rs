@@ -540,20 +540,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parse_tasks_create_link_from_requires_brain() {
-        let result = Cli::try_parse_from([
-            "brain",
-            "tasks",
-            "create",
-            "--title",
-            "Test",
-            "--link-from",
-            "BRN-01ABC",
-        ]);
-        assert!(result.is_err(), "--link-from without --brain should fail");
-    }
-
     // ── Edge cases ──────────────────────────────────────────────────
 
     #[test]

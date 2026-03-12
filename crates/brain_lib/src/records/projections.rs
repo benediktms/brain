@@ -11,9 +11,13 @@ use super::events::{
 
 /// Apply a single event to the SQLite records projection tables.
 ///
+/// `brain_id` is stamped on the `records` row for all `RecordCreated` events.
+/// For all other event types the brain_id is not re-written (the row already
+/// carries the brain_id set at creation time).
+///
 /// The event is applied inside an implicit transaction — callers operating in
 /// bulk (e.g. `rebuild`) should use an outer transaction for performance.
-pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
+pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
     match event.event_type {
         RecordEventType::RecordCreated => {
             let p: RecordCreatedPayload =
@@ -25,14 +29,15 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent) -> Result<()> {
 
             conn.execute(
                 "INSERT INTO records
-                    (record_id, title, kind, status, description,
+                    (record_id, brain_id, title, kind, status, description,
                      content_hash, content_size, media_type,
                      task_id, actor, created_at, updated_at,
                      retention_class, pinned, payload_available, content_encoding, original_size)
-                 VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
-                         ?12, 0, 1, ?13, ?14)",
+                 VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                         ?13, 0, 1, ?14, ?15)",
                 rusqlite::params![
                     event.record_id,
+                    brain_id,
                     p.title,
                     p.kind,
                     p.description,
@@ -241,7 +246,7 @@ pub fn rebuild(conn: &Connection, events_path: &Path) -> Result<usize> {
     )?;
 
     for event in &events {
-        apply_event(&tx, event)?;
+        apply_event(&tx, event, "")?;
     }
 
     tx.commit()?;
@@ -292,7 +297,7 @@ mod tests {
     fn test_apply_record_created() {
         let conn = setup();
         let ev = make_created_event("r1", "My Artifact", "report");
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let (title, kind, status): (String, String, String) = conn
             .query_row(
@@ -329,7 +334,7 @@ mod tests {
                 producer: None,
             },
         );
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -344,7 +349,7 @@ mod tests {
     #[test]
     fn test_apply_record_updated() {
         let conn = setup();
-        apply_event(&conn, &make_created_event("r1", "Original", "report")).unwrap();
+        apply_event(&conn, &make_created_event("r1", "Original", "report"), "").unwrap();
 
         let update = RecordEvent::from_payload(
             "r1",
@@ -354,7 +359,7 @@ mod tests {
                 description: Some("New description".to_string()),
             },
         );
-        apply_event(&conn, &update).unwrap();
+        apply_event(&conn, &update, "").unwrap();
 
         let (title, desc): (String, Option<String>) = conn
             .query_row(
@@ -370,7 +375,7 @@ mod tests {
     #[test]
     fn test_apply_record_archived() {
         let conn = setup();
-        apply_event(&conn, &make_created_event("r1", "Some Record", "diff")).unwrap();
+        apply_event(&conn, &make_created_event("r1", "Some Record", "diff"), "").unwrap();
 
         let archive = RecordEvent::from_payload(
             "r1",
@@ -379,7 +384,7 @@ mod tests {
                 reason: Some("superseded".to_string()),
             },
         );
-        apply_event(&conn, &archive).unwrap();
+        apply_event(&conn, &archive, "").unwrap();
 
         let status: String = conn
             .query_row(
@@ -394,7 +399,7 @@ mod tests {
     #[test]
     fn test_apply_tag_added_removed() {
         let conn = setup();
-        apply_event(&conn, &make_created_event("r1", "T", "report")).unwrap();
+        apply_event(&conn, &make_created_event("r1", "T", "report"), "").unwrap();
 
         let tag_add = RecordEvent::new(
             "r1",
@@ -404,7 +409,7 @@ mod tests {
                 tag: "performance".to_string(),
             },
         );
-        apply_event(&conn, &tag_add).unwrap();
+        apply_event(&conn, &tag_add, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -423,7 +428,7 @@ mod tests {
                 tag: "performance".to_string(),
             },
         );
-        apply_event(&conn, &tag_rm).unwrap();
+        apply_event(&conn, &tag_rm, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -438,7 +443,7 @@ mod tests {
     #[test]
     fn test_apply_link_added_removed() {
         let conn = setup();
-        apply_event(&conn, &make_created_event("r1", "T", "report")).unwrap();
+        apply_event(&conn, &make_created_event("r1", "T", "report"), "").unwrap();
 
         let link_add = RecordEvent::new(
             "r1",
@@ -449,7 +454,7 @@ mod tests {
                 chunk_id: None,
             },
         );
-        apply_event(&conn, &link_add).unwrap();
+        apply_event(&conn, &link_add, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -469,7 +474,7 @@ mod tests {
                 chunk_id: None,
             },
         );
-        apply_event(&conn, &link_rm).unwrap();
+        apply_event(&conn, &link_rm, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -485,7 +490,7 @@ mod tests {
     fn test_event_recorded_in_record_events() {
         let conn = setup();
         let ev = make_created_event("r1", "T", "report");
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -633,7 +638,7 @@ mod tests {
         use crate::records::events::PayloadEvictedPayload;
 
         let conn = setup();
-        apply_event(&conn, &make_created_event("r1", "T", "report")).unwrap();
+        apply_event(&conn, &make_created_event("r1", "T", "report"), "").unwrap();
 
         // Verify default: payload_available = 1
         let avail: i32 = conn
@@ -654,7 +659,7 @@ mod tests {
                 reason: "gc".to_string(),
             },
         );
-        apply_event(&conn, &evict).unwrap();
+        apply_event(&conn, &evict, "").unwrap();
 
         let avail: i32 = conn
             .query_row(
@@ -671,7 +676,7 @@ mod tests {
         use crate::records::events::RetentionClassSetPayload;
 
         let conn = setup();
-        apply_event(&conn, &make_created_event("r1", "T", "report")).unwrap();
+        apply_event(&conn, &make_created_event("r1", "T", "report"), "").unwrap();
 
         // Verify default: retention_class = NULL
         let rc: Option<String> = conn
@@ -690,7 +695,7 @@ mod tests {
                 retention_class: Some("permanent".to_string()),
             },
         );
-        apply_event(&conn, &set_rc).unwrap();
+        apply_event(&conn, &set_rc, "").unwrap();
 
         let rc: Option<String> = conn
             .query_row(
@@ -709,7 +714,7 @@ mod tests {
                 retention_class: None,
             },
         );
-        apply_event(&conn, &clear_rc).unwrap();
+        apply_event(&conn, &clear_rc, "").unwrap();
 
         let rc: Option<String> = conn
             .query_row(
@@ -726,7 +731,7 @@ mod tests {
         use crate::records::events::PinPayload;
 
         let conn = setup();
-        apply_event(&conn, &make_created_event("r1", "T", "report")).unwrap();
+        apply_event(&conn, &make_created_event("r1", "T", "report"), "").unwrap();
 
         // Default: pinned = 0
         let pinned: i32 = conn
@@ -742,6 +747,7 @@ mod tests {
         apply_event(
             &conn,
             &RecordEvent::new("r1", "agent", RecordEventType::RecordPinned, &PinPayload {}),
+            "",
         )
         .unwrap();
 
@@ -763,6 +769,7 @@ mod tests {
                 RecordEventType::RecordUnpinned,
                 &PinPayload {},
             ),
+            "",
         )
         .unwrap();
 
@@ -798,7 +805,7 @@ mod tests {
                 producer: None,
             },
         );
-        apply_event(&conn, &ev).unwrap();
+        apply_event(&conn, &ev, "").unwrap();
 
         let (retention_class, pinned, payload_available, content_encoding, original_size): (
             Option<String>,

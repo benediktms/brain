@@ -7,7 +7,8 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use brain_lib::config::paths::normalize_note_paths_lenient;
 use brain_lib::config::{
-    brain_home, get_or_generate_brain_id, load_global_config, resolve_paths_for_brain,
+    brain_home, get_or_generate_brain_id, load_global_config, resolve_brain_id,
+    resolve_paths_for_brain,
 };
 use brain_lib::db::Db;
 use brain_lib::embedder::Embedder;
@@ -374,7 +375,16 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     let mut brains: HashMap<String, BrainInstance> = HashMap::new();
 
     for (name, entry) in &global_cfg.brains {
-        match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder)).await {
+        let brain_id = match resolve_brain_id(entry, name) {
+            Ok(id) => id,
+            Err(e) => {
+                warn!(brain = %name, error = %e, "failed to resolve brain ID, skipping");
+                continue;
+            }
+        };
+        match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder), &brain_id)
+            .await
+        {
             Ok(instance) => {
                 brains.insert(name.clone(), instance);
             }
@@ -391,11 +401,19 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     info!(brains = brains.len(), "multi-brain daemon started");
 
     // ── 3b. Start IPC server ─────────────────────────────────────────────
-    let ipc_ctx_map: HashMap<String, Arc<McpContext>> = brains
+    // Build brain name → brain_id map for the router.
+    let ipc_brain_map: HashMap<String, String> = brains
         .iter()
-        .map(|(name, inst)| (name.clone(), Arc::clone(&inst.mcp_context)))
+        .map(|(name, inst)| (name.clone(), inst.mcp_context.brain_id.clone()))
         .collect();
-    let router = BrainRouter::new(ipc_ctx_map);
+    // Use the first brain's McpContext as the shared base (all brains share
+    // the unified ~/.brain/brain.db so any instance's Db is the right one).
+    let shared_ctx = brains
+        .values()
+        .next()
+        .map(|inst| Arc::clone(&inst.mcp_context))
+        .expect("at least one brain is initialised");
+    let router = BrainRouter::new(shared_ctx, ipc_brain_map);
 
     let sock_path = brain_home()
         .map(|h| h.join("brain.sock"))
@@ -527,12 +545,12 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                 match reload_brains(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
                     Ok(()) => {
                         prefix_map = build_prefix_map(&brains);
-                        // Rebuild MCP contexts and update the IPC router.
-                        let updated_ctx_map: HashMap<String, Arc<McpContext>> = brains
+                        // Rebuild brain_id map and update the IPC router.
+                        let updated_brain_map: HashMap<String, String> = brains
                             .iter()
-                            .map(|(name, inst)| (name.clone(), Arc::clone(&inst.mcp_context)))
+                            .map(|(name, inst)| (name.clone(), inst.mcp_context.brain_id.clone()))
                             .collect();
-                        router.update_brains(updated_ctx_map).await;
+                        router.update_brains(updated_brain_map).await;
                         info!(brains = brains.len(), "brain registry reloaded");
                     }
                     Err(e) => {
@@ -653,6 +671,7 @@ async fn init_brain_instance(
     name: &str,
     notes: Vec<PathBuf>,
     embedder: Arc<dyn Embed>,
+    brain_id: &str,
 ) -> Result<BrainInstance> {
     let paths = resolve_paths_for_brain(name)?;
 
@@ -720,10 +739,15 @@ async fn init_brain_instance(
         .sqlite_db
         .parent()
         .unwrap_or(std::path::Path::new("."));
-    let tasks = TaskStore::new(&brain_data_dir.join("tasks"), pipeline.db().clone())?;
-    // SQLite is the source of truth (B2) — no rebuild needed on open
-    let records = RecordStore::new(&brain_data_dir.join("records"), pipeline.db().clone())?;
-    // SQLite is the source of truth (B2) — no rebuild needed on open
+    let tasks =
+        TaskStore::with_brain_id(&brain_data_dir.join("tasks"), pipeline.db().clone(), brain_id)?;
+    // SQLite is the source of truth (B2) — scoped to brain_id for unified store
+    let records = RecordStore::with_brain_id(
+        &brain_data_dir.join("records"),
+        pipeline.db().clone(),
+        brain_id,
+    )?;
+    // SQLite is the source of truth (B2) — scoped to brain_id for unified store
     let objects = ObjectStore::new(brain_data_dir.join("objects"))?;
     let store_reader = StoreReader::from_store(pipeline.store());
     let metrics = Arc::clone(pipeline.metrics());
@@ -848,7 +872,16 @@ async fn reload_brains(
 
     for name in &added {
         if let Some(entry) = new_cfg.brains.get(name) {
-            match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder)).await {
+            let brain_id = match resolve_brain_id(entry, name) {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!(brain = %name, error = %e, "failed to resolve brain ID for new brain, skipping");
+                    continue;
+                }
+            };
+            match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder), &brain_id)
+                .await
+            {
                 Ok(instance) => {
                     for dir in &instance.note_dirs {
                         if let Err(e) = watcher.watch_path(dir) {

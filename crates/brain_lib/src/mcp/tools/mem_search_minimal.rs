@@ -132,22 +132,27 @@ impl McpTool for MemSearchMinimal {
                     params.brains.clone()
                 };
 
-                let mut remotes = Vec::new();
+                // Build the brain list: local brain first, then each remote.
+                // All share the same unified `ctx.db` — no separate Db per brain.
+                let mut brains: Vec<(String, Option<crate::store::StoreReader>)> = Vec::new();
+                brains.push((ctx.brain_name.clone(), Some(store.clone())));
+
                 for key in &brain_keys {
                     if key == &ctx.brain_name {
-                        // Skip the current brain — it is already the local brain.
+                        // Local brain already added above.
                         continue;
                     }
                     match crate::config::open_remote_search_context(
                         &ctx.brain_home,
                         key,
-                        // model_dir is not used by open_remote_search_context currently
                         std::path::Path::new(""),
                         embedder,
                     )
                     .await
                     {
-                        Ok(Some(remote)) => remotes.push(remote),
+                        Ok(Some(remote)) => {
+                            brains.push((remote.brain_name, remote.store));
+                        }
                         Ok(None) => {
                             tracing::warn!(brain = %key, "brain not found in registry, skipping");
                         }
@@ -158,10 +163,8 @@ impl McpTool for MemSearchMinimal {
                 }
 
                 let federated = FederatedPipeline {
-                    local_db: &ctx.db,
-                    local_store: store,
-                    local_brain_name: ctx.brain_name.clone(),
-                    remotes,
+                    db: &ctx.db,
+                    brains,
                     embedder,
                     metrics: &ctx.metrics,
                 };
@@ -260,6 +263,7 @@ mod tests {
                 metrics: Arc::new(crate::metrics::Metrics::new()),
                 brain_home,
                 brain_name: "test-brain".to_string(),
+                brain_id: String::new(),
             },
         )
     }
@@ -298,6 +302,7 @@ mod tests {
                 metrics: Arc::new(crate::metrics::Metrics::new()),
                 brain_home,
                 brain_name: "test-brain".to_string(),
+                brain_id: String::new(),
             },
         )
     }
