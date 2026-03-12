@@ -92,14 +92,14 @@ impl McpContext {
             .unwrap_or(std::path::Path::new("."))
             .join("tasks");
         let tasks = TaskStore::new(&tasks_dir, db.clone())?;
-        tasks.rebuild_projections()?;
+        // SQLite is the source of truth (B2) — no rebuild needed on open
 
         let records_dir = sqlite_db
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("records");
         let records = RecordStore::new(&records_dir, db.clone())?;
-        records.rebuild_projections()?;
+        // SQLite is the source of truth (B2) — no rebuild needed on open
 
         let objects_dir = sqlite_db
             .parent()

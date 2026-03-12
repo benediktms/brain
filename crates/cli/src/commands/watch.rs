@@ -721,9 +721,9 @@ async fn init_brain_instance(
         .parent()
         .unwrap_or(std::path::Path::new("."));
     let tasks = TaskStore::new(&brain_data_dir.join("tasks"), pipeline.db().clone())?;
-    tasks.rebuild_projections()?;
+    // SQLite is the source of truth (B2) — no rebuild needed on open
     let records = RecordStore::new(&brain_data_dir.join("records"), pipeline.db().clone())?;
-    records.rebuild_projections()?;
+    // SQLite is the source of truth (B2) — no rebuild needed on open
     let objects = ObjectStore::new(brain_data_dir.join("objects"))?;
     let store_reader = StoreReader::from_store(pipeline.store());
     let metrics = Arc::clone(pipeline.metrics());

@@ -9,7 +9,7 @@ A **brain** is a named knowledge container with its own notes, tasks, indexes, a
 **Core invariant**: Each domain has exactly one source of truth, and sync is always unidirectional:
 
 - **Notes**: Markdown files are the source of truth. SQLite metadata, LanceDB embeddings, and FTS indexes are derived projections, rebuildable from source.
-- **Tasks**: SQLite is now the runtime source of truth — writes are applied to SQLite first. The append-only event log (`.brain/tasks/events.jsonl`, git-tracked) is a best-effort audit trail. Event log failures are logged but do not fail the operation. The event log is retained as a recovery mechanism only — `rebuild_projections()` is removed from read/startup paths and retained only for recovery operations.
+- **Tasks**: SQLite is the runtime source of truth — writes are applied to SQLite first. The append-only event log (`.brain/tasks/events.jsonl`, git-tracked) is a best-effort audit trail. Event log failures are logged but do not fail the operation. `rebuild_projections()` is retained as a recovery mechanism only.
 - **Records**: SQLite is the runtime source of truth — writes are applied to SQLite first. The append-only event log (`~/.brain/brains/<name>/records/events.jsonl`) is a best-effort audit trail. Payloads are stored out-of-line in a content-addressed object store (`~/.brain/brains/<name>/objects/`). Event log failures are logged but do not fail the operation. See [docs/RECORDS.md](./RECORDS.md) for the full design.
 
 Notes, tasks, and records are parallel subsystems that can cross-reference each other (tasks link to note chunks, records link to tasks and note chunks) but have decoupled lifecycles and mutation patterns.
@@ -25,7 +25,7 @@ Notes, tasks, and records are parallel subsystems that can cross-reference each 
       brain.db                             # SQLite projections (notes + tasks + records)
       lancedb/                             # Vector indexes
       records/
-        events.jsonl                       # Record event log (source of truth)
+        events.jsonl                       # Record event log (audit trail)
       objects/                             # Content-addressed payload store (BLAKE3)
         <2-char prefix>/
           <full 64-char BLAKE3 hex>        # Payload bytes, immutable
@@ -33,7 +33,7 @@ Notes, tasks, and records are parallel subsystems that can cross-reference each 
   .brain/
     brain.toml                             # Brain marker: name + note paths
     tasks/
-      events.jsonl                         # Task event log (source of truth, git-tracked)
+      events.jsonl                         # Task event log (audit trail, git-tracked)
   docs/
     architecture.md                        # Indexed as notes
   notes/
@@ -60,10 +60,9 @@ notes = ["~/notes"]
 **Key design decisions:**
 - `brain init` in a project creates `.brain/brain.toml` and registers the brain centrally
 - All derived data (SQLite, LanceDB) lives in `~/.brain/brains/<name>/`, not in the project
-- SQLite is the runtime source of truth for notes, tasks, and records. Writes are applied to SQLite first.
+- SQLite is the runtime source of truth for tasks and records. Writes are applied to SQLite first.
 - The task event log (`.brain/tasks/events.jsonl`, git-tracked) is a best-effort audit trail. Event log failures do not block operations.
-- The record event log (`~/.brain/brains/<name>/records/events.jsonl`) is a best-effort audit trail. Event log failures do not block operations.
-- `rebuild_projections()` is retained only for recovery; normal startup reads hit SQLite directly without rebuilding.
+- `rebuild_projections()` is retained only for recovery; normal startup reads hit SQLite directly.
 - A brain can index multiple note directories (e.g., `docs/` and `notes/` from one project)
 - Moving a project just means updating the path in the registry
 - No symlinks — just paths in config files
@@ -148,7 +147,7 @@ graph TB
 
 | Concern | SQLite (Runtime Source of Truth) | LanceDB (Data Plane) | Task Event Log | Record Event Log | Object Store |
 |---------|----------------------|---------------------|----------------|-----------------|--------------|
-| **Role** | Transactional runtime state — writes succeed here first | Vector similarity search | Best-effort audit trail (note/task events) | Best-effort audit trail (record events) | Record payload storage |
+| **Role** | Transactional runtime state — writes succeed here first | Vector similarity search | Best-effort audit trail (task events) | Best-effort audit trail (record events) | Record payload storage |
 | **Stores** | File identity, content hashes, chunk metadata, links, tasks, records, FTS5 index, summaries, schema versions | Chunk text, 384-dim embeddings, tags, timestamps, scores | Append-only task events (ULID-ordered JSONL, git-tracked) | Append-only record events (ULID-ordered JSONL) | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
 | **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 (reads hit directly, no rebuild) | kNN vector search, batch upserts | Sequential append (failures logged but non-blocking) | Sequential append (failures logged but non-blocking) | Write-once keyed by hash, read by hash path |
 | **Concurrency** | WAL mode (concurrent readers, single writer) | Arc\<Table\> shared across threads | Single writer (append-only) | Single writer (append-only) | Atomic rename on write; concurrent reads safe |
