@@ -721,8 +721,6 @@ fn event_primary_path(event: &FileEvent) -> PathBuf {
     }
 }
 
-/// Reload the brain registry from disk, diffing against the current state.
-///
 /// Ensure every registered brain has a stable ID in both its local
 /// `brain.toml` and the global registry. Generates missing IDs on the fly.
 fn sync_brain_ids(global_cfg: &brain_lib::config::GlobalConfig) {
@@ -741,6 +739,8 @@ fn sync_brain_ids(global_cfg: &brain_lib::config::GlobalConfig) {
     }
 }
 
+/// Reload the brain registry from disk, diffing against the current state.
+///
 /// - New brains: initialise and watch
 /// - Removed brains: unwatch and drop
 /// - Updated brains (notes dirs changed): unwatch old, watch new
