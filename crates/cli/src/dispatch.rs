@@ -184,6 +184,17 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Remove { name, purge } => {
             commands::registry::run_remove(&name, purge)?;
         }
+        Command::Alias { action } => match action {
+            AliasAction::Add { brain, alias } => {
+                commands::alias::run_add(&brain, &alias)?;
+            }
+            AliasAction::Remove { brain, alias } => {
+                commands::alias::run_remove(&brain, &alias)?;
+            }
+            AliasAction::List { brain } => {
+                commands::alias::run_list(brain.as_deref())?;
+            }
+        },
         Command::Config { action } => match action {
             ConfigAction::Get { key } => {
                 commands::config::run_config_get(&cli.sqlite_db, &key)?;
