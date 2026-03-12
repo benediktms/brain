@@ -9,6 +9,7 @@ accelerate = ["candle-core/accelerate"]
 
 [dependencies]
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }

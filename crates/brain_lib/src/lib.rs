@@ -7,6 +7,7 @@ pub mod embedder;
 pub mod error;
 pub mod fs_permissions;
 pub mod hash_gate;
+pub mod ipc;
 pub mod links;
 pub mod mcp;
 pub mod metrics;

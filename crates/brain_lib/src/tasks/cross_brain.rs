@@ -1,5 +1,8 @@
-use crate::config::{RemoteBrainContext, get_or_generate_brain_id};
+use crate::config::{
+    RemoteBrainContext, get_or_generate_brain_id, resolve_brain_entry, resolve_brain_id,
+};
 use crate::error::{BrainCoreError, Result};
+use crate::ipc::client::IpcClient;
 use crate::tasks::TaskStore;
 use crate::tasks::events::{
     CrossBrainRefPayload, EventType, StatusChangedPayload, TaskCreatedPayload, TaskEvent,
@@ -8,6 +11,74 @@ use crate::tasks::events::{
 use crate::tasks::queries::{
     CrossBrainRef, DependencySummary, ExternalIdRow, TaskComment, TaskNoteLink, TaskRow,
 };
+
+// ── IPC helpers ───────────────────────────────────────────────────────────────
+
+/// Run an async future from a synchronous context.
+///
+/// Uses `block_in_place` when a tokio runtime is available (MCP / CLI paths),
+/// which keeps the calling thread from blocking the executor without spawning a
+/// new runtime.  Falls back to a fresh single-threaded runtime for the rare
+/// case where no runtime exists (unit tests that call the public functions
+/// directly without `#[tokio::test]`).
+fn run_async<F, T>(fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
+        Err(_) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime");
+            rt.block_on(fut)
+        }
+    }
+}
+
+/// Attempt an IPC `tasks_apply_event` call against `target_brain`.
+///
+/// Returns the parsed `task_id` string from the response, or `None` if the
+/// daemon is unavailable or the call fails.
+async fn ipc_apply_event(
+    target_brain: &str,
+    event_type: &str,
+    task_id: Option<&str>,
+    payload: serde_json::Value,
+) -> Option<String> {
+    let sock = IpcClient::default_socket_path();
+    let mut client = IpcClient::connect(&sock).await.ok()?;
+
+    let mut args = serde_json::json!({
+        "event_type": event_type,
+        "actor": "cross-brain",
+        "payload": payload,
+    });
+    if let Some(id) = task_id {
+        args["task_id"] = serde_json::Value::String(id.to_string());
+    }
+
+    let result = client
+        .tools_call("tasks_apply_event", target_brain, args)
+        .await
+        .ok()?;
+
+    // result is a serialised ToolCallResult — extract content[0].text then parse JSON.
+    let text = result["content"].get(0).and_then(|c| c["text"].as_str())?;
+
+    // Surface errors from the tool as a None (fall back to direct path).
+    let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
+    if parsed
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    parsed["task_id"].as_str().map(|s| s.to_string())
+}
 
 /// Parameters for creating a task in a remote brain.
 pub struct CrossBrainCreateParams {
@@ -42,16 +113,111 @@ pub struct CrossBrainCreateResult {
 /// on the local side.
 ///
 /// `local_store` is only used when `params.link_from` is `Some(_)`.
+///
+/// When the daemon is running, writes are routed through IPC to avoid opening
+/// the remote SQLite directly (which would compete with the daemon's writer
+/// lock).  Falls back to direct access when the daemon is unavailable.
 pub fn cross_brain_create(
     local_store: &TaskStore,
     params: CrossBrainCreateParams,
 ) -> Result<CrossBrainCreateResult> {
-    // Open the remote brain context (resolves entry, opens DB, builds all stores).
-    // Done first so a missing-brain error surfaces before any local I/O.
-    let ctx = RemoteBrainContext::open(&params.target_brain)?;
+    // Resolve brain entry from config (no SQLite open — just reads config files).
+    // This gives us brain_name and brain_id cheaply, and validates the target exists.
+    let (remote_brain_name, entry) = resolve_brain_entry(&params.target_brain)?;
+    let remote_brain_id = resolve_brain_id(&entry, &remote_brain_name)?;
 
-    // Resolve the local brain ID from the current working directory.
+    // Resolve local brain ID early — needed for reverse ref payload.
     let local_brain_id = get_or_generate_brain_id(&std::env::current_dir()?.join(".brain"))?;
+
+    // Build the task_created payload for the IPC path.
+    let task_type_str = params.task_type.as_ref().map(|t| t.as_ref().to_string());
+    let create_payload = serde_json::json!({
+        "title": params.title,
+        "description": params.description,
+        "priority": params.priority,
+        "status": "open",
+        "task_type": task_type_str,
+        "assignee": params.assignee,
+        "parent_task_id": params.parent,
+    });
+
+    // Build the reverse cross-brain ref payload for the IPC path.
+    let reverse_ref_type = params.link_type.as_deref().unwrap_or("related").to_string();
+    let reverse_remote_task_for_ipc = params
+        .link_from
+        .as_ref()
+        .map(|lf| {
+            local_store
+                .resolve_task_id(lf)
+                .unwrap_or_else(|_| lf.clone())
+        })
+        .unwrap_or_default();
+    let reverse_ref_payload = serde_json::json!({
+        "brain_id": local_brain_id,
+        "remote_task": reverse_remote_task_for_ipc,
+        "ref_type": reverse_ref_type,
+    });
+
+    // ── Try IPC path ──────────────────────────────────────────────────────────
+    // Attempt to route through the daemon to avoid cross-process SQLite writer
+    // conflicts.  If any step fails, fall through to the direct-access path.
+    let ipc_result: Option<CrossBrainCreateResult> = run_async(async {
+        // 1. Create the task in the remote brain via daemon.
+        let remote_task_id = ipc_apply_event(
+            &remote_brain_name,
+            "task_created",
+            None,
+            create_payload.clone(),
+        )
+        .await?;
+
+        // 2. Add reverse cross-brain ref on the remote task.
+        ipc_apply_event(
+            &remote_brain_name,
+            "cross_brain_ref_added",
+            Some(&remote_task_id),
+            reverse_ref_payload.clone(),
+        )
+        .await?;
+
+        // 3. Add local cross-brain ref (sync — writes to local store directly).
+        let local_ref_created = if let Some(ref link_from) = params.link_from {
+            let local_task_id = local_store.resolve_task_id(link_from).ok()?;
+            let ref_type = params.link_type.as_deref().unwrap_or("related").to_string();
+            let ref_payload = CrossBrainRefPayload {
+                brain_id: remote_brain_id.clone(),
+                remote_task: remote_task_id.clone(),
+                ref_type,
+                note: None,
+            };
+            let ref_event = TaskEvent::new(
+                &local_task_id,
+                "cross-brain",
+                EventType::CrossBrainRefAdded,
+                &ref_payload,
+            );
+            local_store.append(&ref_event).ok()?;
+            true
+        } else {
+            false
+        };
+
+        Some(CrossBrainCreateResult {
+            remote_task_id,
+            remote_brain_name: remote_brain_name.clone(),
+            remote_brain_id: remote_brain_id.clone(),
+            local_ref_created,
+            remote_ref_created: true,
+        })
+    });
+
+    if let Some(result) = ipc_result {
+        return Ok(result);
+    }
+
+    // ── Direct-access fallback ────────────────────────────────────────────────
+    // Daemon unavailable or IPC call failed — open remote SQLite directly.
+    let ctx = RemoteBrainContext::open(&params.target_brain)?;
 
     // Generate a task ID for the remote brain.
     let remote_task_id = new_task_id(&ctx.tasks.get_project_prefix()?);
@@ -264,10 +430,90 @@ pub struct CrossBrainCloseResult {
 ///
 /// `local_store` is accepted for API consistency with `cross_brain_create` and
 /// future cross-ref linking but is not mutated in this implementation.
+///
+/// When the daemon is running, writes are routed through IPC to avoid opening
+/// the remote SQLite directly.  Falls back to direct access when unavailable.
 pub fn cross_brain_close(
     _local_store: &TaskStore,
     params: CrossBrainCloseParams,
 ) -> Result<CrossBrainCloseResult> {
+    // Resolve brain entry from config — lightweight, no SQLite open.
+    let (remote_brain_name, entry) = resolve_brain_entry(&params.target_brain)?;
+    let remote_brain_id = resolve_brain_id(&entry, &remote_brain_name)?;
+
+    // ── Try IPC path ──────────────────────────────────────────────────────────
+    let ipc_result: Option<CrossBrainCloseResult> = run_async(async {
+        let sock = IpcClient::default_socket_path();
+        let mut client = IpcClient::connect(&sock).await.ok()?;
+
+        let mut closed = Vec::new();
+        let mut failed = Vec::new();
+        let mut unblocked = Vec::new();
+
+        for raw_id in &params.task_ids {
+            let id = {
+                let req_id = client
+                    .tools_call(
+                        "tasks_apply_event",
+                        &remote_brain_name,
+                        serde_json::json!({
+                            "event_type": "status_changed",
+                            "task_id": raw_id,
+                            "actor": "cross-brain",
+                            "payload": { "new_status": "done" },
+                        }),
+                    )
+                    .await;
+
+                match req_id {
+                    Ok(result) => {
+                        let text = result["content"]
+                            .get(0)
+                            .and_then(|c| c["text"].as_str())
+                            .unwrap_or("");
+                        let parsed: serde_json::Value =
+                            serde_json::from_str(text).unwrap_or_default();
+                        if parsed
+                            .get("isError")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                        {
+                            failed.push((raw_id.clone(), text.to_string()));
+                            continue;
+                        }
+                        // Collect unblocked task IDs.
+                        if let Some(arr) = parsed["unblocked_task_ids"].as_array() {
+                            for v in arr {
+                                if let Some(s) = v.as_str() {
+                                    unblocked.push(s.to_string());
+                                }
+                            }
+                        }
+                        parsed["task_id"].as_str().unwrap_or(raw_id).to_string()
+                    }
+                    Err(e) => {
+                        failed.push((raw_id.clone(), e.to_string()));
+                        continue;
+                    }
+                }
+            };
+            closed.push(id);
+        }
+
+        Some(CrossBrainCloseResult {
+            remote_brain_name: remote_brain_name.clone(),
+            remote_brain_id: remote_brain_id.clone(),
+            closed,
+            failed,
+            unblocked,
+        })
+    });
+
+    if let Some(result) = ipc_result {
+        return Ok(result);
+    }
+
+    // ── Direct-access fallback ────────────────────────────────────────────────
     let ctx = RemoteBrainContext::open(&params.target_brain)?;
 
     let (closed, failed, unblocked) = cross_brain_close_inner(&ctx.tasks, &params.task_ids)?;

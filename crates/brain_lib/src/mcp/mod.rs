@@ -10,10 +10,12 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::db::Db;
 use crate::embedder::{Embed, Embedder};
+use crate::ipc::client::IpcClient;
 use crate::metrics::Metrics;
 use crate::records::RecordStore;
 use crate::records::objects::ObjectStore;
@@ -25,6 +27,22 @@ use protocol::{
     ServerInfo, ToolsCapability, ToolsListResult,
 };
 use tools::ToolRegistry;
+
+/// Dispatch mode for MCP tool calls.
+///
+/// `Local` uses the in-process tool registry and McpContext directly.
+/// `Daemon` forwards `tools/call` requests to the daemon via UDS.
+enum DispatchMode {
+    Local {
+        ctx: Arc<McpContext>,
+    },
+    Daemon {
+        client: Mutex<IpcClient>,
+        brain_name: String,
+        /// Kept for tools/list and metrics even in daemon mode.
+        ctx: Arc<McpContext>,
+    },
+}
 
 /// Shared context for MCP tool handlers.
 ///
@@ -132,6 +150,37 @@ impl McpContext {
         }))
     }
 
+    /// Build an McpContext from pre-opened stores.
+    ///
+    /// Used by the daemon to create per-brain MCP contexts without going
+    /// through the full bootstrap sequence (which opens its own stores).
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_stores(
+        db: Db,
+        store: Option<StoreReader>,
+        writable_store: Option<Store>,
+        embedder: Option<Arc<dyn Embed>>,
+        tasks: TaskStore,
+        records: RecordStore,
+        objects: ObjectStore,
+        metrics: Arc<Metrics>,
+        brain_home: std::path::PathBuf,
+        brain_name: String,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            db,
+            store,
+            writable_store,
+            embedder,
+            tasks,
+            records,
+            objects,
+            metrics,
+            brain_home,
+            brain_name,
+        })
+    }
+
     /// Attempt to open the LanceDB store and load the embedder.
     ///
     /// Returns both as a pair on success. Any error causes the entire search
@@ -165,12 +214,34 @@ impl McpContext {
 ///
 /// All logging goes to stderr (stdout is reserved for MCP protocol).
 /// Returns when stdin is closed.
+///
+/// If the brain daemon is running at the default socket path, tool calls are
+/// routed through it via UDS. Otherwise falls back to direct store access.
 pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
     let reader = BufReader::new(stdin);
     let mut lines = reader.lines();
     let registry = ToolRegistry::new();
+
+    // Attempt to connect to the daemon. Fall back to local dispatch on failure.
+    let dispatch_mode = {
+        let sock = IpcClient::default_socket_path();
+        match IpcClient::connect(&sock).await {
+            Ok(client) => {
+                info!("connected to daemon via UDS, routing tool calls through daemon");
+                DispatchMode::Daemon {
+                    client: Mutex::new(client),
+                    brain_name: ctx.brain_name.clone(),
+                    ctx,
+                }
+            }
+            Err(_) => {
+                info!("daemon not available, using direct store access");
+                DispatchMode::Local { ctx }
+            }
+        }
+    };
 
     info!("MCP server starting");
 
@@ -187,7 +258,7 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
         debug!(line = %line, "received request");
 
         let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
-            Ok(req) => handle_request(req, &ctx, &registry).await,
+            Ok(req) => handle_request(req, &dispatch_mode, &registry).await,
             Err(e) => {
                 error!(error = %e, "invalid JSON-RPC request");
                 r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#
@@ -216,8 +287,18 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
 }
 
 /// Handle a single JSON-RPC request and return the serialized response.
-async fn handle_request(req: JsonRpcRequest, ctx: &McpContext, registry: &ToolRegistry) -> String {
+async fn handle_request(
+    req: JsonRpcRequest,
+    mode: &DispatchMode,
+    registry: &ToolRegistry,
+) -> String {
     let id = req.id.clone();
+
+    // Obtain the McpContext reference for non-dispatch paths (initialize, tools/list, metrics).
+    let ctx = match mode {
+        DispatchMode::Local { ctx } => ctx,
+        DispatchMode::Daemon { ctx, .. } => ctx,
+    };
 
     match req.method.as_str() {
         "initialize" => {
@@ -267,7 +348,28 @@ async fn handle_request(req: JsonRpcRequest, ctx: &McpContext, registry: &ToolRe
                 .unwrap_or(Value::Object(serde_json::Map::new()));
 
             let call_start = std::time::Instant::now();
-            let result = registry.dispatch(tool_name, arguments, ctx).await;
+
+            let result = match mode {
+                DispatchMode::Daemon {
+                    client, brain_name, ..
+                } => {
+                    // Forward to daemon via IPC. On IPC error, return an MCP
+                    // error result rather than panicking.
+                    let mut guard = client.lock().await;
+                    match guard.tools_call(tool_name, brain_name, arguments).await {
+                        Ok(value) => {
+                            // The daemon returns a ToolCallResult-shaped Value; wrap it.
+                            return serialize_response(&JsonRpcResponse::new(id, value));
+                        }
+                        Err(e) => {
+                            error!(error = %e, tool = tool_name, "IPC dispatch failed");
+                            protocol::ToolCallResult::error(format!("daemon error: {e}"))
+                        }
+                    }
+                }
+                DispatchMode::Local { .. } => registry.dispatch(tool_name, arguments, ctx).await,
+            };
+
             if matches!(
                 tool_name,
                 "memory.search_minimal" | "memory.expand" | "memory.reflect"
@@ -305,13 +407,14 @@ mod tests {
     async fn call(method: &str, params: Value) -> String {
         let (_dir, ctx) = tools::tests::create_test_context().await;
         let registry = ToolRegistry::new();
+        let mode = DispatchMode::Local { ctx: Arc::new(ctx) };
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: Some(json!(1)),
             method: method.into(),
             params,
         };
-        handle_request(req, &ctx, &registry).await
+        handle_request(req, &mode, &registry).await
     }
 
     #[tokio::test]

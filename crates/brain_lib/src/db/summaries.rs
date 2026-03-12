@@ -488,6 +488,6 @@ mod tests {
     fn test_get_ml_summaries_for_chunks_missing_chunk_not_in_result() {
         let conn = setup();
         let map = get_ml_summaries_for_chunks(&conn, &["chunk:nonexistent"]).unwrap();
-        assert!(map.get("chunk:nonexistent").is_none());
+        assert!(!map.contains_key("chunk:nonexistent"));
     }
 }
