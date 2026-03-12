@@ -724,7 +724,7 @@ async fn init_brain_instance(
     tasks.rebuild_projections()?;
     let records = RecordStore::new(&brain_data_dir.join("records"), pipeline.db().clone())?;
     records.rebuild_projections()?;
-    let objects = ObjectStore::new(&brain_data_dir.join("objects"))?;
+    let objects = ObjectStore::new(brain_data_dir.join("objects"))?;
     let store_reader = StoreReader::from_store(pipeline.store());
     let metrics = Arc::clone(pipeline.metrics());
 
