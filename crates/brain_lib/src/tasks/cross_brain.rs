@@ -191,17 +191,11 @@ pub(crate) fn cross_brain_fetch_inner(
 }
 
 #[cfg(not(test))]
-fn cross_brain_fetch_inner(
-    remote_store: &TaskStore,
-    task_id: &str,
-) -> Result<FetchInnerResult> {
+fn cross_brain_fetch_inner(remote_store: &TaskStore, task_id: &str) -> Result<FetchInnerResult> {
     _cross_brain_fetch_inner(remote_store, task_id)
 }
 
-fn _cross_brain_fetch_inner(
-    remote_store: &TaskStore,
-    task_id: &str,
-) -> Result<FetchInnerResult> {
+fn _cross_brain_fetch_inner(remote_store: &TaskStore, task_id: &str) -> Result<FetchInnerResult> {
     let resolved = remote_store.resolve_task_id(task_id)?;
     let task = remote_store.get_task(&resolved)?.ok_or_else(|| {
         BrainCoreError::TaskEvent(format!("task '{task_id}' not found in remote brain"))
