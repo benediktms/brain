@@ -170,17 +170,21 @@ async fn dispatch_request(req: JsonRpcRequest, router: &BrainRouter) -> String {
         }
     };
 
-    let arguments = req
+    let mut arguments = req
         .params
         .get("arguments")
         .cloned()
         .unwrap_or(Value::Object(serde_json::Map::new()));
 
-    // Extract the optional `brain` field from arguments.
-    let brain_name = arguments
-        .get("brain")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    // Extract and remove the `brain` routing field from arguments.
+    // Tools must not receive the IPC routing key — they have their own
+    // `brain` param semantics (remote brain targeting) that would conflict.
+    let brain_name = if let Some(obj) = arguments.as_object_mut() {
+        obj.remove("brain")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+    } else {
+        None
+    };
 
     let result = router
         .dispatch(brain_name.as_deref(), &tool_name, arguments)
