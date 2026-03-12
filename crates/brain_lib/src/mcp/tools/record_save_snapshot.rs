@@ -124,7 +124,7 @@ impl McpTool for RecordSaveSnapshot {
         ToolDefinition {
             name: self.name().into(),
             description:
-                "Save a new snapshot record. Writes data to the object store with kind='snapshot'."
+                "Save a new snapshot record. Writes content to the object store with kind='snapshot'."
                     .into(),
             input_schema: json!({
                 "type": "object",

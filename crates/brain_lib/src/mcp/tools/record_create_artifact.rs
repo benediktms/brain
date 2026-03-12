@@ -51,14 +51,18 @@ impl RecordCreateArtifact {
                     Ok(b) => b,
                     Err(e) => return ToolCallResult::error(format!("Invalid base64 data: {e}")),
                 };
-                (bytes, params.media_type.clone())
+                let mt = params
+                    .media_type
+                    .clone()
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                (bytes, Some(mt))
             }
             (None, Some(t)) => {
                 let mt = params
                     .media_type
                     .clone()
-                    .or_else(|| Some("text/plain".to_string()));
-                (t.as_bytes().to_vec(), mt)
+                    .unwrap_or_else(|| "text/plain".to_string());
+                (t.as_bytes().to_vec(), Some(mt))
             }
             (None, None) => (vec![], params.media_type.clone()),
         };
