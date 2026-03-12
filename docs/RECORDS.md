@@ -538,11 +538,12 @@ Creates a new artifact record. Writes data to the object store and appends a `Re
 Input:
   title       string    (required) — Human-readable title
   kind        string    (optional, default "document") — report|diff|export|analysis|document|custom
-  data        string    (optional) — Base64-encoded content bytes. Omit for metadata-only record.
+  data        string    (optional) — Base64-encoded content bytes. Provide 'data' or 'text', not both. Omit both for metadata-only record.
+  text        string    (optional) — Plain-text content (server encodes internally). Provide 'text' or 'data', not both.
   description string    (optional) — Free-text description
   task_id     string    (optional) — Soft link to originating task
   tags        string[]  (optional) — Initial tags
-  media_type  string    (optional) — MIME type hint (e.g. "application/json")
+  media_type  string    (optional) — MIME type hint. Defaults to 'text/plain' for text, 'application/octet-stream' for data.
 
 Output:
   record_id, content_hash, size
@@ -555,11 +556,12 @@ Saves a new snapshot record. Kind is always `"snapshot"`.
 ```
 Input:
   title       string    (required) — Human-readable title
-  data        string    (required) — Base64-encoded snapshot bytes
+  data        string    (optional) — Base64-encoded snapshot bytes. Provide 'data' or 'text', not both.
+  text        string    (optional) — Plain-text content (server encodes internally). Provide 'text' or 'data', not both.
   description string    (optional) — Free-text description
   task_id     string    (optional) — Soft link to originating task
   tags        string[]  (optional) — Initial tags
-  media_type  string    (optional, default "application/octet-stream")
+  media_type  string    (optional) — MIME type hint. Defaults to 'text/plain' for text, 'application/octet-stream' for data.
 
 Output:
   record_id, content_hash, size

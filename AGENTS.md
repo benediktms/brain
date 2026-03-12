@@ -70,8 +70,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 
 | Tool | Description |
 | --- | --- |
-| `records.create_artifact` | Create a new artifact record with base64-encoded content |
-| `records.save_snapshot` | Save an opaque state bundle as a snapshot record |
+| `records.create_artifact` | Create a new artifact record with `text` (plain) or `data` (base64) content |
+| `records.save_snapshot` | Save a snapshot record with `text` (plain) or `data` (base64) content |
 | `records.get` | Get a record by ID with full metadata, tags, and links (supports prefix resolution) |
 | `records.list` | List records with optional filters (kind, status, tag, task_id) |
 | `records.fetch_content` | Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata. |
@@ -236,8 +236,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
 **Records tools:**
-- `records.create_artifact` — Create a new artifact record with base64-encoded content.
-- `records.save_snapshot` — Save an opaque state bundle as a snapshot record.
+- `records.create_artifact` — Create a new artifact record with `text` (plain) or `data` (base64) content.
+- `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content.
 - `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution).
 - `records.list` — List records with optional filters (kind, status, tag, task_id).
 - `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata.
