@@ -16,7 +16,7 @@ use crate::error::{BrainCoreError, Result};
 
 use events::{EventType, TaskEvent};
 
-/// The task store: event log (JSONL) as source of truth, SQLite as projection.
+/// The task store: SQLite as source of truth, JSONL as audit trail.
 pub struct TaskStore {
     events_path: PathBuf,
     db: Db,
@@ -35,24 +35,29 @@ impl TaskStore {
         })
     }
 
-    /// Append a validated event to the log and apply it to the projection.
+    /// Append a validated event: write to SQLite first, then emit to the JSONL audit log.
     ///
-    /// Validation runs before the JSONL write to prevent log/projection divergence:
+    /// Validation runs before any write:
     /// - `TaskCreated`: task_id must NOT already exist
     /// - `TaskUpdated`/`StatusChanged`: task must exist
     /// - `DependencyAdded`: both tasks must exist, no cycle
     /// - `DependencyRemoved`: task must exist
     /// - `NoteLinked`/`NoteUnlinked`: task must exist
+    ///
+    /// SQLite is the authoritative write — if it fails, the operation fails. The JSONL
+    /// append is a best-effort audit trail; failure is logged as a warning but does not
+    /// roll back the SQLite write.
     pub fn append(&self, event: &TaskEvent) -> Result<()> {
-        // Validate before writing to JSONL
         self.db.with_write_conn(|conn| {
             self.validate(conn, event)?;
 
-            // Write to JSONL (source of truth)
-            events::append_event(&self.events_path, event)?;
-
-            // Apply to SQLite projection
+            // SQLite is the source of truth — write first
             projections::apply_event(conn, event)?;
+
+            // JSONL emit is best-effort audit trail — failure does not roll back SQLite
+            if let Err(e) = events::append_event(&self.events_path, event) {
+                tracing::warn!("failed to append task event to audit log: {e}");
+            }
 
             Ok(())
         })
