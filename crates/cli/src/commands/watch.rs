@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use brain_lib::config::paths::normalize_note_paths_lenient;
-use brain_lib::config::{load_global_config, resolve_paths_for_brain};
+use brain_lib::config::{get_or_generate_brain_id, load_global_config, resolve_paths_for_brain};
 use brain_lib::db::Db;
 use brain_lib::embedder::Embedder;
 use brain_lib::pipeline::IndexPipeline;
@@ -341,6 +341,11 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
              Run `brain register` inside a project to add one."
         );
     }
+
+    // ── 1b. Sync brain IDs ─────────────────────────────────────────────
+    // Ensure every registered brain has an ID in both brain.toml and the
+    // global registry. Best-effort: failures are logged but not fatal.
+    sync_brain_ids(&global_cfg);
 
     // ── 2. Load embedder once (model_dir is the same for all brains) ─────
     // Use the first registered brain to derive model_dir.
@@ -713,6 +718,24 @@ fn event_primary_path(event: &FileEvent) -> PathBuf {
     match event {
         FileEvent::Changed(p) | FileEvent::Created(p) | FileEvent::Deleted(p) => p.clone(),
         FileEvent::Renamed { to, .. } => to.clone(),
+    }
+}
+
+/// Ensure every registered brain has a stable ID in both its local
+/// `brain.toml` and the global registry. Generates missing IDs on the fly.
+fn sync_brain_ids(global_cfg: &brain_lib::config::GlobalConfig) {
+    for (name, entry) in &global_cfg.brains {
+        let brain_dir = entry.root.join(".brain");
+        match get_or_generate_brain_id(&brain_dir) {
+            Ok(id) => {
+                if entry.id.as_deref() != Some(&id) {
+                    info!(brain = %name, id = %id, "synced brain ID to registry");
+                }
+            }
+            Err(e) => {
+                warn!(brain = %name, error = %e, "failed to sync brain ID");
+            }
+        }
     }
 }
 

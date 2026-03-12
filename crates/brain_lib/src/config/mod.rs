@@ -125,16 +125,33 @@ pub fn generate_brain_id() -> String {
     nanoid::nanoid!(8)
 }
 
-/// Get or lazily generate a brain ID, persisting it to brain.toml.
+/// Get or lazily generate a brain ID, persisting it to brain.toml
+/// and syncing it to the global registry (`~/.brain/config.toml`).
 pub fn get_or_generate_brain_id(brain_dir: &Path) -> Result<String> {
     let mut toml = load_brain_toml(brain_dir)?;
     if let Some(ref id) = toml.id {
+        // Ensure the global registry is in sync even if the ID already exists locally.
+        sync_id_to_registry(&toml.name, id);
         return Ok(id.clone());
     }
     let id = generate_brain_id();
     toml.id = Some(id.clone());
     save_brain_toml(brain_dir, &toml)?;
+    sync_id_to_registry(&toml.name, &id);
     Ok(id)
+}
+
+/// Best-effort: update the brain's `id` field in the global registry.
+fn sync_id_to_registry(brain_name: &str, id: &str) {
+    let Ok(mut global) = load_global_config() else {
+        return;
+    };
+    if let Some(entry) = global.brains.get_mut(brain_name)
+        && entry.id.as_deref() != Some(id)
+    {
+        entry.id = Some(id.to_string());
+        let _ = save_global_config(&global);
+    }
 }
 
 // ---------------------------------------------------------------------------
