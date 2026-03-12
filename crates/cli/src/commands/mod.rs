@@ -13,6 +13,7 @@ pub mod id;
 pub mod import_beads;
 pub mod index;
 pub mod init;
+pub mod link;
 pub mod mcp;
 pub mod mcp_setup;
 pub mod query;

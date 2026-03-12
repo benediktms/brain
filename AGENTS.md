@@ -136,6 +136,7 @@ brain tasks stats              # Project statistics
 # Registry
 brain list                     # List registered brains
 brain list --json              # List as JSON (name, id, root, prefix)
+brain link <name>              # Link cwd as additional root for brain (by name, ID, or alias)
 
 # Records
 brain artifacts <subcommand>   # Artifact management (alias: art)
@@ -292,6 +293,7 @@ brain tasks label batch-add area:infra BRN-01ABC --brain=<NAME_OR_ID>  # Add lab
 # Registry
 brain list                     # List registered brains
 brain list --json              # List as JSON (name, id, root, prefix)
+brain link <name>              # Link cwd as additional root for brain (by name, ID, or alias)
 
 # Dependencies
 brain tasks dep add <task> <depends-on>

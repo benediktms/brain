@@ -178,6 +178,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         } => {
             commands::init::run(name, notes, no_agents_md)?;
         }
+        Command::Link { name } => {
+            commands::link::run(&name)?;
+        }
         Command::List { json } => {
             commands::registry::run_list(json)?;
         }
