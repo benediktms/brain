@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::json;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use crate::ipc::client::IpcClient;
 use crate::ipc::router::BrainRouter;
@@ -290,7 +290,10 @@ async fn ipc_unknown_brain_returns_error() {
         .get("isError")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    assert!(is_error, "expected isError=true for unknown brain, got: {result}");
+    assert!(
+        is_error,
+        "expected isError=true for unknown brain, got: {result}"
+    );
 
     token.cancel();
 }
@@ -323,8 +326,13 @@ async fn ipc_stale_socket_cleanup() {
     sleep(Duration::from_millis(10)).await;
 
     // Socket file should now be a real UDS — client can connect.
-    let mut client = IpcClient::connect(&sock).await.expect("connect after stale cleanup failed");
-    let result = client.ping("test-brain").await.expect("ping after stale cleanup failed");
+    let mut client = IpcClient::connect(&sock)
+        .await
+        .expect("connect after stale cleanup failed");
+    let result = client
+        .ping("test-brain")
+        .await
+        .expect("ping after stale cleanup failed");
     assert!(result.is_object());
 
     token.cancel();
@@ -354,7 +362,10 @@ async fn ipc_concurrent_connections() {
                 .ping("test-brain")
                 .await
                 .unwrap_or_else(|e| panic!("concurrent ping {i} failed: {e}"));
-            assert!(result.is_object(), "concurrent ping {i} should return object");
+            assert!(
+                result.is_object(),
+                "concurrent ping {i} should return object"
+            );
         }));
     }
 

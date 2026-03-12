@@ -116,7 +116,10 @@ mod tests {
             .await;
         assert_eq!(result.is_error, Some(true));
         let msg = &result.content[0].text;
-        assert!(msg.contains("no-such-brain"), "error should name the missing brain");
+        assert!(
+            msg.contains("no-such-brain"),
+            "error should name the missing brain"
+        );
     }
 
     #[tokio::test]

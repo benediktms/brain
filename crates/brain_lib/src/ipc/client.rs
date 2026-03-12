@@ -55,12 +55,12 @@ impl IpcClient {
     /// Returns [`IpcClientError::DaemonUnavailable`] when the socket file is
     /// absent (`ENOENT`) or the daemon is not listening (`ECONNREFUSED`).
     pub async fn connect(socket_path: &Path) -> Result<Self, IpcClientError> {
-        let stream = UnixStream::connect(socket_path)
-            .await
-            .map_err(|e| IpcClientError::DaemonUnavailable {
+        let stream = UnixStream::connect(socket_path).await.map_err(|e| {
+            IpcClientError::DaemonUnavailable {
                 path: socket_path.to_path_buf(),
                 source: e,
-            })?;
+            }
+        })?;
 
         let (read_half, write_half) = tokio::io::split(stream);
         Ok(Self {
@@ -74,7 +74,10 @@ impl IpcClient {
     ///
     /// On a JSON-RPC error response the method returns
     /// [`IpcClientError::Rpc`] rather than a success value.
-    pub async fn call(&mut self, request: &JsonRpcRequest) -> Result<JsonRpcResponse, IpcClientError> {
+    pub async fn call(
+        &mut self,
+        request: &JsonRpcRequest,
+    ) -> Result<JsonRpcResponse, IpcClientError> {
         // Serialize and send the request.
         let mut payload = serde_json::to_vec(request)?;
         payload.push(b'\n');
@@ -103,7 +106,9 @@ impl IpcClient {
             });
         }
 
-        Err(IpcClientError::Protocol(format!("unparseable response: {line}")))
+        Err(IpcClientError::Protocol(format!(
+            "unparseable response: {line}"
+        )))
     }
 
     /// Issue a `tools/call` JSON-RPC request and return the raw `result` value.
@@ -159,7 +164,8 @@ impl IpcClient {
 
     /// Ping the daemon by calling the `status` tool.
     pub async fn ping(&mut self, brain: &str) -> Result<Value, IpcClientError> {
-        self.tools_call("status", brain, serde_json::json!({})).await
+        self.tools_call("status", brain, serde_json::json!({}))
+            .await
     }
 
     // --- Task operations ---
@@ -201,7 +207,8 @@ impl IpcClient {
         brain: &str,
         arguments: Value,
     ) -> Result<Value, IpcClientError> {
-        self.tools_call("tasks_labels_batch", brain, arguments).await
+        self.tools_call("tasks_labels_batch", brain, arguments)
+            .await
     }
 
     // --- Record operations ---
@@ -227,7 +234,8 @@ impl IpcClient {
         brain: &str,
         arguments: Value,
     ) -> Result<Value, IpcClientError> {
-        self.tools_call("records_fetch_content", brain, arguments).await
+        self.tools_call("records_fetch_content", brain, arguments)
+            .await
     }
 }
 

@@ -287,7 +287,11 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
 }
 
 /// Handle a single JSON-RPC request and return the serialized response.
-async fn handle_request(req: JsonRpcRequest, mode: &DispatchMode, registry: &ToolRegistry) -> String {
+async fn handle_request(
+    req: JsonRpcRequest,
+    mode: &DispatchMode,
+    registry: &ToolRegistry,
+) -> String {
     let id = req.id.clone();
 
     // Obtain the McpContext reference for non-dispatch paths (initialize, tools/list, metrics).
@@ -346,7 +350,9 @@ async fn handle_request(req: JsonRpcRequest, mode: &DispatchMode, registry: &Too
             let call_start = std::time::Instant::now();
 
             let result = match mode {
-                DispatchMode::Daemon { client, brain_name, .. } => {
+                DispatchMode::Daemon {
+                    client, brain_name, ..
+                } => {
                     // Forward to daemon via IPC. On IPC error, return an MCP
                     // error result rather than panicking.
                     let mut guard = client.lock().await;
@@ -361,9 +367,7 @@ async fn handle_request(req: JsonRpcRequest, mode: &DispatchMode, registry: &Too
                         }
                     }
                 }
-                DispatchMode::Local { .. } => {
-                    registry.dispatch(tool_name, arguments, ctx).await
-                }
+                DispatchMode::Local { .. } => registry.dispatch(tool_name, arguments, ctx).await,
             };
 
             if matches!(

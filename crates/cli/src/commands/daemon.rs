@@ -19,7 +19,11 @@ impl Daemon {
         let pid_path = home.join("brain.pid");
         let log_path = home.join("brain.log");
         let sock_path = home.join("brain.sock");
-        Ok(Self { pid_path, log_path, sock_path })
+        Ok(Self {
+            pid_path,
+            log_path,
+            sock_path,
+        })
     }
 
     /// Fork, setsid, redirect fds, write PID. Parent exits; child returns.

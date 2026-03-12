@@ -59,21 +59,16 @@ impl IpcServer {
                 Err(_) => {
                     // Connection failed → stale socket from crashed daemon.
                     warn!(path = ?socket_path, "removing stale socket file");
-                    std::fs::remove_file(socket_path)
-                        .map_err(crate::error::BrainCoreError::Io)?;
+                    std::fs::remove_file(socket_path).map_err(crate::error::BrainCoreError::Io)?;
                 }
             }
         }
 
-        let listener =
-            UnixListener::bind(socket_path).map_err(crate::error::BrainCoreError::Io)?;
+        let listener = UnixListener::bind(socket_path).map_err(crate::error::BrainCoreError::Io)?;
 
         // Restrict socket access to owner only.
-        std::fs::set_permissions(
-            socket_path,
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .map_err(crate::error::BrainCoreError::Io)?;
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(crate::error::BrainCoreError::Io)?;
 
         info!(path = ?socket_path, "IPC server bound");
 

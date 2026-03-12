@@ -640,11 +640,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     let _ = std::fs::remove_file(&sock_path);
 
     let clean = !force_shutdown && total_dropped == 0;
-    info!(
-        clean,
-        dropped_items = total_dropped,
-        "shutdown complete"
-    );
+    info!(clean, dropped_items = total_dropped, "shutdown complete");
 
     Ok(ShutdownOutcome {
         clean,
@@ -720,7 +716,10 @@ async fn init_brain_instance(
     let consolidator = ConsolidationScheduler::new(last_event_ts);
 
     // Build MCP context from the pipeline's stores + task/record/object stores.
-    let brain_data_dir = paths.sqlite_db.parent().unwrap_or(std::path::Path::new("."));
+    let brain_data_dir = paths
+        .sqlite_db
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
     let tasks = TaskStore::new(&brain_data_dir.join("tasks"), pipeline.db().clone())?;
     tasks.rebuild_projections()?;
     let records = RecordStore::new(&brain_data_dir.join("records"), pipeline.db().clone())?;

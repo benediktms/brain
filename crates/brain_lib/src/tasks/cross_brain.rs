@@ -1,4 +1,6 @@
-use crate::config::{RemoteBrainContext, get_or_generate_brain_id, resolve_brain_entry, resolve_brain_id};
+use crate::config::{
+    RemoteBrainContext, get_or_generate_brain_id, resolve_brain_entry, resolve_brain_id,
+};
 use crate::error::{BrainCoreError, Result};
 use crate::ipc::client::IpcClient;
 use crate::tasks::TaskStore;
@@ -57,16 +59,21 @@ async fn ipc_apply_event(
         args["task_id"] = serde_json::Value::String(id.to_string());
     }
 
-    let result = client.tools_call("tasks_apply_event", target_brain, args).await.ok()?;
+    let result = client
+        .tools_call("tasks_apply_event", target_brain, args)
+        .await
+        .ok()?;
 
     // result is a serialised ToolCallResult — extract content[0].text then parse JSON.
-    let text = result["content"]
-        .get(0)
-        .and_then(|c| c["text"].as_str())?;
+    let text = result["content"].get(0).and_then(|c| c["text"].as_str())?;
 
     // Surface errors from the tool as a None (fall back to direct path).
     let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
-    if parsed.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if parsed
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return None;
     }
 
@@ -139,7 +146,11 @@ pub fn cross_brain_create(
     let reverse_remote_task_for_ipc = params
         .link_from
         .as_ref()
-        .map(|lf| local_store.resolve_task_id(lf).unwrap_or_else(|_| lf.clone()))
+        .map(|lf| {
+            local_store
+                .resolve_task_id(lf)
+                .unwrap_or_else(|_| lf.clone())
+        })
         .unwrap_or_default();
     let reverse_ref_payload = serde_json::json!({
         "brain_id": local_brain_id,
@@ -441,16 +452,18 @@ pub fn cross_brain_close(
 
         for raw_id in &params.task_ids {
             let id = {
-                let req_id = client.tools_call(
-                    "tasks_apply_event",
-                    &remote_brain_name,
-                    serde_json::json!({
-                        "event_type": "status_changed",
-                        "task_id": raw_id,
-                        "actor": "cross-brain",
-                        "payload": { "new_status": "done" },
-                    }),
-                ).await;
+                let req_id = client
+                    .tools_call(
+                        "tasks_apply_event",
+                        &remote_brain_name,
+                        serde_json::json!({
+                            "event_type": "status_changed",
+                            "task_id": raw_id,
+                            "actor": "cross-brain",
+                            "payload": { "new_status": "done" },
+                        }),
+                    )
+                    .await;
 
                 match req_id {
                     Ok(result) => {
@@ -460,7 +473,11 @@ pub fn cross_brain_close(
                             .unwrap_or("");
                         let parsed: serde_json::Value =
                             serde_json::from_str(text).unwrap_or_default();
-                        if parsed.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        if parsed
+                            .get("isError")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                        {
                             failed.push((raw_id.clone(), text.to_string()));
                             continue;
                         }
@@ -472,10 +489,7 @@ pub fn cross_brain_close(
                                 }
                             }
                         }
-                        parsed["task_id"]
-                            .as_str()
-                            .unwrap_or(raw_id)
-                            .to_string()
+                        parsed["task_id"].as_str().unwrap_or(raw_id).to_string()
                     }
                     Err(e) => {
                         failed.push((raw_id.clone(), e.to_string()));
