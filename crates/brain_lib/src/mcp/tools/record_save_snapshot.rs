@@ -16,17 +16,13 @@ use super::{McpTool, json_response};
 #[derive(Deserialize)]
 struct Params {
     title: String,
-    data: String,
+    data: Option<String>,
+    text: Option<String>,
     description: Option<String>,
     task_id: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
-    #[serde(default = "default_media_type")]
-    media_type: String,
-}
-
-fn default_media_type() -> String {
-    "application/octet-stream".to_string()
+    media_type: Option<String>,
 }
 
 pub(super) struct RecordSaveSnapshot;
@@ -38,14 +34,40 @@ impl RecordSaveSnapshot {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let raw_bytes = match BASE64.decode(&params.data) {
-            Ok(b) => b,
-            Err(e) => return ToolCallResult::error(format!("Invalid base64 data: {e}")),
+        let (raw_bytes, media_type) = match (&params.data, &params.text) {
+            (Some(_), Some(_)) => {
+                return ToolCallResult::error(
+                    "Provide either 'data' (base64) or 'text' (plain), not both".to_string(),
+                );
+            }
+            (Some(b64), None) => {
+                let bytes = match BASE64.decode(b64) {
+                    Ok(b) => b,
+                    Err(e) => return ToolCallResult::error(format!("Invalid base64 data: {e}")),
+                };
+                let mt = params
+                    .media_type
+                    .clone()
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                (bytes, mt)
+            }
+            (None, Some(t)) => {
+                let mt = params
+                    .media_type
+                    .clone()
+                    .unwrap_or_else(|| "text/plain".to_string());
+                (t.as_bytes().to_vec(), mt)
+            }
+            (None, None) => {
+                return ToolCallResult::error(
+                    "Either 'data' (base64) or 'text' (plain) is required".to_string(),
+                );
+            }
         };
 
         let (content_ref, encoding, original_size) = match ctx.objects.write_compressed(
             &raw_bytes,
-            Some(params.media_type.clone()),
+            Some(media_type.clone()),
             COMPRESSION_THRESHOLD,
         ) {
             Ok(r) => r,
@@ -64,7 +86,7 @@ impl RecordSaveSnapshot {
             content_ref: ContentRefPayload::compressed(
                 content_ref.hash.clone(),
                 content_ref.size,
-                Some(params.media_type),
+                Some(media_type),
                 encoding,
                 original_size,
             ),
@@ -113,7 +135,11 @@ impl McpTool for RecordSaveSnapshot {
                     },
                     "data": {
                         "type": "string",
-                        "description": "Base64-encoded snapshot bytes"
+                        "description": "Base64-encoded snapshot bytes. Provide either 'data' or 'text', not both."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Plain-text content (server encodes internally). Provide either 'text' or 'data', not both."
                     },
                     "description": {
                         "type": "string",
@@ -130,11 +156,10 @@ impl McpTool for RecordSaveSnapshot {
                     },
                     "media_type": {
                         "type": "string",
-                        "description": "MIME type hint. Defaults to 'application/octet-stream'.",
-                        "default": "application/octet-stream"
+                        "description": "MIME type hint. Defaults to 'text/plain' for text, 'application/octet-stream' for data."
                     }
                 },
-                "required": ["title", "data"]
+                "required": ["title"]
             }),
         }
     }

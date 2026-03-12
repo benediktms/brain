@@ -19,6 +19,7 @@ struct Params {
     #[serde(default = "default_kind")]
     kind: String,
     data: Option<String>,
+    text: Option<String>,
     description: Option<String>,
     task_id: Option<String>,
     #[serde(default)]
@@ -39,18 +40,32 @@ impl RecordCreateArtifact {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let raw_bytes: Vec<u8> = if let Some(b64) = &params.data {
-            match BASE64.decode(b64) {
-                Ok(b) => b,
-                Err(e) => return ToolCallResult::error(format!("Invalid base64 data: {e}")),
+        let (raw_bytes, media_type) = match (&params.data, &params.text) {
+            (Some(_), Some(_)) => {
+                return ToolCallResult::error(
+                    "Provide either 'data' (base64) or 'text' (plain), not both".to_string(),
+                );
             }
-        } else {
-            vec![]
+            (Some(b64), None) => {
+                let bytes = match BASE64.decode(b64) {
+                    Ok(b) => b,
+                    Err(e) => return ToolCallResult::error(format!("Invalid base64 data: {e}")),
+                };
+                (bytes, params.media_type.clone())
+            }
+            (None, Some(t)) => {
+                let mt = params
+                    .media_type
+                    .clone()
+                    .or_else(|| Some("text/plain".to_string()));
+                (t.as_bytes().to_vec(), mt)
+            }
+            (None, None) => (vec![], params.media_type.clone()),
         };
 
         let (content_ref, encoding, original_size) = match ctx.objects.write_compressed(
             &raw_bytes,
-            params.media_type.clone(),
+            media_type.clone(),
             COMPRESSION_THRESHOLD,
         ) {
             Ok(r) => r,
@@ -69,7 +84,7 @@ impl RecordCreateArtifact {
             content_ref: ContentRefPayload::compressed(
                 content_ref.hash.clone(),
                 content_ref.size,
-                params.media_type,
+                media_type,
                 encoding,
                 original_size,
             ),
@@ -121,7 +136,11 @@ impl McpTool for RecordCreateArtifact {
                     },
                     "data": {
                         "type": "string",
-                        "description": "Base64-encoded content bytes. Omit or leave empty for a metadata-only record."
+                        "description": "Base64-encoded content bytes. Provide either 'data' or 'text', not both. Omit both for a metadata-only record."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Plain-text content (server encodes internally). Provide either 'text' or 'data', not both."
                     },
                     "description": {
                         "type": "string",
