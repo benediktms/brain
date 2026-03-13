@@ -2,6 +2,59 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
+/// Sanitize user input for FTS5 MATCH queries by quoting unquoted tokens.
+///
+/// FTS5 interprets hyphens as column negation and words like AND/OR/NOT as
+/// boolean operators. This function wraps every unquoted token in double quotes
+/// to force literal matching, while preserving already-quoted phrase strings.
+pub fn sanitize_fts_query(input: &str) -> String {
+    let input = input.trim();
+    if input.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::with_capacity(input.len() + 16);
+    let mut chars = input.chars().peekable();
+
+    while let Some(&ch) = chars.peek() {
+        if ch == '"' {
+            // Pass through quoted phrase as-is
+            result.push(chars.next().unwrap());
+            loop {
+                match chars.next() {
+                    Some('"') => {
+                        result.push('"');
+                        break;
+                    }
+                    Some(c) => result.push(c),
+                    None => {
+                        // Unterminated quote — close it
+                        result.push('"');
+                        break;
+                    }
+                }
+            }
+        } else if ch.is_whitespace() {
+            result.push(chars.next().unwrap());
+        } else {
+            // Collect token until whitespace or quote
+            let mut token = String::new();
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() || c == '"' {
+                    break;
+                }
+                token.push(chars.next().unwrap());
+            }
+            // Escape embedded double quotes by doubling them, then wrap
+            result.push('"');
+            result.push_str(&token.replace('"', "\"\""));
+            result.push('"');
+        }
+    }
+
+    result
+}
+
 /// A full-text search result with normalized BM25 score.
 #[derive(Debug, Clone)]
 pub struct FtsResult {
@@ -16,7 +69,7 @@ pub struct FtsResult {
 /// to [0, 1] by dividing by the maximum score in the result set.
 /// Supports FTS5 query syntax (phrases, boolean operators).
 pub fn search_fts(conn: &Connection, query: &str, limit: usize) -> Result<Vec<FtsResult>> {
-    let query = query.trim();
+    let query = sanitize_fts_query(query);
     if query.is_empty() {
         return Ok(Vec::new());
     }
@@ -232,5 +285,98 @@ mod tests {
         let results = search_fts(&conn, "rust", 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].chunk_id, "f1:2");
+    }
+
+    // ── sanitize_fts_query unit tests ───────────────────────────────────
+
+    #[test]
+    fn test_sanitize_simple_token() {
+        assert_eq!(sanitize_fts_query("rust"), "\"rust\"");
+    }
+
+    #[test]
+    fn test_sanitize_multiple_tokens() {
+        assert_eq!(
+            sanitize_fts_query("remediation post-migration"),
+            "\"remediation\" \"post-migration\""
+        );
+    }
+
+    #[test]
+    fn test_sanitize_hyphenated_term() {
+        assert_eq!(sanitize_fts_query("post-migration"), "\"post-migration\"");
+    }
+
+    #[test]
+    fn test_sanitize_preserves_quoted_phrase() {
+        assert_eq!(
+            sanitize_fts_query("\"machine learning\""),
+            "\"machine learning\""
+        );
+    }
+
+    #[test]
+    fn test_sanitize_mixed_quoted_and_unquoted() {
+        assert_eq!(
+            sanitize_fts_query("rust \"machine learning\" safety"),
+            "\"rust\" \"machine learning\" \"safety\""
+        );
+    }
+
+    #[test]
+    fn test_sanitize_boolean_operators_neutralized() {
+        assert_eq!(
+            sanitize_fts_query("rust AND memory"),
+            "\"rust\" \"AND\" \"memory\""
+        );
+        assert_eq!(
+            sanitize_fts_query("rust OR python"),
+            "\"rust\" \"OR\" \"python\""
+        );
+        assert_eq!(sanitize_fts_query("NOT rust"), "\"NOT\" \"rust\"");
+    }
+
+    #[test]
+    fn test_sanitize_empty_input() {
+        assert_eq!(sanitize_fts_query(""), "");
+        assert_eq!(sanitize_fts_query("   "), "");
+    }
+
+    #[test]
+    fn test_sanitize_unterminated_quote() {
+        // Unterminated quote gets closed
+        assert_eq!(sanitize_fts_query("\"open phrase"), "\"open phrase\"");
+    }
+
+    #[test]
+    fn test_sanitize_special_chars() {
+        // Parentheses, asterisks — all get quoted as tokens
+        assert_eq!(sanitize_fts_query("test*"), "\"test*\"");
+        assert_eq!(sanitize_fts_query("(group)"), "\"(group)\"");
+    }
+
+    // ── Integration: search with hyphenated terms ───────────────────────
+
+    #[test]
+    fn test_search_fts_hyphenated_query() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO files (file_id, path, indexing_state) VALUES ('f1', '/test.md', 'idle')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content)
+             VALUES ('f1:0', 'f1', 0, 'h0', 'remediation post-migration steps')",
+            [],
+        )
+        .unwrap();
+
+        // This would fail without sanitization: "no such column: migration"
+        let results = search_fts(&conn, "post-migration", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk_id, "f1:0");
     }
 }

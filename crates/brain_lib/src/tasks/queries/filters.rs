@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
+use crate::db::fts::sanitize_fts_query;
 use crate::error::Result;
 use crate::tasks::events::TaskType;
 
@@ -81,6 +82,10 @@ pub fn apply_filters(
 /// Full-text search on task title and description via FTS5.
 /// Returns matching task_ids ordered by relevance.
 pub fn search_tasks_fts(conn: &Connection, query: &str, limit: usize) -> Result<Vec<String>> {
+    let query = sanitize_fts_query(query);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut stmt = conn.prepare(
         "SELECT t.task_id
          FROM fts_tasks
