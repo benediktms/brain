@@ -17,6 +17,7 @@ use brain_lib::ipc::server::IpcServer;
 use brain_lib::mcp::McpContext;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::pipeline::consolidation::ConsolidationScheduler;
+use brain_lib::pipeline::embed_poll;
 use brain_lib::prelude::*;
 use brain_lib::records::RecordStore;
 use brain_lib::records::objects::ObjectStore;
@@ -87,6 +88,10 @@ pub async fn run(
     // Compact fragments created during full scan
     pipeline.store().optimizer().force_optimize().await;
 
+    // Startup self-heal: if LanceDB is missing, reset embedded_at so all
+    // tasks and chunks will be re-embedded on the next poll cycle.
+    embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.store()).await;
+
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let _watcher = brain_lib::watcher::BrainWatcher::new(&note_dirs, tx)?;
@@ -107,6 +112,10 @@ pub async fn run(
     let last_event_ts = Arc::new(AtomicU64::new(0));
     let consolidator = ConsolidationScheduler::new(last_event_ts.clone());
     let mut consolidation_tick = tokio::time::interval(Duration::from_secs(30));
+
+    // Embedding poll: catches tasks/chunks that missed inline embedding
+    // (e.g. written directly to SQLite, or failed during MCP handler).
+    let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
 
     // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -180,6 +189,23 @@ pub async fn run(
                     && let Err(e) = consolidator.maybe_consolidate(pipeline.db(), summarizer).await
                 {
                     tracing::warn!("consolidation error: {e}");
+                }
+            }
+            _ = embed_poll_interval.tick() => {
+                let n_tasks = embed_poll::poll_stale_tasks(
+                    pipeline.db(),
+                    pipeline.store(),
+                    pipeline.embedder(),
+                    "",
+                ).await;
+                let n_chunks = embed_poll::poll_stale_chunks(
+                    pipeline.db(),
+                    pipeline.store(),
+                    pipeline.embedder(),
+                    "",
+                ).await;
+                if n_tasks > 0 || n_chunks > 0 {
+                    debug!(tasks = n_tasks, chunks = n_chunks, "embed_poll cycle complete");
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -431,6 +457,12 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         }
     };
 
+    // Startup self-heal: per-brain — reset embedded_at if LanceDB is missing.
+    for instance in brains.values() {
+        embed_poll::self_heal_if_lance_missing(instance.pipeline.db(), instance.pipeline.store())
+            .await;
+    }
+
     // ── 4. Build path-to-brain lookup (longest prefix first) ────────────
     let mut prefix_map = build_prefix_map(&brains);
 
@@ -462,6 +494,9 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Consolidation tick: cheap idle check every 30s; actual work gated on
     // per-brain idle threshold (5min) and summarizer being configured.
     let mut consolidation_tick = tokio::time::interval(Duration::from_secs(30));
+
+    // Embedding poll: catches tasks/chunks that missed inline embedding.
+    let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
 
     // ── 7. Event loop ─────────────────────────────────────────────────────
     let shutdown_reason = loop {
@@ -536,6 +571,31 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                         ).await
                     {
                         tracing::warn!(brain = %instance.name, "consolidation error: {e}");
+                    }
+                }
+            }
+            _ = embed_poll_interval.tick() => {
+                for instance in brains.values() {
+                    let brain_id = &instance.mcp_context.brain_id;
+                    let n_tasks = embed_poll::poll_stale_tasks(
+                        instance.pipeline.db(),
+                        instance.pipeline.store(),
+                        instance.pipeline.embedder(),
+                        brain_id,
+                    ).await;
+                    let n_chunks = embed_poll::poll_stale_chunks(
+                        instance.pipeline.db(),
+                        instance.pipeline.store(),
+                        instance.pipeline.embedder(),
+                        brain_id,
+                    ).await;
+                    if n_tasks > 0 || n_chunks > 0 {
+                        debug!(
+                            brain = %instance.name,
+                            tasks = n_tasks,
+                            chunks = n_chunks,
+                            "embed_poll cycle complete"
+                        );
                     }
                 }
             }
