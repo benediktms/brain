@@ -219,7 +219,8 @@ pub(crate) mod tests {
         (
             tmp,
             McpContext {
-                db,
+                db: db.clone(),
+                unified_db: db,
                 store: Some(store_reader),
                 writable_store: Some(store),
                 embedder: Some(embedder),

@@ -322,3 +322,122 @@ fn test_record_store_brain_id_scoping() {
         "unscoped store should see all 3 records"
     );
 }
+
+// ─── 5. McpContext with unified DB ────────────────────────────────────────────
+
+/// `McpContext` constructed with a separate `unified_db` handle routes
+/// TaskStore operations to the unified DB while `db` remains the per-brain
+/// handle for indexing tables.
+///
+/// Verifies that tasks written via the TaskStore (which uses `unified_db`) are
+/// correctly scoped to the brain_id and are not visible to a different brain.
+#[tokio::test]
+async fn test_mcp_context_unified_db_task_scoping() {
+    use std::sync::Arc;
+
+    use brain_lib::db::Db;
+    use brain_lib::mcp::McpContext;
+    use brain_lib::mcp::tools::ToolRegistry;
+    use brain_lib::metrics::Metrics;
+    use brain_lib::records::RecordStore;
+    use brain_lib::records::objects::ObjectStore;
+    use brain_lib::tasks::TaskStore;
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+
+    // Simulate the unified DB at ~/.brain/brain.db.
+    let unified_db = Db::open_in_memory().unwrap();
+    // Simulate a per-brain DB (separate handle, different schema usage).
+    let per_brain_db = Db::open_in_memory().unwrap();
+
+    let brain_id_a = "brain-id-alpha";
+    let brain_id_b = "brain-id-beta";
+
+    let tasks_dir_a = tmp.path().join("tasks_a");
+    let tasks_dir_b = tmp.path().join("tasks_b");
+    let records_dir_a = tmp.path().join("records_a");
+    let _records_dir_b = tmp.path().join("records_b");
+    let objects_dir = tmp.path().join("objects");
+
+    // Both TaskStores use the same unified_db but different brain_ids.
+    let tasks_a = TaskStore::with_brain_id(&tasks_dir_a, unified_db.clone(), brain_id_a).unwrap();
+    let tasks_b = TaskStore::with_brain_id(&tasks_dir_b, unified_db.clone(), brain_id_b).unwrap();
+    let records_a =
+        RecordStore::with_brain_id(&records_dir_a, unified_db.clone(), brain_id_a).unwrap();
+    let objects = ObjectStore::new(&objects_dir).unwrap();
+
+    // Build context for brain-a with unified_db separate from per-brain db.
+    let ctx_a = McpContext {
+        db: per_brain_db.clone(),
+        unified_db: unified_db.clone(),
+        store: None,
+        writable_store: None,
+        embedder: None,
+        tasks: tasks_a,
+        records: records_a,
+        objects,
+        metrics: Arc::new(Metrics::new()),
+        brain_home: tmp.path().to_path_buf(),
+        brain_name: "alpha".to_string(),
+        brain_id: brain_id_a.to_string(),
+    };
+
+    // Create a task for brain-a via MCP tool.
+    let registry = ToolRegistry::new();
+    let result = registry
+        .dispatch(
+            "tasks.apply_event",
+            serde_json::json!({
+                "event_type": "task_created",
+                "task_id": "alpha-task-1",
+                "payload": { "title": "Alpha brain task", "priority": 2 }
+            }),
+            &ctx_a,
+        )
+        .await;
+    assert!(
+        result.is_error.is_none(),
+        "task creation should succeed; got: {}",
+        result.content[0].text
+    );
+
+    // brain-b's TaskStore (same unified_db, different brain_id) must not see alpha's task.
+    let records_dir_b2 = tmp.path().join("records_b2");
+    let records_b =
+        RecordStore::with_brain_id(&records_dir_b2, unified_db.clone(), brain_id_b).unwrap();
+    let objects_b = ObjectStore::new(tmp.path().join("objects_b")).unwrap();
+    let ctx_b = McpContext {
+        db: per_brain_db.clone(),
+        unified_db: unified_db.clone(),
+        store: None,
+        writable_store: None,
+        embedder: None,
+        tasks: tasks_b,
+        records: records_b,
+        objects: objects_b,
+        metrics: Arc::new(Metrics::new()),
+        brain_home: tmp.path().to_path_buf(),
+        brain_name: "beta".to_string(),
+        brain_id: brain_id_b.to_string(),
+    };
+
+    let list_result = registry
+        .dispatch(
+            "tasks.list",
+            serde_json::json!({ "status": "open" }),
+            &ctx_b,
+        )
+        .await;
+    assert!(
+        list_result.is_error.is_none(),
+        "task list for beta should succeed; got: {}",
+        list_result.content[0].text
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&list_result.content[0].text).unwrap();
+    let tasks_array = parsed["tasks"].as_array().unwrap();
+    assert!(
+        tasks_array.is_empty(),
+        "beta brain must not see alpha's tasks; got: {tasks_array:?}"
+    );
+}

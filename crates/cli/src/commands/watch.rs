@@ -788,6 +788,13 @@ async fn init_brain_instance(
         }
     }
 
+    // Backfill brain_id on per-brain legacy rows that pre-date brain_id scoping.
+    // The unified DB is already backfilled by the workspace migration.
+    if !brain_id.is_empty() {
+        McpContext::backfill_brain_id(pipeline.db(), brain_id)
+            .map_err(|e| anyhow::anyhow!("backfill_brain_id failed: {e}"))?;
+    }
+
     let last_event_ts = Arc::new(AtomicU64::new(0));
     let consolidator = ConsolidationScheduler::new(last_event_ts);
 
@@ -796,21 +803,6 @@ async fn init_brain_instance(
         .sqlite_db
         .parent()
         .unwrap_or(std::path::Path::new("."));
-    let tasks = TaskStore::with_brain_id(
-        &brain_data_dir.join("tasks"),
-        pipeline.db().clone(),
-        brain_id,
-    )?;
-    // SQLite is the source of truth (B2) — scoped to brain_id for unified store
-    let records = RecordStore::with_brain_id(
-        &brain_data_dir.join("records"),
-        pipeline.db().clone(),
-        brain_id,
-    )?;
-    // SQLite is the source of truth (B2) — scoped to brain_id for unified store
-    let objects = ObjectStore::new(brain_data_dir.join("objects"))?;
-    let store_reader = StoreReader::from_store(pipeline.store());
-    let metrics = Arc::clone(pipeline.metrics());
 
     let brain_home_path = brain_data_dir
         .parent() // brains/
@@ -818,8 +810,33 @@ async fn init_brain_instance(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
+    // Open the unified DB (~/.brain/brain.db) for tasks and records.
+    // Falls back to the per-brain DB for pre-migration installations.
+    let unified_db_path = brain_home_path.join("brain.db");
+    let unified_db = if unified_db_path.exists() {
+        let path = unified_db_path.clone();
+        tokio::task::spawn_blocking(move || Db::open(&path))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking unified Db::open: {e}"))??
+    } else {
+        pipeline.db().clone()
+    };
+
+    let tasks =
+        TaskStore::with_brain_id(&brain_data_dir.join("tasks"), unified_db.clone(), brain_id)?;
+    // TaskStore/RecordStore use unified_db — brain_id scoping works correctly.
+    let records = RecordStore::with_brain_id(
+        &brain_data_dir.join("records"),
+        unified_db.clone(),
+        brain_id,
+    )?;
+    let objects = ObjectStore::new(brain_data_dir.join("objects"))?;
+    let store_reader = StoreReader::from_store(pipeline.store());
+    let metrics = Arc::clone(pipeline.metrics());
+
     let mcp_context = McpContext::from_stores(
         pipeline.db().clone(),
+        unified_db,
         Some(store_reader),
         None, // writable_store: pipeline.store() is owned by pipeline; IPC is read-only
         None, // embedder: not needed for task/record operations via IPC
