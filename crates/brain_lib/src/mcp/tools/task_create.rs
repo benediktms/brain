@@ -10,7 +10,6 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id};
 use crate::utils::{parse_timestamp, task_row_to_json};
 
-use super::task_apply_event::embed_capsule_for_task;
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 fn create_schema() -> Value {
@@ -184,11 +183,6 @@ impl TaskCreate {
             });
 
             inject_warnings(&mut response, warnings);
-
-            // Best-effort capsule embedding
-            if let Err(e) = embed_capsule_for_task(ctx, &task_id).await {
-                warn!(error = %e, task_id, "task capsule embedding failed (best-effort)");
-            }
 
             json_response(&response)
         }

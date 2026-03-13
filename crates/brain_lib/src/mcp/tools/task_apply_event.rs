@@ -26,14 +26,9 @@ struct ValidatedEvent {
     payload: Value,
 }
 
-/// The result of `execute_inner` — the tool result plus metadata for capsule embedding.
+/// The result of `execute_inner` — the tool result plus metadata.
 struct ExecuteResult {
     result: ToolCallResult,
-    /// Full task ID if the event succeeded (for capsule embedding).
-    task_id: Option<String>,
-    event_type: Option<EventType>,
-    /// True when a StatusChanged event transitioned to done/cancelled.
-    is_terminal: bool,
 }
 
 /// Validate all static (non-I/O) constraints on the incoming parameters.
@@ -175,69 +170,6 @@ fn default_actor() -> String {
     "mcp".into()
 }
 
-/// Whether this event type should trigger a capsule re-embed.
-pub(super) fn should_embed_capsule(event_type: &EventType) -> bool {
-    matches!(
-        event_type,
-        EventType::TaskCreated
-            | EventType::TaskUpdated
-            | EventType::StatusChanged
-            | EventType::LabelAdded
-            | EventType::LabelRemoved
-    )
-}
-
-/// Fetch task state, build capsule, embed into LanceDB + SQLite.
-pub(super) async fn embed_capsule_for_task(
-    ctx: &McpContext,
-    task_id: &str,
-) -> crate::error::Result<()> {
-    let (store, embedder) = match (ctx.writable_store.as_ref(), ctx.embedder.as_ref()) {
-        (Some(s), Some(e)) => (s, e),
-        _ => return Ok(()), // No store/embedder — skip silently
-    };
-
-    let task = match ctx.tasks.get_task(task_id)? {
-        Some(t) => t,
-        None => return Ok(()),
-    };
-
-    let labels = ctx.tasks.get_task_labels(task_id).unwrap_or_default();
-
-    crate::tasks::capsule::embed_task_capsule(
-        store,
-        embedder,
-        &ctx.db,
-        crate::tasks::capsule::TaskCapsuleParams {
-            task_id,
-            title: &task.title,
-            description: task.description.as_deref(),
-            labels: &labels,
-            priority: task.priority,
-        },
-    )
-    .await
-}
-
-/// Build and embed an outcome capsule for a done/cancelled task.
-pub(super) async fn embed_outcome_for_task(
-    ctx: &McpContext,
-    task_id: &str,
-) -> crate::error::Result<()> {
-    let (store, embedder) = match (ctx.writable_store.as_ref(), ctx.embedder.as_ref()) {
-        (Some(s), Some(e)) => (s, e),
-        _ => return Ok(()),
-    };
-
-    let title = match ctx.tasks.get_task(task_id)? {
-        Some(t) => t.title,
-        None => return Ok(()),
-    };
-
-    crate::tasks::capsule::embed_outcome_capsule(store, embedder, &ctx.db, task_id, &title, None)
-        .await
-}
-
 pub(super) struct TaskApplyEvent;
 
 impl TaskApplyEvent {
@@ -247,9 +179,6 @@ impl TaskApplyEvent {
             Err(e) => {
                 return ExecuteResult {
                     result: ToolCallResult::error(format!("Invalid parameters: {e}")),
-                    task_id: None,
-                    event_type: None,
-                    is_terminal: false,
                 };
             }
         };
@@ -260,9 +189,6 @@ impl TaskApplyEvent {
             Err(msg) => {
                 return ExecuteResult {
                     result: ToolCallResult::error(msg),
-                    task_id: None,
-                    event_type: None,
-                    is_terminal: false,
                 };
             }
         };
@@ -285,9 +211,6 @@ impl TaskApplyEvent {
                                 result: ToolCallResult::error(format!(
                                     "Failed to resolve task_id: {e}"
                                 )),
-                                task_id: None,
-                                event_type: None,
-                                is_terminal: false,
                             };
                         }
                     }
@@ -302,9 +225,6 @@ impl TaskApplyEvent {
                                 result: ToolCallResult::error(format!(
                                     "Failed to get project prefix: {e}"
                                 )),
-                                task_id: None,
-                                event_type: None,
-                                is_terminal: false,
                             };
                         }
                     };
@@ -314,9 +234,6 @@ impl TaskApplyEvent {
                         result: ToolCallResult::error(
                             "Missing required parameter: task_id (required for all event types except task_created)",
                         ),
-                        task_id: None,
-                        event_type: None,
-                        is_terminal: false,
                     };
                 }
             }
@@ -333,9 +250,6 @@ impl TaskApplyEvent {
                         result: ToolCallResult::error(format!(
                             "Failed to resolve depends_on_task_id: {e}"
                         )),
-                        task_id: None,
-                        event_type: None,
-                        is_terminal: false,
                     };
                 }
             }
@@ -350,9 +264,6 @@ impl TaskApplyEvent {
                         result: ToolCallResult::error(format!(
                             "Failed to resolve parent_task_id: {e}"
                         )),
-                        task_id: None,
-                        event_type: None,
-                        is_terminal: false,
                     };
                 }
             }
@@ -365,9 +276,6 @@ impl TaskApplyEvent {
                 Err(e) => {
                     return ExecuteResult {
                         result: ToolCallResult::error(format!("Invalid task_created payload: {e}")),
-                        task_id: None,
-                        event_type: None,
-                        is_terminal: false,
                     };
                 }
             }
@@ -386,9 +294,6 @@ impl TaskApplyEvent {
         if let Err(e) = ctx.tasks.append(&event) {
             return ExecuteResult {
                 result: ToolCallResult::error(format!("Task event failed: {e}")),
-                task_id: None,
-                event_type: None,
-                is_terminal: false,
             };
         }
 
@@ -447,9 +352,6 @@ impl TaskApplyEvent {
 
         ExecuteResult {
             result: json_response(&response),
-            task_id: Some(task_id),
-            event_type: Some(event_type),
-            is_terminal,
         }
     }
 }
@@ -474,22 +376,6 @@ impl McpTool for TaskApplyEvent {
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
             let exec = self.execute_inner(params, ctx);
-
-            // Best-effort capsule embedding for relevant events
-            if let (Some(task_id), Some(event_type)) = (&exec.task_id, &exec.event_type) {
-                if should_embed_capsule(event_type)
-                    && let Err(e) = embed_capsule_for_task(ctx, task_id).await
-                {
-                    warn!(error = %e, task_id, "task capsule embedding failed (best-effort)");
-                }
-                // Also emit an outcome capsule for done/cancelled transitions
-                if exec.is_terminal
-                    && let Err(e) = embed_outcome_for_task(ctx, task_id).await
-                {
-                    warn!(error = %e, task_id, "outcome capsule embedding failed (best-effort)");
-                }
-            }
-
             exec.result
         })
     }
@@ -1076,253 +962,6 @@ mod tests {
         assert!(
             super::parse_and_validate_event(&params).is_ok(),
             "missing task_id is not a pure-validation concern"
-        );
-    }
-
-    // --- Integration tests for task capsule embedding and search ---
-    //
-    // These tests verify the full flow:
-    //   create/update/close task → capsule embedded into LanceDB + SQLite → searchable via memory.search_minimal
-    //
-    // MockEmbedder produces deterministic hash-based vectors. Semantic similarity is not
-    // meaningful across different texts. All tests rely on FTS/BM25 keyword matching, which
-    // indexes the capsule text verbatim in SQLite. Use exact words from the capsule title
-    // as query terms to ensure FTS returns results.
-
-    #[tokio::test]
-    async fn test_capsule_created_on_task_create() {
-        let (_dir, ctx) = create_test_context().await;
-        let registry = ToolRegistry::new();
-
-        // Create a task — triggers embed_capsule_for_task → LanceDB + SQLite
-        let result = dispatch(
-            &registry,
-            "tasks.apply_event",
-            json!({
-                "event_type": "task_created",
-                "task_id": "cap-1",
-                "payload": { "title": "Implement xyzplumbing search", "priority": 2 }
-            }),
-            &ctx,
-        )
-        .await;
-        assert!(result.is_error.is_none(), "task creation should succeed");
-
-        // Search using a distinctive word from the title — FTS should find the capsule
-        let search_result = dispatch(
-            &registry,
-            "memory.search_minimal",
-            json!({
-                "query": "xyzplumbing",
-                "k": 10
-            }),
-            &ctx,
-        )
-        .await;
-        assert!(
-            search_result.is_error.is_none(),
-            "search should succeed; got: {}",
-            search_result.content[0].text
-        );
-
-        let parsed: Value = serde_json::from_str(&search_result.content[0].text).unwrap();
-        let results = parsed["results"].as_array().unwrap();
-
-        // The FTS path should find the capsule by the unique word in the title
-        assert!(
-            !results.is_empty(),
-            "task capsule should be searchable via FTS; got 0 results. full response: {}",
-            search_result.content[0].text
-        );
-
-        // Verify the result has kind "task"
-        let task_result = results.iter().find(|r| r["kind"] == "task");
-        assert!(
-            task_result.is_some(),
-            "at least one result should have kind=task; got: {:?}",
-            results
-        );
-
-        // Verify memory_id follows the expected pattern
-        let task_result = task_result.unwrap();
-        let memory_id = task_result["memory_id"].as_str().unwrap_or("");
-        assert!(
-            memory_id.starts_with("task:"),
-            "task result memory_id should start with 'task:'; got: {memory_id}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_capsule_refreshed_on_task_update() {
-        let (_dir, ctx) = create_test_context().await;
-        let registry = ToolRegistry::new();
-
-        // Create task with a distinctive word in the title
-        dispatch(
-            &registry,
-            "tasks.apply_event",
-            json!({
-                "event_type": "task_created",
-                "task_id": "cap-2",
-                "payload": { "title": "Old xyzqux title", "priority": 3 }
-            }),
-            &ctx,
-        )
-        .await;
-
-        // Update the title with a different distinctive word
-        dispatch(
-            &registry,
-            "tasks.apply_event",
-            json!({
-                "event_type": "task_updated",
-                "task_id": "cap-2",
-                "payload": { "title": "New xyzquux improved title" }
-            }),
-            &ctx,
-        )
-        .await;
-
-        // Search for the new title's distinctive word — the updated capsule should be findable
-        let search_result = dispatch(
-            &registry,
-            "memory.search_minimal",
-            json!({
-                "query": "xyzquux",
-                "k": 10
-            }),
-            &ctx,
-        )
-        .await;
-        assert!(search_result.is_error.is_none(), "search should succeed");
-
-        let parsed: Value = serde_json::from_str(&search_result.content[0].text).unwrap();
-        let results = parsed["results"].as_array().unwrap();
-
-        // Should find the updated capsule (which now contains "xyzquux")
-        let has_task = results.iter().any(|r| r["kind"] == "task");
-        assert!(
-            has_task,
-            "updated task capsule should be searchable by the new title's word; got: {:?}",
-            results
-        );
-    }
-
-    #[tokio::test]
-    async fn test_outcome_capsule_on_task_close() {
-        let (_dir, ctx) = create_test_context().await;
-        let registry = ToolRegistry::new();
-
-        // Create a task
-        dispatch(
-            &registry,
-            "tasks.apply_event",
-            json!({
-                "event_type": "task_created",
-                "task_id": "cap-3",
-                "payload": { "title": "Deploy xyzfeature", "priority": 1 }
-            }),
-            &ctx,
-        )
-        .await;
-
-        // Close the task — triggers embed_outcome_capsule → LanceDB + SQLite
-        let close_result = dispatch(
-            &registry,
-            "tasks.close",
-            json!({ "task_ids": "cap-3" }),
-            &ctx,
-        )
-        .await;
-        assert!(
-            close_result.is_error.is_none(),
-            "task close should succeed; got: {}",
-            close_result.content[0].text
-        );
-
-        // Search for the distinctive word in the task title
-        let search_result = dispatch(
-            &registry,
-            "memory.search_minimal",
-            json!({
-                "query": "xyzfeature",
-                "k": 10
-            }),
-            &ctx,
-        )
-        .await;
-        assert!(search_result.is_error.is_none(), "search should succeed");
-
-        let parsed: Value = serde_json::from_str(&search_result.content[0].text).unwrap();
-        let results = parsed["results"].as_array().unwrap();
-
-        // Should find an outcome capsule with kind "task-outcome"
-        let outcome = results.iter().find(|r| r["kind"] == "task-outcome");
-        assert!(
-            outcome.is_some(),
-            "outcome capsule should be searchable with kind=task-outcome; got results: {:?}",
-            results
-        );
-
-        let memory_id = outcome.unwrap()["memory_id"].as_str().unwrap_or("");
-        assert!(
-            memory_id.starts_with("task-outcome:"),
-            "outcome memory_id should start with 'task-outcome:'; got: {memory_id}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_label_change_refreshes_capsule() {
-        let (_dir, ctx) = create_test_context().await;
-        let registry = ToolRegistry::new();
-
-        // Create task with a distinctive word
-        dispatch(
-            &registry,
-            "tasks.apply_event",
-            json!({
-                "event_type": "task_created",
-                "task_id": "cap-4",
-                "payload": { "title": "xyzlabel test task", "priority": 2 }
-            }),
-            &ctx,
-        )
-        .await;
-
-        // Add a label — triggers capsule re-embed (label_added is in should_embed_capsule)
-        dispatch(
-            &registry,
-            "tasks.apply_event",
-            json!({
-                "event_type": "label_added",
-                "task_id": "cap-4",
-                "payload": { "label": "area:xyzlabelmem" }
-            }),
-            &ctx,
-        )
-        .await;
-
-        // Search for the distinctive word in the title
-        let search_result = dispatch(
-            &registry,
-            "memory.search_minimal",
-            json!({
-                "query": "xyzlabel",
-                "k": 10
-            }),
-            &ctx,
-        )
-        .await;
-        assert!(search_result.is_error.is_none(), "search should succeed");
-
-        let parsed: Value = serde_json::from_str(&search_result.content[0].text).unwrap();
-        let results = parsed["results"].as_array().unwrap();
-
-        let has_task = results.iter().any(|r| r["kind"] == "task");
-        assert!(
-            has_task,
-            "label-updated capsule should be searchable; got: {:?}",
-            results
         );
     }
 
