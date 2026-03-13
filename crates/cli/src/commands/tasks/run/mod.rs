@@ -14,11 +14,10 @@ pub use show::*;
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
-use brain_lib::db::Db;
 use brain_lib::tasks::TaskStore;
 use brain_lib::tasks::events::{self, *};
 use brain_lib::utils::task_row_to_json;
@@ -32,12 +31,17 @@ pub struct TaskCtx {
 
 impl TaskCtx {
     pub fn new(sqlite_db: &Path, json: bool) -> Result<Self> {
-        let db = Db::open(sqlite_db).context("Failed to open SQLite database")?;
+        let resolved = crate::commands::db_routing::resolve_dbs(sqlite_db)?;
         let tasks_dir = sqlite_db
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("tasks");
-        let store = TaskStore::new(&tasks_dir, db).context("Failed to open task store")?;
+        let store = if resolved.brain_id.is_empty() {
+            TaskStore::new(&tasks_dir, resolved.unified)?
+        } else {
+            TaskStore::with_brain_id(&tasks_dir, resolved.unified, &resolved.brain_id)?
+        }
+        .with_meta_db(resolved.per_brain);
         Ok(Self { store, json })
     }
 }

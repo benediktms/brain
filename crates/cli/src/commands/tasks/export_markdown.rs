@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
-use brain_lib::db::Db;
 use brain_lib::tasks::TaskStore;
 use brain_lib::tasks::queries::TaskRow;
 
@@ -68,12 +67,17 @@ fn render_task_markdown(
 }
 
 pub fn run(dir: PathBuf, sqlite_db: PathBuf) -> Result<()> {
-    let db = Db::open(&sqlite_db).context("Failed to open SQLite database")?;
+    let resolved = crate::commands::db_routing::resolve_dbs(&sqlite_db)?;
     let tasks_dir = sqlite_db
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("tasks");
-    let store = TaskStore::new(&tasks_dir, db).context("Failed to open task store")?;
+    let store = if resolved.brain_id.is_empty() {
+        TaskStore::new(&tasks_dir, resolved.unified)?
+    } else {
+        TaskStore::with_brain_id(&tasks_dir, resolved.unified, &resolved.brain_id)?
+    }
+    .with_meta_db(resolved.per_brain);
 
     let tasks = store.list_all()?;
     if tasks.is_empty() {
