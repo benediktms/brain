@@ -3,11 +3,14 @@ use std::path::Path;
 use tracing::{info, instrument, warn};
 
 use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
-use crate::db::chunks::{ChunkMeta, get_chunk_hashes, replace_chunk_metadata};
+use crate::db::chunks::{
+    ChunkMeta, get_chunk_hashes, mark_chunks_embedded, replace_chunk_metadata,
+};
 use crate::db::links::replace_links;
 use crate::hash_gate::HashGate;
 use crate::links::{Link, extract_links};
 use crate::parser::parse_document;
+use crate::utils::now_ts;
 
 use super::{IndexPipeline, ScanStats};
 
@@ -98,6 +101,12 @@ impl IndexPipeline {
         })?;
 
         if chunks_match_stored(&chunks, &stored_hashes) {
+            // Chunks already in LanceDB — still stamp embedded_at so the daemon
+            // knows they are current.
+            let ts = now_ts();
+            let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
+            self.db
+                .with_write_conn(|conn| mark_chunks_embedded(conn, &ids, ts))?;
             gate.mark_passed(&verdict.file_id, &verdict.hash)?;
             self.metrics.record_index_latency(start.elapsed());
             return Ok(true);
@@ -113,6 +122,12 @@ impl IndexPipeline {
         self.store
             .upsert_chunks(&verdict.file_id, &path_str, &chunk_pairs, &embeddings)
             .await?;
+
+        // Stamp embedded_at now that LanceDB has the vectors.
+        let ts = now_ts();
+        let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
+        self.db
+            .with_write_conn(|conn| mark_chunks_embedded(conn, &ids, ts))?;
 
         // Mark indexed (sets hash + state=indexed)
         gate.mark_passed(&verdict.file_id, &verdict.hash)?;
@@ -193,9 +208,12 @@ impl IndexPipeline {
 
             if chunks_match_stored(&chunks, &stored_hashes) {
                 let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
+                let ts = now_ts();
                 self.db.with_write_conn(|conn| {
                     replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
                     replace_links(conn, &verdict.file_id, &links)?;
+                    let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
+                    mark_chunks_embedded(conn, &ids, ts)?;
                     Ok(())
                 })?;
                 gate.mark_passed(&verdict.file_id, &verdict.hash)?;
@@ -294,6 +312,12 @@ impl IndexPipeline {
                 self.store
                     .upsert_chunks(file_id, path_str, &chunk_pairs, file_embeddings)
                     .await?;
+
+                // Stamp embedded_at now that LanceDB has the vectors.
+                let ts = now_ts();
+                let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
+                self.db
+                    .with_write_conn(|conn| mark_chunks_embedded(conn, &ids, ts))?;
 
                 gate.mark_passed(file_id, &pf.hash)?;
                 Ok::<(), crate::error::BrainCoreError>(())

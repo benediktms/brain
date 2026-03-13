@@ -147,6 +147,28 @@ pub fn upsert_task_chunk(
     Ok(())
 }
 
+/// Set `embedded_at` on a batch of chunks, marking them as current in LanceDB.
+///
+/// `chunk_ids` must be non-empty. Skips gracefully if the slice is empty.
+pub fn mark_chunks_embedded(conn: &Connection, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
+    if chunk_ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders: Vec<String> = (2..=chunk_ids.len() + 1).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "UPDATE chunks SET embedded_at = ?1 WHERE chunk_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(chunk_ids.len() + 1);
+    let ts_ref: &dyn rusqlite::types::ToSql = &timestamp;
+    params.push(ts_ref);
+    for id in chunk_ids {
+        params.push(id as &dyn rusqlite::types::ToSql);
+    }
+    conn.execute(&sql, params.as_slice())?;
+    Ok(())
+}
+
 /// Get ordered chunk hashes for a file (by chunk_ord).
 pub fn get_chunk_hashes(conn: &Connection, file_id: &str) -> Result<Vec<String>> {
     let mut stmt =
