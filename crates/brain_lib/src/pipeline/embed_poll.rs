@@ -256,11 +256,7 @@ fn mark_tasks_embedded(conn: &rusqlite::Connection, task_ids: &[&str]) -> crate:
 /// as embedded in SQLite.
 ///
 /// Returns the number of chunks successfully embedded.
-pub async fn poll_stale_chunks(
-    db: &Db,
-    store: &Store,
-    embedder: &Arc<dyn Embed>,
-) -> usize {
+pub async fn poll_stale_chunks(db: &Db, store: &Store, embedder: &Arc<dyn Embed>) -> usize {
     debug!("embed_poll: scanning stale chunks");
 
     #[derive(Debug)]
