@@ -605,7 +605,7 @@ Queen ───◆─── Drone: Four of Five
 
 - Use `◆───` for active connections, `└───` for pending/queued
 - Include agent designation in the visualization
-- This is guidance for lead agents (Queen, BorgQueen) when reporting dispatch status
+- This is guidance for the lead session (thematically: the Queen) when reporting dispatch status
 
 ### Terminal Notifications
 
