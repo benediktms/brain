@@ -154,16 +154,18 @@ impl McpContext {
 
         let tasks_dir = brain_data_dir.join("tasks");
         let tasks = if brain_id.is_empty() {
-            TaskStore::new(&tasks_dir, unified_db.clone())?
+            TaskStore::new(&tasks_dir, unified_db.clone())?.with_meta_db(db.clone())
         } else {
             TaskStore::with_brain_id(&tasks_dir, unified_db.clone(), &brain_id)?
+                .with_meta_db(db.clone())
         };
 
         let records_dir = brain_data_dir.join("records");
         let records = if brain_id.is_empty() {
-            RecordStore::new(&records_dir, unified_db.clone())?
+            RecordStore::new(&records_dir, unified_db.clone())?.with_meta_db(db.clone())
         } else {
             RecordStore::with_brain_id(&records_dir, unified_db.clone(), &brain_id)?
+                .with_meta_db(db.clone())
         };
 
         // Use unified ~/.brain/objects/ when it exists; fall back to per-brain
@@ -336,13 +338,19 @@ impl McpContext {
     /// Create a brain_id-scoped TaskStore sharing this context's unified DB.
     pub fn tasks_for_brain(&self, brain_id: &str) -> crate::error::Result<TaskStore> {
         let tasks_dir = self.brain_home.join("tasks");
-        TaskStore::with_brain_id(&tasks_dir, self.unified_db.clone(), brain_id)
+        Ok(
+            TaskStore::with_brain_id(&tasks_dir, self.unified_db.clone(), brain_id)?
+                .with_meta_db(self.db.clone()),
+        )
     }
 
     /// Create a brain_id-scoped RecordStore sharing this context's unified DB.
     pub fn records_for_brain(&self, brain_id: &str) -> crate::error::Result<RecordStore> {
         let records_dir = self.brain_home.join("records");
-        RecordStore::with_brain_id(&records_dir, self.unified_db.clone(), brain_id)
+        Ok(
+            RecordStore::with_brain_id(&records_dir, self.unified_db.clone(), brain_id)?
+                .with_meta_db(self.db.clone()),
+        )
     }
 
     /// Clone this context with a different brain_id.

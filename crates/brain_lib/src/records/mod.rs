@@ -372,6 +372,11 @@ pub struct SnapshotRecord {
 pub struct RecordStore {
     events_path: PathBuf,
     db: Db,
+    /// Optional per-brain DB for `brain_meta` lookups (project prefix).
+    ///
+    /// When set, `get_project_prefix()` reads from this DB instead of
+    /// `self.db`, avoiding prefix collision in the unified DB.
+    meta_db: Option<Db>,
     /// Brain ID that scopes this store's reads and writes.
     ///
     /// Empty string means "all brains" (legacy / single-brain mode).
@@ -389,6 +394,7 @@ impl RecordStore {
         Ok(Self {
             events_path: records_dir.join("events.jsonl"),
             db,
+            meta_db: None,
             brain_id: String::new(),
         })
     }
@@ -399,8 +405,18 @@ impl RecordStore {
         Ok(Self {
             events_path: records_dir.join("events.jsonl"),
             db,
+            meta_db: None,
             brain_id: brain_id.to_string(),
         })
+    }
+
+    /// Set a separate DB for `brain_meta` lookups (project prefix).
+    ///
+    /// In multi-brain setups the per-brain DB holds the correct prefix while
+    /// `self.db` (unified) would return a shared/colliding one.
+    pub fn with_meta_db(mut self, db: Db) -> Self {
+        self.meta_db = Some(db);
+        self
     }
 
     /// Append a validated event to the log.
@@ -550,8 +566,13 @@ impl RecordStore {
         self.db.with_read_conn(queries::compact_record_ids)
     }
 
+    /// Get the project prefix for record ID generation.
+    ///
+    /// Uses `meta_db` when set (per-brain DB with the correct prefix),
+    /// falling back to `self.db` for single-DB / test setups.
     pub fn get_project_prefix(&self) -> Result<String> {
-        self.db.with_read_conn(|conn| {
+        let db = self.meta_db.as_ref().unwrap_or(&self.db);
+        db.with_read_conn(|conn| {
             Ok(crate::db::meta::get_meta(conn, "project_prefix")?
                 .unwrap_or_else(|| "BRN".to_string()))
         })
