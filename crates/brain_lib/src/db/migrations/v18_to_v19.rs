@@ -7,9 +7,9 @@ use crate::error::Result;
 /// Changes applied:
 ///
 /// 1. `files`         — DROP COLUMN mtime, DROP COLUMN size; recreate with
-///                      CHECK (indexing_state IN ('idle', 'indexing_started', 'indexed'))
+///    CHECK (indexing_state IN ('idle', 'indexing_started', 'indexed'))
 /// 2. `chunks`        — fill NULLs in heading_path/byte_start/byte_end/token_estimate,
-///                      recreate with NOT NULL DEFAULT on those 4 columns
+///    recreate with NOT NULL DEFAULT on those 4 columns
 /// 3. `task_events`   — recreate with FK task_id → tasks(task_id) ON DELETE CASCADE
 /// 4. `record_events` — recreate with FK record_id → records(record_id) ON DELETE CASCADE
 /// 5. `task_note_links` — recreate with FK chunk_id → chunks(chunk_id) ON DELETE CASCADE
