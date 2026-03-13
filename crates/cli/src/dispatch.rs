@@ -559,11 +559,16 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 },
             }
         }
-        Command::Migrate { yes, cleanup } => {
-            commands::migrate::run(commands::migrate::MigrateArgs { yes, cleanup })?;
-        }
-        Command::MigrateWorkspace => {
-            commands::migrate_workspace::run()?;
+        Command::Migrate {
+            yes,
+            cleanup,
+            brain,
+        } => {
+            commands::migrate::run(commands::migrate::MigrateArgs {
+                yes,
+                cleanup,
+                brain,
+            })?;
         }
         Command::Records { json, action } => {
             use commands::records::RecordsCtx;

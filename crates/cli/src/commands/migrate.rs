@@ -1,22 +1,24 @@
 use std::io::{self, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use brain_lib::config::{brain_home, load_global_config, resolve_paths_for_brain_with_home};
 use rusqlite::Connection;
 
-/// Arguments for the polished `brain migrate` command.
+/// Arguments for `brain migrate`.
 pub struct MigrateArgs {
     /// Skip the confirmation prompt.
     pub yes: bool,
     /// Remove per-brain brain.db files after successful migration.
     pub cleanup: bool,
+    /// Migrate a specific brain (name, ID, or alias). `None` = all brains.
+    pub brain: Option<String>,
 }
 
 /// Entry point for `brain migrate`.
 ///
-/// Guides the user through pre-flight checks, backup, migration, and optional
-/// cleanup.  Delegates actual data movement to `migrate_workspace`.
+/// Replays per-brain JSONL event logs into the unified `~/.brain/brain.db`.
+/// Idempotent — safe to re-run. Events already present are skipped.
 pub fn run(args: MigrateArgs) -> Result<()> {
     let home = brain_home()?;
     let unified_db_path = home.join("brain.db");
@@ -30,29 +32,20 @@ pub fn run(args: MigrateArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Detect already-migrated state: unified DB exists and brains table is populated.
-    if unified_db_path.exists()
-        && let Ok(conn) = Connection::open(&unified_db_path)
+    // If a specific brain was requested, resolve it (by name, ID, or alias).
+    let entries: Vec<(String, brain_lib::config::BrainEntry)> = if let Some(ref target) = args.brain
     {
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM brains", [], |row| row.get(0))
-            .unwrap_or(0);
-        if count > 0 {
-            println!(
-                "Migration already complete: {} brain(s) registered in the unified DB.",
-                count
-            );
-            println!("Run `brain list` to verify. Nothing to do.");
-            return Ok(());
-        }
-    }
+        let (name, entry) = brain_lib::config::resolve_brain_entry_from_config(target, &config)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        vec![(name, entry)]
+    } else {
+        let mut all: Vec<(String, brain_lib::config::BrainEntry)> =
+            config.brains.into_iter().collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    };
 
-    // Sort for deterministic output.
-    let mut entries: Vec<(String, brain_lib::config::BrainEntry)> =
-        config.brains.into_iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Collect brains that have a source DB to migrate.
+    // Collect brains eligible for JSONL migration.
     let mut to_migrate: Vec<(&str, &brain_lib::config::BrainEntry)> = Vec::new();
     let mut skipped: Vec<&str> = Vec::new();
 
@@ -61,29 +54,34 @@ pub fn run(args: MigrateArgs) -> Result<()> {
             skipped.push(name.as_str());
             continue;
         }
-        let paths = resolve_paths_for_brain_with_home(name, &home);
-        if !paths.sqlite_db.exists() {
+        // Eligible if any JSONL source exists (per-brain or project-level).
+        let jsonl_paths = collect_jsonl_paths(name, entry, &home);
+        if jsonl_paths.task_sources.is_empty() && jsonl_paths.record_sources.is_empty() {
             skipped.push(name.as_str());
             continue;
         }
         to_migrate.push((name.as_str(), entry));
     }
 
-    println!("Brain migration — unified storage");
-    println!("==================================");
+    println!("Brain migration — JSONL replay into unified storage");
+    println!("====================================================");
     println!();
     println!("The following brains will be migrated into ~/.brain/brain.db:");
     println!();
     for (name, entry) in &to_migrate {
-        let paths = resolve_paths_for_brain_with_home(name, &home);
+        let jsonl = collect_jsonl_paths(name, entry, &home);
         println!("  {} ({})", name, entry.id.as_deref().unwrap_or("no-id"));
-        println!("    source: {}", paths.sqlite_db.display());
+        println!(
+            "    JSONL sources: {} task, {} record",
+            jsonl.task_sources.len(),
+            jsonl.record_sources.len()
+        );
     }
 
     if !skipped.is_empty() {
         println!();
         println!(
-            "Skipped (no brain_id or source DB not found): {}",
+            "Skipped (no brain_id or no JSONL files): {}",
             skipped.join(", ")
         );
     }
@@ -147,21 +145,19 @@ pub fn run(args: MigrateArgs) -> Result<()> {
 
     // ── Execute migration ──────────────────────────────────────────────────
 
-    // Ensure unified DB exists with full v18 schema.
-    {
-        let _db = brain_lib::db::Db::open(&unified_db_path).with_context(|| {
-            format!(
-                "failed to initialise unified DB at {}",
-                unified_db_path.display()
-            )
-        })?;
-    }
+    // Ensure unified DB exists with full schema.
+    let db = brain_lib::db::Db::open(&unified_db_path).with_context(|| {
+        format!(
+            "failed to initialise unified DB at {}",
+            unified_db_path.display()
+        )
+    })?;
 
-    // Migrate per-brain SQLite data.
+    // Migrate per-brain JSONL events.
     for (name, entry) in &to_migrate {
         let brain_id = entry.id.as_deref().unwrap();
-        let paths = resolve_paths_for_brain_with_home(name, &home);
-        migrate_one_brain(&unified_db_path, &paths.sqlite_db, brain_id, name)?;
+        let jsonl_paths = collect_jsonl_paths(name, entry, &home);
+        migrate_one_brain(&db, brain_id, name, &jsonl_paths)?;
     }
 
     // Migrate content-addressed object blobs.
@@ -251,6 +247,115 @@ pub fn run(args: MigrateArgs) -> Result<()> {
 
     Ok(())
 }
+
+// ── JSONL path collection ──────────────────────────────────────────────────
+
+/// All JSONL event log paths for a single brain, deduplicated.
+struct JsonlPaths {
+    task_sources: Vec<PathBuf>,
+    record_sources: Vec<PathBuf>,
+}
+
+/// Collect all JSONL event log paths for a brain from both per-brain data dir
+/// and project roots.
+fn collect_jsonl_paths(
+    name: &str,
+    entry: &brain_lib::config::BrainEntry,
+    home: &Path,
+) -> JsonlPaths {
+    let brain_data = home.join("brains").join(name);
+    let mut task_sources: Vec<PathBuf> = Vec::new();
+    let mut record_sources: Vec<PathBuf> = Vec::new();
+
+    // Per-brain data dir: ~/.brain/brains/<name>/tasks/events.jsonl
+    let per_brain_tasks = brain_data.join("tasks").join("events.jsonl");
+    if per_brain_tasks.exists() {
+        task_sources.push(per_brain_tasks);
+    }
+
+    let per_brain_records = brain_data.join("records").join("events.jsonl");
+    if per_brain_records.exists() {
+        record_sources.push(per_brain_records);
+    }
+
+    // Project roots: <root>/.brain/tasks/events.jsonl
+    for root in &entry.roots {
+        let project_tasks = root.join(".brain").join("tasks").join("events.jsonl");
+        if project_tasks.exists() && !task_sources.contains(&project_tasks) {
+            task_sources.push(project_tasks);
+        }
+        // Records are only in per-brain dir, not project roots.
+    }
+
+    JsonlPaths {
+        task_sources,
+        record_sources,
+    }
+}
+
+// ── Per-brain JSONL replay ─────────────────────────────────────────────────
+
+/// Migrate a single brain by replaying JSONL event logs into the unified DB.
+///
+/// Idempotent: events that already exist are skipped.
+fn migrate_one_brain(
+    db: &brain_lib::db::Db,
+    brain_id: &str,
+    name: &str,
+    jsonl: &JsonlPaths,
+) -> Result<()> {
+    // Register brain (idempotent).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    db.with_write_conn(|conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![brain_id, name, now],
+        )?;
+        Ok(())
+    })
+    .with_context(|| format!("failed to register brain '{name}' ({brain_id})"))?;
+
+    // Replay task JSONL sources.
+    // The tasks_dir argument to TaskStore is only used for the events_path field
+    // which we don't use here — we pass explicit paths to import_from_jsonl.
+    let dummy_tasks_dir = std::env::temp_dir().join("brain-migrate-tasks");
+    let task_store =
+        brain_lib::tasks::TaskStore::with_brain_id(&dummy_tasks_dir, db.clone(), brain_id)?;
+
+    let mut total_tasks = 0usize;
+    for path in &jsonl.task_sources {
+        let count = task_store
+            .import_from_jsonl(path)
+            .with_context(|| format!("failed to import task events from {}", path.display()))?;
+        total_tasks += count;
+    }
+
+    // Replay record JSONL sources.
+    let dummy_records_dir = std::env::temp_dir().join("brain-migrate-records");
+    let record_store =
+        brain_lib::records::RecordStore::with_brain_id(&dummy_records_dir, db.clone(), brain_id)?;
+
+    let mut total_records = 0usize;
+    for path in &jsonl.record_sources {
+        let count = record_store
+            .import_from_jsonl(path)
+            .with_context(|| format!("failed to import record events from {}", path.display()))?;
+        total_records += count;
+    }
+
+    println!(
+        "  Migrated brain '{}' ({}): {} task events, {} record events.",
+        name, brain_id, total_tasks, total_records
+    );
+
+    Ok(())
+}
+
+// ── Object blob migration (unchanged) ──────────────────────────────────────
 
 /// Migrate per-brain object blobs into the unified `~/.brain/objects/` store.
 fn migrate_objects(home: &Path, entries: &[(String, brain_lib::config::BrainEntry)]) -> Result<()> {
@@ -375,151 +480,223 @@ fn migrate_one_objects_dir(
     Ok((moved, skipped))
 }
 
-/// Migrate a single brain's data into the unified DB using SQLite ATTACH.
-fn migrate_one_brain(
-    unified_path: &Path,
-    source_path: &Path,
-    brain_id: &str,
-    name: &str,
-) -> Result<()> {
-    let mut conn = Connection::open(unified_path)
-        .with_context(|| format!("failed to open unified DB at {}", unified_path.display()))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use brain_lib::db::Db;
+    use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
+    use brain_lib::tasks::events::TaskCreatedPayload;
 
-    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    /// Write task events to a JSONL file and migrate via JSONL replay.
+    #[test]
+    fn test_migrate_one_brain_jsonl_basic() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let unified_db_path = tmp.path().join("brain.db");
+        let db = Db::open(&unified_db_path).unwrap();
 
-    let already_migrated: bool = conn
-        .query_row(
-            "SELECT COUNT(*) FROM brains WHERE brain_id = ?1",
-            rusqlite::params![brain_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|c| c > 0)
-        .context("failed to query brains table")?;
+        // Create task JSONL
+        let tasks_dir = tmp.path().join("tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let tasks_jsonl = tasks_dir.join("events.jsonl");
 
-    if already_migrated {
-        println!(
-            "  Brain '{}' ({}): already migrated — skipped.",
-            name, brain_id
+        let task_event = brain_lib::tasks::events::TaskEvent::from_payload(
+            "TST-01AAAA",
+            "test",
+            TaskCreatedPayload {
+                title: "Test Task".to_string(),
+                description: None,
+                status: Default::default(),
+                priority: 2,
+                task_type: None,
+                assignee: None,
+                due_ts: None,
+                defer_until: None,
+                parent_task_id: None,
+            },
         );
-        return Ok(());
-    }
+        brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
 
-    let source_path_str = source_path
-        .to_str()
-        .context("source DB path contains non-UTF8 characters")?;
+        // Create record JSONL
+        let records_dir = tmp.path().join("records");
+        std::fs::create_dir_all(&records_dir).unwrap();
+        let records_jsonl = records_dir.join("events.jsonl");
 
-    conn.execute_batch(&format!(
-        "ATTACH DATABASE '{}' AS src",
-        source_path_str.replace('\'', "''")
-    ))?;
-
-    // Check task_id collisions.
-    {
-        let mut stmt = conn.prepare(
-            "SELECT s.task_id FROM src.tasks s
-             INNER JOIN tasks t ON s.task_id = t.task_id
-             WHERE t.brain_id != ?1
-             LIMIT 1",
-        )?;
-        let collision: Option<String> = stmt
-            .query_row(rusqlite::params![brain_id], |row| row.get(0))
-            .ok();
-        if let Some(task_id) = collision {
-            anyhow::bail!(
-                "task_id collision: '{}' from brain '{}' ({}) already exists in unified DB \
-                 under a different brain. Aborting.",
-                task_id,
-                name,
-                brain_id
-            );
-        }
-    }
-
-    {
-        let tx = conn.transaction()?;
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        tx.execute(
-            "INSERT INTO brains (brain_id, name, created_at) VALUES (?1, ?2, ?3)",
-            rusqlite::params![brain_id, name, now],
-        )?;
-
-        let task_count: i64 =
-            tx.query_row("SELECT COUNT(*) FROM src.tasks", [], |row| row.get(0))?;
-
-        tx.execute_batch(&format!(
-            "INSERT INTO tasks
-                 (task_id, title, description, status, priority,
-                  blocked_reason, due_ts, task_type, assignee, defer_until,
-                  parent_task_id, child_seq, created_at, updated_at, brain_id)
-             SELECT
-                 task_id, title, description, status, priority,
-                 blocked_reason, due_ts, task_type, assignee, defer_until,
-                 parent_task_id, child_seq, created_at, updated_at, '{brain_id}'
-             FROM src.tasks"
-        ))?;
-
-        tx.execute_batch(
-            "INSERT OR IGNORE INTO task_deps (task_id, depends_on)
-             SELECT task_id, depends_on FROM src.task_deps",
-        )?;
-        tx.execute_batch(
-            "INSERT OR IGNORE INTO task_labels (task_id, label)
-             SELECT task_id, label FROM src.task_labels",
-        )?;
-        tx.execute_batch(
-            "INSERT OR IGNORE INTO task_comments (comment_id, task_id, author, body, created_at)
-             SELECT comment_id, task_id, author, body, created_at FROM src.task_comments",
-        )?;
-        tx.execute_batch(
-            "INSERT OR IGNORE INTO task_external_ids (task_id, source, external_id, imported_at, external_url)
-             SELECT task_id, source, external_id, imported_at, external_url FROM src.task_external_ids",
-        )?;
-
-        let record_count: i64 =
-            tx.query_row("SELECT COUNT(*) FROM src.records", [], |row| row.get(0))?;
-
-        tx.execute_batch(&format!(
-            "INSERT OR IGNORE INTO records
-                 (record_id, title, kind, status, description,
-                  content_hash, content_size, media_type, task_id, actor,
-                  created_at, updated_at, retention_class, pinned,
-                  payload_available, content_encoding, original_size, brain_id)
-             SELECT
-                 record_id, title, kind, status, description,
-                 content_hash, content_size, media_type, task_id, actor,
-                 created_at, updated_at, retention_class, pinned,
-                 payload_available, content_encoding, original_size, '{brain_id}'
-             FROM src.records"
-        ))?;
-
-        tx.execute_batch(
-            "INSERT OR IGNORE INTO record_tags (record_id, tag)
-             SELECT record_id, tag FROM src.record_tags",
-        )?;
-        tx.execute_batch(
-            "INSERT OR IGNORE INTO record_links (record_id, task_id, chunk_id, created_at)
-             SELECT record_id, task_id, chunk_id, created_at FROM src.record_links",
-        )?;
-        tx.execute_batch(&format!(
-            "INSERT OR IGNORE INTO record_events (event_id, record_id, event_type, timestamp, actor, payload, brain_id)
-             SELECT event_id, record_id, event_type, timestamp, actor, payload, '{brain_id}'
-             FROM src.record_events"
-        ))?;
-
-        tx.commit()?;
-
-        println!(
-            "  Migrated brain '{}' ({}): {} tasks, {} records.",
-            name, brain_id, task_count, record_count
+        let record_event = RecordEvent::from_payload(
+            "REC-01BBBB",
+            "test",
+            RecordCreatedPayload {
+                title: "Test Record".to_string(),
+                kind: "snapshot".to_string(),
+                content_ref: ContentRefPayload::new("ab".repeat(32), 42, None),
+                description: None,
+                task_id: None,
+                tags: vec![],
+                scope_type: None,
+                scope_id: None,
+                retention_class: None,
+                producer: None,
+            },
         );
+        brain_lib::records::events::append_event(&records_jsonl, &record_event).unwrap();
+
+        let jsonl = JsonlPaths {
+            task_sources: vec![tasks_jsonl],
+            record_sources: vec![records_jsonl],
+        };
+
+        migrate_one_brain(&db, "test-brain-id", "test-brain", &jsonl).unwrap();
+
+        // Verify brain registered
+        let count: i64 = db
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM brains WHERE brain_id = 'test-brain-id'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Verify task imported
+        let task_count: i64 = db
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE brain_id = 'test-brain-id'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(task_count, 1);
+
+        // Verify record imported
+        let rec_count: i64 = db
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM records WHERE brain_id = 'test-brain-id'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(rec_count, 1);
     }
 
-    conn.execute_batch("DETACH DATABASE src")?;
+    /// Migration is idempotent — running twice produces no duplicates.
+    #[test]
+    fn test_migrate_one_brain_jsonl_idempotent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let unified_db_path = tmp.path().join("brain.db");
+        let db = Db::open(&unified_db_path).unwrap();
 
-    Ok(())
+        let tasks_dir = tmp.path().join("tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let tasks_jsonl = tasks_dir.join("events.jsonl");
+
+        let task_event = brain_lib::tasks::events::TaskEvent::from_payload(
+            "TST-02CCCC",
+            "test",
+            TaskCreatedPayload {
+                title: "Idempotent Task".to_string(),
+                description: None,
+                status: Default::default(),
+                priority: 3,
+                task_type: None,
+                assignee: None,
+                due_ts: None,
+                defer_until: None,
+                parent_task_id: None,
+            },
+        );
+        brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
+
+        let jsonl = JsonlPaths {
+            task_sources: vec![tasks_jsonl.clone()],
+            record_sources: vec![],
+        };
+
+        // First migration
+        migrate_one_brain(&db, "idem-id", "idem-brain", &jsonl).unwrap();
+
+        // Second migration — no failure, no duplicates
+        migrate_one_brain(&db, "idem-id", "idem-brain", &jsonl).unwrap();
+
+        let brain_count: i64 = db
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM brains WHERE brain_id = 'idem-id'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(brain_count, 1, "brain should appear exactly once");
+
+        let task_count: i64 = db
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE brain_id = 'idem-id'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(task_count, 1, "task should appear exactly once");
+    }
+
+    /// Migration works even without a per-brain brain.db (the gateway scenario).
+    #[test]
+    fn test_migrate_no_source_db_jsonl_only() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let unified_db_path = tmp.path().join("brain.db");
+        let db = Db::open(&unified_db_path).unwrap();
+
+        // Only JSONL, no per-brain brain.db
+        let tasks_dir = tmp.path().join("tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let tasks_jsonl = tasks_dir.join("events.jsonl");
+
+        let task_event = brain_lib::tasks::events::TaskEvent::from_payload(
+            "GW-01DDDD",
+            "test",
+            TaskCreatedPayload {
+                title: "Gateway Task".to_string(),
+                description: None,
+                status: Default::default(),
+                priority: 1,
+                task_type: None,
+                assignee: None,
+                due_ts: None,
+                defer_until: None,
+                parent_task_id: None,
+            },
+        );
+        brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
+
+        let jsonl = JsonlPaths {
+            task_sources: vec![tasks_jsonl],
+            record_sources: vec![],
+        };
+
+        // No brain.db exists — should work fine via JSONL replay
+        migrate_one_brain(&db, "gateway-id", "gateway", &jsonl).unwrap();
+
+        let task_count: i64 = db
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE brain_id = 'gateway-id'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(task_count, 1, "gateway task should be imported from JSONL");
+    }
 }

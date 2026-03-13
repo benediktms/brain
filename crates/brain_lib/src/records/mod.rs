@@ -428,6 +428,42 @@ impl RecordStore {
         &self.events_path
     }
 
+    /// Import events from a JSONL file into the unified SQLite database.
+    ///
+    /// Reads the given path as a JSONL event log and replays all events into
+    /// SQLite via `projections::apply_event`. Events that already exist (by
+    /// `event_id`) or would violate constraints are silently skipped to make
+    /// this safe to call multiple times (idempotent).
+    ///
+    /// This is intended for migration from per-brain JSONL event logs into
+    /// the unified `~/.brain/brain.db`.
+    pub fn import_from_jsonl(&self, path: &std::path::Path) -> Result<usize> {
+        if !path.exists() {
+            return Ok(0);
+        }
+        let all_events = events::read_all_events(path)?;
+        if all_events.is_empty() {
+            return Ok(0);
+        }
+        let brain_id = self.brain_id.clone();
+        let mut imported = 0usize;
+        self.db.with_write_conn(|conn| {
+            for event in &all_events {
+                match projections::apply_event(conn, event, &brain_id) {
+                    Ok(()) => imported += 1,
+                    Err(e) => {
+                        tracing::debug!(
+                            event_id = %event.event_id,
+                            "skipping record event during import: {e}"
+                        );
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(imported)
+    }
+
     /// Rebuild all records projection tables from the JSONL event log.
     ///
     /// Recovery and migration mechanism — not the primary read path. SQLite is
@@ -850,6 +886,76 @@ mod tests {
             store.events_path(),
             records_dir.join("events.jsonl").as_path()
         );
+    }
+
+    #[test]
+    fn test_import_from_jsonl_basic_and_idempotent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let records_dir = dir.path().join("records");
+        let db = crate::db::Db::open_in_memory().unwrap();
+        let store = RecordStore::with_brain_id(&records_dir, db, "test-brain").unwrap();
+
+        // Write two events to JSONL
+        let ev1 = RecordEvent::from_payload(
+            "r1",
+            "agent",
+            RecordCreatedPayload {
+                title: "Artifact One".to_string(),
+                kind: "report".to_string(),
+                content_ref: ContentRefPayload::new("aaaa".repeat(16), 10, None),
+                description: None,
+                task_id: None,
+                tags: vec!["t1".to_string()],
+                scope_type: None,
+                scope_id: None,
+                retention_class: None,
+                producer: None,
+            },
+        );
+        let ev2 = RecordEvent::from_payload(
+            "r2",
+            "agent",
+            RecordCreatedPayload {
+                title: "Artifact Two".to_string(),
+                kind: "snapshot".to_string(),
+                content_ref: ContentRefPayload::new("bbbb".repeat(16), 20, None),
+                description: None,
+                task_id: None,
+                tags: vec![],
+                scope_type: None,
+                scope_id: None,
+                retention_class: None,
+                producer: None,
+            },
+        );
+        store.append(&ev1).unwrap();
+        store.append(&ev2).unwrap();
+
+        // Import from JSONL
+        let count = store.import_from_jsonl(store.events_path()).unwrap();
+        assert_eq!(count, 2);
+
+        // Verify records exist
+        let row1 = store.get_record("r1").unwrap();
+        assert!(row1.is_some(), "r1 should exist after import");
+        let row2 = store.get_record("r2").unwrap();
+        assert!(row2.is_some(), "r2 should exist after import");
+
+        // Import again — idempotent, no new records
+        let count2 = store.import_from_jsonl(store.events_path()).unwrap();
+        assert_eq!(count2, 0, "second import should skip all events");
+    }
+
+    #[test]
+    fn test_import_from_jsonl_missing_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let records_dir = dir.path().join("records");
+        let db = crate::db::Db::open_in_memory().unwrap();
+        let store = RecordStore::with_brain_id(&records_dir, db, "test-brain").unwrap();
+
+        let missing = dir.path().join("nonexistent.jsonl");
+        let count = store.import_from_jsonl(&missing).unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

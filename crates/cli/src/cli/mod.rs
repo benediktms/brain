@@ -421,11 +421,11 @@ pub(crate) enum Command {
         /// Remove per-brain brain.db files after successful migration
         #[arg(long)]
         cleanup: bool,
-    },
 
-    /// Migrate all per-brain SQLite databases into the unified ~/.brain/brain.db
-    #[command(name = "migrate-workspace")]
-    MigrateWorkspace,
+        /// Migrate a specific brain (name, ID, or alias). Omit to migrate all.
+        #[arg(long)]
+        brain: Option<String>,
+    },
 }
 
 // ── non-task subcommand enums ───────────────────────────────

@@ -26,6 +26,10 @@ use crate::tasks::queries::get_labels_for_tasks;
 /// processes all tasks (used by the single-brain `run()` path).
 ///
 /// Returns the number of tasks successfully embedded.
+///
+/// `db` must be the database containing the `tasks` table — the unified DB
+/// (`~/.brain/brain.db`) in multi-brain mode, or the per-brain DB in
+/// single-brain mode.
 pub async fn poll_stale_tasks(
     db: &Db,
     store: &Store,
@@ -383,8 +387,12 @@ pub async fn poll_stale_chunks(db: &Db, store: &Store, embedder: &Arc<dyn Embed>
 /// Check if LanceDB is accessible. If not, reset all `embedded_at` columns so
 /// items will be re-embedded on the next poll cycle.
 ///
+/// `db` is the per-brain database (contains `chunks`).
+/// `unified_db` is the unified database (contains `tasks`).
+/// In single-brain mode, both point to the same database.
+///
 /// Returns `true` if a reset occurred (LanceDB was missing/inaccessible).
-pub async fn self_heal_if_lance_missing(db: &Db, store: &Store) -> bool {
+pub async fn self_heal_if_lance_missing(db: &Db, unified_db: &Db, store: &Store) -> bool {
     // Use schema() as a lightweight accessibility probe — it sends a trivial
     // request to the underlying table handle.
     if store.current_schema_matches_expected().await {
@@ -393,14 +401,18 @@ pub async fn self_heal_if_lance_missing(db: &Db, store: &Store) -> bool {
 
     warn!("LanceDB not found — resetting embedded_at for full re-embed");
 
-    if let Err(e) = db.with_write_conn(|conn| {
-        conn.execute_batch(
-            "UPDATE tasks SET embedded_at = NULL;
-             UPDATE chunks SET embedded_at = NULL;",
-        )?;
+    if let Err(e) = unified_db.with_write_conn(|conn| {
+        conn.execute_batch("UPDATE tasks SET embedded_at = NULL;")?;
         Ok(())
     }) {
-        warn!(error = %e, "embed_poll: failed to reset embedded_at columns");
+        warn!(error = %e, "embed_poll: failed to reset tasks.embedded_at");
+    }
+
+    if let Err(e) = db.with_write_conn(|conn| {
+        conn.execute_batch("UPDATE chunks SET embedded_at = NULL;")?;
+        Ok(())
+    }) {
+        warn!(error = %e, "embed_poll: failed to reset chunks.embedded_at");
     }
 
     true

@@ -642,18 +642,45 @@ async fn handle_request(
                 DispatchMode::Local {
                     session_brain_name, ..
                 } => {
-                    // For local dispatch, warn if the session brain differs from
-                    // the startup brain. A full re-bootstrap is expensive; the
-                    // unified DB fix (brain_id scoping) ensures correct data
-                    // access for the common case. Re-bootstrap is a follow-up.
+                    // When the session brain differs from the startup brain,
+                    // re-scope the context so TaskStore/RecordStore queries
+                    // filter by the correct brain_id.
                     let session = session_brain_name.read().await.clone();
                     if session != ctx.brain_name {
-                        warn!(
-                            session_brain = %session,
-                            startup_brain = %ctx.brain_name,
-                            "session brain differs from startup brain in local dispatch mode; \
-                             data access uses startup-brain context"
-                        );
+                        match ctx.resolve_brain_id(&session) {
+                            Ok((name, bid)) => match ctx.with_brain_id(&bid, &name) {
+                                Ok(scoped_ctx) => {
+                                    debug!(
+                                        session_brain = %name,
+                                        brain_id = %bid,
+                                        "local dispatch re-scoped to session brain"
+                                    );
+                                    return serialize_response(&JsonRpcResponse::new(
+                                        id,
+                                        serde_json::to_value(
+                                            registry
+                                                .dispatch(tool_name, arguments, &scoped_ctx)
+                                                .await,
+                                        )
+                                        .unwrap(),
+                                    ));
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        session_brain = %session,
+                                        error = %e,
+                                        "failed to re-scope context, falling back to startup brain"
+                                    );
+                                }
+                            },
+                            Err(e) => {
+                                warn!(
+                                    session_brain = %session,
+                                    error = %e,
+                                    "failed to resolve session brain_id, falling back to startup brain"
+                                );
+                            }
+                        }
                     }
                     registry.dispatch(tool_name, arguments, ctx).await
                 }
