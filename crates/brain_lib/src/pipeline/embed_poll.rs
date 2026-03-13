@@ -4,6 +4,7 @@
 //! processes up to 256 items to prevent memory spikes on the first run after
 //! `embedded_at` is introduced.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use tracing::{debug, info, warn};
@@ -170,7 +171,7 @@ pub async fn poll_stale_tasks(
     };
 
     // ── 5. Upsert to LanceDB + SQLite FTS ────────────────────────────────
-    let mut embedded_task_ids: Vec<String> = Vec::new();
+    let mut embedded_task_ids: HashSet<String> = HashSet::new();
 
     for (entry, embedding) in capsules.iter().zip(embeddings.iter()) {
         // LanceDB upsert
@@ -204,9 +205,7 @@ pub async fn poll_stale_tasks(
         }
 
         // Track unique task IDs (task + outcome capsule both count once)
-        if !embedded_task_ids.contains(&entry.task_id) {
-            embedded_task_ids.push(entry.task_id.clone());
-        }
+        embedded_task_ids.insert(entry.task_id.clone());
     }
 
     // ── 6. Mark embedded ─────────────────────────────────────────────────
@@ -261,7 +260,6 @@ pub async fn poll_stale_chunks(
     db: &Db,
     store: &Store,
     embedder: &Arc<dyn Embed>,
-    _brain_id: &str,
 ) -> usize {
     debug!("embed_poll: scanning stale chunks");
 
