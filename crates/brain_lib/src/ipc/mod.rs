@@ -5,6 +5,7 @@
 pub mod client;
 pub mod router;
 pub mod server;
+pub mod sync_client;
 
 #[cfg(test)]
 mod tests;
