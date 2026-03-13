@@ -3,9 +3,8 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    CommentPayload, DependencyPayload, EventType, ExternalIdPayload,
-    LabelPayload, NoteLinkPayload, ParentSetPayload, StatusChangedPayload, TaskCreatedPayload,
-    TaskEvent, TaskUpdatedPayload,
+    CommentPayload, DependencyPayload, EventType, ExternalIdPayload, LabelPayload, NoteLinkPayload,
+    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
 };
 use super::queries::next_child_seq;
 
@@ -242,7 +241,6 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Resu
                 rusqlite::params![event.task_id, p.source, p.external_id],
             )?;
         }
-
     }
 
     // Record the event itself
@@ -593,5 +591,4 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
     }
-
 }

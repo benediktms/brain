@@ -348,8 +348,7 @@ pub fn open_brain_stores(
 
     // RecordStore scoped to brain_id
     let records_dir = data_dir.join("records");
-    let records =
-        crate::records::RecordStore::with_brain_id(&records_dir, db, &brain_id)?;
+    let records = crate::records::RecordStore::with_brain_id(&records_dir, db, &brain_id)?;
 
     // ObjectStore — prefer unified ~/.brain/objects/ when available.
     let brain_home_for_objects = data_dir

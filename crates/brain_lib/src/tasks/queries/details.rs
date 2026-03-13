@@ -247,4 +247,3 @@ pub fn get_deps_for_task(conn: &Connection, task_id: &str) -> Result<Vec<String>
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
 }
-

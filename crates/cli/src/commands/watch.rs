@@ -382,8 +382,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                 continue;
             }
         };
-        match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder), &brain_id)
-            .await
+        match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder), &brain_id).await
         {
             Ok(instance) => {
                 brains.insert(name.clone(), instance);
@@ -739,8 +738,11 @@ async fn init_brain_instance(
         .sqlite_db
         .parent()
         .unwrap_or(std::path::Path::new("."));
-    let tasks =
-        TaskStore::with_brain_id(&brain_data_dir.join("tasks"), pipeline.db().clone(), brain_id)?;
+    let tasks = TaskStore::with_brain_id(
+        &brain_data_dir.join("tasks"),
+        pipeline.db().clone(),
+        brain_id,
+    )?;
     // SQLite is the source of truth (B2) — scoped to brain_id for unified store
     let records = RecordStore::with_brain_id(
         &brain_data_dir.join("records"),

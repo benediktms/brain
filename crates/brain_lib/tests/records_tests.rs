@@ -383,7 +383,8 @@ fn test_rebuild_recovers_when_sqlite_is_behind_event_log() {
     // Apply r1 to SQLite and log (simulating r1 was fully projected)
     let ev1 = make_created_event(&r1, "Record One", "report");
     append_event(&events_path, &ev1).unwrap();
-    db.with_write_conn(|conn| apply_event(conn, &ev1, "")).unwrap();
+    db.with_write_conn(|conn| apply_event(conn, &ev1, ""))
+        .unwrap();
 
     // Write r2 to the log but DO NOT project it (simulates crash before projection)
     let ev2 = make_created_event(&r2, "Record Two", "export");
@@ -577,7 +578,8 @@ fn test_incremental_state_after_each_event() {
 
     // Event 1: create → record active, no tags
     let ev1 = make_created_event(&rid, "Initial", "analysis");
-    db.with_write_conn(|conn| apply_event(conn, &ev1, "")).unwrap();
+    db.with_write_conn(|conn| apply_event(conn, &ev1, ""))
+        .unwrap();
     assert_eq!(count_records(&db), 1);
     assert_eq!(get_status(&db, &rid), "active");
     assert_eq!(count_tags_for(&db, &rid), 0);
@@ -591,7 +593,8 @@ fn test_incremental_state_after_each_event() {
             tag: "new-tag".to_string(),
         },
     );
-    db.with_write_conn(|conn| apply_event(conn, &ev2, "")).unwrap();
+    db.with_write_conn(|conn| apply_event(conn, &ev2, ""))
+        .unwrap();
     assert_eq!(count_tags_for(&db, &rid), 1);
     assert!(tag_exists(&db, &rid, "new-tag"));
 
@@ -604,12 +607,14 @@ fn test_incremental_state_after_each_event() {
             description: None,
         },
     );
-    db.with_write_conn(|conn| apply_event(conn, &ev3, "")).unwrap();
+    db.with_write_conn(|conn| apply_event(conn, &ev3, ""))
+        .unwrap();
     assert_eq!(get_title(&db, &rid), "Updated Title");
 
     // Event 4: archive
     let ev4 = RecordEvent::from_payload(&rid, "agent", RecordArchivedPayload { reason: None });
-    db.with_write_conn(|conn| apply_event(conn, &ev4, "")).unwrap();
+    db.with_write_conn(|conn| apply_event(conn, &ev4, ""))
+        .unwrap();
     assert_eq!(get_status(&db, &rid), "archived");
 }
 
@@ -620,8 +625,10 @@ fn test_status_transition_active_to_archived() {
     let db = Db::open_in_memory().unwrap();
     let rid = new_record_id("BRN");
 
-    db.with_write_conn(|conn| apply_event(conn, &make_created_event(&rid, "My Record", "export"), ""))
-        .unwrap();
+    db.with_write_conn(|conn| {
+        apply_event(conn, &make_created_event(&rid, "My Record", "export"), "")
+    })
+    .unwrap();
     assert_eq!(get_status(&db, &rid), "active");
 
     db.with_write_conn(|conn| {
@@ -647,10 +654,14 @@ fn test_multiple_records_have_independent_status() {
     let r1 = new_record_id("BRN");
     let r2 = new_record_id("BRN");
 
-    db.with_write_conn(|conn| apply_event(conn, &make_created_event(&r1, "Active One", "report"), ""))
-        .unwrap();
-    db.with_write_conn(|conn| apply_event(conn, &make_created_event(&r2, "Active Two", "diff"), ""))
-        .unwrap();
+    db.with_write_conn(|conn| {
+        apply_event(conn, &make_created_event(&r1, "Active One", "report"), "")
+    })
+    .unwrap();
+    db.with_write_conn(|conn| {
+        apply_event(conn, &make_created_event(&r2, "Active Two", "diff"), "")
+    })
+    .unwrap();
 
     // Archive only r2
     db.with_write_conn(|conn| {
@@ -674,7 +685,11 @@ fn test_tag_add_then_remove_leaves_no_tag() {
     let rid = new_record_id("BRN");
 
     db.with_write_conn(|conn| {
-        apply_event(conn, &make_created_event(&rid, "Tagged Record", "report"), "")
+        apply_event(
+            conn,
+            &make_created_event(&rid, "Tagged Record", "report"),
+            "",
+        )
     })
     .unwrap();
 

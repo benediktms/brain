@@ -371,13 +371,19 @@ mod tests {
             "INSERT INTO files (file_id, path, mtime) VALUES ('f1', '/a.md', 0)",
             [],
         );
-        assert!(result.is_err(), "mtime column should not exist after migration");
+        assert!(
+            result.is_err(),
+            "mtime column should not exist after migration"
+        );
 
         let result2 = conn.execute(
             "INSERT INTO files (file_id, path, size) VALUES ('f2', '/b.md', 0)",
             [],
         );
-        assert!(result2.is_err(), "size column should not exist after migration");
+        assert!(
+            result2.is_err(),
+            "size column should not exist after migration"
+        );
     }
 
     #[test]
@@ -642,7 +648,10 @@ mod tests {
              VALUES ('r1', 't1', NULL, 1)",
             [],
         );
-        assert!(result.is_err(), "duplicate record_links entry should be rejected");
+        assert!(
+            result.is_err(),
+            "duplicate record_links entry should be rejected"
+        );
     }
 
     #[test]

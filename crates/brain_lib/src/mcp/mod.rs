@@ -107,9 +107,7 @@ impl McpContext {
         // Derive brain_home early so we can resolve the unified object store path.
         // Convention: sqlite_db = $BRAIN_HOME/brains/<name>/brain.db
         // So: brain_home = sqlite_db.parent().parent().parent()
-        let brain_data_dir_for_objects = sqlite_db
-            .parent()
-            .unwrap_or(std::path::Path::new("."));
+        let brain_data_dir_for_objects = sqlite_db.parent().unwrap_or(std::path::Path::new("."));
         let brain_home_for_objects = brain_data_dir_for_objects
             .parent() // brains/
             .and_then(|p| p.parent()) // $BRAIN_HOME

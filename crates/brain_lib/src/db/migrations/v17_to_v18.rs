@@ -153,7 +153,10 @@ mod tests {
             "INSERT INTO brains (brain_id, name, created_at) VALUES ('b2', 'default', 2000)",
             [],
         );
-        assert!(result.is_err(), "duplicate name should violate UNIQUE constraint");
+        assert!(
+            result.is_err(),
+            "duplicate name should violate UNIQUE constraint"
+        );
     }
 
     #[test]
@@ -177,7 +180,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(brain_id, "", "pre-migration row should default to empty string");
+        assert_eq!(
+            brain_id, "",
+            "pre-migration row should default to empty string"
+        );
     }
 
     #[test]

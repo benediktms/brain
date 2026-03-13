@@ -26,12 +26,8 @@ pub fn run() -> Result<()> {
     // ── Backup ─────────────────────────────────────────────────────────────
 
     if unified_db_path.exists() && !backup_path.exists() {
-        std::fs::copy(&unified_db_path, &backup_path).with_context(|| {
-            format!(
-                "failed to create backup at {}",
-                backup_path.display()
-            )
-        })?;
+        std::fs::copy(&unified_db_path, &backup_path)
+            .with_context(|| format!("failed to create backup at {}", backup_path.display()))?;
         println!("Backup created: {}", backup_path.display());
     } else if backup_path.exists() {
         println!(
@@ -44,8 +40,9 @@ pub fn run() -> Result<()> {
 
     {
         // Open via brain_lib Db to run schema init (creates brain.db + runs all migrations).
-        let _db = brain_lib::db::Db::open(&unified_db_path)
-            .with_context(|| format!("failed to open unified DB at {}", unified_db_path.display()))?;
+        let _db = brain_lib::db::Db::open(&unified_db_path).with_context(|| {
+            format!("failed to open unified DB at {}", unified_db_path.display())
+        })?;
         // _db dropped here; we use raw rusqlite below for ATTACH-based migration.
     }
 
@@ -98,8 +95,12 @@ fn migrate_objects(
     entries: &[(String, brain_lib::config::BrainEntry)],
 ) -> Result<()> {
     let unified_objects = home.join("objects");
-    std::fs::create_dir_all(&unified_objects)
-        .with_context(|| format!("failed to create unified objects dir {}", unified_objects.display()))?;
+    std::fs::create_dir_all(&unified_objects).with_context(|| {
+        format!(
+            "failed to create unified objects dir {}",
+            unified_objects.display()
+        )
+    })?;
 
     let mut total_moved = 0u64;
     let mut total_skipped = 0u64;
@@ -110,7 +111,8 @@ fn migrate_objects(
         }
 
         let paths = brain_lib::config::resolve_paths_for_brain_with_home(name, home);
-        let brain_data_dir = paths.sqlite_db
+        let brain_data_dir = paths
+            .sqlite_db
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| home.join("brains").join(name));
@@ -147,7 +149,9 @@ fn migrate_one_objects_dir(
     let prefix_entries = match std::fs::read_dir(src_objects) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
-        Err(e) => return Err(e).with_context(|| format!("failed to read {}", src_objects.display())),
+        Err(e) => {
+            return Err(e).with_context(|| format!("failed to read {}", src_objects.display()));
+        }
     };
 
     for prefix_entry in prefix_entries {
@@ -196,14 +200,18 @@ fn migrate_one_objects_dir(
             // Try hard-link first (zero copy). Fall back to copy if cross-device.
             let link_result = std::fs::hard_link(&src_blob, &dst_blob);
             if let Err(ref e) = link_result {
-                if e.kind() == std::io::ErrorKind::CrossesDevices
-                    || e.raw_os_error() == Some(18) // EXDEV
+                if e.kind() == std::io::ErrorKind::CrossesDevices || e.raw_os_error() == Some(18)
+                // EXDEV
                 {
-                    std::fs::copy(&src_blob, &dst_blob)
-                        .with_context(|| format!("failed to copy blob {} (brain '{}')", blob_name, brain_name))?;
+                    std::fs::copy(&src_blob, &dst_blob).with_context(|| {
+                        format!("failed to copy blob {} (brain '{}')", blob_name, brain_name)
+                    })?;
                 } else {
                     link_result.with_context(|| {
-                        format!("failed to hard-link blob {} (brain '{}')", blob_name, brain_name)
+                        format!(
+                            "failed to hard-link blob {} (brain '{}')",
+                            blob_name, brain_name
+                        )
                     })?;
                 }
             }
@@ -241,7 +249,10 @@ fn migrate_one_brain(
         .with_context(|| "failed to query brains table")?;
 
     if already_migrated {
-        println!("  Brain '{}' ({}): already migrated — skipped.", name, brain_id);
+        println!(
+            "  Brain '{}' ({}): already migrated — skipped.",
+            name, brain_id
+        );
         return Ok(());
     }
 
@@ -275,11 +286,8 @@ fn migrate_one_brain(
 
         // ── Tasks ──────────────────────────────────────────────────────────
 
-        let task_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM src.tasks",
-            [],
-            |row| row.get(0),
-        )?;
+        let task_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM src.tasks", [], |row| row.get(0))?;
 
         tx.execute(
             "INSERT INTO tasks
@@ -320,11 +328,8 @@ fn migrate_one_brain(
 
         // ── Records ────────────────────────────────────────────────────────
 
-        let record_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM src.records",
-            [],
-            |row| row.get(0),
-        )?;
+        let record_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM src.records", [], |row| row.get(0))?;
 
         tx.execute(
             "INSERT OR IGNORE INTO records
@@ -379,11 +384,7 @@ fn migrate_one_brain(
 ///
 /// Aborts with an error if any task_id in `src.tasks` already exists in
 /// the unified `tasks` table under a different brain_id.
-fn check_task_id_collisions(
-    conn: &Connection,
-    brain_id: &str,
-    name: &str,
-) -> Result<()> {
+fn check_task_id_collisions(conn: &Connection, brain_id: &str, name: &str) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT s.task_id FROM src.tasks s
          INNER JOIN tasks t ON s.task_id = t.task_id
@@ -520,17 +521,29 @@ mod tests {
 
         let conn = Connection::open(&unified).unwrap();
         let brain_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM brains WHERE brain_id = 'brain1id'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM brains WHERE brain_id = 'brain1id'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(brain_count, 1);
 
         let task_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tasks WHERE brain_id = 'brain1id'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE brain_id = 'brain1id'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(task_count, 1);
 
         let rec_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM records WHERE brain_id = 'brain1id'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE brain_id = 'brain1id'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(rec_count, 1);
     }
@@ -557,7 +570,11 @@ mod tests {
 
         let conn = Connection::open(&unified).unwrap();
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM brains WHERE brain_id = 'brain2id'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM brains WHERE brain_id = 'brain2id'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(count, 1, "brain should appear exactly once");
     }
@@ -589,6 +606,9 @@ mod tests {
         let result = migrate_one_brain(&unified, &source2, "bid2", "brain-b");
         assert!(result.is_err(), "collision should abort migration");
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("COLLISION-T1"), "error should mention the colliding task_id");
+        assert!(
+            msg.contains("COLLISION-T1"),
+            "error should mention the colliding task_id"
+        );
     }
 }

@@ -7,37 +7,30 @@
 //! 4. Brain filtering in stores — `with_brain_id` scopes reads and writes correctly.
 
 use brain_lib::db::Db;
-use brain_lib::records::events::{
-    ContentRefPayload, RecordCreatedPayload, RecordEvent,
-};
+use brain_lib::records::RecordStore;
+use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
 use brain_lib::records::objects::ObjectStore;
 use brain_lib::records::queries::RecordFilter;
-use brain_lib::records::RecordStore;
+use brain_lib::tasks::TaskStore;
 use brain_lib::tasks::events::{
     DependencyPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus,
 };
-use brain_lib::tasks::TaskStore;
 use tempfile::TempDir;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// A minimal content hash used as a placeholder in record creation events.
-const PLACEHOLDER_HASH: &str =
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const PLACEHOLDER_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 /// Create two `TaskStore`s that share a single `Db` — simulating the unified
 /// storage model where both brains write to the same SQLite database.
 /// Returns the stores and the shared `Db` so callers can create additional stores.
-fn make_shared_db_stores(
-    dir: &TempDir,
-) -> (TaskStore, TaskStore, Db) {
+fn make_shared_db_stores(dir: &TempDir) -> (TaskStore, TaskStore, Db) {
     let db = Db::open_in_memory().unwrap();
     let tasks_dir_a = dir.path().join("tasks_a");
     let tasks_dir_b = dir.path().join("tasks_b");
-    let store_a =
-        TaskStore::with_brain_id(&tasks_dir_a, db.clone(), "brain-a").unwrap();
-    let store_b =
-        TaskStore::with_brain_id(&tasks_dir_b, db.clone(), "brain-b").unwrap();
+    let store_a = TaskStore::with_brain_id(&tasks_dir_a, db.clone(), "brain-a").unwrap();
+    let store_b = TaskStore::with_brain_id(&tasks_dir_b, db.clone(), "brain-b").unwrap();
     (store_a, store_b, db)
 }
 
@@ -63,11 +56,7 @@ fn create_task(store: &TaskStore, task_id: &str, title: &str) {
 
 /// Create a `RecordStore` and `ObjectStore` pair from the given `Db`,
 /// scoped to `brain_id`.
-fn make_record_store(
-    dir: &TempDir,
-    db: Db,
-    brain_id: &str,
-) -> (RecordStore, ObjectStore) {
+fn make_record_store(dir: &TempDir, db: Db, brain_id: &str) -> (RecordStore, ObjectStore) {
     let records_dir = dir.path().join(format!("records_{brain_id}"));
     // Object store is shared — same path for both brains (unified dedup).
     let objects_dir = dir.path().join("objects");
@@ -327,5 +316,9 @@ fn test_record_store_brain_id_scoping() {
     let records_dir_all = dir.path().join("records_all");
     let store_all = RecordStore::new(&records_dir_all, db).unwrap();
     let all_records = store_all.list_records(&filter).unwrap();
-    assert_eq!(all_records.len(), 3, "unscoped store should see all 3 records");
+    assert_eq!(
+        all_records.len(),
+        3,
+        "unscoped store should see all 3 records"
+    );
 }

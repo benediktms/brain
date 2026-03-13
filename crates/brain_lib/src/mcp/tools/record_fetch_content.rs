@@ -43,13 +43,11 @@ impl RecordFetchContent {
             } else {
                 None
             };
-        let (records, remote_brain_name): (
-            &crate::records::RecordStore,
-            Option<String>,
-        ) = match remote_brain {
-            Some((ref name, ref recs)) => (recs, Some(name.clone())),
-            None => (&ctx.records, None),
-        };
+        let (records, remote_brain_name): (&crate::records::RecordStore, Option<String>) =
+            match remote_brain {
+                Some((ref name, ref recs)) => (recs, Some(name.clone())),
+                None => (&ctx.records, None),
+            };
         let objects = &ctx.objects;
 
         let record_id = match records.resolve_record_id(&params.record_id) {

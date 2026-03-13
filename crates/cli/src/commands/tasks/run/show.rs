@@ -147,4 +147,3 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
 
     Ok(())
 }
-

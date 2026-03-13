@@ -9,9 +9,7 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::enrichment::{
-    comments_to_json, dep_summary_to_json, note_links_to_json,
-};
+use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
 use crate::tasks::queries::TaskRow;
 use crate::utils::task_row_to_json;
 
