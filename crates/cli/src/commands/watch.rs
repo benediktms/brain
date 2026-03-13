@@ -19,11 +19,8 @@ use brain_lib::pipeline::IndexPipeline;
 use brain_lib::pipeline::consolidation::ConsolidationScheduler;
 use brain_lib::pipeline::embed_poll;
 use brain_lib::prelude::*;
-use brain_lib::records::RecordStore;
-use brain_lib::records::objects::ObjectStore;
 use brain_lib::store::{Store, StoreReader};
 use brain_lib::summarizer::FlanT5Summarizer;
-use brain_lib::tasks::TaskStore;
 use tracing::{debug, info, warn};
 
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
@@ -848,30 +845,28 @@ async fn init_brain_instance(
         pipeline.db().clone()
     };
 
-    let tasks =
-        TaskStore::with_brain_id(&brain_data_dir.join("tasks"), unified_db.clone(), brain_id)?;
-    // TaskStore/RecordStore use unified_db — brain_id scoping works correctly.
-    let records = RecordStore::with_brain_id(
-        &brain_data_dir.join("records"),
+    let stores = brain_lib::stores::BrainStores::from_dbs(
+        pipeline.db().clone(),
         unified_db.clone(),
         brain_id,
+        brain_data_dir,
+        &brain_home_path,
     )?;
-    let objects = ObjectStore::new(brain_data_dir.join("objects"))?;
     let store_reader = StoreReader::from_store(pipeline.store());
     let metrics = Arc::clone(pipeline.metrics());
 
     let mcp_context = McpContext::from_stores(
-        pipeline.db().clone(),
+        stores.per_brain_db().clone(),
         unified_db,
         Some(store_reader),
         None, // writable_store: pipeline.store() is owned by pipeline; IPC is read-only
         None, // embedder: not needed for task/record operations via IPC
-        tasks,
-        records,
-        objects,
+        stores.tasks,
+        stores.records,
+        stores.objects,
         metrics,
-        brain_home_path,
-        name.to_string(),
+        stores.brain_home,
+        stores.brain_name,
     );
 
     Ok(BrainInstance {

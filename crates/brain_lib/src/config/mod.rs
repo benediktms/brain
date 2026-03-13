@@ -300,11 +300,8 @@ pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::
 
 /// Open all stores for a brain identified by name or ID.
 ///
-/// Resolves the brain entry, opens the unified SQLite database, and constructs
-/// [`crate::tasks::TaskStore`], [`crate::records::RecordStore`], and
-/// [`crate::records::objects::ObjectStore`] — each scoped to `brain_id`.
-///
-/// Returns `(brain_name, brain_id, tasks, records, objects)`.
+/// Delegates to [`crate::stores::BrainStores::from_brain`] for the actual
+/// store construction. Returns `(brain_name, brain_id, tasks, records, objects)`.
 pub fn open_brain_stores(
     name_or_id: &str,
 ) -> Result<(
@@ -314,56 +311,14 @@ pub fn open_brain_stores(
     crate::records::RecordStore,
     crate::records::objects::ObjectStore,
 )> {
-    let (name, entry) = resolve_brain_entry(name_or_id)?;
-    let brain_id = resolve_brain_id(&entry, &name)?;
-    let paths = resolve_paths_for_brain(&name)?;
-
-    // Ensure the data directory exists.
-    if let Some(parent) = paths.sqlite_db.parent() {
-        std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
-    }
-
-    let db = crate::db::Db::open(&paths.sqlite_db)?;
-    let data_dir = paths
-        .sqlite_db
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .to_path_buf();
-
-    // TaskStore scoped to brain_id, with project-local audit trail if a root is available.
-    let tasks_dir = data_dir.join("tasks");
-    let audit_path = entry
-        .roots
-        .first()
-        .map(|root| root.join(".brain").join("tasks").join("events.jsonl"));
-    let tasks = {
-        let store = crate::tasks::TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id)?;
-        if let Some(p) = audit_path {
-            store.with_audit_path(p)
-        } else {
-            store
-        }
-    };
-
-    // RecordStore scoped to brain_id
-    let records_dir = data_dir.join("records");
-    let records = crate::records::RecordStore::with_brain_id(&records_dir, db, &brain_id)?;
-
-    // ObjectStore — prefer unified ~/.brain/objects/ when available.
-    let brain_home_for_objects = data_dir
-        .parent() // brains/
-        .and_then(|p| p.parent()) // $BRAIN_HOME
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| data_dir.clone());
-    let unified_objects_dir = brain_home_for_objects.join("objects");
-    let objects_dir = if unified_objects_dir.exists() {
-        unified_objects_dir
-    } else {
-        data_dir.join("objects")
-    };
-    let objects = crate::records::objects::ObjectStore::new(objects_dir)?;
-
-    Ok((name, brain_id, tasks, records, objects))
+    let stores = crate::stores::BrainStores::from_brain(name_or_id)?;
+    Ok((
+        stores.brain_name,
+        stores.brain_id,
+        stores.tasks,
+        stores.records,
+        stores.objects,
+    ))
 }
 
 // ---------------------------------------------------------------------------

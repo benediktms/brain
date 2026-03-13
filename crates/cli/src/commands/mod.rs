@@ -3,7 +3,6 @@ pub mod alias;
 pub mod artifacts;
 pub mod backfill_tasks;
 pub mod config;
-pub mod db_routing;
 
 pub mod daemon;
 pub mod daemon_service;

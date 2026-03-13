@@ -6,45 +6,30 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde_json::json;
 
-use brain_lib::records::RecordStore;
 use brain_lib::records::events::{
     ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
     RecordEventType, TagPayload,
 };
-use brain_lib::records::objects::{COMPRESSION_THRESHOLD, ObjectStore};
+use brain_lib::records::objects::COMPRESSION_THRESHOLD;
 use brain_lib::records::queries::RecordFilter;
+use brain_lib::stores::BrainStores;
 
 use crate::markdown_table::MarkdownTable;
 
 // -- shared context --
 
 pub struct ArtifactCtx {
-    pub(crate) record_store: RecordStore,
-    pub(crate) object_store: ObjectStore,
+    pub(crate) record_store: brain_lib::records::RecordStore,
+    pub(crate) object_store: brain_lib::records::objects::ObjectStore,
     pub(crate) json: bool,
 }
 
 impl ArtifactCtx {
     pub fn new(sqlite_db: &Path, json: bool) -> Result<Self> {
-        let resolved = crate::commands::db_routing::resolve_dbs(sqlite_db)?;
-        let brain_dir = sqlite_db.parent().unwrap_or_else(|| Path::new("."));
-        let records_dir = brain_dir.join("records");
-        let unified_objects = resolved.brain_home.join("objects");
-        let objects_dir = if unified_objects.exists() {
-            unified_objects
-        } else {
-            brain_dir.join("objects")
-        };
-        let record_store = if resolved.brain_id.is_empty() {
-            RecordStore::new(&records_dir, resolved.unified)?
-        } else {
-            RecordStore::with_brain_id(&records_dir, resolved.unified, &resolved.brain_id)?
-        }
-        .with_meta_db(resolved.per_brain);
-        let object_store = ObjectStore::new(&objects_dir).context("Failed to open object store")?;
+        let stores = BrainStores::from_path(sqlite_db)?;
         Ok(Self {
-            record_store,
-            object_store,
+            record_store: stores.records,
+            object_store: stores.objects,
             json,
         })
     }

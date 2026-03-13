@@ -194,43 +194,31 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let brain_home = tmp.path().to_path_buf();
-        let sqlite_path = tmp.path().join("test.db");
-        let lance_path = tmp.path().join("test_lance");
-        let tasks_dir = tmp.path().join("tasks");
+        let (tmp, stores) = crate::stores::BrainStores::in_memory().unwrap();
 
-        let db = crate::db::Db::open(&sqlite_path).unwrap();
+        let lance_path = tmp.path().join("test_lance");
         let store = crate::store::Store::open_or_create(&lance_path)
             .await
             .unwrap();
         let store_reader = crate::store::StoreReader::from_store(&store);
         let embedder = Arc::new(crate::embedder::MockEmbedder);
-        let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
 
-        let records_dir = tmp.path().join("records");
-        let records_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let records = crate::records::RecordStore::new(&records_dir, records_db).unwrap();
-
-        let objects_dir = tmp.path().join("objects");
-        let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
-
+        let brain_home = stores.brain_home.clone();
         (
             tmp,
             McpContext {
-                db: db.clone(),
-                unified_db: db,
+                db: stores.per_brain_db().clone(),
+                unified_db: stores.unified_db().clone(),
                 store: Some(store_reader),
                 writable_store: Some(store),
                 embedder: Some(embedder),
-                tasks,
-                records,
-                objects,
+                tasks: stores.tasks,
+                records: stores.records,
+                objects: stores.objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
                 brain_home,
-                brain_name: "test-brain".to_string(),
-                brain_id: String::new(),
+                brain_name: stores.brain_name,
+                brain_id: stores.brain_id,
             },
         )
     }

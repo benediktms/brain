@@ -102,86 +102,24 @@ impl McpContext {
         lance_db: &Path,
         sqlite_db: &Path,
     ) -> crate::error::Result<Arc<Self>> {
-        // Step 1: always open SQLite and build TaskStore (required).
-        let db = tokio::task::spawn_blocking({
+        // Step 1: resolve DBs and build stores via BrainStores.
+        let stores = tokio::task::spawn_blocking({
             let sqlite_db = sqlite_db.to_path_buf();
-            move || Db::open(&sqlite_db)
+            move || crate::stores::BrainStores::from_path(&sqlite_db)
         })
         .await
         .map_err(|e| crate::error::BrainCoreError::Database(format!("spawn_blocking: {e}")))??;
 
-        // Derive brain_name and brain_id from sqlite_db path early so stores
-        // can be scoped correctly.
-        // Convention: sqlite_db = $BRAIN_HOME/brains/<name>/brain.db
-        let brain_data_dir = sqlite_db.parent().unwrap_or(std::path::Path::new("."));
-        let brain_name = brain_data_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let brain_home = brain_data_dir
-            .parent() // brains/
-            .and_then(|p| p.parent()) // $BRAIN_HOME
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-
-        // Open the unified DB (~/.brain/brain.db) for tasks and records.
-        // Falls back to the per-brain DB for pre-migration installations where
-        // the unified DB does not yet exist.
-        let unified_db_path = brain_home.join("brain.db");
-        let unified_db = if unified_db_path.exists() {
-            let path = unified_db_path.clone();
-            tokio::task::spawn_blocking(move || Db::open(&path))
-                .await
-                .map_err(|e| {
-                    crate::error::BrainCoreError::Database(format!("spawn_blocking unified: {e}"))
-                })??
-        } else {
-            db.clone()
-        };
-
-        // Resolve brain_id from the global config registry so stores are
-        // scoped to this brain in multi-brain workspaces.
-        let brain_id = resolve_brain_entry(&brain_name)
-            .and_then(|(name, entry)| crate::config::resolve_brain_id(&entry, &name))
-            .unwrap_or_default();
-
-        if !brain_id.is_empty() {
+        if !stores.brain_id.is_empty() {
             // Backfill only the per-brain DB (for indexing tables).
             // The unified DB is already backfilled by the workspace migration.
-            Self::backfill_brain_id(&db, &brain_id)?;
+            Self::backfill_brain_id(stores.per_brain_db(), &stores.brain_id)?;
         }
-
-        let tasks_dir = brain_data_dir.join("tasks");
-        let tasks = if brain_id.is_empty() {
-            TaskStore::new(&tasks_dir, unified_db.clone())?.with_meta_db(db.clone())
-        } else {
-            TaskStore::with_brain_id(&tasks_dir, unified_db.clone(), &brain_id)?
-                .with_meta_db(db.clone())
-        };
-
-        let records_dir = brain_data_dir.join("records");
-        let records = if brain_id.is_empty() {
-            RecordStore::new(&records_dir, unified_db.clone())?.with_meta_db(db.clone())
-        } else {
-            RecordStore::with_brain_id(&records_dir, unified_db.clone(), &brain_id)?
-                .with_meta_db(db.clone())
-        };
-
-        // Use unified ~/.brain/objects/ when it exists; fall back to per-brain
-        // path for pre-migration installations.
-        let unified_objects_dir = brain_home.join("objects");
-        let objects_dir = if unified_objects_dir.exists() {
-            unified_objects_dir
-        } else {
-            brain_data_dir.join("objects")
-        };
-        let objects = ObjectStore::new(&objects_dir)?;
 
         // Step 2: optionally load LanceDB + embedder. Failures are logged and
         // result in tasks-only mode — no hard error.
         let (writable_store, store, embedder) =
-            match Self::try_load_search_layer(model_dir, lance_db, &db).await {
+            match Self::try_load_search_layer(model_dir, lance_db, stores.per_brain_db()).await {
                 Ok((ws, s, e)) => (Some(ws), Some(s), Some(e)),
                 Err(err) => {
                     info!("embedding model unavailable ({err}), starting in tasks-only mode");
@@ -192,18 +130,18 @@ impl McpContext {
         let metrics = Arc::new(Metrics::new());
 
         Ok(Arc::new(Self {
-            db,
-            unified_db,
+            db: stores.per_brain_db().clone(),
+            unified_db: stores.unified_db().clone(),
             store,
             writable_store,
             embedder,
-            tasks,
-            records,
-            objects,
+            tasks: stores.tasks,
+            records: stores.records,
+            objects: stores.objects,
             metrics,
-            brain_home,
-            brain_name,
-            brain_id,
+            brain_home: stores.brain_home,
+            brain_name: stores.brain_name,
+            brain_id: stores.brain_id,
         }))
     }
 
