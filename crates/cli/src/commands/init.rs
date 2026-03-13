@@ -415,7 +415,7 @@ brain tasks list --priority 1 --label urgent # Combined filters
 brain tasks show <id>          # Detailed task view
 
 # Creating & updating
-brain tasks create --title="..." --description="..." --type=task --priority=2
+brain tasks create --title="..." --description="..." --task-type=task --priority=2
 brain tasks update <id> --status=in_progress
 brain tasks comment <id> "comment text"
 
