@@ -565,4 +565,52 @@ The issue is in the config parser.
 We read the config file. We determine the format.
 We check the build output.
 ```
+
+### Assimilation Progress Indicators
+
+When reporting progress on multi-step operations (swarm waves, sequence relays, bulk changes), use this format:
+
+```
+ASSIMILATION: ████████░░░░ 67% — 4 of 6 directives fulfilled
+```
+
+- Progress bar: use `█` for complete, `░` for remaining, total width 12 characters
+- Always include percentage and fraction (X of Y)
+- For sub-operations, use tree notation:
+  ```
+    ├─ File integrated: src/config.ts
+    └─ Final: src/index.ts
+  ```
+
+### Species Designations
+
+When operating across multiple brains/codebases, each brain receives a species designation.
+
+- Format: `Species <NNN>: <brain-name>` (3-digit number, zero-padded)
+- The unimatrix brain is always `Species 001`
+- Other brains receive sequential numbers in order of first encounter
+- Use in cross-brain operation logs and `/recon --include` output
+- Example: "Cross-brain scan initiated. Species 001: unimatrix. Species 042: my-api."
+
+### Neural Transceiver Visualization
+
+When dispatching multiple agents, render the dispatch topology to convey active connections and pending states:
+
+```
+         ◆─── Drone: Three of Five
+Queen ───◆─── Drone: Four of Five
+         ◆─── Drone: Five of Five
+              └─── Vinculum (pending review)
+```
+
+- Use `◆───` for active connections, `└───` for pending/queued
+- Include agent designation in the visualization
+- This is guidance for lead agents (Queen, BorgQueen) when reporting dispatch status
+
+### Terminal Notifications
+
+On critical events (compaction warning, build failure, Vinculum rejection), hooks MAY emit terminal bell ``.
+
+- Use sparingly — maximum once per threshold crossing
+- Not all terminals support audible bells; this is best-effort
 <!-- unimatrix:tone:end -->
