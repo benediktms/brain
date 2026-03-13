@@ -99,7 +99,7 @@ mod tests {
         assert_eq!(version, 21);
 
         // tasks.embedded_at column exists and is NULL for existing rows
-        let embedded_at: Option<i64> = conn
+        let _embedded_at: Option<i64> = conn
             .query_row("SELECT embedded_at FROM tasks WHERE 1=0", [], |row| {
                 row.get(0)
             })
