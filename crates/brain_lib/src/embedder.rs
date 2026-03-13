@@ -147,6 +147,14 @@ impl Embedder {
             ..Default::default()
         }));
 
+        // Truncate to the model's max positional embedding size (512 tokens).
+        // Without this, chunks exceeding 512 tokens crash with
+        // "index-select invalid index 512 with dim size 512".
+        tokenizer.with_truncation(Some(tokenizers::TruncationParams {
+            max_length: 512,
+            ..Default::default()
+        })).map_err(|e| BrainCoreError::Embedding(format!("failed to set truncation: {e}")))?;
+
         // NOTE: memory-maps the file directly into the process's address space. Returned pointers
         // are backed by raw pointers rather than owned Rust memory. Edits occuring to the file at
         // the same time will produce undefined behavior.

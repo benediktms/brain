@@ -262,6 +262,30 @@ impl IndexPipeline {
         Ok(report)
     }
 
+    /// Repair corrupted index state: rebuild FTS5, drop and recreate LanceDB
+    /// table, and clear all content hashes so the next scan re-indexes everything.
+    ///
+    /// Used as self-healing when a startup scan fails with database corruption.
+    #[instrument(skip(self))]
+    pub async fn repair(&mut self) -> crate::error::Result<()> {
+        // 1. Rebuild FTS5 index from chunks table
+        self.db.with_write_conn(|conn| {
+            crate::db::fts::reindex_fts(conn)?;
+            Ok(())
+        })?;
+        info!("FTS5 index rebuilt");
+
+        // 2. Drop and recreate the LanceDB chunks table
+        self.store_mut().drop_and_recreate_table().await?;
+        info!("LanceDB table rebuilt");
+
+        // 3. Clear all content hashes so every file gets re-indexed
+        let cleared = self.db.with_write_conn(files::clear_all_content_hashes)?;
+        info!(cleared, "content hashes cleared for full re-index");
+
+        Ok(())
+    }
+
     /// Handle a single file event from the watcher.
     #[instrument(skip(self))]
     pub async fn handle_event(&self, event: crate::watcher::FileEvent) -> crate::error::Result<()> {

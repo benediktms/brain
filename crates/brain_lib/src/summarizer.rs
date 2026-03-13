@@ -124,6 +124,11 @@ impl FlanT5Summarizer {
     }
 
     fn generate(&mut self, input_text: &str) -> crate::error::Result<String> {
+        // Clear KV cache upfront — ensures stale state from a failed prior call
+        // never corrupts the next inference. Previously cleared only on success,
+        // causing monotonically growing attention dimensions on repeated errors.
+        self.model.clear_kv_cache();
+
         // Prepend instruction prefix for Flan-T5 summarization
         let prompted = format!("summarize: {input_text}");
 
@@ -178,9 +183,6 @@ impl FlanT5Summarizer {
             }
             output_ids.push(next_token);
         }
-
-        // Clear KV cache between calls
-        self.model.clear_kv_cache();
 
         // Decode output tokens (skip the start token)
         let tokens_to_decode = &output_ids[1..];

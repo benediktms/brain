@@ -770,7 +770,7 @@ async fn init_brain_instance(
         }
     }
 
-    // Run initial full scan
+    // Run initial full scan with self-healing on failure
     if !note_dirs.is_empty() {
         match pipeline.full_scan(&note_dirs).await {
             Ok(stats) => {
@@ -783,7 +783,29 @@ async fn init_brain_instance(
                 );
             }
             Err(e) => {
-                warn!(brain = %name, error = %e, "startup scan failed");
+                warn!(brain = %name, error = %e, "startup scan failed, attempting repair");
+                match pipeline.repair().await {
+                    Ok(()) => {
+                        info!(brain = %name, "repair complete, retrying scan");
+                        match pipeline.full_scan(&note_dirs).await {
+                            Ok(stats) => {
+                                info!(
+                                    brain = %name,
+                                    indexed = stats.indexed,
+                                    skipped = stats.skipped,
+                                    deleted = stats.deleted,
+                                    "post-repair scan complete"
+                                );
+                            }
+                            Err(e2) => {
+                                warn!(brain = %name, error = %e2, "scan failed even after repair");
+                            }
+                        }
+                    }
+                    Err(re) => {
+                        warn!(brain = %name, error = %re, "repair failed");
+                    }
+                }
             }
         }
     }

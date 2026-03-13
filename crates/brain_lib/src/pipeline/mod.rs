@@ -163,6 +163,11 @@ impl IndexPipeline {
         &self.store
     }
 
+    /// Get a mutable reference to the LanceDB store.
+    pub fn store_mut(&mut self) -> &mut Store {
+        &mut self.store
+    }
+
     /// Get a reference to the embedder.
     pub fn embedder(&self) -> &Arc<dyn Embed> {
         &self.embedder
