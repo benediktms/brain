@@ -5,13 +5,13 @@ use super::migrations::{
     migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
     migrate_v10_to_v11, migrate_v11_to_v12, migrate_v12_to_v13, migrate_v13_to_v14,
     migrate_v14_to_v15, migrate_v15_to_v16, migrate_v16_to_v17, migrate_v17_to_v18,
-    migrate_v18_to_v19, migrate_v19_to_v20,
+    migrate_v18_to_v19, migrate_v19_to_v20, migrate_v20_to_v21,
 };
 use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-pub(crate) const SCHEMA_VERSION: i32 = 20;
+pub(crate) const SCHEMA_VERSION: i32 = 21;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -67,6 +67,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
             17 => migrate_v17_to_v18(conn)?,
             18 => migrate_v18_to_v19(conn)?,
             19 => migrate_v19_to_v20(conn)?,
+            20 => migrate_v20_to_v21(conn)?,
             other => {
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",

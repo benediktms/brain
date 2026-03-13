@@ -1,4 +1,5 @@
 pub mod consolidation;
+pub mod embed_poll;
 mod indexing;
 mod maintenance;
 mod scan;
