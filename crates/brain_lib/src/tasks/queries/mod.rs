@@ -422,7 +422,7 @@ mod tests {
         create_task(&conn, "t3", "Blocked", 1);
         add_dep(&conn, "t3", "t1");
 
-        let (ready, blocked) = count_ready_blocked(&conn).unwrap();
+        let (ready, blocked) = count_ready_blocked(&conn, None).unwrap();
         assert_eq!(ready, 2);
         assert_eq!(blocked, 1);
     }
@@ -777,7 +777,7 @@ mod tests {
         create_child_task(&conn, "child1", "epic1", "Child 1", 2);
         create_child_task(&conn, "child2", "epic1", "Child 2", 2);
 
-        let (ready, blocked) = count_ready_blocked(&conn).unwrap();
+        let (ready, blocked) = count_ready_blocked(&conn, None).unwrap();
         // Only "blocker" is ready; epic1 + child1 + child2 are blocked
         assert_eq!(ready, 1, "only blocker should be ready");
         assert_eq!(blocked, 3, "epic + 2 children should be blocked");

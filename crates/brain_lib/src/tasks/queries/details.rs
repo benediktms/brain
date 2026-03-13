@@ -114,7 +114,8 @@ pub fn count_by_status(conn: &Connection) -> Result<StatusCounts> {
 }
 
 /// Count of ready and blocked tasks (for response metadata).
-pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
+pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<(usize, usize)> {
+    let (brain_clause, brain_params) = super::listing::brain_id_filter(brain_id);
     let ready_sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
          SELECT COUNT(*) FROM tasks t
@@ -127,10 +128,16 @@ pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
                WHERE d.task_id = t.task_id
                  AND dep.status NOT IN ('done', 'cancelled')
            )
-           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)"
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
+           {brain_clause}"
     );
-    let ready: i64 = conn.query_row(&ready_sql, [], |row| row.get(0))?;
+    let ready: i64 = conn.query_row(
+        &ready_sql,
+        rusqlite::params_from_iter(brain_params.iter()),
+        |row| row.get(0),
+    )?;
 
+    let (brain_clause, brain_params) = super::listing::brain_id_filter(brain_id);
     let blocked_sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
          SELECT COUNT(*) FROM tasks t
@@ -145,9 +152,14 @@ pub fn count_ready_blocked(conn: &Connection) -> Result<(usize, usize)> {
                      AND dep.status NOT IN ('done', 'cancelled')
                )
                OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
-           )"
+           )
+           {brain_clause}"
     );
-    let blocked: i64 = conn.query_row(&blocked_sql, [], |row| row.get(0))?;
+    let blocked: i64 = conn.query_row(
+        &blocked_sql,
+        rusqlite::params_from_iter(brain_params.iter()),
+        |row| row.get(0),
+    )?;
 
     Ok((ready as usize, blocked as usize))
 }

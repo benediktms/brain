@@ -9,7 +9,7 @@ use super::{ANCESTOR_BLOCKED_CTE, TASK_COLUMNS, TaskRow, row_to_task};
 /// Returns `(clause, params)` where `clause` is either `""` (all brains)
 /// or `" AND t.brain_id = ?"` / `" WHERE brain_id = ?"` depending on the
 /// `prefix` argument, and `params` is a `Vec<String>` with 0 or 1 element.
-fn brain_id_filter(brain_id: Option<&str>) -> (String, Vec<String>) {
+pub(super) fn brain_id_filter(brain_id: Option<&str>) -> (String, Vec<String>) {
     match brain_id {
         Some(id) if !id.is_empty() => (" AND t.brain_id = ?".to_string(), vec![id.to_string()]),
         _ => (String::new(), vec![]),
