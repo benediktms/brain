@@ -1,11 +1,91 @@
 use anyhow::Result;
 use serde_json::json;
+use tracing::debug;
 
 use brain_lib::tasks::events::*;
 
 use crate::markdown_table::MarkdownTable;
 
 use super::TaskCtx;
+
+/// Attempt a cross-brain label write via daemon IPC, returning `Ok(true)` if
+/// the daemon handled it, `Ok(false)` if the caller should fall back to direct
+/// SQLite access.
+fn try_ipc_label_event(
+    ctx: &TaskCtx,
+    target_brain: &str,
+    task_id: &str,
+    label: &str,
+    event_type: &str,
+    action_name: &str,
+) -> Result<bool> {
+    use brain_lib::ipc::sync_client::sync_tools_call;
+
+    match sync_tools_call(
+        "tasks_apply_event",
+        target_brain,
+        json!({
+            "event_type": event_type,
+            "task_id": task_id,
+            "payload": { "label": label }
+        }),
+    ) {
+        Ok(value) => {
+            if ctx.json {
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            } else {
+                println!("{action_name} label \"{label}\" on task {task_id} (via daemon)");
+            }
+            Ok(true)
+        }
+        Err(e) => {
+            debug!(error = %e, "daemon IPC unavailable, falling back to direct access");
+            Ok(false)
+        }
+    }
+}
+
+/// Attempt a cross-brain batch label operation via daemon IPC, returning
+/// `Ok(true)` if handled, `Ok(false)` for fallback.
+fn try_ipc_label_batch(
+    ctx: &TaskCtx,
+    target_brain: &str,
+    task_ids: &[String],
+    label: &str,
+    action: &str,
+) -> Result<bool> {
+    use brain_lib::ipc::sync_client::sync_tools_call;
+
+    match sync_tools_call(
+        "tasks_labels_batch",
+        target_brain,
+        json!({
+            "action": action,
+            "label": label,
+            "task_ids": task_ids
+        }),
+    ) {
+        Ok(value) => {
+            if ctx.json {
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            } else {
+                let succeeded = value
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|item| item.get("text"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("operation completed via daemon");
+                println!("{succeeded}");
+            }
+            Ok(true)
+        }
+        Err(e) => {
+            debug!(error = %e, "daemon IPC unavailable, falling back to direct access");
+            Ok(false)
+        }
+    }
+}
 
 // ── labels ──────────────────────────────────────────────────
 
@@ -47,6 +127,10 @@ pub fn labels(ctx: &TaskCtx) -> Result<()> {
 
 pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
     if let Some(target_brain) = brain {
+        if try_ipc_label_event(ctx, target_brain, task_id, label, "label_added", "Added")? {
+            return Ok(());
+        }
+        // Daemon unavailable — fall back to direct SQLite access.
         let (_name, _id, tasks, _records, _objects) =
             brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
@@ -83,6 +167,16 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
 
 pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
     if let Some(target_brain) = brain {
+        if try_ipc_label_event(
+            ctx,
+            target_brain,
+            task_id,
+            label,
+            "label_removed",
+            "Removed",
+        )? {
+            return Ok(());
+        }
         let (_name, _id, tasks, _records, _objects) =
             brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
@@ -179,6 +273,9 @@ pub fn label_batch_add(
     brain: Option<&str>,
 ) -> Result<()> {
     if let Some(target_brain) = brain {
+        if try_ipc_label_batch(ctx, target_brain, task_ids, label, "add")? {
+            return Ok(());
+        }
         let (_name, _id, tasks, _records, _objects) =
             brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
@@ -197,6 +294,9 @@ pub fn label_batch_remove(
     brain: Option<&str>,
 ) -> Result<()> {
     if let Some(target_brain) = brain {
+        if try_ipc_label_batch(ctx, target_brain, task_ids, label, "remove")? {
+            return Ok(());
+        }
         let (_name, _id, tasks, _records, _objects) =
             brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {

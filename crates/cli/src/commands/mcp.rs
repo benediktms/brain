@@ -10,11 +10,53 @@ use tracing::info;
 /// missing or LanceDB fails to open, the server still starts in tasks-only mode
 /// — task tools work, but memory/search tools return an error asking the user
 /// to set up the model.
-pub async fn run(model_dir: PathBuf, lance_db: PathBuf, sqlite_db: PathBuf) -> Result<()> {
+pub async fn run(
+    mut model_dir: PathBuf,
+    mut lance_db: PathBuf,
+    mut sqlite_db: PathBuf,
+) -> Result<()> {
     info!("starting MCP server");
+
+    // If resolve_defaults couldn't find a brain from cwd (paths still at
+    // relative defaults), fall back to the global config registry.
+    if !sqlite_db.is_absolute()
+        && let Some((name, resolved)) = resolve_from_registry()
+    {
+        info!(brain = %name, "resolved brain from global config (cwd fallback)");
+        model_dir = resolved.model_dir;
+        lance_db = resolved.lance_db;
+        sqlite_db = resolved.sqlite_db;
+    }
 
     let ctx = brain_lib::mcp::McpContext::bootstrap(&model_dir, &lance_db, &sqlite_db).await?;
     brain_lib::mcp::run_server(ctx).await?;
 
     Ok(())
+}
+
+/// Try to resolve brain paths from the global config registry.
+///
+/// First checks if cwd falls under any registered brain's roots.
+/// Falls back to the first brain alphabetically if no root matches.
+fn resolve_from_registry() -> Option<(String, brain_lib::config::ResolvedPaths)> {
+    let config = brain_lib::config::load_global_config().ok()?;
+    let cwd = std::env::current_dir().ok();
+
+    // Try to find a brain whose root contains the cwd.
+    if let Some(ref cwd) = cwd {
+        for (name, entry) in &config.brains {
+            if entry.roots.iter().any(|r| cwd.starts_with(r))
+                && let Ok(resolved) = brain_lib::config::resolve_paths_for_brain(name)
+            {
+                return Some((name.clone(), resolved));
+            }
+        }
+    }
+
+    // Fall back to first brain alphabetically.
+    let mut names: Vec<&String> = config.brains.keys().collect();
+    names.sort();
+    let name = names.first()?;
+    let resolved = brain_lib::config::resolve_paths_for_brain(name).ok()?;
+    Some(((*name).clone(), resolved))
 }

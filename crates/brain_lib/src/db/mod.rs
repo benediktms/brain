@@ -62,6 +62,8 @@ impl Db {
             let r = Connection::open_with_flags(path, read_flags)?;
             r.pragma_update(None, "query_only", "ON")
                 .map_err(|e| BrainCoreError::Database(format!("set query_only: {e}")))?;
+            r.pragma_update(None, "busy_timeout", "5000")
+                .map_err(|e| BrainCoreError::Database(format!("set busy_timeout: {e}")))?;
             readers.push(Mutex::new(r));
         }
 

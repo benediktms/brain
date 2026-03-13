@@ -304,7 +304,15 @@ impl TaskStore {
 
     /// Count of ready and blocked tasks.
     pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
-        self.db.with_read_conn(queries::count_ready_blocked)
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::count_ready_blocked(conn, filter)
+        })
     }
 
     /// Count tasks grouped by status.

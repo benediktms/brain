@@ -90,36 +90,48 @@ impl McpContext {
         .await
         .map_err(|e| crate::error::BrainCoreError::Database(format!("spawn_blocking: {e}")))??;
 
-        let tasks_dir = sqlite_db
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("tasks");
-        let tasks = TaskStore::new(&tasks_dir, db.clone())?;
-        // SQLite is the source of truth (B2) — no rebuild needed on open
-
-        let records_dir = sqlite_db
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("records");
-        let records = RecordStore::new(&records_dir, db.clone())?;
-        // SQLite is the source of truth (B2) — no rebuild needed on open
-
-        // Derive brain_home early so we can resolve the unified object store path.
+        // Derive brain_name and brain_id from sqlite_db path early so stores
+        // can be scoped correctly.
         // Convention: sqlite_db = $BRAIN_HOME/brains/<name>/brain.db
-        // So: brain_home = sqlite_db.parent().parent().parent()
-        let brain_data_dir_for_objects = sqlite_db.parent().unwrap_or(std::path::Path::new("."));
-        let brain_home_for_objects = brain_data_dir_for_objects
+        let brain_data_dir = sqlite_db.parent().unwrap_or(std::path::Path::new("."));
+        let brain_name = brain_data_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let brain_home = brain_data_dir
             .parent() // brains/
             .and_then(|p| p.parent()) // $BRAIN_HOME
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+        // Resolve brain_id from the global config registry so stores are
+        // scoped to this brain in multi-brain workspaces.
+        let brain_id = resolve_brain_entry(&brain_name)
+            .and_then(|(name, entry)| crate::config::resolve_brain_id(&entry, &name))
+            .unwrap_or_default();
+
+        let tasks_dir = brain_data_dir.join("tasks");
+        let tasks = if brain_id.is_empty() {
+            TaskStore::new(&tasks_dir, db.clone())?
+        } else {
+            TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id)?
+        };
+
+        let records_dir = brain_data_dir.join("records");
+        let records = if brain_id.is_empty() {
+            RecordStore::new(&records_dir, db.clone())?
+        } else {
+            RecordStore::with_brain_id(&records_dir, db.clone(), &brain_id)?
+        };
+
         // Use unified ~/.brain/objects/ when it exists; fall back to per-brain
         // path for pre-migration installations.
-        let unified_objects_dir = brain_home_for_objects.join("objects");
+        let unified_objects_dir = brain_home.join("objects");
         let objects_dir = if unified_objects_dir.exists() {
             unified_objects_dir
         } else {
-            brain_data_dir_for_objects.join("objects")
+            brain_data_dir.join("objects")
         };
         let objects = ObjectStore::new(&objects_dir)?;
 
@@ -135,26 +147,6 @@ impl McpContext {
             };
 
         let metrics = Arc::new(Metrics::new());
-
-        // Derive brain_home and brain_name from sqlite_db path.
-        // Convention: sqlite_db = $BRAIN_HOME/brains/<name>/brain.db
-        // So: brain_home = sqlite_db.parent().parent().parent()
-        //     brain_name  = sqlite_db.parent().parent().file_name()
-        let brain_data_dir = sqlite_db.parent().unwrap_or(std::path::Path::new("."));
-        let brain_name = brain_data_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let brain_home = brain_data_dir
-            .parent() // brains/
-            .and_then(|p| p.parent()) // $BRAIN_HOME
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-
-        // Derive brain_id: read from the TaskStore (populated by with_brain_id
-        // in workspace mode, empty in single-brain mode).
-        let brain_id = tasks.brain_id.clone();
 
         Ok(Arc::new(Self {
             db,
@@ -426,17 +418,56 @@ async fn handle_request(
                 DispatchMode::Daemon {
                     client, brain_name, ..
                 } => {
-                    // Forward to daemon via IPC. On IPC error, return an MCP
-                    // error result rather than panicking.
+                    // Forward to daemon via IPC. On connection-level errors,
+                    // attempt a single reconnect (handles daemon restart).
                     let mut guard = client.lock().await;
+                    let args_backup = arguments.clone();
                     match guard.tools_call(tool_name, brain_name, arguments).await {
                         Ok(value) => {
-                            // The daemon returns a ToolCallResult-shaped Value; wrap it.
                             return serialize_response(&JsonRpcResponse::new(id, value));
                         }
                         Err(e) => {
-                            error!(error = %e, tool = tool_name, "IPC dispatch failed");
-                            protocol::ToolCallResult::error(format!("daemon error: {e}"))
+                            use crate::ipc::client::IpcClientError;
+                            let is_connection_error = matches!(
+                                &e,
+                                IpcClientError::Io(_)
+                                    | IpcClientError::Protocol(_)
+                                    | IpcClientError::DaemonUnavailable { .. }
+                            );
+                            if is_connection_error {
+                                warn!(error = %e, "IPC connection lost, attempting reconnect");
+                                match IpcClient::connect(&IpcClient::default_socket_path()).await {
+                                    Ok(new_client) => {
+                                        *guard = new_client;
+                                        match guard
+                                            .tools_call(tool_name, brain_name, args_backup)
+                                            .await
+                                        {
+                                            Ok(value) => {
+                                                info!("IPC reconnect succeeded");
+                                                return serialize_response(&JsonRpcResponse::new(
+                                                    id, value,
+                                                ));
+                                            }
+                                            Err(retry_err) => {
+                                                error!(error = %retry_err, tool = tool_name, "IPC retry after reconnect failed");
+                                                protocol::ToolCallResult::error(format!(
+                                                    "daemon error after reconnect: {retry_err}"
+                                                ))
+                                            }
+                                        }
+                                    }
+                                    Err(reconnect_err) => {
+                                        error!(error = %reconnect_err, "IPC reconnect failed");
+                                        protocol::ToolCallResult::error(format!(
+                                            "daemon error: {e} (reconnect failed: {reconnect_err})"
+                                        ))
+                                    }
+                                }
+                            } else {
+                                error!(error = %e, tool = tool_name, "IPC dispatch failed");
+                                protocol::ToolCallResult::error(format!("daemon error: {e}"))
+                            }
                         }
                     }
                 }
