@@ -117,6 +117,13 @@ impl Db {
         f(&conn)
     }
 
+    /// Ensure a brain is registered in the `brains` table (idempotent).
+    ///
+    /// Must be called before writing tasks/records with FK-constrained `brain_id`.
+    pub fn ensure_brain_registered(&self, brain_id: &str, brain_name: &str) -> Result<()> {
+        self.with_write_conn(|conn| schema::ensure_brain_registered(conn, brain_id, brain_name))
+    }
+
     /// Flush the WAL file to the main database and truncate it.
     ///
     /// This ensures all committed transactions are persisted to the main

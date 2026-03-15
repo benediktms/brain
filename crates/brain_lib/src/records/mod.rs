@@ -402,6 +402,10 @@ impl RecordStore {
     /// Create a new `RecordStore` with an explicit brain_id scope.
     pub fn with_brain_id(records_dir: &std::path::Path, db: Db, brain_id: &str) -> Result<Self> {
         std::fs::create_dir_all(records_dir)?;
+        // Ensure the brain is registered — FK on brain_id requires it.
+        if !brain_id.is_empty() {
+            db.ensure_brain_registered(brain_id, brain_id)?;
+        }
         Ok(Self {
             events_path: records_dir.join("events.jsonl"),
             db,

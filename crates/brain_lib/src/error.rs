@@ -23,6 +23,9 @@ pub enum BrainCoreError {
     #[error("schema version error: {0}")]
     SchemaVersion(String),
 
+    #[error("migration error: {0}")]
+    Migration(String),
+
     #[error("task event error: {0}")]
     TaskEvent(String),
 
