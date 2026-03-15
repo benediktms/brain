@@ -17,7 +17,7 @@ use super::migrations::{
     migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
     migrate_v10_to_v11, migrate_v11_to_v12, migrate_v12_to_v13, migrate_v13_to_v14,
     migrate_v14_to_v15, migrate_v15_to_v16, migrate_v16_to_v17, migrate_v17_to_v18,
-    migrate_v18_to_v19, migrate_v19_to_v20, migrate_v20_to_v21,
+    migrate_v18_to_v19, migrate_v19_to_v20, migrate_v20_to_v21, migrate_v21_to_v22,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -55,6 +55,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             18 => migrate_v18_to_v19(&conn).unwrap(),
             19 => migrate_v19_to_v20(&conn).unwrap(),
             20 => migrate_v20_to_v21(&conn).unwrap(),
+            21 => migrate_v21_to_v22(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -159,6 +160,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "record_links",
     "record_events",
     "brains",
+    "jobs",
 ];
 
 /// All named indexes that must exist at the current schema version.
@@ -179,6 +181,9 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_tasks_brain_priority",
     "idx_records_brain",
     "idx_records_brain_status",
+    "idx_jobs_poll",
+    "idx_jobs_brain_status",
+    "idx_jobs_dedup",
 ];
 
 /// FTS5 triggers that must exist.
