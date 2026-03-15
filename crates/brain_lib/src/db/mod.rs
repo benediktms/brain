@@ -1,6 +1,7 @@
 pub mod chunks;
 pub mod files;
 pub mod fts;
+pub mod jobs;
 pub mod links;
 pub mod meta;
 #[cfg(test)]

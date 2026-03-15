@@ -192,6 +192,10 @@ pub async fn run(
                 }
             }
             _ = embed_poll_interval.tick() => {
+                // Reap stuck jobs (crash recovery) before claiming new ones
+                if let Err(e) = pipeline.db().reap_stuck_jobs(300) {
+                    warn!(error = %e, "reap_stuck_jobs failed");
+                }
                 let n_tasks = embed_poll::poll_stale_tasks(
                     pipeline.db(),
                     pipeline.store(),
@@ -579,6 +583,10 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = embed_poll_interval.tick() => {
                 for instance in brains.values() {
+                    // Reap stuck jobs (crash recovery) before claiming new ones
+                    if let Err(e) = instance.pipeline.db().reap_stuck_jobs(300) {
+                        warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
+                    }
                     let brain_id = &instance.mcp_context.brain_id;
                     let n_tasks = embed_poll::poll_stale_tasks(
                         &instance.mcp_context.unified_db,
