@@ -646,6 +646,7 @@ dependencies = [
  "arrow-schema",
  "base64 0.22.1",
  "blake3",
+ "brain-persistence",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -673,6 +674,29 @@ dependencies = [
  "ulid",
  "walkdir",
  "zstd",
+]
+
+[[package]]
+name = "brain-persistence"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "arrow-array",
+ "arrow-schema",
+ "blake3",
+ "chrono",
+ "futures",
+ "lancedb",
+ "parking_lot",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

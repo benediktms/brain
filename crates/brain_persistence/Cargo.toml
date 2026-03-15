@@ -1,0 +1,29 @@
+[package]
+name = "brain-persistence"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+# SQLite control plane
+rusqlite = { workspace = true }
+blake3 = { workspace = true }
+ulid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+# Vector storage (drives arrow version — lancedb 0.26 uses arrow 57)
+lancedb = "0.26"
+arrow-schema = "57"
+arrow-array = "57"
+futures = "0.3"
+parking_lot = "0.12"
+regex = "1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3"
+rusqlite = { workspace = true }

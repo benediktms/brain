@@ -11,7 +11,7 @@ use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-pub(crate) const SCHEMA_VERSION: i32 = 22;
+pub const SCHEMA_VERSION: i32 = 22;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -98,7 +98,7 @@ pub fn ensure_brain_registered(conn: &Connection, brain_id: &str, brain_name: &s
 ///
 /// Called on every `init_schema` open, outside the migration transaction,
 /// because FTS5 DDL has SQLite transaction limitations.
-pub(crate) fn ensure_fts5(conn: &Connection) -> Result<()> {
+pub fn ensure_fts5(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
             content,
