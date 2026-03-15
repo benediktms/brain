@@ -14,6 +14,7 @@ pub mod metrics;
 pub use brain_persistence::pagerank;
 pub mod parser;
 pub mod pipeline;
+pub mod ports;
 pub mod query_pipeline;
 pub mod ranking;
 pub mod records;
