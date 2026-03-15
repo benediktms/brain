@@ -20,7 +20,9 @@ use crate::db::fts::FtsResult;
 use crate::error::Result;
 use crate::store::QueryResult;
 
-use super::{ChunkIndexWriter, ChunkMetaReader, ChunkSearcher, FileMetaReader, FtsSearcher, SchemaMeta};
+use super::{
+    ChunkIndexWriter, ChunkMetaReader, ChunkSearcher, FileMetaReader, FtsSearcher, SchemaMeta,
+};
 
 // ---------------------------------------------------------------------------
 // MockChunkIndexWriter
