@@ -5,11 +5,15 @@ use tracing::{info, instrument, warn};
 
 use crate::db::files;
 use crate::doctor::{CheckStatus, DoctorReport};
+use crate::ports::{ChunkIndexWriter, SchemaMeta};
 use crate::scanner::scan_brain;
 
 use super::{IndexPipeline, VacuumStats};
 
-impl IndexPipeline {
+impl<S> IndexPipeline<S>
+where
+    S: ChunkIndexWriter + SchemaMeta + Send + Sync,
+{
     /// Delete a file from the index (soft-delete in SQLite, hard-delete in LanceDB).
     pub async fn delete_file(&self, path: &Path) -> crate::error::Result<bool> {
         let path_str = path.to_string_lossy().to_string();
@@ -81,7 +85,7 @@ impl IndexPipeline {
         info!("SQLite VACUUM complete");
 
         // 4. LanceDB optimize
-        self.store.optimizer().force_optimize().await;
+        self.store.force_optimize().await;
         info!("LanceDB optimize complete");
 
         Ok(VacuumStats {

@@ -13,6 +13,7 @@ use crate::db::Db;
 use crate::db::meta;
 use crate::embedder::{Embed, Embedder};
 use crate::metrics::Metrics;
+use crate::ports::{ChunkIndexWriter, SchemaMeta};
 use crate::store::Store;
 use crate::summarizer::Summarize;
 
@@ -32,10 +33,24 @@ pub struct VacuumStats {
     pub purged_files: usize,
 }
 
-/// Orchestrates Db + Store + Embedder for incremental indexing.
-pub struct IndexPipeline {
+/// Orchestrates Db + LanceDB store + Embedder for incremental indexing.
+///
+/// The `S` type parameter is the LanceDB store implementation, which must
+/// implement [`ChunkIndexWriter`] and [`SchemaMeta`]. It defaults to
+/// [`Store`] for production use. Tests may substitute any type that
+/// implements these traits without opening real LanceDB storage.
+///
+/// The `db` field retains the concrete [`Db`] type because the sub-modules
+/// call raw SQLite helpers (`with_read_conn` / `with_write_conn`) that are
+/// not (yet) covered by a persistence port trait.
+pub struct IndexPipeline<S = Store>
+where
+    S: ChunkIndexWriter + SchemaMeta + Send + Sync,
+{
+    /// SQLite database — retains concrete type for raw SQL helpers.
     pub(crate) db: Db,
-    pub(crate) store: Store,
+    /// LanceDB store — abstracted via port traits; defaults to [`Store`].
+    pub(crate) store: S,
     pub(crate) embedder: Arc<dyn Embed>,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) summarizer: Option<Arc<dyn Summarize>>,
@@ -47,7 +62,10 @@ pub struct IndexPipeline {
 /// - **No stored version** (first run): just stamp, no rebuild needed.
 /// - **Stored but wrong/unparseable**: full rebuild + clear content hashes + stamp.
 /// - **Matches**: skip rebuild, but warn if the live schema diverges (safety net).
-pub async fn ensure_schema_version(db: &Db, store: &mut Store) -> crate::error::Result<()> {
+pub async fn ensure_schema_version(
+    db: &Db,
+    store: &mut impl SchemaMeta,
+) -> crate::error::Result<()> {
     let expected = crate::store::LANCE_SCHEMA_VERSION;
 
     let raw: Option<String> =
@@ -98,7 +116,7 @@ pub async fn ensure_schema_version(db: &Db, store: &mut Store) -> crate::error::
     Ok(())
 }
 
-impl IndexPipeline {
+impl IndexPipeline<Store> {
     /// Create a new pipeline, opening SQLite, LanceDB, and loading the embedder.
     pub async fn new(
         model_dir: &Path,
@@ -152,19 +170,44 @@ impl IndexPipeline {
             summarizer: None,
         })
     }
+}
+
+impl<S> IndexPipeline<S>
+where
+    S: ChunkIndexWriter + SchemaMeta + Send + Sync,
+{
+    /// Create a pipeline with a custom store implementing the persistence port
+    /// traits. The schema version check is performed on `store`.
+    ///
+    /// Use this constructor to inject test doubles without opening real storage.
+    pub async fn with_store(
+        db: Db,
+        mut store: S,
+        embedder: Arc<dyn Embed>,
+    ) -> crate::error::Result<Self> {
+        ensure_schema_version(&db, &mut store).await?;
+
+        Ok(Self {
+            db,
+            store,
+            embedder,
+            metrics: Arc::new(Metrics::new()),
+            summarizer: None,
+        })
+    }
 
     /// Get a reference to the SQLite database.
     pub fn db(&self) -> &Db {
         &self.db
     }
 
-    /// Get a reference to the LanceDB store.
-    pub fn store(&self) -> &Store {
+    /// Get a reference to the LanceDB store (as the concrete type `S`).
+    pub fn store(&self) -> &S {
         &self.store
     }
 
     /// Get a mutable reference to the LanceDB store.
-    pub fn store_mut(&mut self) -> &mut Store {
+    pub fn store_mut(&mut self) -> &mut S {
         &mut self.store
     }
 

@@ -18,6 +18,7 @@ use crate::db::summaries::{SummaryRow, get_ml_summaries_for_chunks, list_episode
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
+use crate::ports::ChunkSearcher;
 use crate::ranking::{
     CandidateSignals, FusionConfidence, RerankCandidate, Reranker, RerankerPolicy, Weights,
     compute_fusion_confidence, rank_candidates, resolve_intent,
@@ -38,19 +39,35 @@ pub struct ReflectResult {
 }
 
 /// Orchestrates the read-path: hybrid search, expand, and reflect.
-pub struct QueryPipeline<'a> {
+///
+/// The `S` type parameter is the LanceDB store implementation, which must
+/// implement [`ChunkSearcher`]. It defaults to [`StoreReader`] for production
+/// use. Tests may substitute any type that implements `ChunkSearcher` without
+/// opening real LanceDB storage.
+///
+/// The `db` field retains the concrete [`Db`] type because several methods
+/// call raw SQLite helpers (`with_read_conn`) not yet covered by a port trait.
+pub struct QueryPipeline<'a, S = StoreReader>
+where
+    S: ChunkSearcher + Send + Sync,
+{
+    /// SQLite database — retains concrete type for raw SQL helpers.
     db: &'a Db,
-    store: &'a StoreReader,
+    /// LanceDB store — abstracted via [`ChunkSearcher`]; defaults to [`StoreReader`].
+    store: &'a S,
     embedder: &'a Arc<dyn Embed>,
     metrics: &'a Arc<Metrics>,
     reranker: Option<&'a dyn Reranker>,
     reranker_policy: RerankerPolicy,
 }
 
-impl<'a> QueryPipeline<'a> {
+impl<'a, S> QueryPipeline<'a, S>
+where
+    S: ChunkSearcher + Send + Sync,
+{
     pub fn new(
         db: &'a Db,
-        store: &'a StoreReader,
+        store: &'a S,
         embedder: &'a Arc<dyn Embed>,
         metrics: &'a Arc<Metrics>,
     ) -> Self {
@@ -69,7 +86,10 @@ impl<'a> QueryPipeline<'a> {
     /// When attached, the pipeline computes fusion confidence after hybrid
     /// retrieval and conditionally invokes the reranker on the top-N fused
     /// candidates when confidence is below the policy threshold.
-    pub fn with_reranker(mut self, reranker: &'a dyn Reranker, policy: RerankerPolicy) -> Self {
+    pub fn with_reranker(mut self, reranker: &'a dyn Reranker, policy: RerankerPolicy) -> Self
+    where
+        Self: Sized,
+    {
         self.reranker = Some(reranker);
         self.reranker_policy = policy;
         self
@@ -353,7 +373,11 @@ impl<'a> QueryPipeline<'a> {
 ///
 /// Task/record metadata queries use the single shared SQLite `db` (with
 /// brain_id scoping where applicable). Vector search fans out concurrently
-/// to each brain's per-brain LanceDB `StoreReader`.
+/// to each brain's per-brain LanceDB store.
+///
+/// The `S` type parameter is the store implementation for each brain, which
+/// must implement [`ChunkSearcher`]. It defaults to [`StoreReader`] for
+/// production use. Tests may substitute any type implementing `ChunkSearcher`.
 ///
 /// Construct via the builder or directly:
 /// ```ignore
@@ -367,21 +391,27 @@ impl<'a> QueryPipeline<'a> {
 ///     metrics: &metrics,
 /// };
 /// ```
-pub struct FederatedPipeline<'a> {
+pub struct FederatedPipeline<'a, S = StoreReader>
+where
+    S: ChunkSearcher + Send + Sync,
+{
     /// Shared unified SQLite database (covers all brains for task/record data).
     pub db: &'a crate::db::Db,
-    /// Per-brain entries: `(brain_name, store_reader)`.
+    /// Per-brain entries: `(brain_name, store)`.
     ///
-    /// `store_reader` is `None` when the brain's LanceDB has not yet been
+    /// `store` is `None` when the brain's LanceDB has not yet been
     /// initialised — that brain is skipped for vector search with a warning.
-    pub brains: Vec<(String, Option<StoreReader>)>,
+    pub brains: Vec<(String, Option<S>)>,
     /// Shared embedder — query is embedded once, used across all brains.
     pub embedder: &'a Arc<dyn crate::embedder::Embed>,
     /// Shared metrics handle.
     pub metrics: &'a Arc<crate::metrics::Metrics>,
 }
 
-impl<'a> FederatedPipeline<'a> {
+impl<'a, S> FederatedPipeline<'a, S>
+where
+    S: ChunkSearcher + Send + Sync,
+{
     /// Search across all configured brains.
     ///
     /// The query is embedded once. Vector search fans out concurrently to

@@ -10,6 +10,7 @@ use crate::db::links::replace_links;
 use crate::hash_gate::HashGate;
 use crate::links::{Link, extract_links};
 use crate::parser::parse_document;
+use crate::ports::{ChunkIndexWriter, SchemaMeta};
 use crate::utils::now_ts;
 
 use super::{IndexPipeline, ScanStats};
@@ -54,7 +55,10 @@ fn chunks_match_stored(chunks: &[Chunk], stored_hashes: &[String]) -> bool {
             .all(|(c, stored)| c.chunk_hash == *stored)
 }
 
-impl IndexPipeline {
+impl<S> IndexPipeline<S>
+where
+    S: ChunkIndexWriter + SchemaMeta + Send + Sync,
+{
     /// Index a single file. Returns true if it was actually re-indexed (not skipped).
     #[instrument(skip(self))]
     pub async fn index_file(&self, path: &Path) -> crate::error::Result<bool> {

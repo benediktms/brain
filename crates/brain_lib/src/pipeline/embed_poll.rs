@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::db::Db;
 use crate::embedder::{Embed, embed_batch_async};
-use crate::store::Store;
+use crate::ports::ChunkIndexWriter;
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule, store_task_capsule};
 use crate::tasks::queries::get_labels_for_tasks;
 
@@ -32,7 +32,7 @@ use crate::tasks::queries::get_labels_for_tasks;
 /// single-brain mode.
 pub async fn poll_stale_tasks(
     db: &Db,
-    store: &Store,
+    store: &impl ChunkIndexWriter,
     embedder: &Arc<dyn Embed>,
     brain_id: &str,
 ) -> usize {
@@ -260,7 +260,11 @@ fn mark_tasks_embedded(conn: &rusqlite::Connection, task_ids: &[&str]) -> crate:
 /// as embedded in SQLite.
 ///
 /// Returns the number of chunks successfully embedded.
-pub async fn poll_stale_chunks(db: &Db, store: &Store, embedder: &Arc<dyn Embed>) -> usize {
+pub async fn poll_stale_chunks(
+    db: &Db,
+    store: &impl ChunkIndexWriter,
+    embedder: &Arc<dyn Embed>,
+) -> usize {
     debug!("embed_poll: scanning stale chunks");
 
     #[derive(Debug)]
@@ -392,7 +396,11 @@ pub async fn poll_stale_chunks(db: &Db, store: &Store, embedder: &Arc<dyn Embed>
 /// In single-brain mode, both point to the same database.
 ///
 /// Returns `true` if a reset occurred (LanceDB was missing/inaccessible).
-pub async fn self_heal_if_lance_missing(db: &Db, unified_db: &Db, store: &Store) -> bool {
+pub async fn self_heal_if_lance_missing(
+    db: &Db,
+    unified_db: &Db,
+    store: &impl crate::ports::SchemaMeta,
+) -> bool {
     // Use schema() as a lightweight accessibility probe — it sends a trivial
     // request to the underlying table handle.
     if store.current_schema_matches_expected().await {

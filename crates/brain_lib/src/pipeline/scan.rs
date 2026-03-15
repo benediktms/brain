@@ -4,11 +4,15 @@ use tracing::{info, instrument, warn};
 
 use crate::chunker::CHUNKER_VERSION;
 use crate::db::files;
+use crate::ports::{ChunkIndexWriter, SchemaMeta};
 use crate::scanner::scan_brain;
 
 use super::IndexPipeline;
 
-impl IndexPipeline {
+impl<S> IndexPipeline<S>
+where
+    S: ChunkIndexWriter + SchemaMeta + Send + Sync,
+{
     /// Full scan: index all files, detect deletions, recover stuck states.
     #[instrument(skip(self))]
     pub async fn full_scan(&self, dirs: &[PathBuf]) -> crate::error::Result<super::ScanStats> {
@@ -105,7 +109,7 @@ impl IndexPipeline {
         info!(cleared, "cleared all content hashes for full reindex");
 
         let stats = self.full_scan(dirs).await?;
-        self.store.optimizer().force_optimize().await;
+        self.store.force_optimize().await;
 
         info!(
             indexed = stats.indexed,
