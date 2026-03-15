@@ -257,6 +257,12 @@ impl BrainStores {
         brain_data_dir: &Path,
         brain_home: PathBuf,
     ) -> Result<Self> {
+        // Ensure the brain is registered in both DBs before any writes.
+        // The FK constraint on brain_id (v22) requires the brain to exist upfront.
+        if !brain_id.is_empty() {
+            per_brain.ensure_brain_registered(&brain_id, &brain_name)?;
+            unified.ensure_brain_registered(&brain_id, &brain_name)?;
+        }
         let tasks_dir = brain_data_dir.join("tasks");
         let tasks = if brain_id.is_empty() {
             TaskStore::new(&tasks_dir, unified.clone())?

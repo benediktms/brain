@@ -439,16 +439,30 @@ impl<'a> FederatedPipeline<'a> {
         // ── 2. Fan out and collect ────────────────────────────────────────────
         let all_results: Vec<BrainResult> = join_all(futs).await;
 
-        // ── 3. Merge: pair each RankedResult with its source brain name ───────
+        // ── 3. Merge: deduplicate by chunk_id, keep highest score ────────────
+        //
+        // Every brain runs FTS against the same shared DB, so the same chunks
+        // can appear in multiple brains' results. We deduplicate by chunk_id,
+        // keeping the entry with the highest hybrid_score. The brain
+        // attribution goes to whichever brain produced the best score for
+        // that chunk (typically the brain whose vector store actually
+        // contains the chunk).
         let mut chunk_brain: HashMap<String, String> = HashMap::new();
-        let mut merged: Vec<crate::ranking::RankedResult> = Vec::new();
+        let mut best_by_chunk: HashMap<String, crate::ranking::RankedResult> = HashMap::new();
 
         for (brain_name, ranked) in all_results {
             for result in ranked {
-                chunk_brain.insert(result.chunk_id.clone(), brain_name.clone());
-                merged.push(result);
+                let dominated = best_by_chunk
+                    .get(&result.chunk_id)
+                    .is_some_and(|existing| existing.hybrid_score >= result.hybrid_score);
+                if !dominated {
+                    chunk_brain.insert(result.chunk_id.clone(), brain_name.clone());
+                    best_by_chunk.insert(result.chunk_id.clone(), result);
+                }
             }
         }
+
+        let mut merged: Vec<crate::ranking::RankedResult> = best_by_chunk.into_values().collect();
 
         // ── 4. Sort by hybrid_score descending ────────────────────────────────
         merged.sort_by(|a, b| {

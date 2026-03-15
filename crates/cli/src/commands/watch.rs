@@ -811,13 +811,6 @@ async fn init_brain_instance(
         }
     }
 
-    // Backfill brain_id on per-brain legacy rows that pre-date brain_id scoping.
-    // The unified DB is already backfilled by the workspace migration.
-    if !brain_id.is_empty() {
-        McpContext::backfill_brain_id(pipeline.db(), brain_id)
-            .map_err(|e| anyhow::anyhow!("backfill_brain_id failed: {e}"))?;
-    }
-
     let last_event_ts = Arc::new(AtomicU64::new(0));
     let consolidator = ConsolidationScheduler::new(last_event_ts);
 

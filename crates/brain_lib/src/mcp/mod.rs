@@ -110,12 +110,6 @@ impl McpContext {
         .await
         .map_err(|e| crate::error::BrainCoreError::Database(format!("spawn_blocking: {e}")))??;
 
-        if !stores.brain_id.is_empty() {
-            // Backfill only the per-brain DB (for indexing tables).
-            // The unified DB is already backfilled by the workspace migration.
-            Self::backfill_brain_id(stores.per_brain_db(), &stores.brain_id)?;
-        }
-
         // Step 2: optionally load LanceDB + embedder. Failures are logged and
         // result in tasks-only mode — no hard error.
         let (writable_store, store, embedder) =
@@ -181,57 +175,6 @@ impl McpContext {
             brain_home,
             brain_name,
             brain_id,
-        })
-    }
-
-    /// Backfill brain_id on rows where brain_id = '' in tasks, records, and record_events.
-    ///
-    /// Called during startup to self-heal databases migrated before brain_id scoping
-    /// was enforced. Safe to call multiple times (idempotent).
-    ///
-    /// Returns the total number of rows updated across all tables.
-    pub fn backfill_brain_id(db: &Db, brain_id: &str) -> crate::error::Result<usize> {
-        db.with_write_conn(|conn| {
-            let tasks_updated = conn.execute(
-                "UPDATE tasks SET brain_id = ?1 WHERE brain_id = ''",
-                rusqlite::params![brain_id],
-            )?;
-
-            let records_updated = conn.execute(
-                "UPDATE records SET brain_id = ?1 WHERE brain_id = ''",
-                rusqlite::params![brain_id],
-            )?;
-
-            // record_events gained brain_id in v18; guard against older partial schemas.
-            let has_record_events_brain_id: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM pragma_table_info('record_events') WHERE name = 'brain_id'",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(0)
-                > 0;
-
-            let record_events_updated = if has_record_events_brain_id {
-                conn.execute(
-                    "UPDATE record_events SET brain_id = ?1 WHERE brain_id = ''",
-                    rusqlite::params![brain_id],
-                )?
-            } else {
-                0
-            };
-
-            let total = tasks_updated + records_updated + record_events_updated;
-            if total > 0 {
-                info!(
-                    brain_id,
-                    tasks = tasks_updated,
-                    records = records_updated,
-                    record_events = record_events_updated,
-                    "backfilled brain_id on legacy rows"
-                );
-            }
-            Ok(total)
         })
     }
 
@@ -729,122 +672,6 @@ mod tests {
     async fn test_notification_no_response() {
         let resp = call("notifications/initialized", json!({})).await;
         assert!(resp.is_empty());
-    }
-
-    #[test]
-    fn test_backfill_brain_id_stamps_empty_rows() {
-        let db = Db::open_in_memory().expect("open_in_memory");
-
-        // Insert rows with empty brain_id into tasks, records, and record_events.
-        db.with_write_conn(|conn| {
-            conn.execute_batch(
-                "INSERT INTO tasks (task_id, title, status, priority, task_type, created_at, updated_at)
-                 VALUES ('t1', 'Task One', 'open', 4, 'task', 0, 0);
-                 INSERT INTO records (record_id, title, kind, content_hash, content_size, actor, created_at, updated_at)
-                 VALUES ('r1', 'Rec One', 'snapshot', 'abc', 10, 'agent', 0, 0);
-                 INSERT INTO record_events (event_id, record_id, event_type, timestamp, actor, payload)
-                 VALUES ('e1', 'r1', 'created', 0, 'agent', '{}');"
-            ).map_err(Into::into)
-        })
-        .expect("seed data");
-
-        let total = McpContext::backfill_brain_id(&db, "brain-abc").expect("backfill");
-        assert_eq!(
-            total, 3,
-            "expected 3 rows updated (tasks + records + record_events)"
-        );
-
-        db.with_write_conn(|conn| {
-            let t_id: String = conn
-                .query_row("SELECT brain_id FROM tasks WHERE task_id = 't1'", [], |r| {
-                    r.get(0)
-                })
-                .map_err(crate::error::BrainCoreError::from)?;
-            assert_eq!(t_id, "brain-abc");
-
-            let r_id: String = conn
-                .query_row(
-                    "SELECT brain_id FROM records WHERE record_id = 'r1'",
-                    [],
-                    |r| r.get(0),
-                )
-                .map_err(crate::error::BrainCoreError::from)?;
-            assert_eq!(r_id, "brain-abc");
-
-            let e_id: String = conn
-                .query_row(
-                    "SELECT brain_id FROM record_events WHERE event_id = 'e1'",
-                    [],
-                    |r| r.get(0),
-                )
-                .map_err(crate::error::BrainCoreError::from)?;
-            assert_eq!(e_id, "brain-abc");
-
-            Ok(())
-        })
-        .expect("verify");
-    }
-
-    #[test]
-    fn test_backfill_brain_id_idempotent() {
-        let db = Db::open_in_memory().expect("open_in_memory");
-
-        db.with_write_conn(|conn| {
-            conn.execute_batch(
-                "INSERT INTO tasks (task_id, title, status, priority, task_type, created_at, updated_at)
-                 VALUES ('t1', 'Task One', 'open', 4, 'task', 0, 0);"
-            ).map_err(Into::into)
-        })
-        .expect("seed data");
-
-        let first = McpContext::backfill_brain_id(&db, "brain-xyz").expect("first backfill");
-        assert_eq!(first, 1);
-
-        let second = McpContext::backfill_brain_id(&db, "brain-xyz").expect("second backfill");
-        assert_eq!(
-            second, 0,
-            "second call must update 0 rows (already stamped)"
-        );
-    }
-
-    #[test]
-    fn test_backfill_brain_id_skips_already_stamped_rows() {
-        let db = Db::open_in_memory().expect("open_in_memory");
-
-        db.with_write_conn(|conn| {
-            conn.execute_batch(
-                "INSERT INTO tasks (task_id, title, status, priority, task_type, created_at, updated_at, brain_id)
-                 VALUES ('t1', 'Task One', 'open', 4, 'task', 0, 0, 'other-brain');
-                 INSERT INTO tasks (task_id, title, status, priority, task_type, created_at, updated_at)
-                 VALUES ('t2', 'Task Two', 'open', 4, 'task', 0, 0);"
-            ).map_err(Into::into)
-        })
-        .expect("seed data");
-
-        let total = McpContext::backfill_brain_id(&db, "brain-abc").expect("backfill");
-        assert_eq!(total, 1, "only the empty-brain_id row should be updated");
-
-        db.with_write_conn(|conn| {
-            let t1_id: String = conn
-                .query_row("SELECT brain_id FROM tasks WHERE task_id = 't1'", [], |r| {
-                    r.get(0)
-                })
-                .map_err(crate::error::BrainCoreError::from)?;
-            assert_eq!(
-                t1_id, "other-brain",
-                "pre-stamped row must not be overwritten"
-            );
-
-            let t2_id: String = conn
-                .query_row("SELECT brain_id FROM tasks WHERE task_id = 't2'", [], |r| {
-                    r.get(0)
-                })
-                .map_err(crate::error::BrainCoreError::from)?;
-            assert_eq!(t2_id, "brain-abc");
-
-            Ok(())
-        })
-        .expect("verify");
     }
 
     // --- resolve_brain_from_roots ---
