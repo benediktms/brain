@@ -109,9 +109,17 @@ Map the six hybrid signals to record equivalents:
 | Vector similarity | dot product | Same — shared embedding space |
 | BM25 keyword | `fts_chunks` score | `fts_records` score |
 | Recency | `exp(-age/tau)` on chunk timestamp | Same formula on `records.created_at` |
-| Link density | backlink count from `links` table | Count from `record_links` table |
+| PageRank | Pre-normalized score from `files` table | **Open question — see below** |
 | Tag match | Jaccard on chunk tags | Jaccard on `record_tags` |
 | Importance | Per-chunk importance score | Default 1.0, or derive from `retention_class` (permanent=1.0, standard=0.7, ephemeral=0.4) |
+
+> **Note:** The existing signal #4 is `pagerank_score` — a pre-computed, pre-normalized PageRank score sourced from the `files` table (`ranking.rs:122`). It is NOT a backlink count or log-scaled link density. Records are not files and have no PageRank score. Options:
+>
+> 1. **Default to 0.0** — Records get no PageRank boost. Simple, conservative. The other 5 signals carry the load.
+> 2. **Derive from `record_links` count** — Compute a normalized link score from `record_links` (e.g. `min(link_count / 5.0, 1.0)`). Conceptually similar but different from the file-level PageRank.
+> 3. **Extend PageRank to a cross-entity graph** — Include records as nodes in the PageRank computation alongside files. Most accurate but highest implementation cost.
+>
+> Recommendation: Start with option 1 (default 0.0) and revisit after measuring retrieval quality. The PageRank signal's weight is typically low relative to vector similarity and BM25.
 
 The scoring formula itself (`ranking.rs`) doesn't change — it operates on `CandidateSignals` which is source-agnostic.
 
@@ -165,7 +173,7 @@ When `expand` receives a `rec:` prefixed ID, fetch from the object store instead
 
 ## Migration & Rollout
 
-- **Schema migration:** v22 adds `fts_records` table and triggers.
+- **Schema migration:** Adds `fts_records` table and triggers. Note: the [Episodic Memory Foundation](./episodic-memory.md) plan also targets v22 (adding `brain_id` to summaries + `fts_summaries`). Whichever ships first claims v22; the other becomes v23. If episodic ships first (as the roadmap sequences), this plan's migration is v23.
 - **Backfill:** Run automatically on first startup after migration (or via explicit CLI command for large stores).
 - **No breaking changes:** `memory.search_minimal` response format gains a new `kind` value but is otherwise backward-compatible. Existing callers won't break.
 
@@ -179,7 +187,7 @@ When `expand` receives a `rec:` prefixed ID, fetch from the object store instead
 
 | File | Change |
 |------|--------|
-| `crates/brain_lib/src/db/schema.rs` | Migration v22: `fts_records` table + triggers |
+| `crates/brain_lib/src/db/schema.rs` | Migration (v22 or v23, see Migration & Rollout): `fts_records` table + triggers |
 | `crates/brain_lib/src/db/fts.rs` | FTS5 query function for records |
 | `crates/brain_lib/src/records/indexing.rs` | **New** — embed + index record content |
 | `crates/brain_lib/src/records/mod.rs` | Call indexing on create/update |

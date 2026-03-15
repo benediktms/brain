@@ -160,7 +160,7 @@ The episodic memory system is **partially implemented**. The storage primitives 
   - Vector similarity: same (shared embedding space)
   - BM25: from `fts_summaries`
   - Recency: `exp(-age/tau)` on `created_at`
-  - Links: count from `reflection_sources` (reflections that cite this episode, or sources of a reflection)
+  - PageRank: defaults to 0.0 for summaries (the existing signal is a pre-normalized PageRank from the `files` table — summaries are not files). See `semantic-search-records.md` §2d for a discussion of options.
   - Tag match: Jaccard on `tags`
   - Importance: stored value
 - Add `"episode"` and `"reflection"` as stub kinds in retrieval results
@@ -214,8 +214,8 @@ Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four d
 - **Event log** (per-brain JSONL): Append-only audit trail for records (best-effort, not authoritative).
 
 **Retrieval:**
-- Hybrid 6-signal scoring: vector similarity, BM25, recency (exponential decay, 30d tau), link density (log-scaled), tag Jaccard, importance
-- Intent-driven weight profiles: lookup, planning, reflection, synthesis, auto
+- Hybrid 6-signal scoring: vector similarity, BM25, recency (exponential decay, 30d tau), PageRank (pre-normalized, from files table), tag Jaccard, importance
+- Intent-driven weight profiles: lookup, planning, reflection, synthesis (unrecognized intents fall back to a default profile)
 - Fusion confidence triggers cross-encoder reranking when vector/FTS disagree (<0.3)
 - Token-budgeted progressive packing: minimal stubs → expand on demand
 
@@ -228,7 +228,7 @@ Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four d
 **Key boundaries:**
 - Brain-scoped: each brain is a directory with its own LanceDB, event log, and content path. SQLite is shared with `brain_id` partitioning (except `summaries`).
 - MCP is the only external interface. No REST API, no gRPC.
-- Embedding is local-only (BGE-small via ONNX/safetensors). No remote model dependency on the hot path.
+- Embedding is local-only (BGE-small-en-v1.5, 384-dim, via candle/safetensors). No remote model dependency on the hot path.
 
 ---
 
@@ -437,7 +437,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 - `crates/brain_lib/src/uri.rs`
 
 **Dependencies:** Issues 1.1, 0.1
-**Acceptance criteria:** Any object can link to any other object via URIs; link density signal in hybrid scoring works across all domains
+**Acceptance criteria:** Any object can link to any other object via URIs; a future PageRank extension or link-count signal could leverage `object_links` for cross-domain scoring (out of scope for this issue — the existing PageRank signal only covers files)
 **Size:** L
 **Notes:** This is the most invasive change in Phase 1. Consider keeping existing tables and adding `object_links` as a supplementary table rather than replacing.
 

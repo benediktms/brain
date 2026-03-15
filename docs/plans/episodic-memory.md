@@ -217,7 +217,7 @@ CREATE TRIGGER IF NOT EXISTS summaries_fts_update AFTER UPDATE OF title, content
 END;
 ```
 
-Using `tokenize='porter unicode61'` for stemming (existing `fts_chunks` doesn't use porter, but summaries benefit from it since episode content is prose).
+Using `tokenize='porter unicode61'` for stemming. The existing `fts_chunks` specifies no `tokenize` clause (SQLite defaults to `unicode61` without stemming). Summaries benefit from porter stemming since episode content is prose.
 
 #### Add `search_summaries_fts()` to `fts.rs`:
 ```rust
@@ -374,6 +374,12 @@ if !summary_ids.is_empty() {
                 candidate.importance = row.importance;
                 candidate.tags = row.tags.clone();
                 candidate.age_seconds = (now - row.created_at).max(0) as f64;
+                // Note: pagerank_score defaults to 0.0 for summaries.
+                // The existing signal #4 is a pre-normalized PageRank from
+                // the files table — summaries are not files and have no
+                // PageRank. See the semantic-search-records plan for a
+                // discussion of options (default 0.0, derive from
+                // reflection_sources, or extend PageRank graph).
             }
         }
     }
