@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# pre-commit hook: formats staged .rs files and re-stages them.
+
+# Get staged .rs files (Added, Copied, Modified, Renamed — not Deleted)
+staged_files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')
+
+if [ -z "$staged_files" ]; then
+  exit 0
+fi
+
+# Format the entire workspace (cargo fmt handles editions and module resolution)
+cargo fmt --all
+
+# Re-stage only the originally staged .rs files
+echo "$staged_files" | xargs git add
+
+exit 0
