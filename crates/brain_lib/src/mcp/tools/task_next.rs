@@ -49,9 +49,7 @@ impl TaskNext {
         };
 
         // Re-sort if due_date policy requested; always promote in-progress tasks
-        let status_ord = |status: &str| -> u8 {
-            if status == "in_progress" { 0 } else { 1 }
-        };
+        let status_ord = |status: &str| -> u8 { if status == "in_progress" { 0 } else { 1 } };
         let mut tasks = ready_tasks;
         if params.policy == "due_date" {
             tasks.sort_by(|a, b| {
