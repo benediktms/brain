@@ -75,7 +75,9 @@ pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Resul
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
            {brain_clause}
-         ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
+         ORDER BY t.priority ASC,
+                  CASE WHEN t.status = 'in_progress' THEN 0 ELSE 1 END ASC,
+                  t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 

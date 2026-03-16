@@ -48,7 +48,10 @@ impl TaskNext {
             }
         };
 
-        // Re-sort if due_date policy requested
+        // Re-sort if due_date policy requested; always promote in-progress tasks
+        let status_ord = |status: &str| -> u8 {
+            if status == "in_progress" { 0 } else { 1 }
+        };
         let mut tasks = ready_tasks;
         if params.policy == "due_date" {
             tasks.sort_by(|a, b| {
@@ -59,6 +62,7 @@ impl TaskNext {
                     (None, None) => std::cmp::Ordering::Equal,
                 };
                 due_cmp
+                    .then(status_ord(&a.status).cmp(&status_ord(&b.status)))
                     .then(a.priority.cmp(&b.priority))
                     .then(a.task_id.cmp(&b.task_id))
             });
@@ -392,6 +396,31 @@ mod tests {
         let null_group = groups.iter().find(|g| g["epic"].is_null()).unwrap();
         assert_eq!(null_group["tasks"].as_array().unwrap().len(), 1);
         assert_eq!(null_group["tasks"][0]["task_id"], "o1");
+    }
+
+    #[tokio::test]
+    async fn test_in_progress_before_open() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // Two tasks at the same priority — t1 open, t2 in_progress
+        apply(&registry, &ctx, json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Open Task", "priority": 2}})).await;
+        apply(&registry, &ctx, json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "In Progress Task", "priority": 2}})).await;
+        apply(&registry, &ctx, json!({"event_type": "status_changed", "task_id": "t2", "payload": {"new_status": "in_progress"}})).await;
+
+        let result = registry
+            .dispatch("tasks.next", json!({ "k": 2 }), &ctx)
+            .await;
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let tasks = collect_tasks(&parsed);
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(
+            tasks[0]["task_id"], "t2",
+            "in_progress task must appear before open task at the same priority"
+        );
+        assert_eq!(tasks[1]["task_id"], "t1");
     }
 
     #[tokio::test]
