@@ -19,10 +19,6 @@ candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
 tokenizers = "0.22"
-# Vector storage (drives arrow version — lancedb 0.26 uses arrow 57)
-lancedb = "0.26"
-arrow-schema = "57"
-arrow-array = "57"
 futures = "0.3"
 serde_json = { workspace = true }
 # Directory traversal
