@@ -4,7 +4,7 @@ use brain_lib::config::{
 };
 
 /// List all registered brains.
-pub fn run_list(json: bool) -> Result<()> {
+pub fn run_list(json: bool, all: bool, archived_only: bool) -> Result<()> {
     let global = load_global_config()?;
 
     if global.brains.is_empty() {
@@ -25,6 +25,15 @@ pub fn run_list(json: bool) -> Result<()> {
     let mut entries: Vec<(String, brain_lib::config::BrainEntry, Option<String>)> = global
         .brains
         .into_iter()
+        .filter(|(_, entry)| {
+            if archived_only {
+                entry.archived
+            } else if all {
+                true
+            } else {
+                !entry.archived
+            }
+        })
         .map(|(name, entry)| {
             let prefix = open_remote_task_store(&name, &entry)
                 .ok()
@@ -53,6 +62,7 @@ pub fn run_list(json: bool) -> Result<()> {
                     "aliases": entry.aliases,
                     "extra_roots": extra_roots,
                     "prefix": prefix,
+                    "archived": entry.archived,
                 })
             })
             .collect();
@@ -68,10 +78,11 @@ pub fn run_list(json: bool) -> Result<()> {
     }
 
     for (name, entry, prefix) in &entries {
+        let archived_tag = if entry.archived { " [archived]" } else { "" };
         if let Some(ref id) = entry.id {
-            println!("{name} [{id}]");
+            println!("{name} [{id}]{archived_tag}");
         } else {
-            println!("{name}");
+            println!("{name}{archived_tag}");
         }
         if !entry.aliases.is_empty() {
             println!("  aka:    {}", entry.aliases.join(", "));

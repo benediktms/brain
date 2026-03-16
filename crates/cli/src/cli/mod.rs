@@ -320,6 +320,14 @@ pub(crate) enum Command {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+
+        /// Show all brains including archived ones
+        #[arg(short = 'a', long)]
+        all: bool,
+
+        /// Show only archived brains
+        #[arg(long)]
+        archived: bool,
     },
 
     /// Remove a registered brain
