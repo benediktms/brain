@@ -8,7 +8,7 @@ use anyhow::{Result, bail};
 use brain_lib::config::paths::normalize_note_paths_lenient;
 use brain_lib::config::{
     brain_home, get_or_generate_brain_id, load_global_config, resolve_brain_id,
-    resolve_paths_for_brain,
+    resolve_paths_for_brain, save_global_config,
 };
 use brain_lib::db::Db;
 use brain_lib::embedder::Embedder;
@@ -494,6 +494,10 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Embedding poll: catches tasks/chunks that missed inline embedding.
     let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
 
+    // Root validation tick: checks that registered roots still exist on disk,
+    // prunes stale roots, and archives brains whose all roots are gone.
+    let mut root_validation_tick = tokio::time::interval(Duration::from_secs(60));
+
     // ── 7. Event loop ─────────────────────────────────────────────────────
     let shutdown_reason = loop {
         tokio::select! {
@@ -592,6 +596,16 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                             "embed_poll cycle complete"
                         );
                     }
+                }
+            }
+            _ = root_validation_tick.tick() => {
+                if validate_roots(&mut brains, &mut watcher) {
+                    prefix_map = build_prefix_map(&brains);
+                    let updated_brain_map: HashMap<String, String> = brains
+                        .iter()
+                        .map(|(name, inst)| (name.clone(), inst.mcp_context.brain_id.clone()))
+                        .collect();
+                    router.update_brains(updated_brain_map).await;
                 }
             }
             _ = sighup.recv() => {
@@ -1021,4 +1035,115 @@ async fn reload_brains(
     }
 
     Ok(())
+}
+
+/// Validate that all registered brain roots still exist on disk.
+///
+/// For each brain in the active `brains` map:
+/// - Loads the current global config from disk.
+/// - Removes roots that no longer exist from the config entry.
+/// - If a brain has no roots remaining, marks it archived in config and DB,
+///   unwatches all its note directories, and removes it from the map.
+/// - If a brain retains some roots, unwatches note dirs that fall under
+///   removed roots and updates `instance.note_dirs`.
+/// - Saves the config if any changes occurred.
+///
+/// Returns `true` if the prefix map needs rebuilding (any brain changed).
+fn validate_roots(brains: &mut HashMap<String, BrainInstance>, watcher: &mut BrainWatcher) -> bool {
+    let mut global_cfg = match load_global_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            warn!(error = %e, "root validation: failed to load global config, skipping");
+            return false;
+        }
+    };
+
+    let mut config_changed = false;
+    let mut prefix_map_dirty = false;
+
+    // Collect names to process to avoid borrow conflicts.
+    let brain_names: Vec<String> = brains.keys().cloned().collect();
+
+    for name in brain_names {
+        let entry = match global_cfg.brains.get_mut(&name) {
+            Some(e) => e,
+            None => continue, // brain not in config — nothing to prune
+        };
+
+        let stale_roots: Vec<std::path::PathBuf> = entry
+            .roots
+            .iter()
+            .filter(|r| !r.exists())
+            .cloned()
+            .collect();
+
+        if stale_roots.is_empty() {
+            continue;
+        }
+
+        for root in &stale_roots {
+            info!(brain = %name, root = %root.display(), "removing stale root from config");
+            entry.roots.retain(|r| r != root);
+        }
+        config_changed = true;
+
+        if entry.roots.is_empty() {
+            // All roots gone — archive this brain.
+            info!(brain = %name, "all roots gone; archiving brain");
+            entry.archived = true;
+
+            if let Some(instance) = brains.remove(&name) {
+                // Unwatch all note dirs.
+                for dir in &instance.note_dirs {
+                    if let Err(e) = watcher.unwatch_path(dir) {
+                        warn!(brain = %name, dir = %dir.display(), error = %e, "failed to unwatch dir during archival");
+                    }
+                }
+
+                // Mark archived in the DB.
+                let brain_id = instance.mcp_context.brain_id.clone();
+                if let Err(e) = instance.pipeline.db().with_write_conn(|conn| {
+                    conn.execute(
+                        "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
+                        rusqlite::params![brain_id],
+                    )?;
+                    Ok(())
+                }) {
+                    warn!(brain = %name, error = %e, "failed to mark brain archived in DB");
+                }
+            }
+
+            prefix_map_dirty = true;
+        } else {
+            // Some roots remain — prune note dirs under stale roots.
+            if let Some(instance) = brains.get_mut(&name) {
+                let removed_note_dirs: Vec<std::path::PathBuf> = instance
+                    .note_dirs
+                    .iter()
+                    .filter(|dir| stale_roots.iter().any(|root| dir.starts_with(root)))
+                    .cloned()
+                    .collect();
+
+                for dir in &removed_note_dirs {
+                    info!(brain = %name, dir = %dir.display(), "unwatching note dir under stale root");
+                    if let Err(e) = watcher.unwatch_path(dir) {
+                        warn!(brain = %name, dir = %dir.display(), error = %e, "failed to unwatch dir");
+                    }
+                }
+
+                if !removed_note_dirs.is_empty() {
+                    instance
+                        .note_dirs
+                        .retain(|d| !removed_note_dirs.contains(d));
+                    prefix_map_dirty = true;
+                }
+            }
+        }
+    }
+
+    if config_changed && let Err(e) = save_global_config(&global_cfg) {
+        warn!(error = %e, "root validation: failed to save global config");
+    }
+
+    prefix_map_dirty
 }
