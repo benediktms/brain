@@ -182,18 +182,57 @@ fn split_section(section: &Section, ord: &mut usize) -> Vec<Chunk> {
 
 /// Find byte positions of each trimmed paragraph within a content string.
 ///
+/// Splits on blank-line separators: `\n\n`, `\r\n\r\n`, and mixed variants.
 /// Returns `(trimmed_paragraph, byte_offset_in_content)` pairs.
 fn paragraph_byte_positions(content: &str) -> Vec<(&str, usize)> {
+    let bytes = content.as_bytes();
     let mut positions = Vec::new();
-    let mut offset = 0;
+    let mut seg_start = 0;
+    let mut i = 0;
 
-    for raw in content.split("\n\n") {
+    while i < bytes.len() {
+        // Detect a line ending: \r\n or \n
+        let first_end = if bytes[i] == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            i + 2
+        } else if bytes[i] == b'\n' {
+            i + 1
+        } else {
+            i += 1;
+            continue;
+        };
+
+        // Check for a second line ending immediately after (blank line = paragraph break)
+        let second_end = if first_end < bytes.len()
+            && bytes[first_end] == b'\r'
+            && first_end + 1 < bytes.len()
+            && bytes[first_end + 1] == b'\n'
+        {
+            first_end + 2
+        } else if first_end < bytes.len() && bytes[first_end] == b'\n' {
+            first_end + 1
+        } else {
+            // Single line ending, not a paragraph break
+            i = first_end;
+            continue;
+        };
+
+        // Found paragraph break at bytes i..second_end
+        let raw = &content[seg_start..i];
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             let leading = raw.len() - raw.trim_start().len();
-            positions.push((trimmed, offset + leading));
+            positions.push((trimmed, seg_start + leading));
         }
-        offset += raw.len() + 2; // +2 for the \n\n separator
+        seg_start = second_end;
+        i = second_end;
+    }
+
+    // Final segment
+    let raw = &content[seg_start..];
+    let trimmed = raw.trim();
+    if !trimmed.is_empty() {
+        let leading = raw.len() - raw.trim_start().len();
+        positions.push((trimmed, seg_start + leading));
     }
 
     positions
@@ -575,6 +614,202 @@ mod tests {
                 "CRLF+UTF-8 chunker byte range should produce valid UTF-8"
             );
         }
+    }
+
+    // ─── Byte-offset content-match tests (UTF-8 + CRLF) ────────
+
+    /// Assert that every chunk's byte range in the original text contains
+    /// the chunk's content string. This is the core correctness invariant.
+    fn assert_byte_offsets_match_content(text: &str, chunks: &[Chunk]) {
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(
+                chunk.byte_end <= text.len(),
+                "chunk[{i}] byte_end {} exceeds text len {}",
+                chunk.byte_end,
+                text.len()
+            );
+            assert!(
+                chunk.byte_start <= chunk.byte_end,
+                "chunk[{i}] byte_start {} > byte_end {}",
+                chunk.byte_start,
+                chunk.byte_end
+            );
+            // byte_start..byte_end must land on char boundaries
+            assert!(
+                text.is_char_boundary(chunk.byte_start),
+                "chunk[{i}] byte_start {} is not a char boundary",
+                chunk.byte_start
+            );
+            assert!(
+                text.is_char_boundary(chunk.byte_end),
+                "chunk[{i}] byte_end {} is not a char boundary",
+                chunk.byte_end
+            );
+            let slice = &text[chunk.byte_start..chunk.byte_end];
+            assert!(
+                slice.contains(chunk.content.trim()),
+                "chunk[{i}] byte slice does not contain content.\n  content: {:?}\n  slice:   {:?}",
+                chunk.content.trim(),
+                slice.trim()
+            );
+        }
+    }
+
+    #[test]
+    fn test_content_match_utf8_oversized_cjk() {
+        // CJK text that exceeds token limit — split chunks must still
+        // have byte ranges that contain their content.
+        let sentence = "日本語のテスト文。";
+        let long_para = sentence.repeat(100);
+        let text = format!("# CJK\n\n{long_para}\n");
+        let doc = parse_document(&text);
+        let chunks = chunk_document(&doc);
+
+        assert!(chunks.len() > 1, "CJK text should be split");
+        assert_byte_offsets_match_content(&text, &chunks);
+    }
+
+    #[test]
+    fn test_content_match_utf8_oversized_emoji() {
+        let sentence = "This has an emoji 🧠 in it! ";
+        let long_para = sentence.repeat(80);
+        let text = format!("# Emoji\n\n{long_para}\n");
+        let doc = parse_document(&text);
+        let chunks = chunk_document(&doc);
+
+        assert!(chunks.len() > 1, "emoji text should be split");
+        assert_byte_offsets_match_content(&text, &chunks);
+    }
+
+    #[test]
+    fn test_content_match_utf8_oversized_accented() {
+        let sentence = "Les données naïves coûtent très cher à résoudre. ";
+        let long_para = sentence.repeat(50);
+        let text = format!("# Résumé\n\n{long_para}\n");
+        let doc = parse_document(&text);
+        let chunks = chunk_document(&doc);
+
+        assert!(chunks.len() > 1, "accented text should be split");
+        assert_byte_offsets_match_content(&text, &chunks);
+    }
+
+    #[test]
+    fn test_content_match_crlf_multi_paragraph() {
+        // Multiple paragraphs separated by CRLF blank lines.
+        // This exercises paragraph_byte_positions with \r\n\r\n separators.
+        let text = "# CRLF Paras\r\n\r\nFirst paragraph.\r\n\r\nSecond paragraph.\r\n\r\nThird paragraph.\r\n";
+        let doc = parse_document(text);
+        let chunks = chunk_document(&doc);
+
+        assert!(!chunks.is_empty());
+        assert_byte_offsets_match_content(text, &chunks);
+    }
+
+    #[test]
+    fn test_content_match_crlf_oversized_multi_paragraph() {
+        // Oversized section with CRLF paragraph separators — forces
+        // paragraph_byte_positions to handle \r\n\r\n correctly.
+        let para_a = "First paragraph with enough words to take up space. ".repeat(15);
+        let para_b = "Second paragraph also occupying significant token budget. ".repeat(15);
+        let text = format!("# CRLF Big\r\n\r\n{para_a}\r\n\r\n{para_b}\r\n");
+        let doc = parse_document(&text);
+        let chunks = chunk_document(&doc);
+
+        assert!(chunks.len() > 1, "oversized CRLF section should split");
+        assert_byte_offsets_match_content(&text, &chunks);
+    }
+
+    #[test]
+    fn test_content_match_crlf_utf8_oversized() {
+        // CRLF + multibyte chars + oversized — the triple threat.
+        let sentence = "Ça coûte très cher 🧠! ";
+        let long_para = sentence.repeat(80);
+        let text = format!("# CRLF+UTF8\r\n\r\n{long_para}\r\n");
+        let doc = parse_document(&text);
+        let chunks = chunk_document(&doc);
+
+        assert!(chunks.len() > 1, "CRLF+UTF8 text should be split");
+        assert_byte_offsets_match_content(&text, &chunks);
+    }
+
+    #[test]
+    fn test_content_match_mixed_line_endings() {
+        // Mix of LF and CRLF in same document.
+        let text = "# Mixed\n\nLF paragraph.\n\n## CRLF Section\r\n\r\nCRLF paragraph.\r\n";
+        let doc = parse_document(text);
+        let chunks = chunk_document(&doc);
+
+        assert!(!chunks.is_empty());
+        assert_byte_offsets_match_content(text, &chunks);
+    }
+
+    #[test]
+    fn test_content_match_code_block() {
+        let text = "# Code\n\nSome intro.\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n\nAfter code.\n";
+        let doc = parse_document(text);
+        let chunks = chunk_document(&doc);
+
+        assert!(!chunks.is_empty());
+        assert_byte_offsets_match_content(text, &chunks);
+    }
+
+    #[test]
+    fn test_content_match_headings_fixture() {
+        let text = fixture("headings.md");
+        let doc = parse_document(&text);
+        let chunks = chunk_document(&doc);
+
+        assert_byte_offsets_match_content(&text, &chunks);
+    }
+
+    // ─── Paragraph-boundary splitting tests ────────────────────
+
+    #[test]
+    fn test_lf_paragraph_boundary_splitting() {
+        // Control: LF paragraphs split at paragraph boundary.
+        let sentence = "This is a test sentence for paragraph boundary verification. ";
+        let para_a = sentence.repeat(20);
+        let para_b = sentence.repeat(20);
+        let text = format!("# LF Split\n\n{para_a}\n\n{para_b}\n");
+        let doc = parse_document(&text);
+        let chunks = chunk_document(&doc);
+
+        assert_eq!(
+            chunks.len(),
+            2,
+            "LF paragraphs should split at paragraph boundary, got {} chunks",
+            chunks.len()
+        );
+        assert_byte_offsets_match_content(&text, &chunks);
+    }
+
+    #[test]
+    fn test_crlf_paragraph_boundary_splitting() {
+        // Two paragraphs ~300 tokens each, separated by CRLF blank line.
+        // Total ~600 tokens > MAX_CHUNK_TOKENS (400).
+        // Each paragraph alone < 400 tokens.
+        // Correct: split at paragraph boundary → 2 chunks.
+        let sentence = "This is a test sentence for paragraph boundary verification. ";
+        let para_a = sentence.repeat(20);
+        let para_b = sentence.repeat(20);
+        let text = format!("# CRLF Split\r\n\r\n{para_a}\r\n\r\n{para_b}\r\n");
+        let doc = parse_document(&text);
+        let chunks = chunk_document(&doc);
+
+        assert_eq!(
+            chunks.len(),
+            2,
+            "CRLF paragraphs should split at paragraph boundary, got {} chunks",
+            chunks.len()
+        );
+        // Neither chunk should span across the paragraph boundary
+        for chunk in &chunks {
+            assert!(
+                !chunk.content.contains("\r\n\r\n") && !chunk.content.contains("\n\n"),
+                "chunk should not contain a blank-line separator"
+            );
+        }
+        assert_byte_offsets_match_content(&text, &chunks);
     }
 
     // ─── Offset non-overlap / ordering tests ─────────────────────
