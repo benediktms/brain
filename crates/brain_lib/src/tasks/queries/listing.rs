@@ -169,6 +169,36 @@ pub fn list_done(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRo
     crate::db::collect_rows(rows)
 }
 
+/// List tasks with status exactly 'in_progress'.
+pub fn list_in_progress(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter_bare(brain_id);
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
+         FROM tasks
+         WHERE status = 'in_progress'{brain_clause}
+         ORDER BY priority ASC,
+                  CASE WHEN task_type = 'epic' THEN 0 ELSE 1 END ASC,
+                  due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
+    crate::db::collect_rows(rows)
+}
+
+/// List tasks with status exactly 'cancelled'.
+pub fn list_cancelled(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter_bare(brain_id);
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
+         FROM tasks
+         WHERE status = 'cancelled'{brain_clause}
+         ORDER BY updated_at DESC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
+    crate::db::collect_rows(rows)
+}
+
 /// Get a single task by ID.
 pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
     let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE task_id = ?1");

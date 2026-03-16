@@ -255,6 +255,32 @@ impl TaskStore {
         })
     }
 
+    /// List tasks with status exactly 'in_progress'.
+    pub fn list_in_progress(&self) -> Result<Vec<queries::TaskRow>> {
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::list_in_progress(conn, filter)
+        })
+    }
+
+    /// List tasks with status exactly 'cancelled'.
+    pub fn list_cancelled(&self) -> Result<Vec<queries::TaskRow>> {
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::list_cancelled(conn, filter)
+        })
+    }
+
     /// List ready tasks excluding epics (actionable work items only).
     pub fn list_ready_actionable(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
