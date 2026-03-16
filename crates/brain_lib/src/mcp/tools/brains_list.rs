@@ -20,6 +20,7 @@ struct BrainInfo {
     aliases: Vec<String>,
     extra_roots: Vec<String>,
     prefix: Option<String>,
+    archived: bool,
 }
 
 #[derive(Serialize)]
@@ -36,20 +37,30 @@ impl McpTool for BrainsList {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "List all registered brain projects from the global registry (~/.brain/config.toml). Returns name, ID, root path, aliases, extra_roots, and task prefix for each brain. Use this to discover available brains before cross-brain operations (federated search via memory.search_minimal with brains parameter, or cross-brain task creation).".into(),
+            description: "List all registered brain projects from the global registry (~/.brain/config.toml). Returns name, ID, root path, aliases, extra_roots, task prefix, and archived status for each brain. By default, archived brains are excluded. Pass include_archived: true to include them. Use this to discover available brains before cross-brain operations (federated search via memory.search_minimal with brains parameter, or cross-brain task creation).".into(),
             input_schema: json!({
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "include_archived": {
+                        "type": "boolean",
+                        "description": "When true, include archived brains in the results. Defaults to false."
+                    }
+                }
             }),
         }
     }
 
     fn call<'a>(
         &'a self,
-        _params: Value,
+        params: Value,
         _ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
+            let include_archived = params
+                .get("include_archived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
             let config = match load_global_config() {
                 Ok(c) => c,
                 Err(err) => {
@@ -79,9 +90,15 @@ impl McpTool for BrainsList {
                         extra_roots,
                         id: entry.id,
                         prefix,
+                        archived: entry.archived,
                     }
                 })
                 .collect();
+
+            // Filter archived brains unless explicitly requested.
+            if !include_archived {
+                brains.retain(|info| !info.archived);
+            }
 
             // Sort by name for deterministic output.
             brains.sort_by(|a, b| a.name.cmp(&b.name));
@@ -113,6 +130,10 @@ mod tests {
         assert!(parsed.get("count").is_some());
         assert!(parsed["brains"].is_array());
     }
+
+    // Note: integration tests verifying archived brain filtering (default excludes, include_archived
+    // includes) would require extending create_test_context to produce a config with an archived
+    // brain entry. The filtering logic is exercised by the retain() call in the tool handler.
 
     #[tokio::test]
     async fn test_brains_list_via_underscore_alias() {
