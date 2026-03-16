@@ -358,7 +358,22 @@ const BRAIN_SECTION_START: &str = "<!-- brain:start -->";
 const BRAIN_SECTION_END: &str = "<!-- brain:end -->";
 
 const BRAIN_SECTION_TEMPLATE: &str = r#"<!-- brain:start -->
-{build_section}## Task Management
+{build_section}## Crate Architecture
+
+The workspace has three crates:
+
+- `cli` — Binary crate. Depends on `brain_lib`.
+- `brain_lib` — Application logic: pipelines, MCP server, ranking, parsing. Depends on `brain_persistence`.
+- `brain_persistence` — Concrete persistence: SQLite (connection pool, schema, migrations), LanceDB (vector store, optimize scheduler).
+
+### Dependency rules
+
+- `brain_lib` defines persistence port traits in `brain_lib::ports`
+- Trait implementations live in `brain_lib::ports` (impl blocks for concrete types from `brain_persistence`)
+- Schema migrations live in `brain_persistence`
+- Pipelines are generic over store type: `IndexPipeline<S = Store>`, `QueryPipeline<'a, S = StoreReader>`
+
+## Task Management
 
 This project uses `brain` for task tracking. **Always use MCP tools for task operations** — they provide structured responses and are the canonical interface for AI agents. CLI commands exist for human terminal use only.
 
