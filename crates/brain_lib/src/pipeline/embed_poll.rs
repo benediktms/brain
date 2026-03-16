@@ -11,8 +11,8 @@ use tracing::{debug, info, warn};
 
 use crate::db::Db;
 use crate::embedder::{Embed, embed_batch_async};
-use crate::ports::ChunkIndexWriter;
-use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule, store_task_capsule};
+use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
+use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
 use crate::tasks::queries::get_labels_for_tasks;
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
@@ -39,6 +39,8 @@ pub async fn poll_stale_tasks(
     debug!("embed_poll: scanning stale tasks");
 
     // ── 1. Fetch stale task rows ─────────────────────────────────────────
+    // TODO: replace raw task SELECT with a TaskPersistence trait method when
+    // task persistence is extracted to ports.
     #[derive(Debug)]
     struct TaskPollRow {
         task_id: String,
@@ -107,6 +109,8 @@ pub async fn poll_stale_tasks(
     info!(count = rows.len(), "embed_poll: embedding stale tasks");
 
     // ── 2. Fetch labels for each task ────────────────────────────────────
+    // TODO: replace raw label lookup with a TaskPersistence trait method when
+    // task persistence is extracted to ports.
     let task_id_refs: Vec<&str> = rows.iter().map(|r| r.task_id.as_str()).collect();
 
     let label_map: std::collections::HashMap<String, Vec<String>> =
@@ -197,8 +201,8 @@ pub async fn poll_stale_tasks(
             continue;
         }
 
-        // SQLite FTS upsert
-        if let Err(e) = store_task_capsule(db, &entry.file_id, &entry.capsule_text) {
+        // SQLite FTS upsert via ChunkMetaWriter port
+        if let Err(e) = db.upsert_task_chunk(&entry.file_id, &entry.capsule_text) {
             warn!(
                 task_id = %entry.task_id,
                 file_id = %entry.file_id,
@@ -213,6 +217,8 @@ pub async fn poll_stale_tasks(
     }
 
     // ── 6. Mark embedded ─────────────────────────────────────────────────
+    // TODO: replace raw UPDATE with a TaskPersistence trait method when task
+    // persistence is extracted to ports.
     if !embedded_task_ids.is_empty() {
         let ids_ref: Vec<&str> = embedded_task_ids.iter().map(|s| s.as_str()).collect();
         if let Err(e) = db.with_write_conn(|conn| mark_tasks_embedded(conn, &ids_ref)) {
@@ -228,6 +234,9 @@ pub async fn poll_stale_tasks(
 /// Set `embedded_at = now()` on a batch of tasks.
 ///
 /// `task_ids` must be non-empty. Skips gracefully if the slice is empty.
+///
+/// TODO: remove when task persistence is extracted to ports — replace with a
+/// TaskPersistence trait method.
 fn mark_tasks_embedded(conn: &rusqlite::Connection, task_ids: &[&str]) -> crate::error::Result<()> {
     if task_ids.is_empty() {
         return Ok(());
@@ -267,6 +276,8 @@ pub async fn poll_stale_chunks(
 ) -> usize {
     debug!("embed_poll: scanning stale chunks");
 
+    // TODO: replace raw chunk SELECT with a ChunkMetaReader trait method (e.g.
+    // find_stale_chunks) when the stale-chunk read path is added to ports.
     #[derive(Debug)]
     struct ChunkPollRow {
         chunk_id: String,
@@ -367,16 +378,14 @@ pub async fn poll_stale_chunks(
         embedded_chunk_ids.extend_from_slice(&group.chunk_ids);
     }
 
-    // ── Mark embedded ─────────────────────────────────────────────────────
+    // ── Mark embedded via ChunkMetaWriter port ────────────────────────────
     if !embedded_chunk_ids.is_empty() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
-        if let Err(e) = db.with_write_conn(|conn| {
-            crate::db::chunks::mark_chunks_embedded(conn, &embedded_chunk_ids, now)
-        }) {
+        if let Err(e) = db.mark_chunks_embedded(&embedded_chunk_ids, now) {
             warn!(error = %e, "embed_poll: failed to mark chunks as embedded");
         }
     }
@@ -391,14 +400,17 @@ pub async fn poll_stale_chunks(
 /// Check if LanceDB is accessible. If not, reset all `embedded_at` columns so
 /// items will be re-embedded on the next poll cycle.
 ///
-/// `db` is the per-brain database (contains `chunks`).
-/// `unified_db` is the unified database (contains `tasks`).
+/// `chunk_resetter` is the per-brain database (contains `chunks`).
+/// `task_resetter` is the unified database (contains `tasks`).
 /// In single-brain mode, both point to the same database.
+///
+/// The dual parameter signature is kept temporarily — Wave 3 will collapse it
+/// once the single-brain / multi-brain distinction is removed at the call site.
 ///
 /// Returns `true` if a reset occurred (LanceDB was missing/inaccessible).
 pub async fn self_heal_if_lance_missing(
-    db: &Db,
-    unified_db: &Db,
+    chunk_resetter: &impl EmbeddingResetter,
+    task_resetter: &impl EmbeddingResetter,
     store: &impl crate::ports::SchemaMeta,
 ) -> bool {
     // Use schema() as a lightweight accessibility probe — it sends a trivial
@@ -409,17 +421,11 @@ pub async fn self_heal_if_lance_missing(
 
     warn!("LanceDB not found — resetting embedded_at for full re-embed");
 
-    if let Err(e) = unified_db.with_write_conn(|conn| {
-        conn.execute_batch("UPDATE tasks SET embedded_at = NULL;")?;
-        Ok(())
-    }) {
+    if let Err(e) = task_resetter.reset_tasks_embedded_at() {
         warn!(error = %e, "embed_poll: failed to reset tasks.embedded_at");
     }
 
-    if let Err(e) = db.with_write_conn(|conn| {
-        conn.execute_batch("UPDATE chunks SET embedded_at = NULL;")?;
-        Ok(())
-    }) {
+    if let Err(e) = chunk_resetter.reset_chunks_embedded_at() {
         warn!(error = %e, "embed_poll: failed to reset chunks.embedded_at");
     }
 
