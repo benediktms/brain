@@ -654,6 +654,10 @@ fn artifacts_list_routes_through_unified_db() {
 // ---------------------------------------------------------------------------
 
 /// Helper: set project_prefix in a SQLite database via raw SQL.
+///
+/// Writes to `brain_meta.project_prefix` — which `ensure_brain_registered`
+/// reads as the authoritative prefix when registering a brain for the first
+/// time. Also updates `brains.prefix` for any already-registered brains.
 fn set_prefix(db_path: &std::path::Path, prefix: &str) {
     let conn = rusqlite::Connection::open(db_path).unwrap();
     conn.execute(
@@ -661,11 +665,27 @@ fn set_prefix(db_path: &std::path::Path, prefix: &str) {
         [prefix],
     )
     .unwrap();
+    // Also update brains.prefix for any already-registered brains.
+    conn.execute("UPDATE brains SET prefix = ?1 WHERE brain_id != ''", [prefix])
+        .unwrap();
 }
 
 /// Helper: read project_prefix from a SQLite database.
+/// Reads from `brains.prefix` (primary), falling back to `brain_meta`.
 fn get_prefix(db_path: &std::path::Path) -> String {
     let conn = rusqlite::Connection::open(db_path).unwrap();
+    // Try brains.prefix first
+    let result: Option<String> = conn
+        .query_row(
+            "SELECT prefix FROM brains WHERE brain_id != '' AND prefix IS NOT NULL LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(prefix) = result {
+        return prefix;
+    }
+    // Fallback to brain_meta
     conn.query_row(
         "SELECT value FROM brain_meta WHERE key = 'project_prefix'",
         [],

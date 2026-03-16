@@ -325,50 +325,30 @@ fn test_record_store_brain_id_scoping() {
 
 // ─── 5. Project prefix isolation ──────────────────────────────────────────────
 
-/// Two brains sharing a unified DB must produce distinct project prefixes when
-/// their TaskStores use `with_meta_db()` pointing to separate per-brain DBs.
+/// Two brains sharing a unified DB produce distinct project prefixes via the
+/// `brains.prefix` column (set during `ensure_brain_registered`).
 ///
-/// This is the regression test for the prefix collision bug: without `meta_db`,
-/// both stores read/write `brain_meta.project_prefix` in the unified DB and the
-/// first brain's prefix wins for all brains.
+/// This is the regression test for the prefix collision bug: the old approach
+/// used a global `brain_meta.project_prefix` key. The fix stores the prefix
+/// per-brain in the `brains` table.
 #[test]
-fn test_task_store_prefix_isolation_via_meta_db() {
+fn test_task_store_prefix_isolation_via_brains_table() {
     let dir = TempDir::new().unwrap();
-
-    // Simulate the unified DB at ~/.brain/brain.db — shared by all brains.
     let unified_db = Db::open_in_memory().unwrap();
 
-    // Simulate two per-brain DBs (each at ~/.brain/brains/<name>/brain.db).
-    let per_brain_db_a = Db::open_in_memory().unwrap();
-    let per_brain_db_b = Db::open_in_memory().unwrap();
-
-    // Pre-seed each per-brain DB with its own prefix (as `brain init` would).
-    per_brain_db_a
-        .with_write_conn(|conn| {
-            brain_lib::db::meta::get_or_init_project_prefix(
-                conn,
-                std::path::Path::new("/home/user/.brain/brains/auth-service"),
-            )
-        })
+    // Register two brains with distinct names — `ensure_brain_registered`
+    // computes and stores `brains.prefix` from the name.
+    unified_db
+        .ensure_brain_registered("brain-a", "auth-service")
         .unwrap();
-    per_brain_db_b
-        .with_write_conn(|conn| {
-            brain_lib::db::meta::get_or_init_project_prefix(
-                conn,
-                std::path::Path::new("/home/user/.brain/brains/my-cool-project"),
-            )
-        })
+    unified_db
+        .ensure_brain_registered("brain-b", "my-cool-project")
         .unwrap();
 
-    // Build TaskStores: task data in unified_db, meta lookups in per-brain DBs.
     let tasks_dir_a = dir.path().join("tasks_a");
     let tasks_dir_b = dir.path().join("tasks_b");
-    let store_a = TaskStore::with_brain_id(&tasks_dir_a, unified_db.clone(), "brain-a")
-        .unwrap()
-        .with_meta_db(per_brain_db_a);
-    let store_b = TaskStore::with_brain_id(&tasks_dir_b, unified_db.clone(), "brain-b")
-        .unwrap()
-        .with_meta_db(per_brain_db_b);
+    let store_a = TaskStore::with_brain_id(&tasks_dir_a, unified_db.clone(), "brain-a").unwrap();
+    let store_b = TaskStore::with_brain_id(&tasks_dir_b, unified_db.clone(), "brain-b").unwrap();
 
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
@@ -383,64 +363,58 @@ fn test_task_store_prefix_isolation_via_meta_db() {
 
 /// Same prefix isolation test for RecordStore.
 #[test]
-fn test_record_store_prefix_isolation_via_meta_db() {
+fn test_record_store_prefix_isolation_via_brains_table() {
     let dir = TempDir::new().unwrap();
     let unified_db = Db::open_in_memory().unwrap();
 
-    let per_brain_db_a = Db::open_in_memory().unwrap();
-    let per_brain_db_b = Db::open_in_memory().unwrap();
-
-    // Seed distinct prefixes.
-    per_brain_db_a
-        .with_write_conn(|conn| brain_lib::db::meta::set_meta(conn, "project_prefix", "AAA"))
+    // Register two brains with distinct names.
+    unified_db
+        .ensure_brain_registered("brain-a", "auth-service")
         .unwrap();
-    per_brain_db_b
-        .with_write_conn(|conn| brain_lib::db::meta::set_meta(conn, "project_prefix", "BBB"))
+    unified_db
+        .ensure_brain_registered("brain-b", "my-cool-project")
         .unwrap();
 
     let records_dir_a = dir.path().join("records_a");
     let records_dir_b = dir.path().join("records_b");
-    let store_a = RecordStore::with_brain_id(&records_dir_a, unified_db.clone(), "brain-a")
-        .unwrap()
-        .with_meta_db(per_brain_db_a);
-    let store_b = RecordStore::with_brain_id(&records_dir_b, unified_db.clone(), "brain-b")
-        .unwrap()
-        .with_meta_db(per_brain_db_b);
+    let store_a =
+        RecordStore::with_brain_id(&records_dir_a, unified_db.clone(), "brain-a").unwrap();
+    let store_b =
+        RecordStore::with_brain_id(&records_dir_b, unified_db.clone(), "brain-b").unwrap();
 
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
 
-    assert_eq!(prefix_a, "AAA");
-    assert_eq!(prefix_b, "BBB");
+    assert_eq!(prefix_a, "ASR", "auth-service → ASR");
+    assert_eq!(prefix_b, "MCP", "my-cool-project → MCP");
     assert_ne!(
         prefix_a, prefix_b,
         "two brains must have distinct record prefixes; both got: {prefix_a}"
     );
 }
 
-/// Without `meta_db`, the fallback uses `self.db` — which in this test is the
-/// unified DB. Both stores collide on the same prefix. This documents the
-/// pre-fix behavior to ensure backward compatibility for single-brain setups.
+/// With `brains.prefix`, each brain gets its own prefix from the `brains` table.
+/// No `meta_db` is needed — the unified DB stores per-brain prefixes.
 #[test]
-fn test_prefix_fallback_without_meta_db() {
+fn test_prefix_no_collision_without_meta_db() {
     let dir = TempDir::new().unwrap();
     let unified_db = Db::open_in_memory().unwrap();
 
     let tasks_dir_a = dir.path().join("tasks_a");
     let tasks_dir_b = dir.path().join("tasks_b");
 
-    // No `with_meta_db` — both stores use unified_db for meta lookups.
+    // `with_brain_id` calls `ensure_brain_registered(brain_id, brain_id)`,
+    // so brains "brain-a" and "brain-b" get distinct prefixes.
     let store_a = TaskStore::with_brain_id(&tasks_dir_a, unified_db.clone(), "brain-a").unwrap();
     let store_b = TaskStore::with_brain_id(&tasks_dir_b, unified_db.clone(), "brain-b").unwrap();
 
-    // First call stamps the prefix; second reuses it.
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
 
-    // Both get the same prefix — this is the collision that `meta_db` fixes.
-    assert_eq!(
+    // With brains.prefix, each brain gets its own prefix — no collision.
+    assert_ne!(
         prefix_a, prefix_b,
-        "without meta_db, both stores share the unified DB prefix"
+        "two brains should have distinct prefixes; a={prefix_a}, b={prefix_b}"
     );
 }
 

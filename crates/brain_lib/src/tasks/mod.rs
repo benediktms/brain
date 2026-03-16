@@ -414,14 +414,33 @@ impl TaskStore {
             .with_read_conn(|conn| queries::compact_id(conn, task_id))
     }
 
-    /// Get the project prefix, auto-generating from the brain directory name if needed.
+    /// Get the project prefix for this brain.
     ///
-    /// Uses `meta_db` when set (per-brain DB with the correct prefix),
-    /// falling back to `self.db` for single-DB / test setups.
+    /// When `brain_id` is set, reads from `brains.prefix` (per-brain column).
+    /// Falls back to `brain_meta.project_prefix` for legacy/unscoped mode.
     pub fn get_project_prefix(&self) -> Result<String> {
+        let brain_id = self.brain_id.clone();
+        if !brain_id.is_empty() {
+            let result = self.db.with_read_conn(|conn| {
+                let prefix: Option<String> = conn
+                    .query_row(
+                        "SELECT prefix FROM brains WHERE brain_id = ?1",
+                        [&brain_id],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .ok()
+                    .flatten();
+                Ok(prefix)
+            })?;
+            if let Some(ref prefix) = result
+                .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
+            {
+                return Ok(prefix.clone());
+            }
+        }
+        // Fallback: legacy brain_meta path
         let db = self.meta_db.as_ref().unwrap_or(&self.db);
         db.with_write_conn(|conn| {
-            // events_path = tasks_dir/events.jsonl, tasks_dir = brain_dir/tasks
             let brain_dir = self
                 .events_path
                 .parent()
