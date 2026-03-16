@@ -19,6 +19,7 @@ fn try_ipc_label_event(
     event_type: &str,
     action_name: &str,
 ) -> Result<bool> {
+    use brain_lib::ipc::client::IpcClientError;
     use brain_lib::ipc::sync_client::sync_tools_call;
 
     match sync_tools_call(
@@ -38,10 +39,11 @@ fn try_ipc_label_event(
             }
             Ok(true)
         }
-        Err(e) => {
-            debug!(error = %e, "daemon IPC unavailable, falling back to direct access");
+        Err(IpcClientError::DaemonUnavailable { .. } | IpcClientError::Io(_)) => {
+            debug!("daemon IPC unavailable, falling back to direct access");
             Ok(false)
         }
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -54,6 +56,7 @@ fn try_ipc_label_batch(
     label: &str,
     action: &str,
 ) -> Result<bool> {
+    use brain_lib::ipc::client::IpcClientError;
     use brain_lib::ipc::sync_client::sync_tools_call;
 
     match sync_tools_call(
@@ -80,10 +83,11 @@ fn try_ipc_label_batch(
             }
             Ok(true)
         }
-        Err(e) => {
-            debug!(error = %e, "daemon IPC unavailable, falling back to direct access");
+        Err(IpcClientError::DaemonUnavailable { .. } | IpcClientError::Io(_)) => {
+            debug!("daemon IPC unavailable, falling back to direct access");
             Ok(false)
         }
+        Err(e) => Err(e.into()),
     }
 }
 
