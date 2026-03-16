@@ -5,9 +5,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::error;
 
-use crate::db::summaries::{Episode, store_episode};
+use crate::db::summaries::Episode;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::ports::EpisodeWriter;
 
 use super::{McpTool, json_response};
 
@@ -43,7 +44,7 @@ impl MemWriteEpisode {
             importance: params.importance,
         };
 
-        match ctx.db.with_write_conn(|conn| store_episode(conn, &episode)) {
+        match ctx.db.store_episode(&episode) {
             Ok(summary_id) => {
                 let response = json!({
                     "status": "stored",

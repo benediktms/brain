@@ -3,14 +3,12 @@ use std::path::Path;
 use tracing::{info, instrument, warn};
 
 use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
-use crate::db::chunks::{
-    ChunkMeta, get_chunk_hashes, mark_chunks_embedded, replace_chunk_metadata,
-};
+use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
 use crate::db::links::replace_links;
 use crate::hash_gate::HashGate;
 use crate::links::{Link, extract_links};
 use crate::parser::parse_document;
-use crate::ports::{ChunkIndexWriter, SchemaMeta};
+use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, SchemaMeta};
 use crate::utils::now_ts;
 
 use super::{IndexPipeline, ScanStats};
@@ -93,9 +91,7 @@ where
         }
 
         // Version-bump optimization: if chunk hashes are identical, skip embedding.
-        let stored_hashes = self
-            .db
-            .with_read_conn(|conn| get_chunk_hashes(conn, &verdict.file_id))?;
+        let stored_hashes = self.db.get_chunk_hashes(&verdict.file_id)?;
 
         let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
         self.db.with_write_conn(|conn| {
@@ -109,8 +105,7 @@ where
             // knows they are current.
             let ts = now_ts();
             let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
-            self.db
-                .with_write_conn(|conn| mark_chunks_embedded(conn, &ids, ts))?;
+            self.db.mark_chunks_embedded(&ids, ts)?;
             gate.mark_passed(&verdict.file_id, &verdict.hash)?;
             self.metrics.record_index_latency(start.elapsed());
             return Ok(true);
@@ -130,8 +125,7 @@ where
         // Stamp embedded_at now that LanceDB has the vectors.
         let ts = now_ts();
         let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
-        self.db
-            .with_write_conn(|conn| mark_chunks_embedded(conn, &ids, ts))?;
+        self.db.mark_chunks_embedded(&ids, ts)?;
 
         // Mark indexed (sets hash + state=indexed)
         gate.mark_passed(&verdict.file_id, &verdict.hash)?;
@@ -206,9 +200,7 @@ where
             }
 
             // Version-bump optimization: if chunk hashes are identical, skip embedding
-            let stored_hashes = self
-                .db
-                .with_read_conn(|conn| get_chunk_hashes(conn, &verdict.file_id))?;
+            let stored_hashes = self.db.get_chunk_hashes(&verdict.file_id)?;
 
             if chunks_match_stored(&chunks, &stored_hashes) {
                 let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
@@ -217,7 +209,7 @@ where
                     replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
                     replace_links(conn, &verdict.file_id, &links)?;
                     let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
-                    mark_chunks_embedded(conn, &ids, ts)?;
+                    crate::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
                     Ok(())
                 })?;
                 gate.mark_passed(&verdict.file_id, &verdict.hash)?;
@@ -284,7 +276,7 @@ where
             offsets.push((start, pf.chunks.len()));
         }
 
-        info!(chunk_count = all_texts.len(), "embedding wave…");
+        info!(chunk_count = all_texts.len(), "embedding wave\u{2026}");
         let all_embeddings = crate::embedder::embed_batch_async(&self.embedder, all_texts).await?;
         info!("embedding wave complete");
 
@@ -320,8 +312,7 @@ where
                 // Stamp embedded_at now that LanceDB has the vectors.
                 let ts = now_ts();
                 let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
-                self.db
-                    .with_write_conn(|conn| mark_chunks_embedded(conn, &ids, ts))?;
+                self.db.mark_chunks_embedded(&ids, ts)?;
 
                 gate.mark_passed(file_id, &pf.hash)?;
                 Ok::<(), crate::error::BrainCoreError>(())

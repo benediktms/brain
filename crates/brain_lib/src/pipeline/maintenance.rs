@@ -1,11 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use rusqlite::OptionalExtension;
 use tracing::{info, instrument, warn};
 
 use crate::db::files;
 use crate::doctor::{CheckStatus, DoctorReport};
-use crate::ports::{ChunkIndexWriter, SchemaMeta};
+use crate::ports::{ChunkIndexWriter, FileMetaReader, FileMetaWriter, SchemaMeta};
 use crate::scanner::scan_brain;
 
 use super::{IndexPipeline, VacuumStats};
@@ -18,9 +17,7 @@ where
     pub async fn delete_file(&self, path: &Path) -> crate::error::Result<bool> {
         let path_str = path.to_string_lossy().to_string();
 
-        let file_id = self
-            .db
-            .with_write_conn(|conn| files::handle_delete(conn, &path_str))?;
+        let file_id = self.db.handle_delete(&path_str)?;
         if let Some(ref fid) = file_id {
             self.store.delete_file_chunks(fid).await?;
             info!(path = %path_str, "file deleted from index");
@@ -36,6 +33,7 @@ where
         let to_str = to.to_string_lossy().to_string();
 
         let file_id = self.db.with_write_conn(|conn| {
+            use rusqlite::OptionalExtension;
             let file_id: Option<String> = conn
                 .query_row(
                     "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",
@@ -66,9 +64,7 @@ where
         let cutoff = crate::utils::now_ts() - threshold_secs;
 
         // 1. Purge soft-deleted files older than threshold
-        let purged_ids = self
-            .db
-            .with_write_conn(|conn| files::purge_deleted_files(conn, cutoff))?;
+        let purged_ids = self.db.purge_deleted_files(cutoff)?;
         let purged_count = purged_ids.len();
 
         // 2. Delete their LanceDB chunks
@@ -100,11 +96,12 @@ where
 
         // 1. Orphan chunks in LanceDB (file_id not in SQLite)
         let lance_file_ids = self.store.get_file_ids_with_chunks().await?;
-        let sqlite_file_ids: std::collections::HashSet<String> =
-            self.db.with_read_conn(|conn| {
-                let pairs = files::get_all_active_paths(conn)?;
-                Ok(pairs.into_iter().map(|(fid, _)| fid).collect())
-            })?;
+        let sqlite_file_ids: std::collections::HashSet<String> = self
+            .db
+            .get_all_active_paths()?
+            .into_iter()
+            .map(|(fid, _)| fid)
+            .collect();
         let orphan_ids: Vec<&String> = lance_file_ids
             .iter()
             .filter(|fid| !sqlite_file_ids.contains(*fid))
@@ -149,7 +146,7 @@ where
         }
 
         // 3. Content hash mismatches (stored hash vs actual file on disk)
-        let files_with_hashes = self.db.with_read_conn(files::get_files_with_hashes)?;
+        let files_with_hashes = self.db.get_files_with_hashes()?;
         let mut hash_mismatches = 0;
         let mut hash_errors = 0;
         for (_file_id, path, stored_hash) in &files_with_hashes {
@@ -226,7 +223,7 @@ where
         }
 
         // 5. Stuck files
-        let stuck = self.db.with_read_conn(files::find_stuck_files)?;
+        let stuck = self.db.find_stuck_files()?;
         if stuck.is_empty() {
             report.add(
                 "Stuck files",
@@ -284,7 +281,7 @@ where
         info!("LanceDB table rebuilt");
 
         // 3. Clear all content hashes so every file gets re-indexed
-        let cleared = self.db.with_write_conn(files::clear_all_content_hashes)?;
+        let cleared = self.db.clear_all_content_hashes()?;
         info!(cleared, "content hashes cleared for full re-index");
 
         Ok(())
