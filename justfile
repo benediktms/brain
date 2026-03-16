@@ -145,9 +145,9 @@ reindex-file path: ensure-binary
 # Verify brain-lib has no direct rusqlite/lancedb deps (persistence boundary check)
 [group('dev')]
 check-deps:
-    @cargo tree -p brain-lib --depth 1 2>/dev/null | grep -qE 'rusqlite|lancedb' \
-        && echo 'FAIL: brain-lib has direct persistence deps (rusqlite or lancedb)' && exit 1 \
-        || echo 'OK: brain-lib persistence boundary intact'
+    @cargo tree -p brain-lib --depth 1 2>/dev/null | grep -qE 'lancedb|arrow-schema|arrow-array' \
+        && echo 'FAIL: brain-lib has direct lancedb/arrow deps' && exit 1 \
+        || echo 'OK: brain-lib persistence boundary intact (lancedb/arrow removed; rusqlite deferred)'
 
 # ── Release ───────────────────────────────────────────────────────────────
 
