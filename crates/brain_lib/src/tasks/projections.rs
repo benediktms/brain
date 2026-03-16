@@ -8,12 +8,10 @@ use super::events::{
 };
 use super::queries::next_child_seq;
 
-/// Apply a single event to the SQLite projection tables.
+/// Apply a single event to SQLite projections (no transaction wrapper).
 ///
-/// `brain_id` is stamped on the `tasks` row for all `TaskCreated` events.
-/// For all other event types the brain_id is not re-written (the row already
-/// carries the brain_id set at creation time).
-pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
+/// Called by `apply_event` (with transaction) and `rebuild` (inside existing tx).
+fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
     match event.event_type {
         EventType::TaskCreated => {
             let p: TaskCreatedPayload = serde_json::from_value(event.payload.clone())
@@ -261,6 +259,21 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Resu
     Ok(())
 }
 
+/// Apply a single event to the SQLite projection tables.
+///
+/// `brain_id` is stamped on the `tasks` row for all `TaskCreated` events.
+/// For all other event types the brain_id is not re-written (the row already
+/// carries the brain_id set at creation time).
+///
+/// The projection mutation and event INSERT are wrapped in an explicit
+/// transaction for atomicity.
+pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    apply_event_inner(&tx, event, brain_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Rebuild all projection tables from a full event sequence.
 ///
 /// Drops FTS task triggers before the bulk delete to avoid content-sync
@@ -290,7 +303,7 @@ pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
     for event in events {
         // During rebuild, preserve the existing brain_id value from the event log
         // by reading it from the DB if available, or default to empty string.
-        apply_event(&tx, event, "")?;
+        apply_event_inner(&tx, event, "")?;
     }
 
     tx.commit()?;
