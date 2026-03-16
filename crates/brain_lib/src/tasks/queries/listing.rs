@@ -75,7 +75,9 @@ pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Resul
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
            {brain_clause}
-         ORDER BY t.priority ASC, t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
+         ORDER BY CASE WHEN t.status = 'in_progress' THEN 0 ELSE 1 END ASC,
+                  t.priority ASC,
+                  t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
 
@@ -163,6 +165,36 @@ pub fn list_done(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRo
     );
     let mut stmt = conn.prepare(&sql)?;
 
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
+    crate::db::collect_rows(rows)
+}
+
+/// List tasks with status exactly 'in_progress'.
+pub fn list_in_progress(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter_bare(brain_id);
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
+         FROM tasks
+         WHERE status = 'in_progress'{brain_clause}
+         ORDER BY priority ASC,
+                  CASE WHEN task_type = 'epic' THEN 0 ELSE 1 END ASC,
+                  due_ts ASC NULLS LAST, updated_at DESC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
+    crate::db::collect_rows(rows)
+}
+
+/// List tasks with status exactly 'cancelled'.
+pub fn list_cancelled(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let (brain_clause, brain_params) = brain_id_filter_bare(brain_id);
+    let sql = format!(
+        "SELECT {TASK_COLUMNS}
+         FROM tasks
+         WHERE status = 'cancelled'{brain_clause}
+         ORDER BY updated_at DESC, task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }

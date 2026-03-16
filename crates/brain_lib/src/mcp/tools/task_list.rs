@@ -23,6 +23,8 @@ enum StatusFilter {
     Ready,
     Blocked,
     Done,
+    InProgress,
+    Cancelled,
 }
 
 impl fmt::Display for StatusFilter {
@@ -32,6 +34,8 @@ impl fmt::Display for StatusFilter {
             Self::Ready => write!(f, "ready"),
             Self::Blocked => write!(f, "blocked"),
             Self::Done => write!(f, "done"),
+            Self::InProgress => write!(f, "in_progress"),
+            Self::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -143,6 +147,8 @@ impl TaskList {
             StatusFilter::Ready => store.list_ready(),
             StatusFilter::Blocked => store.list_blocked(),
             StatusFilter::Done => store.list_done(),
+            StatusFilter::InProgress => store.list_in_progress(),
+            StatusFilter::Cancelled => store.list_cancelled(),
         };
 
         let tasks = match tasks {
@@ -265,8 +271,8 @@ impl McpTool for TaskList {
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["open", "ready", "blocked", "done"],
-                        "description": "Filter tasks by status. 'open' (default): excludes done/cancelled. 'ready': no unresolved deps. 'blocked': has unresolved deps or blocked_reason. 'done': completed or cancelled tasks.",
+                        "enum": ["open", "ready", "blocked", "done", "in_progress", "cancelled"],
+                        "description": "Filter tasks by status. 'open' (default): excludes done/cancelled. 'ready': no unresolved deps. 'blocked': has unresolved deps or blocked_reason. 'done': completed or cancelled tasks. 'in_progress': only in-progress tasks. 'cancelled': only cancelled tasks.",
                         "default": "open"
                     },
                     "task_ids": {
@@ -926,5 +932,97 @@ mod tests {
         assert_eq!(parsed["count"], 5);
         assert_eq!(parsed["total"], 5);
         assert_eq!(parsed["has_more"], false);
+    }
+
+    #[tokio::test]
+    async fn test_list_in_progress_filter() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "t1",
+                "payload": { "title": "Open task", "priority": 1 }
+            }),
+        )
+        .await;
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "t2",
+                "payload": { "title": "In progress task", "priority": 2 }
+            }),
+        )
+        .await;
+        // Mark t2 as in_progress
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "status_changed",
+                "task_id": "t2",
+                "payload": { "new_status": "in_progress" }
+            }),
+        )
+        .await;
+
+        let result = registry
+            .dispatch("tasks.list", json!({ "status": "in_progress" }), &ctx)
+            .await;
+        assert!(result.is_error.is_none());
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["task_id"], "t2");
+    }
+
+    #[tokio::test]
+    async fn test_list_cancelled_filter() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "t1",
+                "payload": { "title": "Open task", "priority": 1 }
+            }),
+        )
+        .await;
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "t2",
+                "payload": { "title": "Cancelled task", "priority": 2 }
+            }),
+        )
+        .await;
+        // Mark t2 as cancelled
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "status_changed",
+                "task_id": "t2",
+                "payload": { "new_status": "cancelled" }
+            }),
+        )
+        .await;
+
+        let result = registry
+            .dispatch("tasks.list", json!({ "status": "cancelled" }), &ctx)
+            .await;
+        assert!(result.is_error.is_none());
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["tasks"][0]["task_id"], "t2");
     }
 }
