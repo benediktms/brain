@@ -197,6 +197,27 @@ impl TaskApplyEvent {
         let event_type = validated.event_type;
         let mut payload = validated.payload;
 
+        // Reject task creation on archived brains (other event types pass through)
+        if event_type == EventType::TaskCreated {
+            match super::is_brain_archived(&ctx.db, &ctx.brain_id) {
+                Ok(true) => {
+                    return ExecuteResult {
+                        result: ToolCallResult::error(
+                            "Cannot create tasks: brain is archived. Use `brain link` to add a root and unarchive.",
+                        ),
+                    };
+                }
+                Err(e) => {
+                    return ExecuteResult {
+                        result: ToolCallResult::error(format!(
+                            "Failed to check brain archived status: {e}"
+                        )),
+                    };
+                }
+                Ok(false) => {}
+            }
+        }
+
         // Resolve task_id: auto-generate for task_created, resolve prefix for others (I/O)
         let task_id = match validated.task_id_raw.as_deref() {
             Some(id) => {
@@ -962,6 +983,67 @@ mod tests {
         assert!(
             super::parse_and_validate_event(&params).is_ok(),
             "missing task_id is not a pure-validation concern"
+        );
+    }
+
+    fn mark_brain_archived(ctx: &crate::mcp::McpContext) {
+        ctx.db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
+                    [&ctx.brain_id],
+                )?;
+                Ok(())
+            })
+            .expect("failed to archive brain in test");
+    }
+
+    #[tokio::test]
+    async fn test_task_created_blocked_on_archived_brain() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        mark_brain_archived(&ctx);
+
+        let params = json!({
+            "event_type": "task_created",
+            "payload": { "title": "Should be blocked" }
+        });
+        let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0].text.contains("archived"),
+            "expected archived error, got: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_status_changed_allowed_on_archived_brain() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // Create task before archiving
+        let create = json!({
+            "event_type": "task_created",
+            "task_id": "t1",
+            "payload": { "title": "Pre-archive task" }
+        });
+        dispatch(&registry, "tasks.apply_event", create, &ctx).await;
+
+        mark_brain_archived(&ctx);
+
+        // Status change on existing task must still succeed
+        let update = json!({
+            "event_type": "status_changed",
+            "task_id": "t1",
+            "payload": { "new_status": "done" }
+        });
+        let result = dispatch(&registry, "tasks.apply_event", update, &ctx).await;
+        assert!(
+            result.is_error.is_none(),
+            "status_changed should succeed on archived brain, got: {}",
+            result.content[0].text
         );
     }
 
