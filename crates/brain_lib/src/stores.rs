@@ -1,9 +1,7 @@
-//! Unified store access — hides dual-DB wiring behind a single constructor.
+//! Unified store access — hides DB wiring behind a single constructor.
 //!
 //! Every call site that needs TaskStore + RecordStore + ObjectStore goes through
-//! `BrainStores` instead of manually resolving per-brain vs unified DB handles.
-//! Phase 2 (full DB consolidation) will collapse the dual-DB internals to a
-//! single handle — zero consumer API changes needed.
+//! `BrainStores` instead of manually resolving DB handles.
 
 use std::path::{Path, PathBuf};
 
@@ -18,12 +16,11 @@ use crate::tasks::TaskStore;
 
 /// Unified access to all brain stores.
 ///
-/// Internal dual-DB wiring (per-brain + unified) is hidden from consumers.
-/// Public fields expose only the stores and brain metadata.
+/// All stores share a single `db` handle — `~/.brain/brain.db` scoped by
+/// `brain_id`.
 pub struct BrainStores {
     // Internal — not part of public API.
-    per_brain_db: Db,
-    unified_db: Db,
+    db: Db,
 
     // Public — consumer API.
     pub tasks: TaskStore,
@@ -45,8 +42,8 @@ impl BrainStores {
 
     /// Construct from a brain name or ID via the global registry.
     ///
-    /// Resolves the brain entry, opens the per-brain DB, resolves the unified
-    /// DB, and builds all stores with audit trail if a project root exists.
+    /// Resolves the brain entry, opens the DB, and builds all stores with
+    /// audit trail if a project root exists.
     pub fn from_brain(name_or_id: &str) -> Result<Self> {
         let (name, entry) = config::resolve_brain_entry(name_or_id)?;
         let brain_id = config::resolve_brain_id(&entry, &name)?;
@@ -57,7 +54,6 @@ impl BrainStores {
             std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
         }
 
-        let db = Db::open(&paths.sqlite_db)?;
         let brain_data_dir = paths
             .sqlite_db
             .parent()
@@ -71,16 +67,9 @@ impl BrainStores {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| brain_data_dir.clone());
 
-        // Open unified DB if it exists and is a different file.
+        // Open the unified DB (~/.brain/brain.db) as the single database.
         let unified_db_path = brain_home.join("brain.db");
-        let unified = if unified_db_path.exists()
-            && std::fs::canonicalize(&unified_db_path).ok()
-                != std::fs::canonicalize(&paths.sqlite_db).ok()
-        {
-            Db::open(&unified_db_path)?
-        } else {
-            db.clone()
-        };
+        let db = Db::open(&unified_db_path)?;
 
         // Audit trail: project-local JSONL if a root is available.
         let audit_path = entry
@@ -88,7 +77,7 @@ impl BrainStores {
             .first()
             .map(|root| root.join(".brain").join("tasks").join("events.jsonl"));
 
-        let mut stores = Self::build(db, unified, brain_id, name, &brain_data_dir, brain_home)?;
+        let mut stores = Self::build(db, brain_id, name, &brain_data_dir, brain_home)?;
 
         if let Some(p) = audit_path {
             stores.tasks = stores.tasks.with_audit_path(p);
@@ -97,14 +86,13 @@ impl BrainStores {
         Ok(stores)
     }
 
-    /// Low-level: from pre-opened Db handles.
+    /// Low-level: from a pre-opened Db handle.
     ///
-    /// Used by the daemon which already has a per-brain Db from IndexPipeline.
+    /// Used by the daemon which already has a Db from IndexPipeline.
     /// `brain_data_dir` is the per-brain data directory (e.g.
     /// `~/.brain/brains/<name>/`).
     pub fn from_dbs(
-        per_brain: Db,
-        unified: Db,
+        db: Db,
         brain_id: &str,
         brain_data_dir: &Path,
         brain_home: &Path,
@@ -116,8 +104,7 @@ impl BrainStores {
             .to_string();
 
         Self::build(
-            per_brain,
-            unified,
+            db,
             brain_id.to_string(),
             brain_name,
             brain_data_dir,
@@ -160,8 +147,7 @@ impl BrainStores {
         Ok((
             tmp,
             Self {
-                per_brain_db: db.clone(),
-                unified_db: db,
+                db,
                 tasks,
                 records,
                 objects,
@@ -172,18 +158,9 @@ impl BrainStores {
         ))
     }
 
-    /// Access the per-brain Db (for pipeline indexing, backfill).
-    ///
-    /// Escape hatch — will be removed in Phase 2 (full DB consolidation).
-    pub fn per_brain_db(&self) -> &Db {
-        &self.per_brain_db
-    }
-
-    /// Access the unified Db (for direct queries).
-    ///
-    /// Escape hatch — will be removed in Phase 2 (full DB consolidation).
-    pub fn unified_db(&self) -> &Db {
-        &self.unified_db
+    /// Access the underlying Db handle.
+    pub fn db(&self) -> &Db {
+        &self.db
     }
 
     /// Set an audit trail path on the TaskStore.
@@ -195,8 +172,6 @@ impl BrainStores {
     // -- internals --
 
     fn from_path_inner(sqlite_db: &Path, brain_home_override: Option<&Path>) -> Result<Self> {
-        let per_brain = Db::open(sqlite_db)?;
-
         let brain_data_dir = sqlite_db.parent().unwrap_or(Path::new("."));
         let brain_name = brain_data_dir
             .file_name()
@@ -219,14 +194,13 @@ impl BrainStores {
             config::brain_home().unwrap_or_else(|_| brain_data_dir.to_path_buf())
         };
 
-        // Open unified DB only if it exists and is a different file.
+        // Open the unified DB (~/.brain/brain.db) as the single database.
+        // Falls back to the path-local brain.db when the unified DB does not yet exist.
         let unified_db_path = brain_home.join("brain.db");
-        let unified = if unified_db_path.exists()
-            && std::fs::canonicalize(&unified_db_path).ok() != std::fs::canonicalize(sqlite_db).ok()
-        {
+        let db = if unified_db_path.exists() {
             Db::open(&unified_db_path)?
         } else {
-            per_brain.clone()
+            Db::open(sqlite_db)?
         };
 
         // Resolve brain_id from config registry.
@@ -238,46 +212,35 @@ impl BrainStores {
             String::new()
         };
 
-        Self::build(
-            per_brain,
-            unified,
-            brain_id,
-            brain_name,
-            brain_data_dir,
-            brain_home,
-        )
+        Self::build(db, brain_id, brain_name, brain_data_dir, brain_home)
     }
 
-    /// Build all stores from resolved DB handles and paths.
+    /// Build all stores from a resolved Db handle and paths.
     fn build(
-        per_brain: Db,
-        unified: Db,
+        db: Db,
         brain_id: String,
         brain_name: String,
         brain_data_dir: &Path,
         brain_home: PathBuf,
     ) -> Result<Self> {
-        // Ensure the brain is registered in both DBs before any writes.
+        // Ensure the brain is registered before any writes.
         // The FK constraint on brain_id (v22) requires the brain to exist upfront.
         if !brain_id.is_empty() {
-            per_brain.ensure_brain_registered(&brain_id, &brain_name)?;
-            unified.ensure_brain_registered(&brain_id, &brain_name)?;
+            db.ensure_brain_registered(&brain_id, &brain_name)?;
         }
         let tasks_dir = brain_data_dir.join("tasks");
         let tasks = if brain_id.is_empty() {
-            TaskStore::new(&tasks_dir, unified.clone())?
+            TaskStore::new(&tasks_dir, db.clone())?
         } else {
-            TaskStore::with_brain_id(&tasks_dir, unified.clone(), &brain_id)?
-        }
-        .with_meta_db(per_brain.clone());
+            TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id)?
+        };
 
         let records_dir = brain_data_dir.join("records");
         let records = if brain_id.is_empty() {
-            RecordStore::new(&records_dir, unified.clone())?
+            RecordStore::new(&records_dir, db.clone())?
         } else {
-            RecordStore::with_brain_id(&records_dir, unified.clone(), &brain_id)?
-        }
-        .with_meta_db(per_brain.clone());
+            RecordStore::with_brain_id(&records_dir, db.clone(), &brain_id)?
+        };
 
         // ObjectStore: prefer unified brain_home/objects when available.
         let unified_objects = brain_home.join("objects");
@@ -289,8 +252,7 @@ impl BrainStores {
         let objects = ObjectStore::new(&objects_dir)?;
 
         Ok(Self {
-            per_brain_db: per_brain,
-            unified_db: unified,
+            db,
             tasks,
             records,
             objects,
@@ -305,7 +267,7 @@ impl BrainStores {
 mod tests {
     use super::*;
 
-    /// Helper: create standard brain directory structure and return per-brain DB path.
+    /// Helper: create standard brain directory structure and return unified DB path.
     fn make_brain_dirs(root: &Path, name: &str, create_unified: bool) -> PathBuf {
         let brain_data = root.join("brains").join(name);
         std::fs::create_dir_all(brain_data.join("tasks")).unwrap();
@@ -368,7 +330,7 @@ mod tests {
 
         let stores = BrainStores::from_path_inner(&sqlite_db, Some(tmp.path())).unwrap();
 
-        // No unified DB → falls back to per-brain clone
+        // No unified DB → falls back to per-brain path
         assert_eq!(stores.brain_home, tmp.path());
         assert!(stores.brain_id.is_empty());
     }
@@ -386,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn from_dbs_wires_meta_db() {
+    fn from_dbs_wires_stores() {
         let tmp = TempDir::new().unwrap();
         let brain_data = tmp.path().join("brains").join("test-brain");
         std::fs::create_dir_all(&brain_data).unwrap();
@@ -394,8 +356,7 @@ mod tests {
         let db_path = brain_data.join("brain.db");
         let db = Db::open(&db_path).unwrap();
 
-        let stores =
-            BrainStores::from_dbs(db.clone(), db, "test-id", &brain_data, tmp.path()).unwrap();
+        let stores = BrainStores::from_dbs(db, "test-id", &brain_data, tmp.path()).unwrap();
 
         assert_eq!(stores.brain_id, "test-id");
         assert_eq!(stores.brain_name, "test-brain");

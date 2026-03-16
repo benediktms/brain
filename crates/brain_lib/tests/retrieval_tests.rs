@@ -64,8 +64,7 @@ async fn setup_mcp() -> (McpContext, TempDir) {
     let objects = brain_lib::records::objects::ObjectStore::new(&objects_dir).unwrap();
 
     let ctx = McpContext {
-        db: db.clone(),
-        unified_db: db,
+        db,
         store: Some(store_reader),
         writable_store: Some(store),
         embedder: Some(embedder),
@@ -578,8 +577,7 @@ async fn test_mcp_search_minimal_returns_results() {
     let store2_reader = brain_lib::store::StoreReader::from_store(&store2);
     let ctx_db = Db::open(&sqlite_path).unwrap();
     let ctx = McpContext {
-        db: ctx_db.clone(),
-        unified_db: ctx_db,
+        db: ctx_db,
         store: Some(store2_reader),
         writable_store: Some(store2),
         embedder: Some(Arc::new(MockEmbedder)),
@@ -655,8 +653,7 @@ async fn test_mcp_expand_returns_full_content() {
     let store3_reader = brain_lib::store::StoreReader::from_store(&store3);
     let ctx_db3 = Db::open(&sqlite_path).unwrap();
     let ctx = McpContext {
-        db: ctx_db3.clone(),
-        unified_db: ctx_db3,
+        db: ctx_db3,
         store: Some(store3_reader),
         writable_store: Some(store3),
         embedder: Some(Arc::new(MockEmbedder)),

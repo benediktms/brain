@@ -59,19 +59,14 @@ enum DispatchMode {
 /// be downloaded. When absent, task tools still work but memory/search tools
 /// return an error asking the user to download the model via the HuggingFace CLI.
 ///
-/// Two database handles are maintained:
-/// - `db`: per-brain SQLite (files, chunks, summaries, brain_meta) used by the
-///   indexing pipeline, search queries, and the status tool.
-/// - `unified_db`: `~/.brain/brain.db` shared across all brains.  TaskStore
-///   and RecordStore are always opened against this handle so that
+/// A single database handle is maintained:
+/// - `db`: SQLite (`~/.brain/brain.db`) shared across all brains.  TaskStore,
+///   RecordStore, and the indexing pipeline all use this handle so that
 ///   brain_id-scoped queries work correctly across the full workspace.
 pub struct McpContext {
-    /// Per-brain SQLite — indexing tables (files, chunks, summaries, brain_meta).
+    /// SQLite (`~/.brain/brain.db`) — tasks, records, record_events, and
+    /// indexing tables (files, chunks, summaries, brain_meta).
     pub db: Db,
-    /// Unified SQLite (`~/.brain/brain.db`) — tasks, records, record_events.
-    /// Falls back to `db` (same handle) when the unified DB does not yet exist
-    /// (pre-migration installations).
-    pub unified_db: Db,
     pub store: Option<StoreReader>,
     pub writable_store: Option<Store>, // for task capsule embedding
     pub embedder: Option<Arc<dyn Embed>>,
@@ -113,7 +108,7 @@ impl McpContext {
         // Step 2: optionally load LanceDB + embedder. Failures are logged and
         // result in tasks-only mode — no hard error.
         let (writable_store, store, embedder) =
-            match Self::try_load_search_layer(model_dir, lance_db, stores.per_brain_db()).await {
+            match Self::try_load_search_layer(model_dir, lance_db, stores.db()).await {
                 Ok((ws, s, e)) => (Some(ws), Some(s), Some(e)),
                 Err(err) => {
                     info!("embedding model unavailable ({err}), starting in tasks-only mode");
@@ -124,8 +119,7 @@ impl McpContext {
         let metrics = Arc::new(Metrics::new());
 
         Ok(Arc::new(Self {
-            db: stores.per_brain_db().clone(),
-            unified_db: stores.unified_db().clone(),
+            db: stores.db().clone(),
             store,
             writable_store,
             embedder,
@@ -144,13 +138,11 @@ impl McpContext {
     /// Used by the daemon to create per-brain MCP contexts without going
     /// through the full bootstrap sequence (which opens its own stores).
     ///
-    /// `db` is the per-brain SQLite (indexing tables).
-    /// `unified_db` is `~/.brain/brain.db` (tasks/records).  Pass the same
-    /// handle as `db` for pre-migration installations.
+    /// `db` is the single SQLite handle (`~/.brain/brain.db`) used for all
+    /// tables — tasks, records, and indexing.
     #[allow(clippy::too_many_arguments)]
     pub fn from_stores(
         db: Db,
-        unified_db: Db,
         store: Option<StoreReader>,
         writable_store: Option<Store>,
         embedder: Option<Arc<dyn Embed>>,
@@ -164,7 +156,6 @@ impl McpContext {
         let brain_id = tasks.brain_id.clone();
         Arc::new(Self {
             db,
-            unified_db,
             store,
             writable_store,
             embedder,
@@ -216,22 +207,16 @@ impl McpContext {
         Ok((name, bid))
     }
 
-    /// Create a brain_id-scoped TaskStore sharing this context's unified DB.
+    /// Create a brain_id-scoped TaskStore sharing this context's db handle.
     pub fn tasks_for_brain(&self, brain_id: &str) -> crate::error::Result<TaskStore> {
         let tasks_dir = self.brain_home.join("tasks");
-        Ok(
-            TaskStore::with_brain_id(&tasks_dir, self.unified_db.clone(), brain_id)?
-                .with_meta_db(self.db.clone()),
-        )
+        TaskStore::with_brain_id(&tasks_dir, self.db.clone(), brain_id)
     }
 
-    /// Create a brain_id-scoped RecordStore sharing this context's unified DB.
+    /// Create a brain_id-scoped RecordStore sharing this context's db handle.
     pub fn records_for_brain(&self, brain_id: &str) -> crate::error::Result<RecordStore> {
         let records_dir = self.brain_home.join("records");
-        Ok(
-            RecordStore::with_brain_id(&records_dir, self.unified_db.clone(), brain_id)?
-                .with_meta_db(self.db.clone()),
-        )
+        RecordStore::with_brain_id(&records_dir, self.db.clone(), brain_id)
     }
 
     /// Clone this context with a different brain_id.
@@ -249,7 +234,6 @@ impl McpContext {
         let objects = ObjectStore::new(self.objects.root())?;
         Ok(Arc::new(Self {
             db: self.db.clone(),
-            unified_db: self.unified_db.clone(),
             store: self.store.clone(),
             writable_store: None, // shared read-only via IPC
             embedder: self.embedder.clone(),

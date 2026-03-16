@@ -12,12 +12,11 @@ use std::sync::atomic::Ordering;
 
 use crate::capsule::generate_stub_capsule;
 use crate::db::Db;
-use crate::db::chunks::get_chunks_by_ids;
-use crate::db::fts::search_fts;
-use crate::db::summaries::{SummaryRow, get_ml_summaries_for_chunks, list_episodes};
+use crate::db::summaries::SummaryRow;
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
+use crate::ports::{ChunkMetaReader, ChunkSearcher, EpisodeReader, FtsSearcher};
 use crate::ranking::{
     CandidateSignals, FusionConfidence, RerankCandidate, Reranker, RerankerPolicy, Weights,
     compute_fusion_confidence, rank_candidates, resolve_intent,
@@ -38,19 +37,38 @@ pub struct ReflectResult {
 }
 
 /// Orchestrates the read-path: hybrid search, expand, and reflect.
-pub struct QueryPipeline<'a> {
-    db: &'a Db,
-    store: &'a StoreReader,
+///
+/// The `S` type parameter is the LanceDB store implementation, which must
+/// implement [`ChunkSearcher`]. It defaults to [`StoreReader`] for production
+/// use. Tests may substitute any type that implements `ChunkSearcher` without
+/// opening real LanceDB storage.
+///
+/// The `D` type parameter is the SQLite-backed persistence implementation,
+/// which must implement [`ChunkMetaReader`], [`FtsSearcher`], and
+/// [`EpisodeReader`]. It defaults to [`Db`] for production use.
+pub struct QueryPipeline<'a, S = StoreReader, D = Db>
+where
+    S: ChunkSearcher + Send + Sync,
+    D: ChunkMetaReader + FtsSearcher + EpisodeReader + Send + Sync,
+{
+    /// SQLite database — abstracted via port traits.
+    db: &'a D,
+    /// LanceDB store — abstracted via [`ChunkSearcher`]; defaults to [`StoreReader`].
+    store: &'a S,
     embedder: &'a Arc<dyn Embed>,
     metrics: &'a Arc<Metrics>,
     reranker: Option<&'a dyn Reranker>,
     reranker_policy: RerankerPolicy,
 }
 
-impl<'a> QueryPipeline<'a> {
+impl<'a, S, D> QueryPipeline<'a, S, D>
+where
+    S: ChunkSearcher + Send + Sync,
+    D: ChunkMetaReader + FtsSearcher + EpisodeReader + Send + Sync,
+{
     pub fn new(
-        db: &'a Db,
-        store: &'a StoreReader,
+        db: &'a D,
+        store: &'a S,
         embedder: &'a Arc<dyn Embed>,
         metrics: &'a Arc<Metrics>,
     ) -> Self {
@@ -69,7 +87,10 @@ impl<'a> QueryPipeline<'a> {
     /// When attached, the pipeline computes fusion confidence after hybrid
     /// retrieval and conditionally invokes the reranker on the top-N fused
     /// candidates when confidence is below the policy threshold.
-    pub fn with_reranker(mut self, reranker: &'a dyn Reranker, policy: RerankerPolicy) -> Self {
+    pub fn with_reranker(mut self, reranker: &'a dyn Reranker, policy: RerankerPolicy) -> Self
+    where
+        Self: Sized,
+    {
         self.reranker = Some(reranker);
         self.reranker_policy = policy;
         self
@@ -115,8 +136,7 @@ impl<'a> QueryPipeline<'a> {
         ranked: &[crate::ranking::RankedResult],
     ) -> Result<HashMap<String, String>> {
         let chunk_ids: Vec<&str> = ranked.iter().map(|r| r.chunk_id.as_str()).collect();
-        self.db
-            .with_read_conn(|conn| get_ml_summaries_for_chunks(conn, &chunk_ids))
+        self.db.get_ml_summaries_for_chunks(&chunk_ids)
     }
 
     /// Core search logic: returns ranked results with fusion confidence.
@@ -144,10 +164,7 @@ impl<'a> QueryPipeline<'a> {
             .await?;
 
         // 3. FTS search (top-50, gracefully degrade on failure)
-        let fts_results = match self
-            .db
-            .with_read_conn(|conn| search_fts(conn, query, CANDIDATE_LIMIT))
-        {
+        let fts_results = match self.db.search_fts(query, CANDIDATE_LIMIT) {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, "FTS search failed, continuing with vector-only");
@@ -218,9 +235,7 @@ impl<'a> QueryPipeline<'a> {
 
         // 5. Enrich from SQLite (single batched JOIN — pagerank_score comes from files table)
         let chunk_ids: Vec<String> = candidates.keys().cloned().collect();
-        let enrichment = self
-            .db
-            .with_read_conn(|conn| get_chunks_by_ids(conn, &chunk_ids));
+        let enrichment = self.db.get_chunks_by_ids(&chunk_ids);
 
         if let Ok(rows) = enrichment {
             let now = crate::utils::now_ts();
@@ -301,9 +316,7 @@ impl<'a> QueryPipeline<'a> {
         memory_ids: &[String],
         budget_tokens: usize,
     ) -> Result<ExpandResult> {
-        let rows = self
-            .db
-            .with_read_conn(|conn| get_chunks_by_ids(conn, memory_ids))?;
+        let rows = self.db.get_chunks_by_ids(memory_ids)?;
 
         // Preserve the requested order
         let row_map: HashMap<&str, _> = rows.iter().map(|r| (r.chunk_id.as_str(), r)).collect();
@@ -327,10 +340,7 @@ impl<'a> QueryPipeline<'a> {
     /// Reflect: fetch recent episodes + search for related chunks, return combined result.
     #[instrument(skip_all)]
     pub async fn reflect(&self, topic: String, budget_tokens: usize) -> Result<ReflectResult> {
-        let episodes = self
-            .db
-            .with_read_conn(|conn| list_episodes(conn, 10))
-            .unwrap_or_default();
+        let episodes = self.db.list_episodes(10).unwrap_or_default();
 
         let search_result = self
             .search(&topic, "reflection", budget_tokens / 2, 5, &[])
@@ -353,7 +363,15 @@ impl<'a> QueryPipeline<'a> {
 ///
 /// Task/record metadata queries use the single shared SQLite `db` (with
 /// brain_id scoping where applicable). Vector search fans out concurrently
-/// to each brain's per-brain LanceDB `StoreReader`.
+/// to each brain's per-brain LanceDB store.
+///
+/// The `S` type parameter is the store implementation for each brain, which
+/// must implement [`ChunkSearcher`]. It defaults to [`StoreReader`] for
+/// production use. Tests may substitute any type implementing `ChunkSearcher`.
+///
+/// The `D` type parameter is the SQLite-backed persistence implementation,
+/// which must implement [`ChunkMetaReader`], [`FtsSearcher`], and
+/// [`EpisodeReader`]. It defaults to [`Db`] for production use.
 ///
 /// Construct via the builder or directly:
 /// ```ignore
@@ -367,21 +385,29 @@ impl<'a> QueryPipeline<'a> {
 ///     metrics: &metrics,
 /// };
 /// ```
-pub struct FederatedPipeline<'a> {
-    /// Shared unified SQLite database (covers all brains for task/record data).
-    pub db: &'a crate::db::Db,
-    /// Per-brain entries: `(brain_name, store_reader)`.
+pub struct FederatedPipeline<'a, S = StoreReader, D = Db>
+where
+    S: ChunkSearcher + Send + Sync,
+    D: ChunkMetaReader + FtsSearcher + EpisodeReader + Send + Sync,
+{
+    /// Shared unified SQLite database — abstracted via port traits.
+    pub db: &'a D,
+    /// Per-brain entries: `(brain_name, store)`.
     ///
-    /// `store_reader` is `None` when the brain's LanceDB has not yet been
+    /// `store` is `None` when the brain's LanceDB has not yet been
     /// initialised — that brain is skipped for vector search with a warning.
-    pub brains: Vec<(String, Option<StoreReader>)>,
+    pub brains: Vec<(String, Option<S>)>,
     /// Shared embedder — query is embedded once, used across all brains.
     pub embedder: &'a Arc<dyn crate::embedder::Embed>,
     /// Shared metrics handle.
     pub metrics: &'a Arc<crate::metrics::Metrics>,
 }
 
-impl<'a> FederatedPipeline<'a> {
+impl<'a, S, D> FederatedPipeline<'a, S, D>
+where
+    S: ChunkSearcher + Send + Sync,
+    D: ChunkMetaReader + FtsSearcher + EpisodeReader + Send + Sync,
+{
     /// Search across all configured brains.
     ///
     /// The query is embedded once. Vector search fans out concurrently to

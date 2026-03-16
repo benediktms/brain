@@ -674,33 +674,22 @@ fn get_prefix(db_path: &std::path::Path) -> String {
     .unwrap()
 }
 
-/// When the per-brain DB has prefix "AAA" and the unified DB has stale prefix
-/// "ZZZ", task creation must use the per-brain prefix.
+/// Task creation must use the prefix stored in the single brain DB.
 #[test]
-fn task_prefix_uses_per_brain_db_not_unified() {
+fn task_prefix_uses_brain_db() {
     let (project, home) = setup_brain();
     let _ = project;
-    let per_brain_db = sqlite_db_path(home.path());
-    let unified_db_path = home.path().join("brain.db");
+    let db_path = sqlite_db_path(home.path());
 
-    // Create unified DB if it doesn't exist
-    if !unified_db_path.exists() {
-        brain_lib::db::Db::open(&unified_db_path).unwrap();
-    }
+    // Plant a known prefix in the DB
+    set_prefix(&db_path, "AAA");
+    assert_eq!(get_prefix(&db_path), "AAA");
 
-    // Plant different prefixes in each DB
-    set_prefix(&per_brain_db, "AAA");
-    set_prefix(&unified_db_path, "ZZZ");
-
-    // Verify our setup
-    assert_eq!(get_prefix(&per_brain_db), "AAA");
-    assert_eq!(get_prefix(&unified_db_path), "ZZZ");
-
-    // Create a task — should use per-brain prefix "AAA"
+    // Create a task — should use prefix "AAA"
     let output = brain_cmd()
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
-        .arg(&per_brain_db)
+        .arg(&db_path)
         .args(["tasks", "create", "--title", "Prefix test"])
         .output()
         .unwrap();
@@ -708,36 +697,25 @@ fn task_prefix_uses_per_brain_db_not_unified() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // The task ID should start with "AAA-", not "ZZZ-"
     assert!(
         stdout.contains("AAA-"),
-        "Task ID should use per-brain prefix 'AAA', got: {stdout}"
-    );
-    assert!(
-        !stdout.contains("ZZZ-"),
-        "Task ID must NOT use unified DB's stale prefix 'ZZZ', got: {stdout}"
+        "Task ID should use prefix 'AAA', got: {stdout}"
     );
 }
 
-/// Same test but with JSON output — verify the task_id field in JSON.
+/// Same test but with JSON output — verify the task_id field in JSON uses the brain DB prefix.
 #[test]
-fn task_prefix_json_uses_per_brain_db() {
+fn task_prefix_json_uses_brain_db() {
     let (project, home) = setup_brain();
     let _ = project;
-    let per_brain_db = sqlite_db_path(home.path());
-    let unified_db_path = home.path().join("brain.db");
+    let db_path = sqlite_db_path(home.path());
 
-    if !unified_db_path.exists() {
-        brain_lib::db::Db::open(&unified_db_path).unwrap();
-    }
-
-    set_prefix(&per_brain_db, "COR");
-    set_prefix(&unified_db_path, "BAD");
+    set_prefix(&db_path, "COR");
 
     let output = brain_cmd()
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
-        .arg(&per_brain_db)
+        .arg(&db_path)
         .args(["tasks", "--json", "create", "--title", "JSON prefix test"])
         .output()
         .unwrap();
@@ -753,23 +731,14 @@ fn task_prefix_json_uses_per_brain_db() {
     );
 }
 
-/// Snapshot save should also use the per-brain prefix, not the unified DB's.
+/// Snapshot save should use the prefix stored in the brain DB.
 #[test]
-fn snapshot_prefix_uses_per_brain_db() {
+fn snapshot_prefix_uses_brain_db() {
     let (project, home) = setup_brain();
     let _ = project;
-    let per_brain_db = sqlite_db_path(home.path());
-    let unified_db_path = home.path().join("brain.db");
+    let db_path = sqlite_db_path(home.path());
 
-    if !unified_db_path.exists() {
-        brain_lib::db::Db::open(&unified_db_path).unwrap();
-    }
-
-    // Create unified objects dir (needed for snapshot save)
-    std::fs::create_dir_all(home.path().join("objects")).unwrap();
-
-    set_prefix(&per_brain_db, "SNP");
-    set_prefix(&unified_db_path, "OLD");
+    set_prefix(&db_path, "SNP");
 
     // Save a snapshot via a temp file
     let payload_file = home.path().join("test_payload.txt");
@@ -778,7 +747,7 @@ fn snapshot_prefix_uses_per_brain_db() {
     let output = brain_cmd()
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
-        .arg(&per_brain_db)
+        .arg(&db_path)
         .args(["snapshots", "save", "--title", "Prefix snap", "--file"])
         .arg(&payload_file)
         .output()
@@ -789,10 +758,6 @@ fn snapshot_prefix_uses_per_brain_db() {
 
     assert!(
         stdout.contains("SNP-"),
-        "Snapshot ID should use per-brain prefix 'SNP', got: {stdout}"
-    );
-    assert!(
-        !stdout.contains("OLD-"),
-        "Snapshot ID must NOT use unified DB's stale prefix 'OLD', got: {stdout}"
+        "Snapshot ID should use prefix 'SNP', got: {stdout}"
     );
 }

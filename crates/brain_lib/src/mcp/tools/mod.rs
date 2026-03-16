@@ -207,8 +207,7 @@ pub(crate) mod tests {
         (
             tmp,
             McpContext {
-                db: stores.per_brain_db().clone(),
-                unified_db: stores.unified_db().clone(),
+                db: stores.db().clone(),
                 store: Some(store_reader),
                 writable_store: Some(store),
                 embedder: Some(embedder),

@@ -6,7 +6,7 @@ pub mod meta;
 #[cfg(test)]
 mod migration_harness;
 mod migrations;
-pub(crate) mod schema;
+pub mod schema;
 pub mod summaries;
 
 use std::path::Path;
@@ -25,7 +25,7 @@ use crate::error::{BrainCoreError, Result};
 /// for row in rows { result.push(row?); }
 /// Ok(result)
 /// ```
-pub(crate) fn collect_rows<T>(
+pub fn collect_rows<T>(
     rows: impl Iterator<Item = std::result::Result<T, rusqlite::Error>>,
 ) -> Result<Vec<T>> {
     rows.collect::<std::result::Result<Vec<_>, _>>()

@@ -984,8 +984,7 @@ mod tests {
         let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
 
         let ctx = crate::mcp::McpContext {
-            db: db.clone(),
-            unified_db: db,
+            db,
             store: None,
             writable_store: None,
             embedder: None,

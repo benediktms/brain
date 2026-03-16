@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/brain_lib", "crates/cli"]
+members = ["crates/brain_lib", "crates/brain_persistence", "crates/cli"]
 
 [workspace.package]
 version = "0.2.1"

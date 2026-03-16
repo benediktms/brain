@@ -4,11 +4,15 @@ use tracing::{info, instrument, warn};
 
 use crate::chunker::CHUNKER_VERSION;
 use crate::db::files;
+use crate::ports::{ChunkIndexWriter, FileMetaReader, FileMetaWriter, SchemaMeta};
 use crate::scanner::scan_brain;
 
 use super::IndexPipeline;
 
-impl IndexPipeline {
+impl<S> IndexPipeline<S>
+where
+    S: ChunkIndexWriter + SchemaMeta + Send + Sync,
+{
     /// Full scan: index all files, detect deletions, recover stuck states.
     #[instrument(skip(self))]
     pub async fn full_scan(&self, dirs: &[PathBuf]) -> crate::error::Result<super::ScanStats> {
@@ -16,7 +20,7 @@ impl IndexPipeline {
         let mut stats = super::ScanStats::default();
 
         // 1. Recover stuck files (crash recovery)
-        let stuck = self.db.with_write_conn(files::find_stuck_files)?;
+        let stuck = self.db.find_stuck_files()?;
         if !stuck.is_empty() {
             info!(
                 count = stuck.len(),
@@ -50,7 +54,7 @@ impl IndexPipeline {
 
         // 3. Detect deletions (files in DB but not on disk)
         info!("checking for stale files in DB");
-        let active_paths = self.db.with_write_conn(files::get_all_active_paths)?;
+        let active_paths = self.db.get_all_active_paths()?;
         info!(
             active_in_db = active_paths.len(),
             on_disk = disk_paths.len(),
@@ -58,8 +62,7 @@ impl IndexPipeline {
         );
         for (file_id, db_path) in &active_paths {
             if !disk_paths.contains(db_path.as_str()) {
-                self.db
-                    .with_write_conn(|conn| files::handle_delete(conn, db_path))?;
+                self.db.handle_delete(db_path)?;
                 self.store.delete_file_chunks(file_id).await?;
                 info!(path = %db_path, "deleted stale file from index");
                 stats.deleted += 1;
@@ -67,9 +70,7 @@ impl IndexPipeline {
         }
 
         // 4. Check for stale chunker versions
-        let stale_count = self
-            .db
-            .with_read_conn(|conn| files::count_stale_chunker_version(conn, CHUNKER_VERSION))?;
+        let stale_count = self.db.count_stale_chunker_version(CHUNKER_VERSION)?;
         if stale_count > 0 {
             warn!(
                 count = stale_count,
@@ -101,11 +102,11 @@ impl IndexPipeline {
     /// Force re-index all files: clear all content hashes, then run full_scan + optimize.
     #[instrument(skip(self))]
     pub async fn reindex_full(&self, dirs: &[PathBuf]) -> crate::error::Result<super::ScanStats> {
-        let cleared = self.db.with_write_conn(files::clear_all_content_hashes)?;
+        let cleared = self.db.clear_all_content_hashes()?;
         info!(cleared, "cleared all content hashes for full reindex");
 
         let stats = self.full_scan(dirs).await?;
-        self.store.optimizer().force_optimize().await;
+        self.store.force_optimize().await;
 
         info!(
             indexed = stats.indexed,
@@ -121,9 +122,7 @@ impl IndexPipeline {
     #[instrument(skip(self))]
     pub async fn reindex_file(&self, path: &Path) -> crate::error::Result<bool> {
         let path_str = path.to_string_lossy().to_string();
-        let found = self
-            .db
-            .with_write_conn(|conn| files::clear_content_hash_by_path(conn, &path_str))?;
+        let found = self.db.clear_content_hash_by_path(&path_str)?;
         if !found {
             info!(path = %path_str, "file not in index, indexing fresh");
         }
