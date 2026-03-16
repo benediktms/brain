@@ -213,6 +213,106 @@ pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     Ok(())
 }
 
+// ── ext-link ─────────────────────────────────────────────────
+
+pub fn ext_link_add(
+    ctx: &TaskCtx,
+    task_id: &str,
+    source: &str,
+    id: &str,
+    url: Option<&str>,
+) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let event = TaskEvent::new(
+        task_id.as_str(),
+        "cli",
+        EventType::ExternalIdAdded,
+        &ExternalIdPayload {
+            source: source.to_string(),
+            external_id: id.to_string(),
+            external_url: url.map(|u| u.to_string()),
+        },
+    );
+    ctx.store.append(&event)?;
+
+    if ctx.json {
+        let out = serde_json::json!({
+            "event_id": event.event_id,
+            "task_id": task_id,
+            "source": source,
+            "external_id": id,
+            "external_url": url,
+            "action": "ext_link_added",
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Added external reference [{source}:{id}] to task {task_id}");
+    }
+
+    Ok(())
+}
+
+pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let event = TaskEvent::new(
+        task_id.as_str(),
+        "cli",
+        EventType::ExternalIdRemoved,
+        &ExternalIdPayload {
+            source: source.to_string(),
+            external_id: id.to_string(),
+            external_url: None,
+        },
+    );
+    ctx.store.append(&event)?;
+
+    if ctx.json {
+        let out = serde_json::json!({
+            "event_id": event.event_id,
+            "task_id": task_id,
+            "source": source,
+            "external_id": id,
+            "action": "ext_link_removed",
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Removed external reference [{source}:{id}] from task {task_id}");
+    }
+
+    Ok(())
+}
+
+pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
+    let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let refs = ctx.store.get_external_ids(task_id)?;
+
+    if ctx.json {
+        let out: Vec<serde_json::Value> = refs
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "source": e.source,
+                    "external_id": e.external_id,
+                    "external_url": e.external_url,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else if refs.is_empty() {
+        println!("No external references for task {task_id}");
+    } else {
+        for r in &refs {
+            if let Some(ref u) = r.external_url {
+                println!("[{}:{}] {}", r.source, r.external_id, u);
+            } else {
+                println!("[{}:{}]", r.source, r.external_id);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ── comment ─────────────────────────────────────────────────
 
 pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {

@@ -321,6 +321,32 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 TasksAction::Unlink { task_id, chunk_id } => {
                     commands::tasks::run::unlink(&ctx, &task_id, &chunk_id)?;
                 }
+                TasksAction::ExtLink { action } => match action {
+                    ExtLinkAction::Add {
+                        task_id,
+                        source,
+                        id,
+                        url,
+                    } => {
+                        commands::tasks::run::ext_link_add(
+                            &ctx,
+                            &task_id,
+                            &source,
+                            &id,
+                            url.as_deref(),
+                        )?;
+                    }
+                    ExtLinkAction::Remove {
+                        task_id,
+                        source,
+                        id,
+                    } => {
+                        commands::tasks::run::ext_link_remove(&ctx, &task_id, &source, &id)?;
+                    }
+                    ExtLinkAction::List { task_id } => {
+                        commands::tasks::run::ext_link_list(&ctx, &task_id)?;
+                    }
+                },
                 TasksAction::Comment { task_id, body } => {
                     commands::tasks::run::comment(&ctx, &task_id, &body)?;
                 }

@@ -154,6 +154,12 @@ pub(crate) enum TasksAction {
         chunk_id: String,
     },
 
+    /// Manage external references (GitHub issues, URLs, etc.)
+    ExtLink {
+        #[command(subcommand)]
+        action: ExtLinkAction,
+    },
+
     /// Add a comment to a task
     Comment {
         /// Task ID
@@ -321,5 +327,48 @@ pub(crate) enum LabelAction {
     Purge {
         /// Label to purge
         label: String,
+    },
+}
+
+// ── ext-link subcommands ─────────────────────────────────────
+
+#[derive(Subcommand)]
+pub(crate) enum ExtLinkAction {
+    /// Add an external reference to a task
+    Add {
+        /// Task ID
+        task_id: String,
+
+        /// Source system (e.g. "github", "jira", "linear")
+        #[arg(long)]
+        source: String,
+
+        /// External identifier (e.g. issue number, ticket ID)
+        #[arg(long)]
+        id: String,
+
+        /// URL to the external resource
+        #[arg(long)]
+        url: Option<String>,
+    },
+
+    /// Remove an external reference from a task
+    Remove {
+        /// Task ID
+        task_id: String,
+
+        /// Source system
+        #[arg(long)]
+        source: String,
+
+        /// External identifier
+        #[arg(long)]
+        id: String,
+    },
+
+    /// List external references for a task
+    List {
+        /// Task ID
+        task_id: String,
     },
 }
