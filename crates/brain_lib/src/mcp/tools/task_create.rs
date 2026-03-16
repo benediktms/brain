@@ -7,7 +7,9 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id};
+use crate::tasks::events::{
+    EventType, ExternalIdPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
+};
 use crate::utils::{parse_timestamp, task_row_to_json};
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
@@ -53,6 +55,20 @@ fn create_schema() -> Value {
                 "type": "string",
                 "description": "Who is creating the task. Default: mcp",
                 "default": "mcp"
+            },
+            "brain": {
+                "type": "string",
+                "description": "Target brain name or ID for cross-brain task creation. If omitted, creates in the current brain."
+            },
+            "link_from": {
+                "type": "string",
+                "description": "Local task ID to auto-create a cross-brain reference from (resolved via prefix)"
+            },
+            "link_type": {
+                "type": "string",
+                "description": "Type of cross-brain link: depends_on, blocks, or related (default: related)",
+                "enum": ["depends_on", "blocks", "related"],
+                "default": "related"
             }
         },
         "required": ["title"]
@@ -60,6 +76,7 @@ fn create_schema() -> Value {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)] // link_type reserved for future use (external task sources)
 struct Params {
     title: String,
     description: Option<String>,
@@ -72,6 +89,9 @@ struct Params {
     defer_until: Option<Value>,
     #[serde(default = "default_actor")]
     actor: String,
+    brain: Option<String>,
+    link_from: Option<String>,
+    link_type: Option<String>,
 }
 
 fn default_priority() -> i32 {
@@ -105,6 +125,153 @@ impl TaskCreate {
             None
         };
 
+        // Cross-brain path
+        if let Some(ref brain) = params.brain {
+            let (remote_brain_name, bid) = match ctx.resolve_brain_id(brain) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
+                }
+            };
+            let remote_tasks = match ctx.tasks_for_brain(&bid) {
+                Ok(t) => t,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
+                }
+            };
+
+            let mut warnings: Vec<Warning> = Vec::new();
+
+            // Parse timestamps
+            let due_ts = params.due_ts.as_ref().and_then(parse_timestamp);
+            let defer_until = params.defer_until.as_ref().and_then(parse_timestamp);
+
+            // Generate task ID using remote brain prefix
+            let prefix = match remote_tasks.get_project_prefix() {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to get project prefix: {e}"));
+                }
+            };
+            let task_id = new_task_id(&prefix);
+
+            // Resolve parent task ID against remote brain if provided
+            let parent_task_id = if let Some(ref parent) = params.parent {
+                match remote_tasks.resolve_task_id(parent) {
+                    Ok(resolved) => Some(resolved),
+                    Err(e) => {
+                        return ToolCallResult::error(format!(
+                            "Failed to resolve parent task ID: {e}"
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
+
+            // Build and append the TaskCreated event to remote brain
+            let payload = TaskCreatedPayload {
+                title: params.title,
+                description: params.description,
+                priority: params.priority,
+                status: TaskStatus::Open,
+                due_ts,
+                task_type,
+                assignee: params.assignee,
+                defer_until,
+                parent_task_id,
+            };
+
+            let event = TaskEvent::from_payload(&task_id, &params.actor, payload);
+
+            if let Err(e) = remote_tasks.append(&event) {
+                return ToolCallResult::error(format!("Task event failed: {e}"));
+            }
+
+            // Fetch resulting task state from remote brain
+            let task_json = match remote_tasks.get_task(&task_id) {
+                Ok(Some(row)) => {
+                    let labels = store_or_warn(
+                        remote_tasks.get_task_labels(&task_id),
+                        "get_task_labels",
+                        &mut warnings,
+                    );
+                    task_row_to_json(&row, labels)
+                }
+                Ok(None) => json!(null),
+                Err(e) => {
+                    warn!(error = %e, "failed to fetch task after event");
+                    json!(null)
+                }
+            };
+
+            let short_id = remote_tasks
+                .compact_id(&task_id)
+                .unwrap_or_else(|_| task_id.clone());
+
+            // Optionally create bidirectional cross-brain references
+            let mut local_ref_created = false;
+            if let Some(ref link_from) = params.link_from {
+                let local_task_id = match ctx.tasks.resolve_task_id(link_from) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return ToolCallResult::error(format!(
+                            "Failed to resolve link_from task ID: {e}"
+                        ));
+                    }
+                };
+
+                let resolved_link_type = params.link_type.as_deref().unwrap_or("related");
+                let link_source = format!("brain:{remote_brain_name}:{resolved_link_type}");
+                let local_source = format!("brain:{}:{resolved_link_type}", ctx.brain_name);
+
+                // ExternalIdAdded on the local task pointing to the remote task
+                let local_ref_event = TaskEvent::new(
+                    &local_task_id,
+                    &params.actor,
+                    EventType::ExternalIdAdded,
+                    &ExternalIdPayload {
+                        source: link_source.clone(),
+                        external_id: task_id.clone(),
+                        external_url: None,
+                    },
+                );
+                if let Err(e) = ctx.tasks.append(&local_ref_event) {
+                    warn!(error = %e, "failed to create local cross-brain ref");
+                } else {
+                    // ExternalIdAdded on the remote task pointing back to the local task
+                    let remote_ref_event = TaskEvent::new(
+                        &task_id,
+                        &params.actor,
+                        EventType::ExternalIdAdded,
+                        &ExternalIdPayload {
+                            source: local_source,
+                            external_id: local_task_id.clone(),
+                            external_url: None,
+                        },
+                    );
+                    if let Err(e) = remote_tasks.append(&remote_ref_event) {
+                        warn!(error = %e, "failed to create remote cross-brain ref");
+                    } else {
+                        local_ref_created = true;
+                    }
+                }
+            }
+
+            let mut response = json!({
+                "remote_task_id": short_id,
+                "remote_brain_name": remote_brain_name,
+                "remote_brain_id": bid,
+                "task": task_json,
+                "local_ref_created": local_ref_created,
+            });
+
+            inject_warnings(&mut response, warnings);
+
+            return json_response(&response);
+        }
+
+        // Local path (unchanged)
         {
             let mut warnings: Vec<Warning> = Vec::new();
 
@@ -197,7 +364,7 @@ impl McpTool for TaskCreate {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Create a task in the current brain's event store and returns the resulting task state (same as tasks.apply_event with event_type: task_created, but with a simpler flat schema). Defaults: priority=4 (backlog), status=open, actor=mcp.".into(),
+            description: "Create a task in the current brain's event store (or a remote brain via the 'brain' parameter) and returns the resulting task state. Same as tasks.apply_event with event_type: task_created, but with a simpler flat schema. Defaults: priority=4 (backlog), status=open, actor=mcp. When 'brain' is provided, creates the task in the target brain and returns remote_task_id, remote_brain_name, remote_brain_id, and task. Optionally links a local task to the remote task via 'link_from'.".into(),
             input_schema: create_schema(),
         }
     }
@@ -344,5 +511,99 @@ mod tests {
         // Verify the tool reports the correct underscore alias
         let tool = TaskCreate;
         assert_eq!(tool.underscore_alias(), "tasks_create");
+    }
+
+    #[tokio::test]
+    async fn test_schema_includes_brain_params() {
+        let tool = TaskCreate;
+        let schema = tool.definition().input_schema;
+        let props = &schema["properties"];
+        assert!(props["brain"].is_object(), "schema must include 'brain'");
+        assert!(
+            props["link_from"].is_object(),
+            "schema must include 'link_from'"
+        );
+        assert!(
+            props["link_type"].is_object(),
+            "schema must include 'link_type'"
+        );
+        // link_type must have enum values
+        let enum_vals = props["link_type"]["enum"].as_array().unwrap();
+        let enum_strs: Vec<&str> = enum_vals.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(enum_strs.contains(&"depends_on"));
+        assert!(enum_strs.contains(&"blocks"));
+        assert!(enum_strs.contains(&"related"));
+    }
+
+    #[tokio::test]
+    async fn test_params_deserialize_without_brain() {
+        // Params without brain fields should deserialize correctly (local path)
+        let raw = json!({ "title": "No brain param" });
+        let params: super::Params = serde_json::from_value(raw).unwrap();
+        assert!(params.brain.is_none());
+        assert!(params.link_from.is_none());
+        assert!(params.link_type.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_params_deserialize_with_brain() {
+        // Params with brain fields should deserialize correctly
+        let raw = json!({
+            "title": "Remote task",
+            "brain": "some-brain",
+            "link_from": "LOCAL-01ABC",
+            "link_type": "depends_on"
+        });
+        let params: super::Params = serde_json::from_value(raw).unwrap();
+        assert_eq!(params.brain.as_deref(), Some("some-brain"));
+        assert_eq!(params.link_from.as_deref(), Some("LOCAL-01ABC"));
+        assert_eq!(params.link_type.as_deref(), Some("depends_on"));
+    }
+
+    #[tokio::test]
+    async fn test_create_remote_brain_not_found() {
+        // Passing an unknown brain name must return an error
+        let (_dir, ctx) = create_test_context().await;
+
+        let params = json!({
+            "title": "Remote task",
+            "brain": "nonexistent-brain-xyz"
+        });
+        let result = call(params, &ctx).await;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "unknown brain should return error"
+        );
+        assert!(
+            result.content[0].text.contains("Failed to resolve brain"),
+            "error should mention brain resolution: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_local_path_unaffected_by_new_params() {
+        // Ensure existing local creation still works after adding brain/link params
+        let (_dir, ctx) = create_test_context().await;
+
+        let params = json!({
+            "title": "Still local",
+            "priority": 1,
+            "assignee": "drone"
+        });
+        let result = call(params, &ctx).await;
+        assert!(
+            result.is_error.is_none(),
+            "local creation must still succeed: {:?}",
+            result.content
+        );
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert!(parsed["task_id"].is_string());
+        assert_eq!(parsed["task"]["title"], "Still local");
+        assert_eq!(parsed["task"]["assignee"], "drone");
+        // Local response has task_id, not remote_task_id
+        assert!(parsed.get("remote_task_id").is_none());
     }
 }
