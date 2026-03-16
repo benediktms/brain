@@ -76,7 +76,6 @@ fn create_schema() -> Value {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)] // link_type reserved for future use (external task sources)
 struct Params {
     title: String,
     description: Option<String>,
