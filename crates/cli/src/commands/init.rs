@@ -164,9 +164,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     }
 
     // 7. Register brain MCP server in Claude Code (user scope)
-    let brain_bin = std::env::current_exe()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "brain".into());
+    let brain_bin = super::mcp_setup::installed_brain_bin();
     if let Err(e) = super::mcp_setup::register_claude(&brain_bin, false) {
         eprintln!("Warning: {e}");
     }
