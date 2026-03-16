@@ -5,8 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use crate::db::Db;
-use crate::db::summaries::{find_chunks_lacking_summary, store_ml_summary};
+use crate::ports::{SummaryReader, SummaryWriter};
 use crate::summarizer::{Summarize, summarize_async};
 
 /// Default idle threshold: 5 minutes of no file events before consolidation starts.
@@ -90,7 +89,7 @@ impl ConsolidationScheduler {
     /// - Yields mid-batch if new file events arrive (re-indexes take priority).
     pub async fn maybe_consolidate(
         &self,
-        db: &Db,
+        db: &(impl SummaryReader + SummaryWriter),
         summarizer: &Arc<dyn Summarize>,
     ) -> crate::error::Result<usize> {
         // Gate 1: idle threshold — skip if file activity is recent.
@@ -104,9 +103,7 @@ impl ConsolidationScheduler {
         };
 
         // Find chunks that have no ML summary from this summarizer backend.
-        let chunks = db.with_read_conn(|conn| {
-            find_chunks_lacking_summary(conn, summarizer.backend_name(), self.batch_size)
-        })?;
+        let chunks = db.find_chunks_lacking_summary(summarizer.backend_name(), self.batch_size)?;
 
         if chunks.is_empty() {
             return Ok(0);
@@ -128,9 +125,7 @@ impl ConsolidationScheduler {
 
             match summarize_async(summarizer, content).await {
                 Ok(summary) => {
-                    match db.with_write_conn(|conn| {
-                        store_ml_summary(conn, &chunk_id, &summary, summarizer.backend_name())
-                    }) {
+                    match db.store_ml_summary(&chunk_id, &summary, summarizer.backend_name()) {
                         Ok(_) => {
                             count += 1;
                         }
@@ -169,6 +164,7 @@ mod tests {
 
     use super::*;
     use crate::db::Db;
+    use crate::db::summaries::store_ml_summary;
     use crate::summarizer::MockSummarizer;
 
     fn insert_chunk(db: &Db, chunk_id: &str, file_id: &str, content: &str) {
