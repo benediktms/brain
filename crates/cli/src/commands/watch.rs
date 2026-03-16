@@ -87,7 +87,7 @@ pub async fn run(
 
     // Startup self-heal: if LanceDB is missing, reset embedded_at so all
     // tasks and chunks will be re-embedded on the next poll cycle.
-    embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.db(), pipeline.store()).await;
+    embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.store()).await;
 
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -453,14 +453,10 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         }
     };
 
-    // Startup self-heal: per-brain — reset embedded_at if LanceDB is missing.
+    // Startup self-heal: reset embedded_at if LanceDB is missing.
     for instance in brains.values() {
-        embed_poll::self_heal_if_lance_missing(
-            instance.pipeline.db(),
-            instance.pipeline.db(),
-            instance.pipeline.store(),
-        )
-        .await;
+        embed_poll::self_heal_if_lance_missing(instance.pipeline.db(), instance.pipeline.store())
+            .await;
     }
 
     // ── 4. Build path-to-brain lookup (longest prefix first) ────────────

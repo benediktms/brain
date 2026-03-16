@@ -23,13 +23,9 @@ use crate::tasks::queries::get_labels_for_tasks;
 /// SQLite FTS, then marks the tasks as embedded.
 ///
 /// `brain_id` — when non-empty, filters tasks to this brain only; when empty,
-/// processes all tasks (used by the single-brain `run()` path).
+/// processes all tasks.
 ///
 /// Returns the number of tasks successfully embedded.
-///
-/// `db` must be the database containing the `tasks` table — the unified DB
-/// (`~/.brain/brain.db`) in multi-brain mode, or the per-brain DB in
-/// single-brain mode.
 pub async fn poll_stale_tasks(
     db: &Db,
     store: &impl ChunkIndexWriter,
@@ -400,17 +396,9 @@ pub async fn poll_stale_chunks(
 /// Check if LanceDB is accessible. If not, reset all `embedded_at` columns so
 /// items will be re-embedded on the next poll cycle.
 ///
-/// `chunk_resetter` is the per-brain database (contains `chunks`).
-/// `task_resetter` is the unified database (contains `tasks`).
-/// In single-brain mode, both point to the same database.
-///
-/// The dual parameter signature is kept temporarily — Wave 3 will collapse it
-/// once the single-brain / multi-brain distinction is removed at the call site.
-///
 /// Returns `true` if a reset occurred (LanceDB was missing/inaccessible).
 pub async fn self_heal_if_lance_missing(
-    chunk_resetter: &impl EmbeddingResetter,
-    task_resetter: &impl EmbeddingResetter,
+    resetter: &impl EmbeddingResetter,
     store: &impl crate::ports::SchemaMeta,
 ) -> bool {
     // Use schema() as a lightweight accessibility probe — it sends a trivial
@@ -421,11 +409,11 @@ pub async fn self_heal_if_lance_missing(
 
     warn!("LanceDB not found — resetting embedded_at for full re-embed");
 
-    if let Err(e) = task_resetter.reset_tasks_embedded_at() {
+    if let Err(e) = resetter.reset_tasks_embedded_at() {
         warn!(error = %e, "embed_poll: failed to reset tasks.embedded_at");
     }
 
-    if let Err(e) = chunk_resetter.reset_chunks_embedded_at() {
+    if let Err(e) = resetter.reset_chunks_embedded_at() {
         warn!(error = %e, "embed_poll: failed to reset chunks.embedded_at");
     }
 
