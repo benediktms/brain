@@ -368,10 +368,11 @@ The workspace has three crates:
 
 ### Dependency rules
 
-- `brain_lib` defines persistence port traits in `brain_lib::ports`
+- `brain_lib` must NOT depend on `lancedb`, `arrow-schema`, or `arrow-array` directly — enforced by `just check-deps`
+- `brain_lib` defines persistence port traits in `brain_lib::ports` (13 traits covering LanceDB and SQLite operations)
 - Trait implementations live in `brain_lib::ports` (impl blocks for concrete types from `brain_persistence`)
 - Schema migrations live in `brain_persistence`
-- Pipelines are generic over store type: `IndexPipeline<S = Store>`, `QueryPipeline<'a, S = StoreReader>`
+- Pipelines are generic over store and DB types: `IndexPipeline<S = Store>`, `QueryPipeline<'a, S = StoreReader, D = Db>`
 
 ## Task Management
 
