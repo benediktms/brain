@@ -274,10 +274,16 @@ pub fn resolve_brain_id(entry: &BrainEntry, _name: &str) -> Result<String> {
     }
 }
 
-/// Open a [`crate::tasks::TaskStore`] for a remote brain identified by `name`.
+/// Open a local [`crate::tasks::TaskStore`] for a brain identified by `name`.
 ///
 /// Resolves the brain's data paths, creates the database directory if needed,
-/// and opens the SQLite database.
+/// and opens a [`crate::db::Db`] backed [`crate::tasks::TaskStore`] for the
+/// named brain.
+///
+/// # Deprecation
+///
+/// Prefer [`open_brain_stores`] which opens all stores (tasks, records,
+/// objects) in a single call and is the canonical entry point.
 pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::tasks::TaskStore> {
     let paths = resolve_paths_for_brain(name)?;
 
