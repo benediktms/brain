@@ -433,10 +433,6 @@ brain tasks create --title="..." --description="..." --task-type=task --priority
 brain tasks update <id> --status=in_progress
 brain tasks comment <id> "comment text"
 
-# Cross-brain task creation
-brain tasks create --title="..." --brain=<NAME_OR_ID>          # Create in another brain
-brain tasks create --title="..." --brain=infra --link-from=BRN-01X --link-type=related  # Create + auto-link
-
 # Registry
 brain list                     # List registered brains
 brain list --json              # List as JSON (name, id, root, prefix)
