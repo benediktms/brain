@@ -6,12 +6,13 @@ use super::migrations::{
     migrate_v10_to_v11, migrate_v11_to_v12, migrate_v12_to_v13, migrate_v13_to_v14,
     migrate_v14_to_v15, migrate_v15_to_v16, migrate_v16_to_v17, migrate_v17_to_v18,
     migrate_v18_to_v19, migrate_v19_to_v20, migrate_v20_to_v21, migrate_v21_to_v22,
+    migrate_v22_to_v23,
 };
 use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-pub const SCHEMA_VERSION: i32 = 22;
+pub const SCHEMA_VERSION: i32 = 23;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -69,6 +70,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
             19 => migrate_v19_to_v20(conn)?,
             20 => migrate_v20_to_v21(conn)?,
             21 => migrate_v21_to_v22(conn)?,
+            22 => migrate_v22_to_v23(conn)?,
             other => {
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",
@@ -87,9 +89,17 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
 /// `backfill_brain_id()` self-healing approach — with FK constraints on
 /// `brain_id`, every brain must be registered upfront.
 pub fn ensure_brain_registered(conn: &Connection, brain_id: &str, brain_name: &str) -> Result<()> {
+    use super::meta::{generate_prefix, get_meta};
+
+    // Respect brain_meta.project_prefix if set (seeded during `brain init` or
+    // `brain config set prefix`). Otherwise derive from brain_name.
+    let prefix = get_meta(conn, "project_prefix")?
+        .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
+        .unwrap_or_else(|| generate_prefix(brain_name));
     conn.execute(
-        "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES (?1, ?2, strftime('%s', 'now'))",
-        rusqlite::params![brain_id, brain_name],
+        "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES (?1, ?2, ?3, strftime('%s', 'now'))
+         ON CONFLICT(brain_id) DO UPDATE SET prefix = COALESCE(brains.prefix, excluded.prefix)",
+        rusqlite::params![brain_id, brain_name, prefix],
     )?;
     Ok(())
 }
