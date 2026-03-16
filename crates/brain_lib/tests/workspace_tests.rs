@@ -446,12 +446,10 @@ fn test_prefix_fallback_without_meta_db() {
 
 // ─── 6. McpContext with unified DB ────────────────────────────────────────────
 
-/// `McpContext` constructed with a separate `unified_db` handle routes
-/// TaskStore operations to the unified DB while `db` remains the per-brain
-/// handle for indexing tables.
+/// `McpContext` uses a single `db` handle for all tables.
 ///
-/// Verifies that tasks written via the TaskStore (which uses `unified_db`) are
-/// correctly scoped to the brain_id and are not visible to a different brain.
+/// Verifies that tasks written via the TaskStore are correctly scoped to the
+/// brain_id and are not visible to a different brain.
 #[tokio::test]
 async fn test_mcp_context_unified_db_task_scoping() {
     use std::sync::Arc;
@@ -467,10 +465,8 @@ async fn test_mcp_context_unified_db_task_scoping() {
 
     let tmp = TempDir::new().unwrap();
 
-    // Simulate the unified DB at ~/.brain/brain.db.
-    let unified_db = Db::open_in_memory().unwrap();
-    // Simulate a per-brain DB (separate handle, different schema usage).
-    let per_brain_db = Db::open_in_memory().unwrap();
+    // Single shared DB — tasks and records share the same handle.
+    let db = Db::open_in_memory().unwrap();
 
     let brain_id_a = "brain-id-alpha";
     let brain_id_b = "brain-id-beta";
@@ -478,20 +474,17 @@ async fn test_mcp_context_unified_db_task_scoping() {
     let tasks_dir_a = tmp.path().join("tasks_a");
     let tasks_dir_b = tmp.path().join("tasks_b");
     let records_dir_a = tmp.path().join("records_a");
-    let _records_dir_b = tmp.path().join("records_b");
     let objects_dir = tmp.path().join("objects");
 
-    // Both TaskStores use the same unified_db but different brain_ids.
-    let tasks_a = TaskStore::with_brain_id(&tasks_dir_a, unified_db.clone(), brain_id_a).unwrap();
-    let tasks_b = TaskStore::with_brain_id(&tasks_dir_b, unified_db.clone(), brain_id_b).unwrap();
-    let records_a =
-        RecordStore::with_brain_id(&records_dir_a, unified_db.clone(), brain_id_a).unwrap();
+    // Both TaskStores use the same db but different brain_ids.
+    let tasks_a = TaskStore::with_brain_id(&tasks_dir_a, db.clone(), brain_id_a).unwrap();
+    let tasks_b = TaskStore::with_brain_id(&tasks_dir_b, db.clone(), brain_id_b).unwrap();
+    let records_a = RecordStore::with_brain_id(&records_dir_a, db.clone(), brain_id_a).unwrap();
     let objects = ObjectStore::new(&objects_dir).unwrap();
 
-    // Build context for brain-a with unified_db separate from per-brain db.
+    // Build context for brain-a.
     let ctx_a = McpContext {
-        db: per_brain_db.clone(),
-        unified_db: unified_db.clone(),
+        db: db.clone(),
         store: None,
         writable_store: None,
         embedder: None,
@@ -523,14 +516,12 @@ async fn test_mcp_context_unified_db_task_scoping() {
         result.content[0].text
     );
 
-    // brain-b's TaskStore (same unified_db, different brain_id) must not see alpha's task.
+    // brain-b's TaskStore (same db, different brain_id) must not see alpha's task.
     let records_dir_b2 = tmp.path().join("records_b2");
-    let records_b =
-        RecordStore::with_brain_id(&records_dir_b2, unified_db.clone(), brain_id_b).unwrap();
+    let records_b = RecordStore::with_brain_id(&records_dir_b2, db.clone(), brain_id_b).unwrap();
     let objects_b = ObjectStore::new(tmp.path().join("objects_b")).unwrap();
     let ctx_b = McpContext {
-        db: per_brain_db.clone(),
-        unified_db: unified_db.clone(),
+        db: db.clone(),
         store: None,
         writable_store: None,
         embedder: None,

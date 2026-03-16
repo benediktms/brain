@@ -836,8 +836,7 @@ async fn init_brain_instance(
     let metrics = Arc::clone(pipeline.metrics());
 
     let mcp_context = McpContext::from_stores(
-        stores.per_brain_db().clone(),
-        stores.unified_db().clone(),
+        stores.db().clone(),
         Some(store_reader),
         None, // writable_store: pipeline.store() is owned by pipeline; IPC is read-only
         None, // embedder: not needed for task/record operations via IPC

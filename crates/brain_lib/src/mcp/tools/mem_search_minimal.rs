@@ -253,8 +253,7 @@ mod tests {
         (
             tmp,
             McpContext {
-                db: db.clone(),
-                unified_db: db,
+                db,
                 store: None,
                 writable_store: None,
                 embedder: None,
@@ -293,8 +292,7 @@ mod tests {
         (
             tmp,
             McpContext {
-                db: db.clone(),
-                unified_db: db,
+                db,
                 store: Some(store_reader),
                 writable_store: Some(store),
                 embedder: None,

@@ -163,16 +163,6 @@ impl BrainStores {
         &self.db
     }
 
-    /// Access the Db handle (compatibility alias — was `per_brain_db`).
-    pub fn per_brain_db(&self) -> &Db {
-        &self.db
-    }
-
-    /// Access the Db handle (compatibility alias — was `unified_db`).
-    pub fn unified_db(&self) -> &Db {
-        &self.db
-    }
-
     /// Set an audit trail path on the TaskStore.
     pub fn with_audit_path(mut self, path: PathBuf) -> Self {
         self.tasks = self.tasks.with_audit_path(path);
