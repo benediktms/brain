@@ -63,6 +63,11 @@ test *args:
 
 alias t := test
 
+# Run fd-heavy perf tests serially with raised fd limit
+[group('dev')]
+test-perf:
+    ulimit -n 4096 && cargo test -p brain-lib --test perf_tests -- --ignored --test-threads=1
+
 # Check formatting + run clippy
 [group('dev')]
 lint:

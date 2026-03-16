@@ -63,6 +63,7 @@ fn generate_vault(dir: &Path, count: usize) -> Vec<PathBuf> {
 // ─── Test 1: Batch embedding equivalence ─────────────────────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_batch_vs_single_equivalence() {
     let (pipeline_a, tmp_a) = setup().await;
     let (pipeline_b, tmp_b) = setup().await;
@@ -123,6 +124,7 @@ async fn test_batch_vs_single_equivalence() {
 // ─── Test 2: Backpressure — no dropped events ────────────────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_backpressure_no_dropped_events() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
@@ -176,6 +178,7 @@ async fn test_backpressure_no_dropped_events() {
 // ─── Test 3: Coalescing — 10 events, 1 index pass ───────────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_coalescing_deduplicates() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
@@ -206,6 +209,7 @@ async fn test_coalescing_deduplicates() {
 // ─── Test 4: Concurrent read/write — no deadlocks ───────────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_concurrent_read_write_no_deadlocks() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
@@ -285,6 +289,7 @@ async fn test_concurrent_read_write_no_deadlocks() {
 // ─── Test 5: Optimize scheduling — row threshold ─────────────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_optimize_row_threshold() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
@@ -318,6 +323,7 @@ async fn test_optimize_row_threshold() {
 // ─── Test 6: Optimize scheduling — time threshold ────────────────
 
 #[tokio::test(start_paused = true)]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_optimize_time_threshold() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
@@ -358,6 +364,7 @@ async fn test_optimize_time_threshold() {
 // ─── Test 7: Startup scan + watcher race — no duplicates ─────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_scan_watcher_race_idempotent() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
@@ -439,6 +446,7 @@ async fn test_scan_watcher_race_idempotent() {
 // ─── Test 8: IVF-PQ index creation ──────────────────────────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_ivf_pq_index_creation() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
@@ -467,6 +475,7 @@ async fn test_ivf_pq_index_creation() {
 // ─── Test 9: IVF-PQ query returns results ────────────────────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_ivf_pq_query_returns_results() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
@@ -497,6 +506,7 @@ async fn test_ivf_pq_query_returns_results() {
 // ─── Test 10: Auto-index on optimize ─────────────────────────────
 
 #[tokio::test]
+#[ignore] // fd-heavy — run via `just test-perf`
 async fn test_auto_index_on_optimize() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
