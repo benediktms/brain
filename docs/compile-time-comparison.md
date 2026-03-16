@@ -21,13 +21,58 @@ Post-refactor note: `cargo build -p brain-lib` now compiles `brain-persistence` 
 meaning the "brain-lib only" cold time includes both crates. This is expected and correct — `brain-persistence`
 replaces code that was previously part of `brain-lib`.
 
-| # | Scenario | Before | After | Delta | % Change |
+| # | Scenario | Baseline (pre-refactor) | Attempt 1 (post-refactor, direct deps present) | Delta | % Change |
 |---|---|---|---|---|---|
 | 1 | Cold full workspace (`cargo build --workspace`) | 2m 02s | 2m 06s | +4s | +3.3% |
 | 2a | Cold `brain-lib` only (`cargo build -p brain-lib`) | 1m 56s | 1m 59s | +3s | +2.6% |
 | 2b | Warm `brain-lib`, no changes | 0.61s | 0.78s | +0.17s | +27.9% |
 | 3 | Incremental touch `pipeline/mod.rs` | 1.32s | 1.33s | +0.01s | +0.8% |
 | 4 | Cold test compile (`cargo test --workspace --no-run`) | 2m 05s | 2m 25s | +20s | +16.0% |
+
+## Direct Dependency Analysis
+
+### Why `rusqlite` and `lancedb` remain in `brain_lib/Cargo.toml`
+
+The persistence extraction moved concrete I/O implementations (schema, migrations, object store, vector store)
+into `brain-persistence`. However, the SQL query and projection layer was not migrated — it remains in
+`brain_lib` and uses `rusqlite::Connection` directly across 19 source files:
+
+```
+crates/brain_lib/src/records/queries.rs
+crates/brain_lib/src/records/projections.rs
+crates/brain_lib/src/tasks/queries/mod.rs
+crates/brain_lib/src/tasks/queries/details.rs
+crates/brain_lib/src/tasks/queries/filters.rs
+crates/brain_lib/src/tasks/queries/labels.rs
+crates/brain_lib/src/tasks/queries/listing.rs
+crates/brain_lib/src/tasks/queries/resolve.rs
+crates/brain_lib/src/tasks/projections.rs
+crates/brain_lib/src/tasks/cycle.rs
+crates/brain_lib/src/pipeline/mod.rs
+crates/brain_lib/src/pipeline/maintenance.rs
+crates/brain_lib/src/mcp/tools/status.rs
+... (19 files total)
+```
+
+Removing `rusqlite` from `brain_lib/Cargo.toml` without migrating this code would cause compilation failure.
+`arrow-schema`, `arrow-array`, and `lancedb` remain as direct deps because the vector pipeline code in
+`brain_lib` (embed_poll, pipeline/mod.rs) uses arrow types from those crates.
+
+Verified via `cargo tree -p brain-lib --depth 1`:
+```
+brain-lib v0.2.1
+├── arrow-array v57.3.0
+├── arrow-schema v57.3.0
+├── lancedb v0.26.2
+├── rusqlite v0.33.0
+└── brain-persistence v0.2.1
+    ├── arrow-array v57.3.0
+    ├── arrow-schema v57.3.0
+    ├── lancedb v0.26.2
+    └── rusqlite v0.33.0
+```
+
+These appear as **direct** deps of `brain-lib` (not transitive-only), confirming the migration is incomplete.
 
 ## Analysis
 
@@ -67,15 +112,34 @@ Observed results:
 | Warm no-change rebuild | 0.61s | 0.78s | +28% (slower) |
 | Incremental touch rebuild | 1.32s | 1.33s | +0.8% (neutral) |
 
-The incremental touch time is statistically unchanged. The warm no-change rebuild is slightly slower,
-but both are sub-second and within noise floor for this machine.
+The incremental touch time is statistically unchanged.
 
-**Root cause assessment:** The baseline incremental time of 1.32s was already excellent — only `brain-lib`
-itself was recompiled with no dependency cascade. The extraction did not make this scenario worse, but
-could not improve it further because the limiting factor was never `brain-persistence`-specific code
-within `brain-lib`. The persistence code was not being unnecessarily recompiled pre-refactor; it was
-compiled once and cached. The extraction benefit is architectural (separation of concerns, independent
-versioning) rather than a raw compile-time speedup.
+**Root cause:** Two compounding factors prevent the improvement:
+
+1. **Incomplete migration.** The SQL query and projection layer (`tasks/queries/`, `records/queries.rs`,
+   `records/projections.rs`, etc.) was not migrated to `brain-persistence`. These modules use
+   `rusqlite::Connection` directly, requiring `rusqlite` as a direct `brain-lib` dependency. Until this
+   code is migrated, `brain-lib` always links rusqlite — removing the dep from `Cargo.toml` would be
+   purely cosmetic (re-exporting from `brain-persistence`) and would not change compile times.
+
+2. **Baseline was already optimal.** The 1.32s incremental baseline reflected `brain-lib` recompiling
+   only itself. There was no unnecessary dependency cascade to eliminate — the persistence code was
+   compiled once and cached, not re-compiled on every `brain-lib` touch.
+
+### What would achieve the ≥20% target
+
+To realize a measurable compile-time reduction:
+
+1. **Migrate the query/projection layer.** Move `tasks/queries/`, `tasks/projections.rs`,
+   `records/queries.rs`, `records/projections.rs`, and related modules into `brain-persistence`.
+   This would allow `rusqlite` to be removed as a direct `brain-lib` dep.
+
+2. **Migrate the arrow/vector pipeline code.** Move `pipeline/embed_poll.rs` and vector-related
+   pipeline code into `brain-persistence`. This would allow `lancedb`, `arrow-schema`, and
+   `arrow-array` to be removed as direct `brain-lib` deps.
+
+3. After both migrations: `brain-lib` incremental rebuilds would not require linking rusqlite or
+   lancedb at all, potentially reducing the 1.32s touch rebuild by the rusqlite/lancedb link step.
 
 ## Cargo Timings Reports
 
@@ -93,6 +157,8 @@ leaf nodes in the dependency graph — `brain-persistence` compiles before `brai
 |---|---|
 | Cold build regression | Acceptable (+3–4s, within 4%) |
 | Incremental rebuild | Neutral — unchanged at ~1.33s |
-| ≥20% improvement target | Not met — baseline was already optimal |
+| ≥20% improvement target | Not met — incomplete migration and baseline was already optimal |
 | Architectural isolation | Confirmed — `brain-persistence` and `brain-lib` compile independently |
 | Full cold build does not regress significantly | Pass — +3.3% is within tolerance |
+| Direct deps removed from brain-lib | Not achieved — query/projection layer not migrated |
+| Next step to achieve target | Migrate `tasks/queries/`, `records/queries.rs`, `records/projections.rs`, and vector pipeline into `brain-persistence` |
