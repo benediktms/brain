@@ -839,7 +839,6 @@ async fn init_brain_instance(
     };
 
     let stores = brain_lib::stores::BrainStores::from_dbs(
-        pipeline.db().clone(),
         unified_db.clone(),
         brain_id,
         brain_data_dir,
