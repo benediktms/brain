@@ -95,6 +95,20 @@ The raw SQLite closure pattern (`Db::with_read_conn`, `Db::with_write_conn`) is 
 
 ---
 
+## Dependency Enforcement
+
+A `just check-deps` recipe in the justfile enforces the persistence boundary:
+
+```sh
+just check-deps
+```
+
+This runs `cargo tree -p brain-lib --depth 1` and fails if `rusqlite` or `lancedb` appear as direct dependencies of `brain_lib`. Run after any `Cargo.toml` change to `brain_lib`.
+
+**Current state:** `brain_lib` still carries direct `lancedb` and `rusqlite` entries in its `Cargo.toml` from before the extraction. Removing these direct deps (after verifying all usage is routed through `brain_persistence`) is tracked as a follow-on task. Until then, `just check-deps` will report a violation — this is expected and serves as a visible reminder.
+
+---
+
 ## Deferred
 
 The following items were evaluated and explicitly deferred:
@@ -104,3 +118,4 @@ The following items were evaluated and explicitly deferred:
 | `TaskPersistence` / `RecordPersistence` traits | Task and record queries use complex multi-join SQL that does not map cleanly to a thin trait interface. Deferred until a clear use case for mocking emerges. |
 | Full `Db` abstraction | The closure-based `with_read_conn`/`with_write_conn` pattern does not compose with trait object dispatch. Deferred pending a cleaner design. |
 | Embedding crate extraction | A spike (`docs/spike-embedding-crate.md`) concluded that extracting the embedder into a separate crate provides no meaningful benefit at current scale. Rejected. |
+| Remove `brain_lib` direct persistence deps | `brain_lib/Cargo.toml` still declares `lancedb` and `rusqlite` directly. These must be removed once all call sites are confirmed to route through `brain_persistence`. `just check-deps` will pass once this is done. |

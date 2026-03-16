@@ -140,6 +140,15 @@ reindex notes_path=".": ensure-binary
 reindex-file path: ensure-binary
     {{bin}} reindex --file {{path}}
 
+# ── Architecture ──────────────────────────────────────────────────────────
+
+# Verify brain-lib has no direct rusqlite/lancedb deps (persistence boundary check)
+[group('dev')]
+check-deps:
+    @cargo tree -p brain-lib --depth 1 2>/dev/null | grep -qE 'rusqlite|lancedb' \
+        && echo 'FAIL: brain-lib has direct persistence deps (rusqlite or lancedb)' && exit 1 \
+        || echo 'OK: brain-lib persistence boundary intact'
+
 # ── Release ───────────────────────────────────────────────────────────────
 
 # Bump version, update changelog, commit and tag (patch|minor|major)
