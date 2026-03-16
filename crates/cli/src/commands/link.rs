@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use brain_lib::config::{
     BrainToml, load_brain_toml, load_global_config, resolve_brain_entry_from_config,
-    save_brain_toml, save_global_config,
+    resolve_paths_for_brain, save_brain_toml, save_global_config,
 };
+use brain_lib::db::Db;
 use std::fs;
 
 /// Link the current directory as an additional root for an existing brain.
@@ -77,13 +78,34 @@ pub fn run(name: &str) -> Result<()> {
     }
 
     // Append cwd to this brain's roots in the global config.
+    let was_archived = config.brains.get(&brain_name).unwrap().archived;
     config
         .brains
         .get_mut(&brain_name)
         .unwrap()
         .roots
         .push(cwd.clone());
+    if was_archived {
+        config.brains.get_mut(&brain_name).unwrap().archived = false;
+    }
     save_global_config(&config)?;
+
+    // If the brain was archived, clear the archived flag in the DB as well.
+    if was_archived && !brain_id.is_empty() {
+        let paths = resolve_paths_for_brain(&brain_name)
+            .context("failed to resolve brain paths for unarchive")?;
+        if paths.sqlite_db.exists() {
+            let db = Db::open(&paths.sqlite_db).context("failed to open brain DB for unarchive")?;
+            db.with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE brains SET archived = 0 WHERE brain_id = ?1",
+                    rusqlite::params![brain_id],
+                )?;
+                Ok(())
+            })?;
+        }
+        println!("Brain '{}' has been unarchived.", brain_name);
+    }
 
     // Signal daemon to reload registry (best-effort).
     super::daemon::Daemon::new()

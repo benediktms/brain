@@ -1,7 +1,35 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::db::Db;
 use crate::mcp::protocol::ToolCallResult;
+
+/// Return `true` if the brain with `brain_id` has been archived.
+///
+/// Returns `false` when no matching row exists (brain not yet registered).
+/// Returns `Err` only on a hard database failure.
+pub fn is_brain_archived(db: &Db, brain_id: &str) -> Result<bool, String> {
+    db.with_read_conn(|conn| {
+        let mut stmt = conn
+            .prepare_cached("SELECT archived FROM brains WHERE brain_id = ?1")
+            .map_err(|e| crate::error::BrainCoreError::Database(format!("{e}")))?;
+        let mut rows = stmt
+            .query([brain_id])
+            .map_err(|e| crate::error::BrainCoreError::Database(format!("{e}")))?;
+        if let Some(row) = rows
+            .next()
+            .map_err(|e| crate::error::BrainCoreError::Database(format!("{e}")))?
+        {
+            let archived: i64 = row
+                .get(0)
+                .map_err(|e| crate::error::BrainCoreError::Database(format!("{e}")))?;
+            Ok(archived == 1)
+        } else {
+            Ok(false)
+        }
+    })
+    .map_err(|e| e.to_string())
+}
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Warning {

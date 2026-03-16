@@ -44,6 +44,13 @@ pub struct BrainEntry {
     /// Alternate names for this brain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// Whether this brain has been archived. Omitted from TOML when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub archived: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl BrainEntry {
@@ -77,6 +84,7 @@ impl<'de> Deserialize<'de> for BrainEntry {
             // Accept but ignore legacy extra_roots field.
             #[serde(default)]
             extra_roots: Vec<PathBuf>,
+            archived: Option<bool>,
         }
 
         let raw = BrainEntryRaw::deserialize(deserializer)?;
@@ -96,6 +104,7 @@ impl<'de> Deserialize<'de> for BrainEntry {
             notes: raw.notes,
             id: raw.id,
             aliases: raw.aliases,
+            archived: raw.archived.unwrap_or(false),
         })
     }
 }
@@ -756,6 +765,7 @@ mod tests {
                 notes: vec![],
                 id: id.map(str::to_string),
                 aliases: vec![],
+                archived: false,
             },
         );
         cfg
@@ -819,6 +829,7 @@ mod tests {
             notes: vec![],
             id: Some("test1234".to_string()),
             aliases: vec![],
+            archived: false,
         };
 
         let store = open_remote_task_store("test-brain", &entry).unwrap();
@@ -913,6 +924,7 @@ mod tests {
                 notes: vec![],
                 id: Some("id000001".to_string()),
                 aliases: vec![],
+                archived: false,
             },
         );
         cfg.brains.insert(
@@ -922,6 +934,7 @@ mod tests {
                 notes: vec![],
                 id: None,
                 aliases: vec![],
+                archived: false,
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -969,6 +982,7 @@ mod tests {
                 notes: vec![],
                 id: Some("testid01".to_string()),
                 aliases: vec![],
+                archived: false,
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -1001,6 +1015,7 @@ mod tests {
                 notes: vec![],
                 id: Some("abc12345".to_string()),
                 aliases: vec![],
+                archived: false,
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
@@ -1057,6 +1072,7 @@ roots = ["/path1", "/path2"]
             notes: vec![],
             id: None,
             aliases: vec![],
+            archived: false,
         };
         assert_eq!(entry.primary_root(), PathBuf::from("/primary").as_path());
     }
@@ -1071,6 +1087,7 @@ roots = ["/path1", "/path2"]
                 notes: vec![],
                 id: None,
                 aliases: vec![],
+                archived: false,
             },
         );
         let serialized = toml::to_string_pretty(&cfg).unwrap();
@@ -1123,6 +1140,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("abc12345".to_string()),
                 aliases: vec!["gateway".to_string(), "infra-alias".to_string()],
+                archived: false,
             },
         );
 
@@ -1146,6 +1164,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("aaaaaaaa".to_string()),
                 aliases: vec!["gateway".to_string()],
+                archived: false,
             },
         );
         cfg.brains.insert(
@@ -1155,6 +1174,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("bbbbbbbb".to_string()),
                 aliases: vec![],
+                archived: false,
             },
         );
 
@@ -1198,6 +1218,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("abcd1234".to_string()),
                 aliases: vec![],
+                archived: false,
             },
         );
 
@@ -1253,5 +1274,54 @@ roots = ["/some/path"]
         fn hidden_size(&self) -> usize {
             384
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // BrainEntry archived field
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn brain_entry_archived_round_trips() {
+        let entry = BrainEntry {
+            roots: vec![PathBuf::from("/tmp/brain")],
+            notes: vec![],
+            id: None,
+            aliases: vec![],
+            archived: true,
+        };
+        let toml_str = toml::to_string_pretty(&entry).unwrap();
+        assert!(
+            toml_str.contains("archived = true"),
+            "archived must be present in TOML when true"
+        );
+
+        let decoded: BrainEntry = toml::from_str(&toml_str).unwrap();
+        assert!(decoded.archived);
+    }
+
+    #[test]
+    fn brain_entry_archived_defaults_to_false() {
+        let toml_str = r#"roots = ["/tmp/brain"]"#;
+        let entry: BrainEntry = toml::from_str(toml_str).unwrap();
+        assert!(
+            !entry.archived,
+            "archived must default to false when absent"
+        );
+    }
+
+    #[test]
+    fn brain_entry_archived_false_omitted_from_toml() {
+        let entry = BrainEntry {
+            roots: vec![PathBuf::from("/tmp/brain")],
+            notes: vec![],
+            id: None,
+            aliases: vec![],
+            archived: false,
+        };
+        let toml_str = toml::to_string_pretty(&entry).unwrap();
+        assert!(
+            !toml_str.contains("archived"),
+            "archived must be absent from TOML when false"
+        );
     }
 }

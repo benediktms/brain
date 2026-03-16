@@ -136,6 +136,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
             notes: abs_notes,
             id: Some(brain_id.clone()),
             aliases: vec![],
+            archived: false,
         },
     );
     save_global_config(&global)?;

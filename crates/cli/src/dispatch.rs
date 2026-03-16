@@ -181,8 +181,12 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Link { name } => {
             commands::link::run(&name)?;
         }
-        Command::List { json } => {
-            commands::registry::run_list(json)?;
+        Command::List {
+            json,
+            all,
+            archived,
+        } => {
+            commands::registry::run_list(json, all, archived)?;
         }
         Command::Remove { name, purge } => {
             commands::registry::run_remove(&name, purge)?;

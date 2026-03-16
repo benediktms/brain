@@ -86,6 +86,21 @@ pub(super) struct TaskCreate;
 
 impl TaskCreate {
     async fn execute(&self, raw_params: Value, ctx: &McpContext) -> ToolCallResult {
+        // Reject task creation on archived brains
+        match super::is_brain_archived(&ctx.db, &ctx.brain_id) {
+            Ok(true) => {
+                return ToolCallResult::error(
+                    "Cannot create tasks: brain is archived. Use `brain link` to add a root and unarchive.",
+                );
+            }
+            Err(e) => {
+                return ToolCallResult::error(format!(
+                    "Failed to check brain archived status: {e}"
+                ));
+            }
+            Ok(false) => {}
+        }
+
         let params: Params = match serde_json::from_value(raw_params) {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
@@ -219,6 +234,18 @@ mod tests {
     use super::McpTool;
     use super::TaskCreate;
 
+    fn mark_brain_archived(ctx: &crate::mcp::McpContext) {
+        ctx.db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
+                    [&ctx.brain_id],
+                )?;
+                Ok(())
+            })
+            .expect("failed to archive brain in test");
+    }
+
     async fn call(
         params: Value,
         ctx: &crate::mcp::McpContext,
@@ -337,6 +364,22 @@ mod tests {
         );
         let child_parsed: Value = serde_json::from_str(&child_result.content[0].text).unwrap();
         assert_eq!(child_parsed["task"]["title"], "Child task");
+    }
+
+    #[tokio::test]
+    async fn test_create_archived_brain_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+
+        mark_brain_archived(&ctx);
+
+        let params = json!({ "title": "Should be blocked" });
+        let result = call(params, &ctx).await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0].text.contains("archived"),
+            "expected archived error, got: {}",
+            result.content[0].text
+        );
     }
 
     #[tokio::test]
