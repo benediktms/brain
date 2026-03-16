@@ -588,8 +588,8 @@ impl RecordStore {
                     .flatten();
                 Ok(prefix)
             })?;
-            if let Some(ref prefix) = result
-                .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
+            if let Some(ref prefix) =
+                result.filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
             {
                 return Ok(prefix.clone());
             }

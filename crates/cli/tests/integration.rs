@@ -666,8 +666,11 @@ fn set_prefix(db_path: &std::path::Path, prefix: &str) {
     )
     .unwrap();
     // Also update brains.prefix for any already-registered brains.
-    conn.execute("UPDATE brains SET prefix = ?1 WHERE brain_id != ''", [prefix])
-        .unwrap();
+    conn.execute(
+        "UPDATE brains SET prefix = ?1 WHERE brain_id != ''",
+        [prefix],
+    )
+    .unwrap();
 }
 
 /// Helper: read project_prefix from a SQLite database.

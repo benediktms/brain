@@ -89,10 +89,10 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
     // Range scan on PRIMARY KEY B-tree
     let upper_bound = increment_string(&search_prefix);
     let mut stmt =
-        conn.prepare("SELECT task_id FROM tasks WHERE task_id >= ?1 AND task_id < ?2")?;
-    let matches: Vec<String> = stmt
+        conn.prepare("SELECT task_id, title FROM tasks WHERE task_id >= ?1 AND task_id < ?2")?;
+    let matches: Vec<(String, String)> = stmt
         .query_map(rusqlite::params![search_prefix, upper_bound], |row| {
-            row.get(0)
+            Ok((row.get(0)?, row.get(1)?))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -100,10 +100,17 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
         0 => Err(BrainCoreError::TaskEvent(format!(
             "no task found matching prefix: {input}"
         ))),
-        1 => Ok(matches.into_iter().next().unwrap()),
-        n => Err(BrainCoreError::TaskEvent(format!(
-            "ambiguous prefix '{input}': matches {n} tasks"
-        ))),
+        1 => Ok(matches.into_iter().next().unwrap().0),
+        n => {
+            let candidates: Vec<String> = matches
+                .iter()
+                .map(|(id, title)| format!("  {id} — {title}"))
+                .collect();
+            Err(BrainCoreError::TaskEvent(format!(
+                "ambiguous prefix '{input}': matches {n} tasks:\n{}",
+                candidates.join("\n")
+            )))
+        }
     }
 }
 

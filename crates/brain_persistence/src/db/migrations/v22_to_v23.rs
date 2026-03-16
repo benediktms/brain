@@ -70,9 +70,8 @@ fn rewrite_brain_ids(conn: &Connection, brain_id: &str, correct_prefix: &str) ->
     // ── Tasks ────────────────────────────────────────────────────────────────
 
     let task_ids: Vec<String> = {
-        let mut stmt = conn.prepare(
-            "SELECT task_id FROM tasks WHERE brain_id = ?1 AND task_id LIKE 'BRX-%'",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT task_id FROM tasks WHERE brain_id = ?1 AND task_id LIKE 'BRX-%'")?;
         let rows = stmt.query_map([brain_id], |row| row.get(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
     };
@@ -509,7 +508,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(brx_count, 0, "no BRX- tasks should remain for scoped brains");
+        assert_eq!(
+            brx_count, 0,
+            "no BRX- tasks should remain for scoped brains"
+        );
     }
 
     #[test]

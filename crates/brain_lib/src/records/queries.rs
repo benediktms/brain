@@ -239,11 +239,11 @@ pub fn resolve_record_id(conn: &Connection, input: &str) -> Result<String> {
 
     // Range scan on PRIMARY KEY B-tree
     let upper_bound = increment_string(&search_prefix);
-    let mut stmt =
-        conn.prepare("SELECT record_id FROM records WHERE record_id >= ?1 AND record_id < ?2")?;
-    let matches: Vec<String> = stmt
+    let mut stmt = conn
+        .prepare("SELECT record_id, title FROM records WHERE record_id >= ?1 AND record_id < ?2")?;
+    let matches: Vec<(String, String)> = stmt
         .query_map(rusqlite::params![search_prefix, upper_bound], |row| {
-            row.get(0)
+            Ok((row.get(0)?, row.get(1)?))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -251,10 +251,17 @@ pub fn resolve_record_id(conn: &Connection, input: &str) -> Result<String> {
         0 => Err(BrainCoreError::RecordEvent(format!(
             "no record found matching prefix: {input}"
         ))),
-        1 => Ok(matches.into_iter().next().unwrap()),
-        n => Err(BrainCoreError::RecordEvent(format!(
-            "ambiguous prefix '{input}': matches {n} records"
-        ))),
+        1 => Ok(matches.into_iter().next().unwrap().0),
+        n => {
+            let candidates: Vec<String> = matches
+                .iter()
+                .map(|(id, title)| format!("  {id} — {title}"))
+                .collect();
+            Err(BrainCoreError::RecordEvent(format!(
+                "ambiguous prefix '{input}': matches {n} records:\n{}",
+                candidates.join("\n")
+            )))
+        }
     }
 }
 
