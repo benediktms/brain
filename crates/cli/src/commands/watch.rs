@@ -457,7 +457,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     for instance in brains.values() {
         embed_poll::self_heal_if_lance_missing(
             instance.pipeline.db(),
-            &instance.mcp_context.unified_db,
+            instance.pipeline.db(),
             instance.pipeline.store(),
         )
         .await;
@@ -578,7 +578,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                 for instance in brains.values() {
                     let brain_id = &instance.mcp_context.brain_id;
                     let n_tasks = embed_poll::poll_stale_tasks(
-                        &instance.mcp_context.unified_db,
+                        instance.pipeline.db(),
                         instance.pipeline.store(),
                         instance.pipeline.embedder(),
                         brain_id,
@@ -826,20 +826,8 @@ async fn init_brain_instance(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    // Open the unified DB (~/.brain/brain.db) for tasks and records.
-    // Falls back to the per-brain DB for pre-migration installations.
-    let unified_db_path = brain_home_path.join("brain.db");
-    let unified_db = if unified_db_path.exists() {
-        let path = unified_db_path.clone();
-        tokio::task::spawn_blocking(move || Db::open(&path))
-            .await
-            .map_err(|e| anyhow::anyhow!("spawn_blocking unified Db::open: {e}"))??
-    } else {
-        pipeline.db().clone()
-    };
-
     let stores = brain_lib::stores::BrainStores::from_dbs(
-        unified_db.clone(),
+        pipeline.db().clone(),
         brain_id,
         brain_data_dir,
         &brain_home_path,
@@ -849,7 +837,7 @@ async fn init_brain_instance(
 
     let mcp_context = McpContext::from_stores(
         stores.per_brain_db().clone(),
-        unified_db,
+        stores.unified_db().clone(),
         Some(store_reader),
         None, // writable_store: pipeline.store() is owned by pipeline; IPC is read-only
         None, // embedder: not needed for task/record operations via IPC
