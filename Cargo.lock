@@ -642,8 +642,6 @@ dependencies = [
 name = "brain-lib"
 version = "0.2.1"
 dependencies = [
- "arrow-array",
- "arrow-schema",
  "base64 0.22.1",
  "blake3",
  "brain-persistence",
@@ -654,7 +652,6 @@ dependencies = [
  "criterion",
  "dirs",
  "futures",
- "lancedb",
  "nanoid",
  "notify-debouncer-full",
  "proptest",
