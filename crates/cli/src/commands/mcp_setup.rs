@@ -7,6 +7,42 @@ use serde_json::{Value, json};
 
 use crate::cli::McpTarget;
 
+/// Resolve the installed brain binary path.
+///
+/// Checks `~/bin/brain` first (the canonical install location from `just install`),
+/// then falls back to `current_exe()`, then the bare name `"brain"`.
+///
+/// This ensures MCP server configs always point to the stable installed binary,
+/// not a transient debug/worktree build that may have incompatible schema versions.
+pub fn installed_brain_bin() -> String {
+    let canonical = dirs::home_dir().map(|h| h.join("bin").join("brain"));
+    let current = std::env::current_exe().ok();
+    resolve_brain_bin(canonical.as_deref(), current.as_deref())
+}
+
+/// Pure resolution logic, testable without filesystem side effects.
+///
+/// `canonical` is the known install path (`~/bin/brain`).
+/// `current_exe` is the path of the currently running binary.
+/// Prefers `canonical` when it exists on disk, otherwise falls back to `current_exe`,
+/// then the bare name `"brain"`.
+fn resolve_brain_bin(
+    canonical: Option<&std::path::Path>,
+    current_exe: Option<&std::path::Path>,
+) -> String {
+    // Prefer the canonical install location if it exists on disk.
+    if let Some(path) = canonical.filter(|p| p.exists()) {
+        return path.to_string_lossy().into_owned();
+    }
+
+    // Fallback: current executable path.
+    if let Some(path) = current_exe {
+        return path.to_string_lossy().into_owned();
+    }
+
+    "brain".into()
+}
+
 /// Register brain as a Claude Code MCP server (user scope).
 ///
 /// Calls `claude mcp remove brain` then `claude mcp add` so the entry is
@@ -158,9 +194,7 @@ fn find_git_root() -> Option<std::path::PathBuf> {
 
 /// Entry point for `brain mcp setup <target>`.
 pub fn run(target: McpTarget, dry_run: bool) -> Result<()> {
-    let brain_bin = std::env::current_exe()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "brain".into());
+    let brain_bin = installed_brain_bin();
 
     // Check for brain project root (informational only).
     let cwd = std::env::current_dir().context("cannot determine current directory")?;
@@ -197,5 +231,70 @@ pub fn run(target: McpTarget, dry_run: bool) -> Result<()> {
         McpTarget::Claude => register_claude(&brain_bin, dry_run),
         McpTarget::Cursor => setup_cursor(&brain_bin, dry_run),
         McpTarget::Vscode => setup_vscode(&brain_bin, dry_run),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    /// Before the fix, MCP config used `current_exe()` directly. When running
+    /// from a worktree debug build (e.g. `target/debug/brain`), the config
+    /// would point to that transient binary — which may auto-migrate the shared
+    /// database with an incompatible schema version.
+    ///
+    /// This test reproduces the bugged behavior: when no canonical install
+    /// exists, `resolve_brain_bin` falls back to whatever `current_exe` is,
+    /// which could be a worktree build path.
+    #[test]
+    fn old_behavior_uses_worktree_binary_when_no_canonical_install() {
+        let worktree_bin = PathBuf::from("/tmp/worktree/target/debug/brain");
+        // No canonical path exists → falls back to current_exe (the worktree binary).
+        let result = resolve_brain_bin(None, Some(&worktree_bin));
+        assert_eq!(result, "/tmp/worktree/target/debug/brain");
+    }
+
+    /// With the fix: when the canonical install path exists on disk,
+    /// `resolve_brain_bin` returns it regardless of what `current_exe` is.
+    #[test]
+    fn prefers_canonical_install_over_current_exe() {
+        let tmp = TempDir::new().unwrap();
+        let canonical = tmp.path().join("bin").join("brain");
+        std::fs::create_dir_all(canonical.parent().unwrap()).unwrap();
+        std::fs::write(&canonical, b"fake-binary").unwrap();
+
+        let worktree_bin = PathBuf::from("/tmp/worktree/target/debug/brain");
+        let result = resolve_brain_bin(Some(&canonical), Some(&worktree_bin));
+        assert_eq!(result, canonical.to_string_lossy());
+    }
+
+    /// When the canonical path is provided but doesn't exist on disk,
+    /// falls back to current_exe.
+    #[test]
+    fn falls_back_to_current_exe_when_canonical_missing() {
+        let missing = PathBuf::from("/nonexistent/bin/brain");
+        let current = PathBuf::from("/usr/local/bin/brain");
+        let result = resolve_brain_bin(Some(&missing), Some(&current));
+        assert_eq!(result, "/usr/local/bin/brain");
+    }
+
+    /// When neither canonical nor current_exe is available, returns bare "brain".
+    #[test]
+    fn falls_back_to_bare_name_when_nothing_available() {
+        let result = resolve_brain_bin(None, None);
+        assert_eq!(result, "brain");
+    }
+
+    #[test]
+    fn deep_merge_preserves_existing_keys() {
+        let mut base = json!({"a": 1, "b": {"c": 2, "d": 3}});
+        let overlay = json!({"b": {"c": 99, "e": 4}, "f": 5});
+        deep_merge(&mut base, &overlay);
+        assert_eq!(
+            base,
+            json!({"a": 1, "b": {"c": 99, "d": 3, "e": 4}, "f": 5})
+        );
     }
 }
