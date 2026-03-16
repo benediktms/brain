@@ -59,8 +59,9 @@ impl TaskNext {
                     (None, Some(_)) => std::cmp::Ordering::Greater,
                     (None, None) => std::cmp::Ordering::Equal,
                 };
-                due_cmp
-                    .then(status_ord(&a.status).cmp(&status_ord(&b.status)))
+                status_ord(&a.status)
+                    .cmp(&status_ord(&b.status))
+                    .then(due_cmp)
                     .then(a.priority.cmp(&b.priority))
                     .then(a.task_id.cmp(&b.task_id))
             });
@@ -419,6 +420,32 @@ mod tests {
             "in_progress task must appear before open task at the same priority"
         );
         assert_eq!(tasks[1]["task_id"], "t1");
+    }
+
+    #[tokio::test]
+    async fn test_in_progress_before_open_cross_priority() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // t1: priority 3, in_progress — t2: priority 1 (higher), open
+        // in_progress must dominate regardless of priority
+        apply(&registry, &ctx, json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Low Priority In Progress", "priority": 3}})).await;
+        apply(&registry, &ctx, json!({"event_type": "task_created", "task_id": "t2", "payload": {"title": "High Priority Open", "priority": 1}})).await;
+        apply(&registry, &ctx, json!({"event_type": "status_changed", "task_id": "t1", "payload": {"new_status": "in_progress"}})).await;
+
+        let result = registry
+            .dispatch("tasks.next", json!({ "k": 2 }), &ctx)
+            .await;
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let tasks = collect_tasks(&parsed);
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(
+            tasks[0]["task_id"], "t1",
+            "in_progress task (P3) must appear before open task (P1) — status dominates priority"
+        );
+        assert_eq!(tasks[1]["task_id"], "t2");
     }
 
     #[tokio::test]
