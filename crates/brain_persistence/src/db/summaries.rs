@@ -263,7 +263,8 @@ pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Sum
     }
     let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
     let sql = format!(
-        "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at
+        "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                brain_id, parent_id, source_hash, confidence, valid_from
          FROM summaries WHERE summary_id IN ({})",
         placeholders.join(", ")
     );
@@ -282,6 +283,11 @@ pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Sum
             importance: row.get(5)?,
             created_at: row.get(6)?,
             updated_at: row.get(7)?,
+            brain_id: row.get(8)?,
+            parent_id: row.get(9)?,
+            source_hash: row.get(10)?,
+            confidence: row.get(11)?,
+            valid_from: row.get(12)?,
         })
     })?;
     super::collect_rows(rows)
