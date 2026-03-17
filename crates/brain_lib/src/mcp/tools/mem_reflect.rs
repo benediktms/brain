@@ -70,7 +70,7 @@ impl McpTool for MemReflect {
 
             let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
             let reflect_result = match pipeline
-                .reflect(params.topic.clone(), params.budget_tokens as usize)
+                .reflect(params.topic.clone(), params.budget_tokens as usize, &ctx.brain_id)
                 .await
             {
                 Ok(r) => r,

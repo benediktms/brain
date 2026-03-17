@@ -7,6 +7,7 @@ use crate::error::Result;
 
 /// An episode record for the summaries table.
 pub struct Episode {
+    pub brain_id: String,
     pub goal: String,
     pub actions: String,
     pub outcome: String,
@@ -18,6 +19,7 @@ pub struct Episode {
 #[derive(Debug, Clone)]
 pub struct SummaryRow {
     pub summary_id: String,
+    pub brain_id: String,
     pub kind: String,
     pub title: Option<String>,
     pub content: String,
@@ -25,6 +27,10 @@ pub struct SummaryRow {
     pub importance: f64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub parent_id: Option<String>,
+    pub source_hash: Option<String>,
+    pub confidence: f64,
+    pub valid_from: Option<i64>,
 }
 
 /// Store an episode in the summaries table.
@@ -40,15 +46,15 @@ pub fn store_episode(conn: &Connection, episode: &Episode) -> Result<String> {
     );
 
     conn.execute(
-        "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, created_at, updated_at)
-         VALUES (?1, 'episode', ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, valid_from, created_at, updated_at)
+         VALUES (?1, 'episode', ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
         rusqlite::params![
             summary_id,
             episode.goal,
             content,
             tags_json,
             episode.importance,
-            now,
+            episode.brain_id,
             now,
         ],
     )?;
@@ -65,6 +71,7 @@ pub fn store_reflection(
     source_ids: &[String],
     tags: &[String],
     importance: f64,
+    brain_id: &str,
 ) -> Result<String> {
     let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
@@ -73,9 +80,9 @@ pub fn store_reflection(
     let tx = conn.unchecked_transaction()?;
 
     tx.execute(
-        "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, created_at, updated_at)
-         VALUES (?1, 'reflection', ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![summary_id, title, content, tags_json, importance, now, now],
+        "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, valid_from, created_at, updated_at)
+         VALUES (?1, 'reflection', ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
+        rusqlite::params![summary_id, title, content, tags_json, importance, brain_id, now],
     )?;
 
     // Link reflection to sources
@@ -93,10 +100,12 @@ pub fn store_reflection(
 }
 
 /// Get a summary by ID.
+/// No brain_id filter — PK lookup, intentional for cross-brain references.
 pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<SummaryRow>> {
     let result = conn
         .query_row(
-            "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at
+            "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                    brain_id, parent_id, source_hash, confidence, valid_from
              FROM summaries WHERE summary_id = ?1",
             [summary_id],
             |row| {
@@ -111,12 +120,64 @@ pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<Summary
                     importance: row.get(5)?,
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
+                    brain_id: row.get(8)?,
+                    parent_id: row.get(9)?,
+                    source_hash: row.get(10)?,
+                    confidence: row.get(11)?,
+                    valid_from: row.get(12)?,
                 })
             },
         )
         .optional()?;
 
     Ok(result)
+}
+
+/// Get summaries by prefixed IDs (strips `sum:` prefix before lookup).
+/// No brain_id filter — allows cross-brain references.
+pub fn get_summaries_by_prefixed_ids(
+    conn: &Connection,
+    prefixed_ids: &[String],
+) -> Result<Vec<SummaryRow>> {
+    if prefixed_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<String> = prefixed_ids
+        .iter()
+        .map(|id| id.strip_prefix("sum:").unwrap_or(id).to_string())
+        .collect();
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                brain_id, parent_id, source_hash, confidence, valid_from
+         FROM summaries WHERE summary_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        let tags_json: String = row.get(4)?;
+        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+        Ok(SummaryRow {
+            summary_id: row.get(0)?,
+            kind: row.get(1)?,
+            title: row.get(2)?,
+            content: row.get(3)?,
+            tags,
+            importance: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            brain_id: row.get(8)?,
+            parent_id: row.get(9)?,
+            source_hash: row.get(10)?,
+            confidence: row.get(11)?,
+            valid_from: row.get(12)?,
+        })
+    })?;
+    super::collect_rows(rows)
 }
 
 /// Store an ML-generated summary for a chunk.
@@ -195,15 +256,9 @@ pub fn get_ml_summaries_for_chunks(
 }
 
 /// List recent episodes.
-pub fn list_episodes(conn: &Connection, limit: usize) -> Result<Vec<SummaryRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at
-         FROM summaries WHERE kind = 'episode'
-         ORDER BY created_at DESC
-         LIMIT ?1",
-    )?;
-
-    let rows = stmt.query_map([limit as i64], |row| {
+/// When `brain_id` is non-empty, filters to that brain only. Empty string returns all brains.
+pub fn list_episodes(conn: &Connection, limit: usize, brain_id: &str) -> Result<Vec<SummaryRow>> {
+    let row_mapper = |row: &rusqlite::Row<'_>| {
         let tags_json: String = row.get(4)?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         Ok(SummaryRow {
@@ -215,9 +270,83 @@ pub fn list_episodes(conn: &Connection, limit: usize) -> Result<Vec<SummaryRow>>
             importance: row.get(5)?,
             created_at: row.get(6)?,
             updated_at: row.get(7)?,
+            brain_id: row.get(8)?,
+            parent_id: row.get(9)?,
+            source_hash: row.get(10)?,
+            confidence: row.get(11)?,
+            valid_from: row.get(12)?,
+        })
+    };
+
+    if brain_id.is_empty() {
+        let mut stmt = conn.prepare(
+            "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                    brain_id, parent_id, source_hash, confidence, valid_from
+             FROM summaries WHERE kind = 'episode'
+             ORDER BY created_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], row_mapper)?;
+        super::collect_rows(rows)
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                    brain_id, parent_id, source_hash, confidence, valid_from
+             FROM summaries WHERE kind = 'episode' AND brain_id = ?2
+             ORDER BY created_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![limit as i64, brain_id], row_mapper)?;
+        super::collect_rows(rows)
+    }
+}
+
+/// List recent episodes across multiple brains.
+/// Returns episodes where brain_id is in the provided list, newest first.
+pub fn list_episodes_multi_brain(
+    conn: &Connection,
+    limit: usize,
+    brain_ids: &[String],
+) -> Result<Vec<SummaryRow>> {
+    if brain_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<String> = (1..=brain_ids.len()).map(|i| format!("?{}", i + 1)).collect();
+    let sql = format!(
+        "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                brain_id, parent_id, source_hash, confidence, valid_from
+         FROM summaries WHERE kind = 'episode' AND brain_id IN ({})
+         ORDER BY created_at DESC
+         LIMIT ?1",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(brain_ids.len() + 1);
+    params.push(Box::new(limit as i64));
+    for id in brain_ids {
+        params.push(Box::new(id.clone()));
+    }
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        let tags_json: String = row.get(4)?;
+        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+        Ok(SummaryRow {
+            summary_id: row.get(0)?,
+            kind: row.get(1)?,
+            title: row.get(2)?,
+            content: row.get(3)?,
+            tags,
+            importance: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            brain_id: row.get(8)?,
+            parent_id: row.get(9)?,
+            source_hash: row.get(10)?,
+            confidence: row.get(11)?,
+            valid_from: row.get(12)?,
         })
     })?;
-
     super::collect_rows(rows)
 }
 
@@ -237,6 +366,7 @@ mod tests {
         let conn = setup();
 
         let episode = Episode {
+            brain_id: "brain-test".into(),
             goal: "Fix the bug".into(),
             actions: "Debugged and patched".into(),
             outcome: "Bug fixed".into(),
@@ -249,6 +379,7 @@ mod tests {
 
         let summary = get_summary(&conn, &id).unwrap().unwrap();
         assert_eq!(summary.kind, "episode");
+        assert_eq!(summary.brain_id, "brain-test");
         assert_eq!(summary.title.as_deref(), Some("Fix the bug"));
         assert!(summary.content.contains("Fix the bug"));
         assert!(summary.content.contains("Bug fixed"));
@@ -264,6 +395,7 @@ mod tests {
         let ep1 = store_episode(
             &conn,
             &Episode {
+                brain_id: "brain-a".into(),
                 goal: "Goal 1".into(),
                 actions: "Actions 1".into(),
                 outcome: "Outcome 1".into(),
@@ -275,6 +407,7 @@ mod tests {
         let ep2 = store_episode(
             &conn,
             &Episode {
+                brain_id: "brain-a".into(),
                 goal: "Goal 2".into(),
                 actions: "Actions 2".into(),
                 outcome: "Outcome 2".into(),
@@ -292,6 +425,7 @@ mod tests {
             &[ep1.clone(), ep2.clone()],
             &["learning".into()],
             0.9,
+            "brain-a",
         )
         .unwrap();
 
@@ -318,6 +452,7 @@ mod tests {
             store_episode(
                 &conn,
                 &Episode {
+                    brain_id: "brain-x".into(),
                     goal: format!("Goal {i}"),
                     actions: format!("Actions {i}"),
                     outcome: format!("Outcome {i}"),
@@ -328,12 +463,85 @@ mod tests {
             .unwrap();
         }
 
-        let episodes = list_episodes(&conn, 3).unwrap();
+        let episodes = list_episodes(&conn, 3, "brain-x").unwrap();
         assert_eq!(episodes.len(), 3);
         // All should be episodes
         for ep in &episodes {
             assert_eq!(ep.kind, "episode");
         }
+    }
+
+    #[test]
+    fn test_list_episodes_brain_id_filter() {
+        let conn = setup();
+
+        store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-a".into(),
+                goal: "A goal".into(),
+                actions: "A actions".into(),
+                outcome: "A outcome".into(),
+                tags: vec![],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+        store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-b".into(),
+                goal: "B goal".into(),
+                actions: "B actions".into(),
+                outcome: "B outcome".into(),
+                tags: vec![],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        let a_eps = list_episodes(&conn, 10, "brain-a").unwrap();
+        assert_eq!(a_eps.len(), 1);
+        assert_eq!(a_eps[0].brain_id, "brain-a");
+
+        let b_eps = list_episodes(&conn, 10, "brain-b").unwrap();
+        assert_eq!(b_eps.len(), 1);
+        assert_eq!(b_eps[0].brain_id, "brain-b");
+
+        let all_eps = list_episodes(&conn, 10, "").unwrap();
+        assert_eq!(all_eps.len(), 2);
+    }
+
+    #[test]
+    fn test_list_episodes_multi_brain() {
+        let conn = setup();
+
+        for bid in ["brain-1", "brain-2", "brain-3"] {
+            store_episode(
+                &conn,
+                &Episode {
+                    brain_id: bid.into(),
+                    goal: format!("Goal {bid}"),
+                    actions: "actions".into(),
+                    outcome: "outcome".into(),
+                    tags: vec![],
+                    importance: 1.0,
+                },
+            )
+            .unwrap();
+        }
+
+        let multi = list_episodes_multi_brain(
+            &conn,
+            10,
+            &["brain-1".to_string(), "brain-2".to_string()],
+        )
+        .unwrap();
+        assert_eq!(multi.len(), 2);
+        let ids: Vec<&str> = multi.iter().map(|r| r.brain_id.as_str()).collect();
+        assert!(ids.contains(&"brain-1"));
+        assert!(ids.contains(&"brain-2"));
+        assert!(!ids.contains(&"brain-3"));
     }
 
     #[test]

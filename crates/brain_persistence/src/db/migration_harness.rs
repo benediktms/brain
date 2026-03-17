@@ -18,7 +18,7 @@ use super::migrations::{
     migrate_v10_to_v11, migrate_v11_to_v12, migrate_v12_to_v13, migrate_v13_to_v14,
     migrate_v14_to_v15, migrate_v15_to_v16, migrate_v16_to_v17, migrate_v17_to_v18,
     migrate_v18_to_v19, migrate_v19_to_v20, migrate_v20_to_v21, migrate_v21_to_v22,
-    migrate_v22_to_v23, migrate_v23_to_v24,
+    migrate_v22_to_v23, migrate_v23_to_v24, migrate_v24_to_v25,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -59,6 +59,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             21 => migrate_v21_to_v22(&conn).unwrap(),
             22 => migrate_v22_to_v23(&conn).unwrap(),
             23 => migrate_v23_to_v24(&conn).unwrap(),
+            24 => migrate_v24_to_v25(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -183,6 +184,7 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_tasks_brain_priority",
     "idx_records_brain",
     "idx_records_brain_status",
+    "idx_summaries_brain_id",
 ];
 
 /// FTS5 triggers that must exist.

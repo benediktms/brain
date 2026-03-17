@@ -698,12 +698,29 @@ impl MockEpisodeReader {
 }
 
 impl EpisodeReader for MockEpisodeReader {
-    fn list_episodes(&self, limit: usize) -> Result<Vec<SummaryRow>> {
+    fn list_episodes(&self, limit: usize, brain_id: &str) -> Result<Vec<SummaryRow>> {
         Ok(self
             .episodes
             .lock()
             .unwrap()
             .iter()
+            .filter(|ep| brain_id.is_empty() || ep.brain_id == brain_id)
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    fn list_episodes_multi_brain(
+        &self,
+        limit: usize,
+        brain_ids: &[String],
+    ) -> Result<Vec<SummaryRow>> {
+        Ok(self
+            .episodes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|ep| brain_ids.contains(&ep.brain_id))
             .take(limit)
             .cloned()
             .collect())
@@ -1058,6 +1075,7 @@ mod tests {
     fn mock_episode_writer_stores_episodes() {
         let writer = MockEpisodeWriter::default();
         let episode = Episode {
+            brain_id: "brain-test".to_string(),
             goal: "Fix bug".to_string(),
             actions: "Debugged".to_string(),
             outcome: "Fixed".to_string(),
@@ -1078,6 +1096,7 @@ mod tests {
         let episodes = vec![
             SummaryRow {
                 summary_id: "s1".to_string(),
+                brain_id: "brain-a".to_string(),
                 kind: "episode".to_string(),
                 title: Some("Episode 1".to_string()),
                 content: "content 1".to_string(),
@@ -1085,9 +1104,14 @@ mod tests {
                 importance: 1.0,
                 created_at: 100,
                 updated_at: 100,
+                parent_id: None,
+                source_hash: None,
+                confidence: 1.0,
+                valid_from: None,
             },
             SummaryRow {
                 summary_id: "s2".to_string(),
+                brain_id: "brain-a".to_string(),
                 kind: "episode".to_string(),
                 title: Some("Episode 2".to_string()),
                 content: "content 2".to_string(),
@@ -1095,11 +1119,15 @@ mod tests {
                 importance: 1.0,
                 created_at: 200,
                 updated_at: 200,
+                parent_id: None,
+                source_hash: None,
+                confidence: 1.0,
+                valid_from: None,
             },
         ];
         let reader = MockEpisodeReader::with_episodes(episodes);
 
-        let out = reader.list_episodes(1).unwrap();
+        let out = reader.list_episodes(1, "").unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].summary_id, "s1");
     }

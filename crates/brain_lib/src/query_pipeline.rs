@@ -339,8 +339,13 @@ where
 
     /// Reflect: fetch recent episodes + search for related chunks, return combined result.
     #[instrument(skip_all)]
-    pub async fn reflect(&self, topic: String, budget_tokens: usize) -> Result<ReflectResult> {
-        let episodes = self.db.list_episodes(10).unwrap_or_default();
+    pub async fn reflect(
+        &self,
+        topic: String,
+        budget_tokens: usize,
+        brain_id: &str,
+    ) -> Result<ReflectResult> {
+        let episodes = self.db.list_episodes(10, brain_id).unwrap_or_default();
 
         let search_result = self
             .search(&topic, "reflection", budget_tokens / 2, 5, &[])

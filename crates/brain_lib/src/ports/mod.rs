@@ -584,6 +584,7 @@ pub trait EpisodeWriter: Send + Sync {
 impl EpisodeWriter for Db {
     fn store_episode(&self, episode: &crate::db::summaries::Episode) -> Result<String> {
         // Episode fields must be cloned to cross the closure boundary.
+        let brain_id = episode.brain_id.clone();
         let goal = episode.goal.clone();
         let actions = episode.actions.clone();
         let outcome = episode.outcome.clone();
@@ -593,6 +594,7 @@ impl EpisodeWriter for Db {
             crate::db::summaries::store_episode(
                 conn,
                 &crate::db::summaries::Episode {
+                    brain_id,
                     goal,
                     actions,
                     outcome,
@@ -613,14 +615,44 @@ impl EpisodeWriter for Db {
 /// Consumers: `QueryPipeline::reflect`.
 pub trait EpisodeReader: Send + Sync {
     /// List recent episodes, newest first, up to `limit` entries.
-    fn list_episodes(&self, limit: usize) -> Result<Vec<crate::db::summaries::SummaryRow>>;
+    /// When `brain_id` is non-empty, filters to that brain. Empty string returns all brains.
+    fn list_episodes(
+        &self,
+        limit: usize,
+        brain_id: &str,
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>>;
+
+    /// List recent episodes across multiple brains.
+    fn list_episodes_multi_brain(
+        &self,
+        limit: usize,
+        brain_ids: &[String],
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>>;
 }
 
 // -- EpisodeReader for Db --------------------------------------------------
 
 impl EpisodeReader for Db {
-    fn list_episodes(&self, limit: usize) -> Result<Vec<crate::db::summaries::SummaryRow>> {
-        self.with_read_conn(move |conn| crate::db::summaries::list_episodes(conn, limit))
+    fn list_episodes(
+        &self,
+        limit: usize,
+        brain_id: &str,
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            crate::db::summaries::list_episodes(conn, limit, &brain_id)
+        })
+    }
+
+    fn list_episodes_multi_brain(
+        &self,
+        limit: usize,
+        brain_ids: &[String],
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
+        let brain_ids = brain_ids.to_vec();
+        self.with_read_conn(move |conn| {
+            crate::db::summaries::list_episodes_multi_brain(conn, limit, &brain_ids)
+        })
     }
 }
 

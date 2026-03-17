@@ -37,6 +37,7 @@ impl MemWriteEpisode {
         };
 
         let episode = Episode {
+            brain_id: ctx.brain_id.clone(),
             goal: params.goal.clone(),
             actions: params.actions,
             outcome: params.outcome,
