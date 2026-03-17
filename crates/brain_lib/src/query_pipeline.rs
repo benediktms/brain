@@ -310,15 +310,12 @@ where
                     for row in &rows {
                         let key = format!("sum:{}", row.summary_id);
                         if let Some(candidate) = candidates.get_mut(&key) {
-                            candidate.heading_path =
-                                row.title.clone().unwrap_or_default();
+                            candidate.heading_path = row.title.clone().unwrap_or_default();
                             candidate.content = row.content.clone();
-                            candidate.token_estimate =
-                                crate::tokens::estimate_tokens(&row.content);
+                            candidate.token_estimate = crate::tokens::estimate_tokens(&row.content);
                             candidate.importance = row.importance;
                             candidate.tags = row.tags.clone();
-                            candidate.age_seconds =
-                                (now - row.updated_at).max(0) as f64;
+                            candidate.age_seconds = (now - row.updated_at).max(0) as f64;
                             candidate.summary_kind = Some(row.kind.clone());
                         }
                     }
@@ -393,20 +390,27 @@ where
         budget_tokens: usize,
     ) -> Result<ExpandResult> {
         // Partition: sum: IDs go to summaries table, others go to chunks table.
-        let (sum_ids, chunk_ids): (Vec<String>, Vec<String>) =
-            memory_ids.iter().cloned().partition(|id| id.starts_with("sum:"));
+        let (sum_ids, chunk_ids): (Vec<String>, Vec<String>) = memory_ids
+            .iter()
+            .cloned()
+            .partition(|id| id.starts_with("sum:"));
 
         // Fetch chunk rows
         let chunk_rows = self.db.get_chunks_by_ids(&chunk_ids)?;
-        let chunk_map: HashMap<&str, _> =
-            chunk_rows.iter().map(|r| (r.chunk_id.as_str(), r)).collect();
+        let chunk_map: HashMap<&str, _> = chunk_rows
+            .iter()
+            .map(|r| (r.chunk_id.as_str(), r))
+            .collect();
 
         // Fetch summary rows (strip "sum:" prefix to get summary_id)
         let summary_raw_ids: Vec<String> = sum_ids
             .iter()
             .map(|id| id["sum:".len()..].to_string())
             .collect();
-        let summary_rows = self.db.get_summaries_by_ids(&summary_raw_ids).unwrap_or_default();
+        let summary_rows = self
+            .db
+            .get_summaries_by_ids(&summary_raw_ids)
+            .unwrap_or_default();
         // Build map keyed by the original "sum:{id}" form
         let summary_map: HashMap<String, _> = summary_rows
             .iter()
@@ -428,15 +432,18 @@ where
                         byte_end: 0,
                     })
                 } else {
-                    chunk_map.get(id.as_str()).copied().map(|row| ExpandableChunk {
-                        chunk_id: row.chunk_id.clone(),
-                        content: row.content.clone(),
-                        file_path: row.file_path.clone(),
-                        heading_path: row.heading_path.clone(),
-                        token_estimate: row.token_estimate,
-                        byte_start: row.byte_start,
-                        byte_end: row.byte_end,
-                    })
+                    chunk_map
+                        .get(id.as_str())
+                        .copied()
+                        .map(|row| ExpandableChunk {
+                            chunk_id: row.chunk_id.clone(),
+                            content: row.content.clone(),
+                            file_path: row.file_path.clone(),
+                            heading_path: row.heading_path.clone(),
+                            token_estimate: row.token_estimate,
+                            byte_start: row.byte_start,
+                            byte_end: row.byte_end,
+                        })
                 }
             })
             .collect();

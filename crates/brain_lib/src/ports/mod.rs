@@ -168,11 +168,7 @@ pub trait FtsSearcher: Send + Sync {
 
     /// Search the FTS5 summaries index (episodes + reflections) and return
     /// BM25-ranked results (scores normalized to [0, 1]).
-    fn search_summaries_fts(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<FtsSummaryResult>>;
+    fn search_summaries_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -313,15 +309,9 @@ impl FtsSearcher for Db {
         self.with_read_conn(move |conn| crate::db::fts::search_fts(conn, &query, limit))
     }
 
-    fn search_summaries_fts(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<FtsSummaryResult>> {
+    fn search_summaries_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>> {
         let query = query.to_string();
-        self.with_read_conn(move |conn| {
-            crate::db::fts::search_summaries_fts(conn, &query, limit)
-        })
+        self.with_read_conn(move |conn| crate::db::fts::search_summaries_fts(conn, &query, limit))
     }
 }
 
@@ -649,10 +639,8 @@ pub trait EpisodeReader: Send + Sync {
     ) -> Result<Vec<crate::db::summaries::SummaryRow>>;
 
     /// Batch-load summaries by a list of summary IDs.
-    fn get_summaries_by_ids(
-        &self,
-        ids: &[String],
-    ) -> Result<Vec<crate::db::summaries::SummaryRow>>;
+    fn get_summaries_by_ids(&self, ids: &[String])
+    -> Result<Vec<crate::db::summaries::SummaryRow>>;
 }
 
 // -- EpisodeReader for Db --------------------------------------------------
@@ -664,9 +652,7 @@ impl EpisodeReader for Db {
         brain_id: &str,
     ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
         let brain_id = brain_id.to_string();
-        self.with_read_conn(move |conn| {
-            crate::db::summaries::list_episodes(conn, limit, &brain_id)
-        })
+        self.with_read_conn(move |conn| crate::db::summaries::list_episodes(conn, limit, &brain_id))
     }
 
     fn list_episodes_multi_brain(
@@ -685,9 +671,7 @@ impl EpisodeReader for Db {
         ids: &[String],
     ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
         let ids = ids.to_vec();
-        self.with_read_conn(move |conn| {
-            crate::db::summaries::get_summaries_by_ids(conn, &ids)
-        })
+        self.with_read_conn(move |conn| crate::db::summaries::get_summaries_by_ids(conn, &ids))
     }
 }
 
@@ -768,7 +752,7 @@ impl MaintenanceOps for Db {
     }
 
     fn reindex_summaries_fts(&self) -> Result<usize> {
-        self.with_write_conn(|conn| crate::db::fts::reindex_summaries_fts(conn))
+        self.with_write_conn(crate::db::fts::reindex_summaries_fts)
     }
 }
 

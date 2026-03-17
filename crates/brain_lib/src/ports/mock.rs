@@ -245,11 +245,7 @@ impl FtsSearcher for MockFtsSearcher {
         Ok(self.results.lock().unwrap().clone())
     }
 
-    fn search_summaries_fts(
-        &self,
-        _query: &str,
-        _limit: usize,
-    ) -> Result<Vec<FtsSummaryResult>> {
+    fn search_summaries_fts(&self, _query: &str, _limit: usize) -> Result<Vec<FtsSummaryResult>> {
         Ok(Vec::new())
     }
 }

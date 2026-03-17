@@ -112,7 +112,7 @@ impl McpTool for MemReflect {
 
             match params.mode.as_str() {
                 "commit" => Self::commit(params, ctx).await,
-                "prepare" | _ => Self::prepare(params, ctx).await,
+                _ => Self::prepare(params, ctx).await,
             }
         })
     }
@@ -129,7 +129,11 @@ impl MemReflect {
 
         let topic = match params.topic {
             Some(t) => t,
-            None => return ToolCallResult::error("Invalid parameters: 'topic' is required for prepare mode"),
+            None => {
+                return ToolCallResult::error(
+                    "Invalid parameters: 'topic' is required for prepare mode",
+                );
+            }
         };
 
         // Log cross-brain request. The shared SQLite DB is unscoped — all
@@ -202,16 +206,32 @@ impl MemReflect {
     async fn commit(params: Params, ctx: &McpContext) -> ToolCallResult {
         let title = match params.title {
             Some(t) => t,
-            None => return ToolCallResult::error("Invalid parameters: 'title' is required for commit mode"),
+            None => {
+                return ToolCallResult::error(
+                    "Invalid parameters: 'title' is required for commit mode",
+                );
+            }
         };
         let content = match params.content {
             Some(c) => c,
-            None => return ToolCallResult::error("Invalid parameters: 'content' is required for commit mode"),
+            None => {
+                return ToolCallResult::error(
+                    "Invalid parameters: 'content' is required for commit mode",
+                );
+            }
         };
         let source_ids = match params.source_ids {
             Some(ids) if !ids.is_empty() => ids,
-            Some(_) => return ToolCallResult::error("Invalid parameters: 'source_ids' must be non-empty for commit mode"),
-            None => return ToolCallResult::error("Invalid parameters: 'source_ids' is required for commit mode"),
+            Some(_) => {
+                return ToolCallResult::error(
+                    "Invalid parameters: 'source_ids' must be non-empty for commit mode",
+                );
+            }
+            None => {
+                return ToolCallResult::error(
+                    "Invalid parameters: 'source_ids' is required for commit mode",
+                );
+            }
         };
         let tags = params.tags.unwrap_or_default();
         let importance = params.importance.unwrap_or(1.0);
@@ -219,15 +239,13 @@ impl MemReflect {
         // Validate source_ids exist (PK lookup, no brain_id filter — cross-brain refs allowed)
         for source_id in &source_ids {
             let id = source_id.clone();
-            let exists = ctx.db.with_read_conn(move |conn| {
-                crate::db::summaries::get_summary(conn, &id)
-            });
+            let exists = ctx
+                .db
+                .with_read_conn(move |conn| crate::db::summaries::get_summary(conn, &id));
             match exists {
                 Ok(Some(_)) => {}
                 Ok(None) => {
-                    return ToolCallResult::error(format!(
-                        "source_id not found: {source_id}"
-                    ));
+                    return ToolCallResult::error(format!("source_id not found: {source_id}"));
                 }
                 Err(e) => {
                     return ToolCallResult::error(format!(
@@ -345,8 +363,7 @@ mod tests {
             )
             .await;
         assert!(ep_result.is_error.is_none());
-        let ep_json: serde_json::Value =
-            serde_json::from_str(&ep_result.content[0].text).unwrap();
+        let ep_json: serde_json::Value = serde_json::from_str(&ep_result.content[0].text).unwrap();
         let episode_id = ep_json["summary_id"].as_str().unwrap().to_string();
 
         // Now commit a reflection referencing that episode
@@ -365,8 +382,7 @@ mod tests {
             )
             .await;
         assert!(result.is_error.is_none());
-        let parsed: serde_json::Value =
-            serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["status"], "stored");
         assert!(parsed["summary_id"].is_string());
         assert_eq!(parsed["source_count"], 1);

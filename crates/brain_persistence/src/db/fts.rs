@@ -465,7 +465,6 @@ pub fn reindex_summaries_fts(conn: &Connection) -> Result<usize> {
         "INSERT INTO fts_summaries(fts_summaries) VALUES('rebuild')",
         [],
     )?;
-    let count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM summaries", [], |row| row.get(0))?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM summaries", [], |row| row.get(0))?;
     Ok(count as usize)
 }

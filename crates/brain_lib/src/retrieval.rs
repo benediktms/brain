@@ -449,11 +449,17 @@ mod tests {
     #[test]
     fn test_derive_kind() {
         assert_eq!(derive_kind("task:BRN-01ABC:0", None), "task");
-        assert_eq!(derive_kind("task-outcome:BRN-01XYZ:0", None), "task-outcome");
+        assert_eq!(
+            derive_kind("task-outcome:BRN-01XYZ:0", None),
+            "task-outcome"
+        );
         assert_eq!(derive_kind("01JXYZ1234:0", None), "note");
         assert_eq!(derive_kind("some-uuid:3", None), "note");
         assert_eq!(derive_kind("sum:01JXYZ1234", Some("episode")), "episode");
-        assert_eq!(derive_kind("sum:01JXYZ1234", Some("reflection")), "reflection");
+        assert_eq!(
+            derive_kind("sum:01JXYZ1234", Some("reflection")),
+            "reflection"
+        );
         assert_eq!(derive_kind("sum:01JXYZ1234", None), "episode");
     }
 

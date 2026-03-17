@@ -101,7 +101,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(brain_id, "", "existing row should default brain_id to empty string");
+        assert_eq!(
+            brain_id, "",
+            "existing row should default brain_id to empty string"
+        );
     }
 
     #[test]
@@ -158,7 +161,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(valid_from, 5000, "valid_from should be backfilled from created_at");
+        assert_eq!(
+            valid_from, 5000,
+            "valid_from should be backfilled from created_at"
+        );
     }
 
     #[test]

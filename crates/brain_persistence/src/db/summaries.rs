@@ -269,8 +269,10 @@ pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Sum
         placeholders.join(", ")
     );
     let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<&dyn rusqlite::types::ToSql> =
-        ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows = stmt.query_map(params.as_slice(), |row| {
         let tags_json: String = row.get(4)?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
@@ -349,7 +351,9 @@ pub fn list_episodes_multi_brain(
     if brain_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders: Vec<String> = (1..=brain_ids.len()).map(|i| format!("?{}", i + 1)).collect();
+    let placeholders: Vec<String> = (1..=brain_ids.len())
+        .map(|i| format!("?{}", i + 1))
+        .collect();
     let sql = format!(
         "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
                 brain_id, parent_id, source_hash, confidence, valid_from
@@ -364,8 +368,7 @@ pub fn list_episodes_multi_brain(
     for id in brain_ids {
         params.push(Box::new(id.clone()));
     }
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|b| b.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
     let rows = stmt.query_map(param_refs.as_slice(), |row| {
         let tags_json: String = row.get(4)?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
@@ -569,12 +572,9 @@ mod tests {
             .unwrap();
         }
 
-        let multi = list_episodes_multi_brain(
-            &conn,
-            10,
-            &["brain-1".to_string(), "brain-2".to_string()],
-        )
-        .unwrap();
+        let multi =
+            list_episodes_multi_brain(&conn, 10, &["brain-1".to_string(), "brain-2".to_string()])
+                .unwrap();
         assert_eq!(multi.len(), 2);
         let ids: Vec<&str> = multi.iter().map(|r| r.brain_id.as_str()).collect();
         assert!(ids.contains(&"brain-1"));
@@ -763,13 +763,9 @@ mod tests {
             !results.is_empty(),
             "FTS should find the episode by content"
         );
-        let found: Vec<&FtsSummaryResult> =
-            results.iter().filter(|r| r.summary_id == id).collect();
+        let found: Vec<&FtsSummaryResult> = results.iter().filter(|r| r.summary_id == id).collect();
         assert_eq!(found.len(), 1, "episode id should appear in FTS results");
-        assert!(
-            found[0].score > 0.0,
-            "score should be positive for a match"
-        );
+        assert!(found[0].score > 0.0, "score should be positive for a match");
     }
 
     #[test]
@@ -979,17 +975,17 @@ mod tests {
         }
 
         // Query only brain-1 and brain-3
-        let multi = list_episodes_multi_brain(
-            &conn,
-            10,
-            &["brain-1".to_string(), "brain-3".to_string()],
-        )
-        .unwrap();
+        let multi =
+            list_episodes_multi_brain(&conn, 10, &["brain-1".to_string(), "brain-3".to_string()])
+                .unwrap();
         assert_eq!(multi.len(), 2);
         let brain_ids: Vec<&str> = multi.iter().map(|r| r.brain_id.as_str()).collect();
         assert!(brain_ids.contains(&"brain-1"));
         assert!(brain_ids.contains(&"brain-3"));
-        assert!(!brain_ids.contains(&"brain-2"), "brain-2 should be excluded");
+        assert!(
+            !brain_ids.contains(&"brain-2"),
+            "brain-2 should be excluded"
+        );
     }
 
     #[test]
@@ -1123,7 +1119,10 @@ mod tests {
         assert_eq!(row.brain_id, "brain-schema");
         assert_eq!(row.kind, "episode");
         // parent_id defaults to NULL for episodes
-        assert!(row.parent_id.is_none(), "parent_id should be None for direct episodes");
+        assert!(
+            row.parent_id.is_none(),
+            "parent_id should be None for direct episodes"
+        );
         // source_hash defaults to NULL (not computed at write time for episodes)
         let _ = row.source_hash; // accessible — type: Option<String>
         // confidence defaults to 1.0
