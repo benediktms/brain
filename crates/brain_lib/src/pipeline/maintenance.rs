@@ -2,9 +2,8 @@ use std::path::{Path, PathBuf};
 
 use tracing::{info, instrument, warn};
 
-use crate::db::files;
 use crate::doctor::{CheckStatus, DoctorReport};
-use crate::ports::{ChunkIndexWriter, FileMetaReader, FileMetaWriter, SchemaMeta};
+use crate::ports::{ChunkIndexWriter, FileMetaReader, FileMetaWriter, MaintenanceOps, SchemaMeta};
 use crate::scanner::scan_brain;
 
 use super::{IndexPipeline, VacuumStats};
@@ -32,21 +31,7 @@ where
         let from_str = from.to_string_lossy().to_string();
         let to_str = to.to_string_lossy().to_string();
 
-        let file_id = self.db.with_write_conn(|conn| {
-            use rusqlite::OptionalExtension;
-            let file_id: Option<String> = conn
-                .query_row(
-                    "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",
-                    [&from_str],
-                    |row| row.get(0),
-                )
-                .optional()?;
-
-            if let Some(ref fid) = file_id {
-                files::handle_rename(conn, fid, &to_str)?;
-            }
-            Ok(file_id)
-        })?;
+        let file_id = self.db.rename_file_by_path(&from_str, &to_str)?;
 
         if let Some(ref fid) = file_id {
             self.store.update_file_path(fid, &to_str).await?;
@@ -74,10 +59,7 @@ where
         }
 
         // 3. SQLite VACUUM
-        self.db.with_write_conn(|conn| {
-            conn.execute_batch("VACUUM")?;
-            Ok(())
-        })?;
+        self.db.vacuum_db()?;
         info!("SQLite VACUUM complete");
 
         // 4. LanceDB optimize
@@ -190,13 +172,7 @@ where
         }
 
         // 4. FTS5 consistency (rebuild and compare counts)
-        let fts_result = self.db.with_read_conn(|conn| {
-            let chunk_count: i64 =
-                conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
-            let fts_count: i64 =
-                conn.query_row("SELECT COUNT(*) FROM fts_chunks", [], |row| row.get(0))?;
-            Ok((chunk_count, fts_count))
-        });
+        let fts_result = self.db.fts_consistency();
         match fts_result {
             Ok((chunk_count, fts_count)) => {
                 if chunk_count == fts_count {
@@ -270,10 +246,7 @@ where
     #[instrument(skip(self))]
     pub async fn repair(&mut self) -> crate::error::Result<()> {
         // 1. Rebuild FTS5 index from chunks table
-        self.db.with_write_conn(|conn| {
-            crate::db::fts::reindex_fts(conn)?;
-            Ok(())
-        })?;
+        self.db.reindex_fts()?;
         info!("FTS5 index rebuilt");
 
         // 2. Drop and recreate the LanceDB chunks table

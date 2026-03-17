@@ -625,6 +625,79 @@ impl EpisodeReader for Db {
 }
 
 // ---------------------------------------------------------------------------
+// SQLite status queries — used by MCP status tool
+// ---------------------------------------------------------------------------
+
+/// SQLite queries for runtime health metrics.
+///
+/// Consumers: `mcp::tools::status::Status`.
+pub trait StatusReader: Send + Sync {
+    /// Count files stuck in `indexing_started` state.
+    fn count_stuck_files(&self) -> Result<u64>;
+
+    /// Read the `stale_hashes_prevented` counter from `brain_meta`.
+    fn stale_hashes_prevented(&self) -> Result<u64>;
+}
+
+// -- StatusReader for Db ---------------------------------------------------
+
+impl StatusReader for Db {
+    fn count_stuck_files(&self) -> Result<u64> {
+        self.with_read_conn(crate::db::files::count_stuck_indexing)
+    }
+
+    fn stale_hashes_prevented(&self) -> Result<u64> {
+        self.with_read_conn(crate::db::meta::stale_hashes_prevented)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQLite maintenance operations — used by pipeline::maintenance
+// ---------------------------------------------------------------------------
+
+/// SQLite maintenance operations for the indexing pipeline.
+///
+/// Consumers: `pipeline::maintenance`.
+pub trait MaintenanceOps: Send + Sync {
+    /// Rename a file by its path. Returns the file_id if found.
+    fn rename_file_by_path(&self, from_path: &str, to_path: &str) -> Result<Option<String>>;
+
+    /// Run SQLite VACUUM.
+    fn vacuum_db(&self) -> Result<()>;
+
+    /// Rebuild the FTS5 index from the chunks table.
+    fn reindex_fts(&self) -> Result<()>;
+
+    /// Check FTS5 consistency: return (chunk_count, fts_count).
+    fn fts_consistency(&self) -> Result<(i64, i64)>;
+}
+
+// -- MaintenanceOps for Db -------------------------------------------------
+
+impl MaintenanceOps for Db {
+    fn rename_file_by_path(&self, from_path: &str, to_path: &str) -> Result<Option<String>> {
+        let from = from_path.to_string();
+        let to = to_path.to_string();
+        self.with_write_conn(move |conn| crate::db::files::rename_by_path(conn, &from, &to))
+    }
+
+    fn vacuum_db(&self) -> Result<()> {
+        self.with_write_conn(crate::db::files::vacuum)
+    }
+
+    fn reindex_fts(&self) -> Result<()> {
+        self.with_write_conn(|conn| {
+            crate::db::fts::reindex_fts(conn)?;
+            Ok(())
+        })
+    }
+
+    fn fts_consistency(&self) -> Result<(i64, i64)> {
+        self.with_read_conn(crate::db::fts::fts_consistency)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock implementations for testing
 // ---------------------------------------------------------------------------
 

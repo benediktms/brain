@@ -6,14 +6,17 @@ pub mod meta;
 #[cfg(test)]
 mod migration_harness;
 mod migrations;
+pub mod records;
 pub mod schema;
 pub mod summaries;
+pub mod tasks;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{Connection, OpenFlags};
+pub use rusqlite::Connection;
+use rusqlite::OpenFlags;
 
 use crate::error::{BrainCoreError, Result};
 

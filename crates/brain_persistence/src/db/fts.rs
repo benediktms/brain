@@ -380,3 +380,10 @@ mod tests {
         assert_eq!(results[0].chunk_id, "f1:0");
     }
 }
+
+/// Check FTS5 consistency: return (chunk_count, fts_count).
+pub fn fts_consistency(conn: &Connection) -> Result<(i64, i64)> {
+    let chunk_count: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
+    let fts_count: i64 = conn.query_row("SELECT COUNT(*) FROM fts_chunks", [], |row| row.get(0))?;
+    Ok((chunk_count, fts_count))
+}

@@ -1,11 +1,11 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::ports::StatusReader;
 
 use super::{McpTool, json_response};
 
@@ -36,17 +36,7 @@ impl McpTool for Status {
             let mut snapshot = ctx.metrics.snapshot();
 
             // Enrich with stuck-file count from SQLite
-            let stuck_file_count = match ctx.db.with_read_conn(|conn| {
-                let count: u64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                    .unwrap_or(0);
-                Ok(count)
-            }) {
+            let stuck_file_count = match ctx.db.count_stuck_files() {
                 Ok(count) => count,
                 Err(err) => {
                     return ToolCallResult::error(format!(
@@ -55,18 +45,7 @@ impl McpTool for Status {
                 }
             };
 
-            let stale_hash_count = match ctx.db.with_read_conn(|conn| {
-                let count: u64 = conn
-                    .query_row(
-                        "SELECT value FROM brain_meta WHERE key = 'stale_hashes_prevented'",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                    .and_then(|v: String| v.parse::<u64>().ok())
-                    .unwrap_or(0);
-                Ok(count)
-            }) {
+            let stale_hash_count = match ctx.db.stale_hashes_prevented() {
                 Ok(count) => count,
                 Err(err) => {
                     return ToolCallResult::error(format!(

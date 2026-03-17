@@ -358,3 +358,17 @@ mod tests {
         assert!(prefix.chars().all(|c| c.is_ascii_uppercase()));
     }
 }
+
+/// Read the `stale_hashes_prevented` counter from `brain_meta`.
+pub fn stale_hashes_prevented(conn: &Connection) -> Result<u64> {
+    let count: u64 = conn
+        .query_row(
+            "SELECT value FROM brain_meta WHERE key = 'stale_hashes_prevented'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?
+        .and_then(|v: String| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    Ok(count)
+}

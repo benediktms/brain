@@ -267,3 +267,65 @@ pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
     )?;
     Ok(count > 0)
 }
+
+// ---------------------------------------------------------------------------
+// Embed-poll helpers
+// ---------------------------------------------------------------------------
+
+/// A task row for the embedding poll (minimal fields for capsule generation).
+#[derive(Debug)]
+pub struct TaskPollRow {
+    pub task_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub priority: i32,
+    pub blocked_reason: Option<String>,
+}
+
+/// Find tasks that need (re-)embedding into LanceDB (limit 256).
+pub fn find_stale_tasks_for_embedding(
+    conn: &Connection,
+    brain_id: &str,
+) -> Result<Vec<TaskPollRow>> {
+    let (sql, has_brain_filter) = if brain_id.is_empty() {
+        (
+            "SELECT task_id, title, description, status, priority, blocked_reason
+             FROM tasks
+             WHERE (updated_at > COALESCE(embedded_at, 0) OR embedded_at IS NULL)
+             LIMIT 256"
+                .to_string(),
+            false,
+        )
+    } else {
+        (
+            "SELECT task_id, title, description, status, priority, blocked_reason
+             FROM tasks
+             WHERE (updated_at > COALESCE(embedded_at, 0) OR embedded_at IS NULL)
+               AND brain_id = ?1
+             LIMIT 256"
+                .to_string(),
+            true,
+        )
+    };
+
+    let mut stmt = conn.prepare(&sql)?;
+
+    let map_row = |row: &rusqlite::Row<'_>| {
+        Ok(TaskPollRow {
+            task_id: row.get(0)?,
+            title: row.get(1)?,
+            description: row.get(2)?,
+            status: row.get(3)?,
+            priority: row.get(4)?,
+            blocked_reason: row.get(5)?,
+        })
+    };
+
+    let rows = if has_brain_filter {
+        stmt.query_map([brain_id], map_row)?
+    } else {
+        stmt.query_map([], map_row)?
+    };
+    crate::db::collect_rows(rows)
+}

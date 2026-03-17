@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 
 use crate::db::fts::sanitize_fts_query;
+use crate::db::tasks::events::TaskType;
 use crate::error::Result;
-use crate::tasks::events::TaskType;
 
 use super::TaskRow;
 

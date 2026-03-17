@@ -492,9 +492,9 @@ impl RecordStore {
     /// the four records tables (in FK-safe order), then replays every event in
     /// `events.jsonl` in order. Returns the number of events applied.
     pub fn rebuild_projections(&self) -> Result<usize> {
-        let events_path = self.events_path.clone();
+        let all_events = events::read_all_events(&self.events_path)?;
         self.db
-            .with_write_conn(|conn| projections::rebuild(conn, &events_path))
+            .with_write_conn(|conn| projections::rebuild_from_events(conn, &all_events))
     }
 
     /// Apply a single event to the SQLite projection and append it to the log.
