@@ -53,8 +53,6 @@ pub async fn poll_stale_tasks(
     info!(count = rows.len(), "embed_poll: embedding stale tasks");
 
     // ── 2. Fetch labels for each task ────────────────────────────────────
-    // TODO: replace raw label lookup with a TaskPersistence trait method when
-    // task persistence is extracted to ports.
     let task_id_refs: Vec<&str> = rows.iter().map(|r| r.task_id.as_str()).collect();
 
     let label_map: std::collections::HashMap<String, Vec<String>> =
