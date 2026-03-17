@@ -10,7 +10,7 @@ Brain handles most upgrade tasks automatically on the next startup or index cycl
 
 ### Schema Migrations
 
-When brain opens the SQLite database, `init_schema` checks the stored `user_version` against the compiled `SCHEMA_VERSION` (currently **13**). Version 12 added records domain tables (`records`, `record_tags`, `record_links`, `record_events`). Version 13 added storage lifecycle columns (`retention_class`, `pinned`, `payload_available`, `content_encoding`, `original_size`) for compression, retention classes, and payload eviction. If the stored version is behind, a version-aware migration dispatch loop runs each migration sequentially in its own transaction — from the current version up to the target. If the stored version is *ahead* of the binary (e.g. you downgraded), brain rejects the database with an error rather than silently corrupting it.
+When brain opens the SQLite database, `init_schema` checks the stored `user_version` against the compiled `SCHEMA_VERSION` (currently **24**). If the stored version is behind, a version-aware migration dispatch loop runs each migration sequentially in its own transaction — from the current version up to the target. If the stored version is *ahead* of the binary (e.g. you downgraded), brain rejects the database with an error rather than silently corrupting it.
 
 ### FTS5 Tables
 
