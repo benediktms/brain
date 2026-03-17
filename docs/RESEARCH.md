@@ -279,7 +279,7 @@ MCP specifies JSON-RPC messaging (UTF-8) over stdio transport. The tool surface 
 
 ### `memory.search_minimal`
 
-Return compact stubs; never return full chunk text by default.
+Return compact stubs; never return full chunk text by default. Results include note chunks, tasks, and episodic memory objects (`episode` and `reflection` kinds) merged from the hybrid pipeline.
 
 **Request:**
 ```json
@@ -329,11 +329,13 @@ Expand selected stubs into raw chunks with strict budgets and "quotable spans" w
 
 ### `memory.reflect`
 
-Consolidate selected episodes/chunks into higher-tier summaries (semantic memory) stored in SQLite as durable, low-token memory objects.
+Two-phase tool for generating and storing reflections:
+- **`prepare` mode** (default): returns recent episodes and related note chunks as source material for reflection synthesis. Accepts an optional `brains` parameter for cross-brain episode gathering.
+- **`commit` mode**: accepts a synthesized reflection (`title`, `content`, `source_ids`, `tags`, `importance`) and stores it in the `summaries` table with `kind='reflection'`. Source episodes are linked via `reflection_sources`. The stored reflection is embedded into LanceDB and indexed in `fts_summaries`, making it retrievable via `search_minimal`.
 
 ### `memory.write_episode`
 
-Write structured episodic events (goal, actions, tool outputs, outcome) and compute quick metadata (tags, importance).
+Write structured episodic events (goal, actions, tool outputs, outcome) and compute quick metadata (tags, importance). Episodes are stored in the `summaries` table with `kind='episode'`, embedded into LanceDB (`sum:{id}` prefix), and indexed in `fts_summaries`. They appear as `episode` stubs in `search_minimal` results.
 
 ### Response Conventions
 
