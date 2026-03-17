@@ -177,6 +177,43 @@ pub fn ensure_fts5(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    // ── FTS5 for summaries (title + content, porter stemming for prose) ──
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_summaries USING fts5(
+            title, content,
+            content=summaries,
+            content_rowid=rowid,
+            tokenize='porter unicode61'
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS summaries_fts_insert AFTER INSERT ON summaries BEGIN
+            INSERT INTO fts_summaries(rowid, title, content)
+            VALUES (new.rowid, COALESCE(new.title, ''), new.content);
+        END",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS summaries_fts_delete AFTER DELETE ON summaries BEGIN
+            INSERT INTO fts_summaries(fts_summaries, rowid, title, content)
+            VALUES ('delete', old.rowid, COALESCE(old.title, ''), old.content);
+        END",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS summaries_fts_update AFTER UPDATE OF title, content ON summaries BEGIN
+            INSERT INTO fts_summaries(fts_summaries, rowid, title, content)
+            VALUES ('delete', old.rowid, COALESCE(old.title, ''), old.content);
+            INSERT INTO fts_summaries(rowid, title, content)
+            VALUES (new.rowid, COALESCE(new.title, ''), new.content);
+        END",
+        [],
+    )?;
+
     Ok(())
 }
 
