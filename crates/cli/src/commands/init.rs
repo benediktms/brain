@@ -480,6 +480,26 @@ When working on tasks:
 
 **Planning references**: When planning work, always reference the task ID(s) being planned for and any related tasks that may be affected. This creates a traceable link between plans and the work they address, and helps future agents (or humans) understand why decisions were made.
 
+### Recording Context as Memory
+
+When the user shares critical context that is not derivable from the current codebase, **proactively record it** using `memory_write_episode`. This preserves knowledge that would otherwise be lost between conversations.
+
+**Record an episode when the user shares:**
+- How an external API or service behaves (rate limits, quirks, undocumented behavior)
+- Architecture or conventions of a different codebase that this project interacts with
+- Business logic, domain rules, or constraints not captured in code
+- Deployment topology, infrastructure details, or environment-specific behavior
+- Historical context about why something was built a certain way
+- Gotchas, workarounds, or lessons learned from past incidents
+
+**How to record:** Use `memory_write_episode` with:
+- `goal`: What the user was explaining or what prompted the context
+- `actions`: The key facts, rules, or details shared
+- `outcome`: How this knowledge should influence future work
+- `tags`: Relevant topic tags for later retrieval (e.g. `["external-api", "payments"]`)
+
+**Do not record:** Information already in the codebase, git history, or existing notes. Check `memory_search_minimal` first to avoid duplicates.
+
 ### Conventions
 
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog

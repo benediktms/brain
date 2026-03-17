@@ -255,7 +255,7 @@ pub fn rebuild_from_events(conn: &Connection, events: &[RecordEvent]) -> Result<
 mod tests {
     use super::*;
     use crate::db::records::events::{
-        ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+        ContentRefPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
         RecordEventType, RecordUpdatedPayload, TagPayload,
     };
     use crate::db::schema::init_schema;
