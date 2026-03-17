@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Regenerate AGENTS.md from template so it stays in sync.
+# If brain binary isn't built yet, skip silently — the drift will
+# be caught on the next commit after `just install`.
+BIN="./target/release/brain"
+if [ -x "$BIN" ]; then
+    "$BIN" docs
+    # If AGENTS.md changed, stage it so the commit includes the update.
+    git add -f AGENTS.md 2>/dev/null || true
+fi

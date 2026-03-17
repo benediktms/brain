@@ -231,14 +231,12 @@ fn seed_project_prefix_if_missing(db_path: &Path, seed_name: &str) -> Result<()>
 pub fn upsert_agent_docs(cwd: &std::path::Path, brain_name: &str) -> Result<()> {
     let agents_md_path = cwd.join("AGENTS.md");
     let build_section = detect_build_section(cwd);
-    let brain_section = BRAIN_SECTION_TEMPLATE
-        .replace("{brain_name}", brain_name)
-        .replace("{build_section}", &build_section);
+    let brain_section = render_brain_section(brain_name, &build_section);
 
     if agents_md_path.exists() {
         let existing = fs::read_to_string(&agents_md_path)?;
-        if let Some(start) = existing.find(BRAIN_SECTION_START) {
-            // Replace existing brain section.
+        if let Some(start) = existing.find(BRAIN_SECTION_START_PREFIX) {
+            // Replace existing brain section (handles both legacy and versioned markers).
             let end = existing
                 .find(BRAIN_SECTION_END)
                 .map(|i| i + BRAIN_SECTION_END.len())
@@ -274,7 +272,7 @@ pub fn upsert_agent_docs(cwd: &std::path::Path, brain_name: &str) -> Result<()> 
     let bridge_ref = "Read [AGENTS.md](./AGENTS.md) for project instructions — it is the canonical reference for all AI agents.\n".to_string();
     if claude_md_path.exists() {
         let existing = fs::read_to_string(&claude_md_path)?;
-        if let Some(start) = existing.find(BRAIN_SECTION_START) {
+        if let Some(start) = existing.find(BRAIN_SECTION_START_PREFIX) {
             // Replace the brain section with the bridge reference, preserving surrounding content.
             let end = existing
                 .find(BRAIN_SECTION_END)
@@ -353,11 +351,11 @@ make test      # Test
     String::new()
 }
 
-const BRAIN_SECTION_START: &str = "<!-- brain:start -->";
+const BRAIN_SECTION_START_PREFIX: &str = "<!-- brain:start";
 const BRAIN_SECTION_END: &str = "<!-- brain:end -->";
 
-const BRAIN_SECTION_TEMPLATE: &str = r#"<!-- brain:start -->
-{build_section}## Crate Architecture
+/// Template body WITHOUT markers. Markers are added by `render_brain_section()`.
+const BRAIN_SECTION_BODY: &str = r#"{build_section}## Crate Architecture
 
 The workspace has three crates:
 
@@ -487,8 +485,16 @@ When working on tasks:
 - **Priority scale**: 0=critical, 1=high, 2=medium, 3=low, 4=backlog
 - **Task types**: task, bug, feature, epic, spike
 - **Statuses**: open, in_progress, blocked, done, cancelled
-<!-- brain:end -->
 "#;
+
+/// Render the full brain section with versioned start marker and end marker.
+fn render_brain_section(brain_name: &str, build_section: &str) -> String {
+    let body = BRAIN_SECTION_BODY
+        .replace("{brain_name}", brain_name)
+        .replace("{build_section}", build_section);
+    let hash = &blake3::hash(body.as_bytes()).to_hex()[..8];
+    format!("<!-- brain:start:{hash} -->\n{body}{BRAIN_SECTION_END}\n")
+}
 
 #[cfg(test)]
 mod tests {
@@ -502,7 +508,7 @@ mod tests {
 
         let content = fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
         assert!(content.starts_with("# test-brain"));
-        assert!(content.contains(BRAIN_SECTION_START));
+        assert!(content.contains(BRAIN_SECTION_START_PREFIX));
         assert!(content.contains(BRAIN_SECTION_END));
         assert!(content.contains("## Task Management"));
     }
@@ -521,7 +527,7 @@ mod tests {
 
         let result = fs::read_to_string(&agents_path).unwrap();
         assert!(result.starts_with(preamble), "preamble must be preserved");
-        assert!(result.contains(BRAIN_SECTION_START));
+        assert!(result.contains(BRAIN_SECTION_START_PREFIX));
         assert!(
             result.contains("## Task Management"),
             "new content must be present"
@@ -610,7 +616,7 @@ mod tests {
             "existing content must be preserved"
         );
         assert!(
-            result.contains(BRAIN_SECTION_START),
+            result.contains(BRAIN_SECTION_START_PREFIX),
             "brain section must be appended"
         );
     }
@@ -626,7 +632,7 @@ mod tests {
             "bridge must reference AGENTS.md"
         );
         assert!(
-            !content.contains(BRAIN_SECTION_START),
+            !content.contains(BRAIN_SECTION_START_PREFIX),
             "bridge must not contain brain markers"
         );
     }
@@ -755,5 +761,41 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored, "XYZ");
+    }
+
+    #[test]
+    fn render_brain_section_embeds_correct_hash() {
+        let section = render_brain_section("test", "");
+        // Extract hash from marker: <!-- brain:start:XXXXXXXX -->
+        let marker_end = section.find(" -->\n").unwrap();
+        let hash_in_marker = &section["<!-- brain:start:".len()..marker_end];
+        assert_eq!(hash_in_marker.len(), 8, "hash must be 8 hex chars");
+
+        // Recompute: body is everything between the start marker line and the end marker.
+        let body_start = section.find('\n').unwrap() + 1;
+        let body_end = section.find(BRAIN_SECTION_END).unwrap();
+        let body = &section[body_start..body_end];
+        let expected_hash = &blake3::hash(body.as_bytes()).to_hex()[..8];
+
+        assert_eq!(
+            hash_in_marker, expected_hash,
+            "hash in marker must match blake3 of rendered body"
+        );
+    }
+
+    #[test]
+    fn render_brain_section_is_deterministic() {
+        let a = render_brain_section("test", "## Build\n\n");
+        let b = render_brain_section("test", "## Build\n\n");
+        assert_eq!(a, b, "same inputs must produce identical output");
+    }
+
+    #[test]
+    fn render_brain_section_hash_changes_on_body_change() {
+        let a = render_brain_section("test", "## Build A\n\n");
+        let b = render_brain_section("test", "## Build B\n\n");
+        let hash_a = &a["<!-- brain:start:".len()..a.find(" -->\n").unwrap()];
+        let hash_b = &b["<!-- brain:start:".len()..b.find(" -->\n").unwrap()];
+        assert_ne!(hash_a, hash_b, "different body must produce different hash");
     }
 }

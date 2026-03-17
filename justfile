@@ -15,7 +15,7 @@ default:
 
 # Full first-run: build, symlink, download models, install daemon
 [group('setup')]
-setup: install setup-models
+setup: install setup-models install-hooks
     @echo "==> Setup complete. Run 'brain daemon start' or 'just watch' to begin."
 
 # Build release binary, symlink to ~/bin, install daemon service
@@ -39,6 +39,18 @@ uninstall:
     @rm -f ~/bin/brain
     cargo clean
     @echo "==> Uninstalled brain"
+
+# Install git hooks from scripts/
+[group('setup')]
+install-hooks:
+    @cp scripts/pre-commit .git/hooks/pre-commit
+    @chmod +x .git/hooks/pre-commit
+    @echo "==> Git hooks installed"
+
+# Regenerate AGENTS.md + bridge CLAUDE.md from template
+[group('dev')]
+docs: ensure-binary
+    {{bin}} docs
 
 # ── Dev ───────────────────────────────────────────────────────────────────
 
