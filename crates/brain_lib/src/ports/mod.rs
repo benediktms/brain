@@ -737,6 +737,10 @@ pub trait MaintenanceOps: Send + Sync {
 
     /// Check FTS5 consistency: return (chunk_count, fts_count).
     fn fts_consistency(&self) -> Result<(i64, i64)>;
+
+    /// Rebuild the FTS5 summaries index from the summaries table.
+    /// Returns the number of summaries indexed.
+    fn reindex_summaries_fts(&self) -> Result<usize>;
 }
 
 // -- MaintenanceOps for Db -------------------------------------------------
@@ -761,6 +765,10 @@ impl MaintenanceOps for Db {
 
     fn fts_consistency(&self) -> Result<(i64, i64)> {
         self.with_read_conn(crate::db::fts::fts_consistency)
+    }
+
+    fn reindex_summaries_fts(&self) -> Result<usize> {
+        self.with_write_conn(|conn| crate::db::fts::reindex_summaries_fts(conn))
     }
 }
 

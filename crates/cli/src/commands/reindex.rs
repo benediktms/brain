@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use brain_lib::ports::MaintenanceOps;
 use brain_lib::prelude::*;
 
 /// Re-index all files (clears content hashes, forces full re-embed).
@@ -13,10 +14,14 @@ pub async fn run_full(
     let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
     let stats = pipeline.reindex_full(&[notes_path]).await?;
 
+    // Rebuild FTS5 summaries index after full reindex
+    let summaries_count = pipeline.db().reindex_summaries_fts()?;
+
     println!(
         "Reindex complete: {} indexed, {} skipped, {} deleted, {} errors",
         stats.indexed, stats.skipped, stats.deleted, stats.errors
     );
+    println!("FTS summaries reindexed: {summaries_count} summaries");
 
     Ok(())
 }

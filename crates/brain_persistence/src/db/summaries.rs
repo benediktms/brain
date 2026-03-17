@@ -736,4 +736,402 @@ mod tests {
         let map = get_ml_summaries_for_chunks(&conn, &["chunk:nonexistent"]).unwrap();
         assert!(!map.contains_key("chunk:nonexistent"));
     }
+
+    // --- FTS summaries integration tests ---
+
+    #[test]
+    fn test_fts_summaries_search_finds_episode() {
+        use crate::db::fts::{FtsSummaryResult, search_summaries_fts};
+
+        let conn = setup();
+
+        let id = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-fts".into(),
+                goal: "Implement distributed caching layer".into(),
+                actions: "Deployed Redis cluster with sentinel failover".into(),
+                outcome: "Cache hit rate improved by 40 percent".into(),
+                tags: vec!["redis".into(), "caching".into()],
+                importance: 0.9,
+            },
+        )
+        .unwrap();
+
+        let results = search_summaries_fts(&conn, "distributed caching", 10).unwrap();
+        assert!(
+            !results.is_empty(),
+            "FTS should find the episode by content"
+        );
+        let found: Vec<&FtsSummaryResult> =
+            results.iter().filter(|r| r.summary_id == id).collect();
+        assert_eq!(found.len(), 1, "episode id should appear in FTS results");
+        assert!(
+            found[0].score > 0.0,
+            "score should be positive for a match"
+        );
+    }
+
+    #[test]
+    fn test_fts_summaries_normalized_scores() {
+        use crate::db::fts::search_summaries_fts;
+
+        let conn = setup();
+
+        // Two episodes — first is highly relevant, second is less so
+        store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-score".into(),
+                goal: "Optimize database query performance".into(),
+                actions: "Added indexes, analyzed query plans".into(),
+                outcome: "Query latency reduced 80 percent".into(),
+                tags: vec!["database".into()],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+        store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-score".into(),
+                goal: "Fix login bug".into(),
+                actions: "Patched auth middleware".into(),
+                outcome: "Login works correctly".into(),
+                tags: vec!["auth".into()],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        let results = search_summaries_fts(&conn, "database", 10).unwrap();
+        assert!(!results.is_empty());
+        // Top result should be normalized to 1.0
+        assert!(
+            (results[0].score - 1.0).abs() < f64::EPSILON,
+            "top result should have score 1.0, got {}",
+            results[0].score
+        );
+        for r in &results {
+            assert!(
+                r.score >= 0.0 && r.score <= 1.0,
+                "score out of range: {}",
+                r.score
+            );
+        }
+    }
+
+    #[test]
+    fn test_fts_summaries_no_results_for_unknown_term() {
+        use crate::db::fts::search_summaries_fts;
+
+        let conn = setup();
+
+        store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-x".into(),
+                goal: "Write unit tests".into(),
+                actions: "Added test coverage".into(),
+                outcome: "Coverage at 90 percent".into(),
+                tags: vec![],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        let results = search_summaries_fts(&conn, "xylophone", 10).unwrap();
+        assert!(results.is_empty(), "unknown term should return no results");
+    }
+
+    #[test]
+    fn test_reindex_summaries_fts_rebuilds_index() {
+        use crate::db::fts::{reindex_summaries_fts, search_summaries_fts};
+
+        let conn = setup();
+
+        store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-reindex".into(),
+                goal: "Refactor authentication module".into(),
+                actions: "Extracted JWT logic into separate crate".into(),
+                outcome: "Authentication module is now independently testable".into(),
+                tags: vec!["refactor".into()],
+                importance: 0.8,
+            },
+        )
+        .unwrap();
+
+        // Manually drop the FTS index content (simulate corruption)
+        conn.execute("DELETE FROM fts_summaries", []).unwrap();
+
+        // Verify search returns nothing after corruption
+        let pre = search_summaries_fts(&conn, "authentication", 10).unwrap();
+        assert!(pre.is_empty(), "FTS should be empty after manual delete");
+
+        // Rebuild
+        let count = reindex_summaries_fts(&conn).unwrap();
+        assert_eq!(count, 1, "reindex should count 1 summary");
+
+        // Verify search works again
+        let post = search_summaries_fts(&conn, "authentication", 10).unwrap();
+        assert!(!post.is_empty(), "FTS should find episode after reindex");
+    }
+
+    #[test]
+    fn test_get_summaries_by_prefixed_ids_fields_populated() {
+        let conn = setup();
+
+        let ep_id = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-prefix".into(),
+                goal: "Deploy new service".into(),
+                actions: "Containerized with Docker".into(),
+                outcome: "Service deployed to production".into(),
+                tags: vec!["deployment".into()],
+                importance: 0.75,
+            },
+        )
+        .unwrap();
+
+        // Fetch by prefixed ID
+        let prefixed = format!("sum:{ep_id}");
+        let rows = get_summaries_by_prefixed_ids(&conn, &[prefixed]).unwrap();
+        assert_eq!(rows.len(), 1);
+
+        let row = &rows[0];
+        assert_eq!(row.summary_id, ep_id);
+        assert_eq!(row.brain_id, "brain-prefix");
+        assert_eq!(row.kind, "episode");
+        assert!((row.importance - 0.75).abs() < 1e-9);
+        // valid_from should be populated (set to created_at)
+        assert!(row.valid_from.is_some(), "valid_from should be set");
+        assert_eq!(row.valid_from, Some(row.created_at));
+    }
+
+    #[test]
+    fn test_multi_brain_isolation_via_fts() {
+        use crate::db::fts::search_summaries_fts;
+
+        let conn = setup();
+
+        // Store episode in brain-alpha with unique keyword
+        store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-alpha".into(),
+                goal: "Implement quantum encryption algorithm".into(),
+                actions: "Studied lattice cryptography papers".into(),
+                outcome: "Prototype implementation complete".into(),
+                tags: vec!["cryptography".into()],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        // Store episode in brain-beta with different keyword
+        let beta_id = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-beta".into(),
+                goal: "Set up observability pipeline".into(),
+                actions: "Deployed OpenTelemetry collectors".into(),
+                outcome: "Traces flowing to Jaeger".into(),
+                tags: vec!["observability".into()],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        // FTS search for beta's unique content
+        let results = search_summaries_fts(&conn, "observability", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].summary_id, beta_id);
+
+        // list_episodes with brain_id filter
+        let alpha_eps = list_episodes(&conn, 10, "brain-alpha").unwrap();
+        let beta_eps = list_episodes(&conn, 10, "brain-beta").unwrap();
+        assert_eq!(alpha_eps.len(), 1);
+        assert_eq!(beta_eps.len(), 1);
+        assert_eq!(alpha_eps[0].brain_id, "brain-alpha");
+        assert_eq!(beta_eps[0].brain_id, "brain-beta");
+    }
+
+    #[test]
+    fn test_list_episodes_multi_brain_subset() {
+        let conn = setup();
+
+        for bid in ["brain-1", "brain-2", "brain-3"] {
+            store_episode(
+                &conn,
+                &Episode {
+                    brain_id: bid.into(),
+                    goal: format!("Task for {bid}"),
+                    actions: "Executed".into(),
+                    outcome: "Done".into(),
+                    tags: vec![],
+                    importance: 1.0,
+                },
+            )
+            .unwrap();
+        }
+
+        // Query only brain-1 and brain-3
+        let multi = list_episodes_multi_brain(
+            &conn,
+            10,
+            &["brain-1".to_string(), "brain-3".to_string()],
+        )
+        .unwrap();
+        assert_eq!(multi.len(), 2);
+        let brain_ids: Vec<&str> = multi.iter().map(|r| r.brain_id.as_str()).collect();
+        assert!(brain_ids.contains(&"brain-1"));
+        assert!(brain_ids.contains(&"brain-3"));
+        assert!(!brain_ids.contains(&"brain-2"), "brain-2 should be excluded");
+    }
+
+    #[test]
+    fn test_reflection_source_linking() {
+        let conn = setup();
+
+        let ep1 = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-reflect".into(),
+                goal: "Investigate memory leak".into(),
+                actions: "Profiled heap allocations".into(),
+                outcome: "Found unbounded cache growth".into(),
+                tags: vec![],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+        let ep2 = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-reflect".into(),
+                goal: "Fix memory leak".into(),
+                actions: "Added LRU eviction to cache".into(),
+                outcome: "Memory usage stabilized".into(),
+                tags: vec![],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        let ref_id = store_reflection(
+            &conn,
+            "Memory Management Insight",
+            "Unbounded caches cause memory leaks. LRU eviction is the standard fix.",
+            &[ep1.clone(), ep2.clone()],
+            &["memory".into(), "lessons-learned".into()],
+            0.95,
+            "brain-reflect",
+        )
+        .unwrap();
+
+        // Verify reflection is stored
+        let refl = get_summary(&conn, &ref_id).unwrap().unwrap();
+        assert_eq!(refl.kind, "reflection");
+        assert_eq!(refl.brain_id, "brain-reflect");
+        assert_eq!(refl.tags, vec!["memory", "lessons-learned"]);
+
+        // Verify both sources are linked
+        let source_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM reflection_sources WHERE reflection_id = ?1",
+                [&ref_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_count, 2);
+
+        // Verify specific source links
+        let has_ep1: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM reflection_sources WHERE reflection_id = ?1 AND source_id = ?2",
+                rusqlite::params![ref_id, ep1],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+            > 0;
+        assert!(has_ep1, "ep1 should be a source of the reflection");
+
+        let has_ep2: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM reflection_sources WHERE reflection_id = ?1 AND source_id = ?2",
+                rusqlite::params![ref_id, ep2],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+            > 0;
+        assert!(has_ep2, "ep2 should be a source of the reflection");
+    }
+
+    #[test]
+    fn test_valid_from_equals_created_at_for_new_episodes() {
+        let conn = setup();
+
+        let id = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-ts".into(),
+                goal: "Verify timestamps".into(),
+                actions: "Inserted row".into(),
+                outcome: "Row inserted".into(),
+                tags: vec![],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        let row = get_summary(&conn, &id).unwrap().unwrap();
+        assert!(
+            row.valid_from.is_some(),
+            "valid_from should be set for new episodes"
+        );
+        assert_eq!(
+            row.valid_from,
+            Some(row.created_at),
+            "valid_from should equal created_at"
+        );
+    }
+
+    #[test]
+    fn test_schema_foundations_summary_row_fields() {
+        let conn = setup();
+
+        let id = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-schema".into(),
+                goal: "Verify schema fields".into(),
+                actions: "Read SummaryRow fields".into(),
+                outcome: "All fields accessible".into(),
+                tags: vec!["schema".into()],
+                importance: 0.5,
+            },
+        )
+        .unwrap();
+
+        let row = get_summary(&conn, &id).unwrap().unwrap();
+
+        // Verify all Phase 4 schema fields are accessible via SummaryRow
+        assert!(!row.summary_id.is_empty());
+        assert_eq!(row.brain_id, "brain-schema");
+        assert_eq!(row.kind, "episode");
+        // parent_id defaults to NULL for episodes
+        assert!(row.parent_id.is_none(), "parent_id should be None for direct episodes");
+        // source_hash defaults to NULL (not computed at write time for episodes)
+        let _ = row.source_hash; // accessible — type: Option<String>
+        // confidence defaults to 1.0
+        assert!(
+            (row.confidence - 1.0).abs() < 1e-9,
+            "default confidence should be 1.0"
+        );
+        // valid_from should be set
+        assert!(row.valid_from.is_some());
+    }
 }
