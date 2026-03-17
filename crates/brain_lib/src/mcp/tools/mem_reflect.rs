@@ -242,6 +242,7 @@ impl MemReflect {
         let content_c = content.clone();
         let source_ids_c = source_ids.clone();
         let tags_c = tags.clone();
+        let brain_id_c = ctx.brain_id.clone();
         let summary_id = ctx.db.with_write_conn(move |conn| {
             crate::db::summaries::store_reflection(
                 conn,
@@ -250,6 +251,7 @@ impl MemReflect {
                 &source_ids_c,
                 &tags_c,
                 importance,
+                &brain_id_c,
             )
         });
 
