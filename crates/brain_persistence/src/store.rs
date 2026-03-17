@@ -544,6 +544,78 @@ impl Store {
         query_impl(&self.table, embedding, top_k, nprobes).await
     }
 
+    /// Upsert a single summary embedding into LanceDB.
+    ///
+    /// Uses `chunk_id = "sum:{summary_id}"`, `file_id = "sum:{summary_id}"`,
+    /// `file_path = ""`, `chunk_ord = 0`. No orphan-delete clause — each
+    /// summary is its own file_id scope, so only match/insert arms are needed.
+    #[instrument(skip_all)]
+    pub async fn upsert_summary(
+        &self,
+        summary_id: &str,
+        content: &str,
+        embedding: &[f32],
+    ) -> crate::error::Result<()> {
+        let key = format!("sum:{summary_id}");
+        let schema = chunks_schema();
+
+        let embedding_values: Vec<Option<Vec<Option<f32>>>> =
+            vec![Some(embedding.iter().map(|v| Some(*v)).collect())];
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(StringArray::from(vec![key.as_str()])),
+                Arc::new(StringArray::from(vec![key.as_str()])),
+                Arc::new(StringArray::from(vec![""])),
+                Arc::new(Int32Array::from(vec![0i32])),
+                Arc::new(StringArray::from(vec![content])),
+                Arc::new(
+                    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                        embedding_values,
+                        EMBEDDING_DIM,
+                    ),
+                ),
+            ],
+        )
+        .map_err(|e| BrainCoreError::VectorDb(format!("failed to build summary batch: {e}")))?;
+
+        let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
+
+        let mut builder = self.table.merge_insert(&["chunk_id"]);
+        builder
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        builder
+            .execute(Box::new(batches))
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("summary upsert failed: {e}")))?;
+
+        self.optimize_scheduler.record_mutation(1);
+
+        info!(summary_id, "summary upserted into LanceDB");
+        Ok(())
+    }
+
+    /// Delete a summary's embedding from LanceDB.
+    ///
+    /// Deletes the row with `chunk_id = "sum:{summary_id}"`.
+    #[instrument(skip_all)]
+    pub async fn delete_summary(&self, summary_id: &str) -> crate::error::Result<()> {
+        let key = format!("sum:{summary_id}");
+        // validate_file_id accepts the same charset as chunk_id here
+        let safe_key = validate_file_id(&key)?;
+        self.table
+            .delete(&format!("chunk_id = '{safe_key}'"))
+            .await
+            .map_err(|e| BrainCoreError::VectorDb(format!("summary delete failed: {e}")))?;
+
+        self.optimize_scheduler.record_mutation(1);
+
+        info!(summary_id, "summary deleted from LanceDB");
+        Ok(())
+    }
+
     /// Create an IVF-PQ vector index on the embedding column.
     pub async fn create_vector_index(&self, config: &IvfPqConfig) -> crate::error::Result<()> {
         let mut builder = IvfPqIndexBuilder::default().distance_type(lancedb::DistanceType::Dot);
