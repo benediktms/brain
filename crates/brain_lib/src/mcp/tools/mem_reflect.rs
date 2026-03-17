@@ -358,7 +358,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_reflect_commit_clamps_importance() {
-
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
 

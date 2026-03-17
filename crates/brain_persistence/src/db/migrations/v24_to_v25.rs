@@ -197,7 +197,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 1, "idx_summaries_kind_brain_created compound index should exist");
+        assert_eq!(
+            count, 1,
+            "idx_summaries_kind_brain_created compound index should exist"
+        );
     }
 
     #[test]
