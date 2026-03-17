@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use crate::db::chunks::ChunkRow;
-use crate::db::fts::FtsResult;
+use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::db::summaries::{Episode, SummaryRow};
 use crate::error::Result;
 use crate::store::QueryResult;
@@ -243,6 +243,14 @@ impl MockFtsSearcher {
 impl FtsSearcher for MockFtsSearcher {
     fn search_fts(&self, _query: &str, _limit: usize) -> Result<Vec<FtsResult>> {
         Ok(self.results.lock().unwrap().clone())
+    }
+
+    fn search_summaries_fts(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<FtsSummaryResult>> {
+        Ok(Vec::new())
     }
 }
 
@@ -722,6 +730,16 @@ impl EpisodeReader for MockEpisodeReader {
             .iter()
             .filter(|ep| brain_ids.contains(&ep.brain_id))
             .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    fn get_summaries_by_ids(&self, ids: &[String]) -> Result<Vec<SummaryRow>> {
+        let episodes = self.episodes.lock().unwrap();
+        let id_set: std::collections::HashSet<&String> = ids.iter().collect();
+        Ok(episodes
+            .iter()
+            .filter(|r| id_set.contains(&r.summary_id))
             .cloned()
             .collect())
     }

@@ -303,6 +303,7 @@ fn golden_to_signals(candidates: &[GoldenRankingCandidate]) -> Vec<CandidateSign
             token_estimate: 20,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         })
         .collect()
 }

@@ -381,6 +381,74 @@ mod tests {
     }
 }
 
+/// A full-text search result from the summaries FTS5 index.
+#[derive(Debug, Clone)]
+pub struct FtsSummaryResult {
+    pub summary_id: String,
+    /// BM25 score normalized to [0, 1] (1.0 = best match in result set).
+    pub score: f64,
+}
+
+/// Search the FTS5 summaries index for episodes/reflections matching the query.
+///
+/// Returns results ranked by BM25 relevance, with scores normalized
+/// to [0, 1] by dividing by the maximum score in the result set.
+pub fn search_summaries_fts(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<FtsSummaryResult>> {
+    let query = sanitize_fts_query(query);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT s.summary_id, -bm25(fts_summaries) AS score
+         FROM fts_summaries
+         JOIN summaries s ON s.rowid = fts_summaries.rowid
+         WHERE fts_summaries MATCH ?1
+         ORDER BY score DESC
+         LIMIT ?2",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![query, limit as i64], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    })?;
+
+    let mut raw: Vec<(String, f64)> = Vec::new();
+    for row in rows {
+        raw.push(row?);
+    }
+
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let max_score = raw
+        .iter()
+        .map(|(_, s)| *s)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let results = if max_score <= 0.0 {
+        raw.into_iter()
+            .map(|(summary_id, _)| FtsSummaryResult {
+                summary_id,
+                score: 0.0,
+            })
+            .collect()
+    } else {
+        raw.into_iter()
+            .map(|(summary_id, score)| FtsSummaryResult {
+                summary_id,
+                score: score / max_score,
+            })
+            .collect()
+    };
+
+    Ok(results)
+}
+
 /// Check FTS5 consistency: return (chunk_count, fts_count).
 pub fn fts_consistency(conn: &Connection) -> Result<(i64, i64)> {
     let chunk_count: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;

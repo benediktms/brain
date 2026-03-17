@@ -53,6 +53,7 @@ fn make_ranked(id: &str, score: f64, content: &str) -> RankedResult {
         token_estimate: estimate_tokens(content),
         byte_start: 0,
         byte_end: 0,
+        summary_kind: None,
     }
 }
 

@@ -308,6 +308,7 @@ fn test_hybrid_ranking_signal_combination() {
             token_estimate: 10,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         },
         CandidateSignals {
             chunk_id: "vector_champ".into(),
@@ -323,6 +324,7 @@ fn test_hybrid_ranking_signal_combination() {
             token_estimate: 10,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         },
         CandidateSignals {
             chunk_id: "fresh_one".into(),
@@ -338,6 +340,7 @@ fn test_hybrid_ranking_signal_combination() {
             token_estimate: 10,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         },
     ];
 
@@ -400,6 +403,7 @@ fn test_search_minimal_budget_compliance() {
                 token_estimate: tokens,
                 byte_start: 0,
                 byte_end: 0,
+                summary_kind: None,
             }
         })
         .collect();
@@ -442,6 +446,7 @@ fn test_expand_truncates_correctly() {
         token_estimate: estimate_tokens(&long_content),
         byte_start: 0,
         byte_end: 0,
+        summary_kind: None,
     }];
 
     // Budget smaller than the content

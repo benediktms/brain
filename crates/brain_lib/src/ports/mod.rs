@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use crate::db::chunks::ChunkRow;
-use crate::db::fts::FtsResult;
+use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::error::Result;
 use crate::store::QueryResult;
 
@@ -165,6 +165,14 @@ pub trait FtsSearcher: Send + Sync {
     /// Search the FTS5 index and return BM25-ranked results (scores
     /// normalized to [0, 1]).
     fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>>;
+
+    /// Search the FTS5 summaries index (episodes + reflections) and return
+    /// BM25-ranked results (scores normalized to [0, 1]).
+    fn search_summaries_fts(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<FtsSummaryResult>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +311,17 @@ impl FtsSearcher for Db {
     fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>> {
         let query = query.to_string();
         self.with_read_conn(move |conn| crate::db::fts::search_fts(conn, &query, limit))
+    }
+
+    fn search_summaries_fts(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<FtsSummaryResult>> {
+        let query = query.to_string();
+        self.with_read_conn(move |conn| {
+            crate::db::fts::search_summaries_fts(conn, &query, limit)
+        })
     }
 }
 
@@ -612,7 +631,7 @@ impl EpisodeWriter for Db {
 
 /// SQLite episode read operations required by the query pipeline.
 ///
-/// Consumers: `QueryPipeline::reflect`.
+/// Consumers: `QueryPipeline::reflect`, `QueryPipeline::search_ranked`.
 pub trait EpisodeReader: Send + Sync {
     /// List recent episodes, newest first, up to `limit` entries.
     /// When `brain_id` is non-empty, filters to that brain. Empty string returns all brains.
@@ -627,6 +646,12 @@ pub trait EpisodeReader: Send + Sync {
         &self,
         limit: usize,
         brain_ids: &[String],
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>>;
+
+    /// Batch-load summaries by a list of summary IDs.
+    fn get_summaries_by_ids(
+        &self,
+        ids: &[String],
     ) -> Result<Vec<crate::db::summaries::SummaryRow>>;
 }
 
@@ -652,6 +677,16 @@ impl EpisodeReader for Db {
         let brain_ids = brain_ids.to_vec();
         self.with_read_conn(move |conn| {
             crate::db::summaries::list_episodes_multi_brain(conn, limit, &brain_ids)
+        })
+    }
+
+    fn get_summaries_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
+        let ids = ids.to_vec();
+        self.with_read_conn(move |conn| {
+            crate::db::summaries::get_summaries_by_ids(conn, &ids)
         })
     }
 }

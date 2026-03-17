@@ -255,6 +255,38 @@ pub fn get_ml_summaries_for_chunks(
     Ok(map)
 }
 
+/// Batch-load summaries by a list of summary IDs.
+/// Returns rows in unspecified order; caller is responsible for reordering if needed.
+pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<SummaryRow>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at
+         FROM summaries WHERE summary_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> =
+        ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        let tags_json: String = row.get(4)?;
+        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+        Ok(SummaryRow {
+            summary_id: row.get(0)?,
+            kind: row.get(1)?,
+            title: row.get(2)?,
+            content: row.get(3)?,
+            tags,
+            importance: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+        })
+    })?;
+    super::collect_rows(rows)
+}
+
 /// List recent episodes.
 /// When `brain_id` is non-empty, filters to that brain only. Empty string returns all brains.
 pub fn list_episodes(conn: &Connection, limit: usize, brain_id: &str) -> Result<Vec<SummaryRow>> {

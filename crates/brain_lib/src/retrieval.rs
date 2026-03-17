@@ -250,7 +250,7 @@ fn make_stub(result: &RankedResult, ml_summary: Option<&str>) -> MemoryStub {
 
     let stub_tokens = estimate_tokens(&title) + estimate_tokens(&summary_2sent) + 5;
 
-    let kind = derive_kind(&result.chunk_id);
+    let kind = derive_kind(&result.chunk_id, result.summary_kind.as_deref());
 
     MemoryStub {
         memory_id: result.chunk_id.clone(),
@@ -266,9 +266,11 @@ fn make_stub(result: &RankedResult, ml_summary: Option<&str>) -> MemoryStub {
     }
 }
 
-/// Derive the result kind from a chunk_id prefix.
-fn derive_kind(chunk_id: &str) -> String {
-    if chunk_id.starts_with("task-outcome:") {
+/// Derive the result kind from a chunk_id prefix and optional summary kind.
+fn derive_kind(chunk_id: &str, summary_kind: Option<&str>) -> String {
+    if chunk_id.starts_with("sum:") {
+        summary_kind.unwrap_or("episode").to_string()
+    } else if chunk_id.starts_with("task-outcome:") {
         "task-outcome".to_string()
     } else if chunk_id.starts_with("task:") {
         "task".to_string()
@@ -321,6 +323,7 @@ mod tests {
             token_estimate,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         }
     }
 
@@ -445,10 +448,13 @@ mod tests {
 
     #[test]
     fn test_derive_kind() {
-        assert_eq!(derive_kind("task:BRN-01ABC:0"), "task");
-        assert_eq!(derive_kind("task-outcome:BRN-01XYZ:0"), "task-outcome");
-        assert_eq!(derive_kind("01JXYZ1234:0"), "note");
-        assert_eq!(derive_kind("some-uuid:3"), "note");
+        assert_eq!(derive_kind("task:BRN-01ABC:0", None), "task");
+        assert_eq!(derive_kind("task-outcome:BRN-01XYZ:0", None), "task-outcome");
+        assert_eq!(derive_kind("01JXYZ1234:0", None), "note");
+        assert_eq!(derive_kind("some-uuid:3", None), "note");
+        assert_eq!(derive_kind("sum:01JXYZ1234", Some("episode")), "episode");
+        assert_eq!(derive_kind("sum:01JXYZ1234", Some("reflection")), "reflection");
+        assert_eq!(derive_kind("sum:01JXYZ1234", None), "episode");
     }
 
     #[test]
