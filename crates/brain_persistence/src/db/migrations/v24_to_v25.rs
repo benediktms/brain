@@ -17,6 +17,7 @@ pub fn migrate_v24_to_v25(conn: &Connection) -> Result<()> {
 
          ALTER TABLE summaries ADD COLUMN brain_id TEXT NOT NULL DEFAULT '';
          CREATE INDEX idx_summaries_brain_id ON summaries(brain_id);
+         CREATE INDEX IF NOT EXISTS idx_summaries_kind_brain_created ON summaries(kind, brain_id, created_at DESC);
 
          ALTER TABLE summaries ADD COLUMN parent_id TEXT REFERENCES summaries(summary_id);
          ALTER TABLE summaries ADD COLUMN source_hash TEXT;
@@ -181,6 +182,22 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "idx_summaries_brain_id index should exist");
+    }
+
+    #[test]
+    fn test_compound_kind_brain_created_index_exists() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_v24(&conn);
+        migrate_v24_to_v25(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_summaries_kind_brain_created'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "idx_summaries_kind_brain_created compound index should exist");
     }
 
     #[test]

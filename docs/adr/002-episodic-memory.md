@@ -56,7 +56,7 @@ Episode vs. reflection kind is determined from SQLite enrichment, not from the c
 
 A new `fts_summaries` virtual table uses `tokenize='porter unicode61'`. The existing `fts_chunks` table uses no stemming tokenizer. Episodes and reflections are prose; porter stemming improves recall. Insert, delete, and update triggers maintain the index automatically via `ensure_fts5()`.
 
-### 5. Best-effort embedding on write
+### 5. Best-effort embedding on write *(implemented)*
 
 `mem_write_episode.rs` and `mem_reflect.rs` (commit mode) embed and upsert into LanceDB after the SQLite write. Embedding failure is logged but does not fail the episode or reflection write. Existing summaries are backfilled via `brain reindex --summaries` (CLI-only, no auto-startup cost).
 
@@ -66,9 +66,9 @@ Reflections are stored in the current brain. `source_ids` in a commit may refere
 
 `reflect(mode="prepare")` accepts a `brains` parameter (same pattern as `search_minimal`) to gather episodes from specified brains. When omitted, the default is the current brain.
 
-### 7. Episode linking via `related_ids` on write_episode
+### 7. Episode linking via `related_ids` on write_episode *(deferred to Phase 4)*
 
-`memory.write_episode` accepts an optional `related_ids` list. These are written to `reflection_sources` at episode creation time, enabling explicit episode-to-episode linking without requiring a separate reflect call.
+`memory.write_episode` was designed to accept an optional `related_ids` list, writing links to `reflection_sources` at episode creation time. The schema supports it (`reflection_sources` table exists), but the parameter is not yet exposed in the MCP tool or the `store_episode()` function signature. This is deferred to Phase 4 alongside consolidation.
 
 ### 8. Phase 4 schema foundations
 
@@ -132,6 +132,18 @@ Three consolidation trigger modes are defined (Phase 4):
 | `EpisodeWriter` / `EpisodeReader` port traits needing `brain_id` + `related_ids` | Parameters added directly; port trait extraction deferred (same rationale as `TaskPersistence` in ADR-001) |
 | Synthetic file_id special-casing | Task capsule pattern applied uniformly — no special-casing in expand |
 | Source-group dedup | Post-ranking filter (not pre-filter) — preserves ranking signal integrity |
+
+---
+
+## Deferred Items
+
+The following items from this ADR were not implemented in Phase 3:
+
+| Item | Reason | Target Phase |
+|---|---|---|
+| Decision 7: `related_ids` on `write_episode` | Schema in place (`reflection_sources` table); MCP parameter and `store_episode()` signature extension deferred | Phase 4 |
+| PageRank extension to summaries | Reflections not yet included in PageRank graph; default to `pagerank_score = 0.0` | Phase 4 |
+| Port trait extraction for `EpisodeWriter` / `EpisodeReader` | Same rationale as `TaskPersistence` in ADR-001; deferred until the interface stabilizes | Phase 4+ |
 
 ---
 

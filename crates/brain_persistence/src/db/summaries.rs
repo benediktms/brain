@@ -99,6 +99,32 @@ pub fn store_reflection(
     Ok(summary_id)
 }
 
+/// Map a rusqlite row to a `SummaryRow`.
+///
+/// Expects 13 columns in this exact order:
+/// 0: summary_id, 1: kind, 2: title, 3: content, 4: tags (JSON),
+/// 5: importance, 6: created_at, 7: updated_at, 8: brain_id,
+/// 9: parent_id, 10: source_hash, 11: confidence, 12: valid_from
+fn map_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SummaryRow> {
+    let tags_json: String = row.get(4)?;
+    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    Ok(SummaryRow {
+        summary_id: row.get(0)?,
+        kind: row.get(1)?,
+        title: row.get(2)?,
+        content: row.get(3)?,
+        tags,
+        importance: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+        brain_id: row.get(8)?,
+        parent_id: row.get(9)?,
+        source_hash: row.get(10)?,
+        confidence: row.get(11)?,
+        valid_from: row.get(12)?,
+    })
+}
+
 /// Get a summary by ID.
 /// No brain_id filter — PK lookup, intentional for cross-brain references.
 pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<SummaryRow>> {
@@ -108,25 +134,7 @@ pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<Summary
                     brain_id, parent_id, source_hash, confidence, valid_from
              FROM summaries WHERE summary_id = ?1",
             [summary_id],
-            |row| {
-                let tags_json: String = row.get(4)?;
-                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-                Ok(SummaryRow {
-                    summary_id: row.get(0)?,
-                    kind: row.get(1)?,
-                    title: row.get(2)?,
-                    content: row.get(3)?,
-                    tags,
-                    importance: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                    brain_id: row.get(8)?,
-                    parent_id: row.get(9)?,
-                    source_hash: row.get(10)?,
-                    confidence: row.get(11)?,
-                    valid_from: row.get(12)?,
-                })
-            },
+            map_summary_row,
         )
         .optional()?;
 
@@ -158,25 +166,7 @@ pub fn get_summaries_by_prefixed_ids(
         .iter()
         .map(|s| s as &dyn rusqlite::types::ToSql)
         .collect();
-    let rows = stmt.query_map(params.as_slice(), |row| {
-        let tags_json: String = row.get(4)?;
-        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-        Ok(SummaryRow {
-            summary_id: row.get(0)?,
-            kind: row.get(1)?,
-            title: row.get(2)?,
-            content: row.get(3)?,
-            tags,
-            importance: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-            brain_id: row.get(8)?,
-            parent_id: row.get(9)?,
-            source_hash: row.get(10)?,
-            confidence: row.get(11)?,
-            valid_from: row.get(12)?,
-        })
-    })?;
+    let rows = stmt.query_map(params.as_slice(), map_summary_row)?;
     super::collect_rows(rows)
 }
 
@@ -273,51 +263,13 @@ pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Sum
         .iter()
         .map(|s| s as &dyn rusqlite::types::ToSql)
         .collect();
-    let rows = stmt.query_map(params.as_slice(), |row| {
-        let tags_json: String = row.get(4)?;
-        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-        Ok(SummaryRow {
-            summary_id: row.get(0)?,
-            kind: row.get(1)?,
-            title: row.get(2)?,
-            content: row.get(3)?,
-            tags,
-            importance: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-            brain_id: row.get(8)?,
-            parent_id: row.get(9)?,
-            source_hash: row.get(10)?,
-            confidence: row.get(11)?,
-            valid_from: row.get(12)?,
-        })
-    })?;
+    let rows = stmt.query_map(params.as_slice(), map_summary_row)?;
     super::collect_rows(rows)
 }
 
 /// List recent episodes.
 /// When `brain_id` is non-empty, filters to that brain only. Empty string returns all brains.
 pub fn list_episodes(conn: &Connection, limit: usize, brain_id: &str) -> Result<Vec<SummaryRow>> {
-    let row_mapper = |row: &rusqlite::Row<'_>| {
-        let tags_json: String = row.get(4)?;
-        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-        Ok(SummaryRow {
-            summary_id: row.get(0)?,
-            kind: row.get(1)?,
-            title: row.get(2)?,
-            content: row.get(3)?,
-            tags,
-            importance: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-            brain_id: row.get(8)?,
-            parent_id: row.get(9)?,
-            source_hash: row.get(10)?,
-            confidence: row.get(11)?,
-            valid_from: row.get(12)?,
-        })
-    };
-
     if brain_id.is_empty() {
         let mut stmt = conn.prepare(
             "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
@@ -326,7 +278,7 @@ pub fn list_episodes(conn: &Connection, limit: usize, brain_id: &str) -> Result<
              ORDER BY created_at DESC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map([limit as i64], row_mapper)?;
+        let rows = stmt.query_map([limit as i64], map_summary_row)?;
         super::collect_rows(rows)
     } else {
         let mut stmt = conn.prepare(
@@ -336,7 +288,7 @@ pub fn list_episodes(conn: &Connection, limit: usize, brain_id: &str) -> Result<
              ORDER BY created_at DESC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map(rusqlite::params![limit as i64, brain_id], row_mapper)?;
+        let rows = stmt.query_map(rusqlite::params![limit as i64, brain_id], map_summary_row)?;
         super::collect_rows(rows)
     }
 }
@@ -369,25 +321,7 @@ pub fn list_episodes_multi_brain(
         params.push(Box::new(id.clone()));
     }
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-    let rows = stmt.query_map(param_refs.as_slice(), |row| {
-        let tags_json: String = row.get(4)?;
-        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-        Ok(SummaryRow {
-            summary_id: row.get(0)?,
-            kind: row.get(1)?,
-            title: row.get(2)?,
-            content: row.get(3)?,
-            tags,
-            importance: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
-            brain_id: row.get(8)?,
-            parent_id: row.get(9)?,
-            source_hash: row.get(10)?,
-            confidence: row.get(11)?,
-            valid_from: row.get(12)?,
-        })
-    })?;
+    let rows = stmt.query_map(param_refs.as_slice(), map_summary_row)?;
     super::collect_rows(rows)
 }
 

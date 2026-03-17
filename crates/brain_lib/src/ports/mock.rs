@@ -229,13 +229,24 @@ impl FileMetaReader for MockFileMetaReader {
 pub struct MockFtsSearcher {
     /// Results returned by every `search_fts` call.
     pub results: Mutex<Vec<FtsResult>>,
+    /// Results returned by every `search_summaries_fts` call.
+    pub summary_results: Mutex<Vec<FtsSummaryResult>>,
 }
 
 impl MockFtsSearcher {
-    /// Create a searcher that always returns the given results.
+    /// Create a searcher that always returns the given chunk FTS results.
     pub fn with_results(results: Vec<FtsResult>) -> Self {
         Self {
             results: Mutex::new(results),
+            summary_results: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Create a searcher that always returns the given summary FTS results.
+    pub fn with_summary_results(summary_results: Vec<FtsSummaryResult>) -> Self {
+        Self {
+            results: Mutex::new(Vec::new()),
+            summary_results: Mutex::new(summary_results),
         }
     }
 }
@@ -245,8 +256,15 @@ impl FtsSearcher for MockFtsSearcher {
         Ok(self.results.lock().unwrap().clone())
     }
 
-    fn search_summaries_fts(&self, _query: &str, _limit: usize) -> Result<Vec<FtsSummaryResult>> {
-        Ok(Vec::new())
+    fn search_summaries_fts(&self, _query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>> {
+        Ok(self
+            .summary_results
+            .lock()
+            .unwrap()
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect())
     }
 }
 
