@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::db::tasks::events::TaskStatus;
 use crate::error::Result;
-use crate::tasks::events::TaskStatus;
 
 use super::ANCESTOR_BLOCKED_CTE;
 

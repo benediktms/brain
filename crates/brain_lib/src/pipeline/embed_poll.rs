@@ -10,10 +10,11 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::db::Db;
+use crate::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
 use crate::embedder::{Embed, embed_batch_async};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
-use crate::tasks::queries::get_labels_for_tasks;
+use crate::tasks::queries::{TaskPollRow, find_stale_tasks_for_embedding, get_labels_for_tasks};
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 
@@ -35,67 +36,14 @@ pub async fn poll_stale_tasks(
     debug!("embed_poll: scanning stale tasks");
 
     // ── 1. Fetch stale task rows ─────────────────────────────────────────
-    // TODO: replace raw task SELECT with a TaskPersistence trait method when
-    // task persistence is extracted to ports.
-    #[derive(Debug)]
-    struct TaskPollRow {
-        task_id: String,
-        title: String,
-        description: Option<String>,
-        status: String,
-        priority: i32,
-        blocked_reason: Option<String>,
-    }
-
-    let rows: Vec<TaskPollRow> = match db.with_read_conn(|conn| {
-        // Build query dynamically: filter by brain_id only when non-empty.
-        let (sql, has_brain_filter) = if brain_id.is_empty() {
-            (
-                "SELECT task_id, title, description, status, priority, blocked_reason
-                 FROM tasks
-                 WHERE (updated_at > COALESCE(embedded_at, 0) OR embedded_at IS NULL)
-                 LIMIT 256"
-                    .to_string(),
-                false,
-            )
-        } else {
-            (
-                "SELECT task_id, title, description, status, priority, blocked_reason
-                 FROM tasks
-                 WHERE (updated_at > COALESCE(embedded_at, 0) OR embedded_at IS NULL)
-                   AND brain_id = ?1
-                 LIMIT 256"
-                    .to_string(),
-                true,
-            )
+    let rows: Vec<TaskPollRow> =
+        match db.with_read_conn(|conn| find_stale_tasks_for_embedding(conn, brain_id)) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "embed_poll: failed to query stale tasks");
+                return 0;
+            }
         };
-
-        let mut stmt = conn.prepare(&sql)?;
-
-        let map_row = |row: &rusqlite::Row<'_>| {
-            Ok(TaskPollRow {
-                task_id: row.get(0)?,
-                title: row.get(1)?,
-                description: row.get(2)?,
-                status: row.get(3)?,
-                priority: row.get(4)?,
-                blocked_reason: row.get(5)?,
-            })
-        };
-
-        let rows = if has_brain_filter {
-            stmt.query_map([brain_id], map_row)?
-        } else {
-            stmt.query_map([], map_row)?
-        };
-        crate::db::collect_rows(rows)
-    }) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(error = %e, "embed_poll: failed to query stale tasks");
-            return 0;
-        }
-    };
 
     if rows.is_empty() {
         debug!("embed_poll: no stale tasks");
@@ -105,8 +53,6 @@ pub async fn poll_stale_tasks(
     info!(count = rows.len(), "embed_poll: embedding stale tasks");
 
     // ── 2. Fetch labels for each task ────────────────────────────────────
-    // TODO: replace raw label lookup with a TaskPersistence trait method when
-    // task persistence is extracted to ports.
     let task_id_refs: Vec<&str> = rows.iter().map(|r| r.task_id.as_str()).collect();
 
     let label_map: std::collections::HashMap<String, Vec<String>> =
@@ -213,8 +159,6 @@ pub async fn poll_stale_tasks(
     }
 
     // ── 6. Mark embedded ─────────────────────────────────────────────────
-    // TODO: replace raw UPDATE with a TaskPersistence trait method when task
-    // persistence is extracted to ports.
     if !embedded_task_ids.is_empty() {
         let ids_ref: Vec<&str> = embedded_task_ids.iter().map(|s| s.as_str()).collect();
         if let Err(e) = db.with_write_conn(|conn| mark_tasks_embedded(conn, &ids_ref)) {
@@ -225,36 +169,6 @@ pub async fn poll_stale_tasks(
     let count = embedded_task_ids.len();
     info!(count, "embed_poll: tasks embedded");
     count
-}
-
-/// Set `embedded_at = now()` on a batch of tasks.
-///
-/// `task_ids` must be non-empty. Skips gracefully if the slice is empty.
-///
-/// TODO: remove when task persistence is extracted to ports — replace with a
-/// TaskPersistence trait method.
-fn mark_tasks_embedded(conn: &rusqlite::Connection, task_ids: &[&str]) -> crate::error::Result<()> {
-    if task_ids.is_empty() {
-        return Ok(());
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
-    let placeholders: Vec<String> = (2..=task_ids.len() + 1).map(|i| format!("?{i}")).collect();
-    let sql = format!(
-        "UPDATE tasks SET embedded_at = ?1 WHERE task_id IN ({})",
-        placeholders.join(", ")
-    );
-    let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(task_ids.len() + 1);
-    let ts_ref: &dyn rusqlite::types::ToSql = &now;
-    params.push(ts_ref);
-    for id in task_ids {
-        params.push(id as &dyn rusqlite::types::ToSql);
-    }
-    conn.execute(&sql, params.as_slice())?;
-    Ok(())
 }
 
 // ── Chunks ──────────────────────────────────────────────────────────────────
@@ -272,36 +186,7 @@ pub async fn poll_stale_chunks(
 ) -> usize {
     debug!("embed_poll: scanning stale chunks");
 
-    // TODO: replace raw chunk SELECT with a ChunkMetaReader trait method (e.g.
-    // find_stale_chunks) when the stale-chunk read path is added to ports.
-    #[derive(Debug)]
-    struct ChunkPollRow {
-        chunk_id: String,
-        file_id: String,
-        file_path: String,
-        chunk_ord: i32,
-        content: String,
-    }
-
-    let rows: Vec<ChunkPollRow> = match db.with_read_conn(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT c.chunk_id, c.file_id, COALESCE(f.path, c.file_id), c.chunk_ord, c.content
-             FROM chunks c
-             LEFT JOIN files f ON f.file_id = c.file_id
-             WHERE c.embedded_at IS NULL
-             LIMIT 256",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ChunkPollRow {
-                chunk_id: row.get(0)?,
-                file_id: row.get(1)?,
-                file_path: row.get(2)?,
-                chunk_ord: row.get(3)?,
-                content: row.get(4)?,
-            })
-        })?;
-        crate::db::collect_rows(rows)
-    }) {
+    let rows: Vec<ChunkPollRow> = match db.with_read_conn(find_stale_for_embedding) {
         Ok(r) => r,
         Err(e) => {
             warn!(error = %e, "embed_poll: failed to query stale chunks");

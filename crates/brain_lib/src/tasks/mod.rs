@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use crate::db::Db;
 use crate::error::{BrainCoreError, Result};
 
-use events::{EventType, TaskEvent};
+use events::TaskEvent;
 
 /// The task store: SQLite as source of truth, JSONL as audit trail.
 pub struct TaskStore {
@@ -106,11 +106,8 @@ impl TaskStore {
     pub fn append(&self, event: &TaskEvent) -> Result<()> {
         let brain_id = self.brain_id.clone();
         self.db.with_write_conn(|conn| {
-            self.validate(conn, event)?;
-
-            // SQLite is the source of truth — write first
-            projections::apply_event(conn, event, &brain_id)?;
-            Ok(())
+            // Validate + apply in one transaction (validation + projection inside brain_persistence)
+            projections::validate_and_apply(conn, event, &brain_id)
         })?;
         // JSONL emit is best-effort audit trail — outside the write lock
         if let Err(e) = events::append_event(&self.events_path, event) {
@@ -513,108 +510,6 @@ impl TaskStore {
             Ok(())
         })?;
         Ok(imported)
-    }
-
-    /// Validate an event before writing it to the log.
-    fn validate(&self, conn: &rusqlite::Connection, event: &TaskEvent) -> Result<()> {
-        match event.event_type {
-            EventType::TaskCreated => {
-                if queries::task_exists(conn, &event.task_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "task already exists: {}",
-                        event.task_id
-                    )));
-                }
-                // Validate parent_task_id if provided
-                let payload: events::TaskCreatedPayload =
-                    serde_json::from_value(event.payload.clone()).map_err(|e| {
-                        BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}"))
-                    })?;
-                if let Some(ref parent_id) = payload.parent_task_id {
-                    if parent_id == &event.task_id {
-                        return Err(BrainCoreError::TaskEvent(
-                            "task cannot be its own parent".to_string(),
-                        ));
-                    }
-                    if !queries::task_exists(conn, parent_id)? {
-                        return Err(BrainCoreError::TaskEvent(format!(
-                            "parent task not found: {parent_id}"
-                        )));
-                    }
-                }
-            }
-
-            EventType::TaskUpdated | EventType::StatusChanged => {
-                if !queries::task_exists(conn, &event.task_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "task not found: {}",
-                        event.task_id
-                    )));
-                }
-            }
-
-            EventType::DependencyAdded => {
-                if !queries::task_exists(conn, &event.task_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "task not found: {}",
-                        event.task_id
-                    )));
-                }
-                let payload: events::DependencyPayload =
-                    serde_json::from_value(event.payload.clone()).map_err(|e| {
-                        BrainCoreError::TaskEvent(format!("bad DependencyAdded payload: {e}"))
-                    })?;
-                if !queries::task_exists(conn, &payload.depends_on_task_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "dependency target not found: {}",
-                        payload.depends_on_task_id
-                    )));
-                }
-                cycle::check_cycle(conn, &event.task_id, &payload.depends_on_task_id)?;
-            }
-
-            EventType::ParentSet => {
-                if !queries::task_exists(conn, &event.task_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "task not found: {}",
-                        event.task_id
-                    )));
-                }
-                let payload: events::ParentSetPayload =
-                    serde_json::from_value(event.payload.clone()).map_err(|e| {
-                        BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}"))
-                    })?;
-                if let Some(ref parent_id) = payload.parent_task_id {
-                    if parent_id == &event.task_id {
-                        return Err(BrainCoreError::TaskEvent(
-                            "task cannot be its own parent".to_string(),
-                        ));
-                    }
-                    if !queries::task_exists(conn, parent_id)? {
-                        return Err(BrainCoreError::TaskEvent(format!(
-                            "parent task not found: {parent_id}"
-                        )));
-                    }
-                }
-            }
-
-            EventType::DependencyRemoved
-            | EventType::NoteLinked
-            | EventType::NoteUnlinked
-            | EventType::LabelAdded
-            | EventType::LabelRemoved
-            | EventType::CommentAdded
-            | EventType::ExternalIdAdded
-            | EventType::ExternalIdRemoved => {
-                if !queries::task_exists(conn, &event.task_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "task not found: {}",
-                        event.task_id
-                    )));
-                }
-            }
-        }
-        Ok(())
     }
 }
 

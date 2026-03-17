@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, types::ToSql};
 
 use crate::error::Result;
 
@@ -274,4 +274,61 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Embed-poll helpers
+// ---------------------------------------------------------------------------
+
+/// A chunk pending embedding into LanceDB.
+#[derive(Debug)]
+pub struct ChunkPollRow {
+    pub chunk_id: String,
+    pub file_id: String,
+    pub file_path: String,
+    pub chunk_ord: i32,
+    pub content: String,
+}
+
+/// Find chunks that have not yet been embedded into LanceDB (limit 256).
+pub fn find_stale_for_embedding(conn: &Connection) -> Result<Vec<ChunkPollRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.chunk_id, c.file_id, COALESCE(f.path, c.file_id), c.chunk_ord, c.content
+         FROM chunks c
+         LEFT JOIN files f ON f.file_id = c.file_id
+         WHERE c.embedded_at IS NULL
+         LIMIT 256",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ChunkPollRow {
+            chunk_id: row.get(0)?,
+            file_id: row.get(1)?,
+            file_path: row.get(2)?,
+            chunk_ord: row.get(3)?,
+            content: row.get(4)?,
+        })
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+/// Set `embedded_at = now()` on a batch of tasks.
+pub fn mark_tasks_embedded(conn: &Connection, task_ids: &[&str]) -> Result<()> {
+    if task_ids.is_empty() {
+        return Ok(());
+    }
+    let now = crate::utils::now_ts();
+
+    let placeholders: Vec<String> = (2..=task_ids.len() + 1).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "UPDATE tasks SET embedded_at = ?1 WHERE task_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut params: Vec<&dyn ToSql> = Vec::with_capacity(task_ids.len() + 1);
+    let ts_ref: &dyn ToSql = &now;
+    params.push(ts_ref);
+    for id in task_ids {
+        params.push(id as &dyn ToSql);
+    }
+    conn.execute(&sql, params.as_slice())?;
+    Ok(())
 }
