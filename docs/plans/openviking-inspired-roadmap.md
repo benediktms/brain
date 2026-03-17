@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: in-progress
 complexity: epic
 effort: ~3 months
 priority: high
@@ -15,9 +15,9 @@ priority: high
 
 ### Current Status
 
-The episodic memory system is **partially implemented**. The storage primitives exist, but the loop is not closed — episodes go in but don't come back out through the main retrieval path, and reflections can't be stored via the MCP tool at all.
+**Phase 0 is complete.** The episodic memory loop is closed: episodes and reflections are written, indexed, retrieved, and searchable via the main hybrid pipeline.
 
-#### What Is Implemented
+#### What Was Delivered
 
 | Component | Status | Detail |
 |-----------|--------|--------|
@@ -25,40 +25,23 @@ The episodic memory system is **partially implemented**. The storage primitives 
 | `summaries` table schema | Complete | Supports `episode`, `reflection`, `summary` kinds with timestamps, importance, validity windows |
 | `reflection_sources` table | Complete | Junction table linking reflections → source episodes; FK constraints in place |
 | `store_episode()` DB function | Complete | Writes to `summaries` with `kind='episode'`, returns ULID |
-| `store_reflection()` DB function | Complete | Writes reflection + source links; never called by any MCP tool |
+| `store_reflection()` DB function | Complete | Writes reflection + source links; called by `memory.reflect` commit mode |
 | `list_episodes()` DB function | Complete | Recency-ordered retrieval, limit-based |
-| `memory.reflect` retrieval phase | Complete | Returns recent episodes + related chunks via hybrid search with "reflection" intent |
-| Unit + integration tests | Partial | Episode write/read tested; reflection storage tested at DB level; no end-to-end reflection test |
+| `memory.reflect` two-phase tool | Complete | `prepare` mode returns recent episodes + related chunks; `commit` mode stores the synthesized reflection |
+| Episode/reflection vector indexing (LanceDB) | Complete | Summaries embedded at write time with `sum:{id}` prefix; semantic search works |
+| Episode/reflection FTS5 indexing (`fts_summaries`) | Complete | BM25 keyword search over episode/reflection content |
+| Episodes + reflections in `search_minimal` results | Complete | Hybrid pipeline merges summary candidates into the result pool; `episode` and `reflection` stub kinds returned |
+| `brain_id` on `summaries` table | Complete | Schema v25 migration; all summary queries are brain-scoped |
+| Cross-brain `memory.reflect` prepare | Complete | `brains` parameter allows gathering episodes across registered brains |
+| Unit + integration tests | Complete | Episode write/read, reflection storage, FTS reindex, and pipeline integration all tested |
 
-#### What Is Stubbed or Missing
+#### Why This Unblocks Later Phases
 
-| Component | Status | Impact |
-|-----------|--------|--------|
-| `memory.reflect` storage phase | Missing | Agents cannot store reflections via MCP — `store_reflection()` exists but is unreachable |
-| Episode vector indexing (LanceDB) | Missing | Episodes cannot be found by semantic similarity |
-| Episode FTS5 indexing | Missing | Episodes invisible to keyword search |
-| Episodes in `search_minimal` results | Missing | Hybrid search never returns episodes as candidates |
-| Reflection retrieval | Missing | `reflect` tool returns episodes but never returns existing reflections |
-| `brain_id` on `summaries` table | Missing | Breaks brain isolation in multi-brain deployments |
-| Expand support for summary IDs | Missing | `memory.expand` only handles chunk IDs |
-
-#### Why This Blocks Later Phases
-
-- **Phase 1 (URIs):** Can't assign `brain://` URIs to episodes/reflections if they aren't first-class addressable objects with brain scoping.
-- **Phase 2 (Hierarchy summaries):** Derived summaries depend on the same `summaries` table infrastructure and retrieval integration pattern.
-- **Phase 3 (Explainability):** Scoring breakdowns are meaningless if half the memory types aren't in the candidate pool.
-- **Phase 4 (Consolidation):** Session-to-durable-memory promotion requires episodes to be the target — they must be retrievable first.
-- **Phase 5 (Playbooks):** Procedural memories are a new kind in the same `summaries` table; pattern must be proven on episodes first.
-
-#### Recommended Implementation Order
-
-1. Add `brain_id` to `summaries` (schema migration — unblocks everything else)
-2. Complete `memory.reflect` storage phase (close the write loop)
-3. Add FTS5 for summaries (keyword search — low-risk, follows existing pattern)
-4. Add LanceDB indexing for summaries (vector search — embed at write time)
-5. Integrate summaries into `search_minimal` candidate pool
-6. Add expand support for summary IDs
-7. Backfill + migration + tests
+- **Phase 1 (URIs):** Episodes/reflections are brain-scoped first-class objects. URI assignment is now straightforward.
+- **Phase 2 (Hierarchy summaries):** The summary storage and retrieval pattern is proven and reusable.
+- **Phase 3 (Explainability):** All memory types are in the candidate pool — score breakdowns are now meaningful across all object types.
+- **Phase 4 (Consolidation):** Episodes are retrievable. The reflect commit mode provides the write path for consolidated memories.
+- **Phase 5 (Playbooks):** The `playbook` kind can follow the same pattern proven here.
 
 ### Concrete Issues
 
@@ -208,8 +191,8 @@ The episodic memory system is **partially implemented**. The storage primitives 
 Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four domains:
 
 **Storage layers:**
-- **SQLite** (v21 schema): chunks, files, links, tasks, records, summaries, record_tags, record_links, reflection_sources. FTS5 virtual tables for chunks and tasks.
-- **LanceDB** (per-brain): 384-dim BGE-small embeddings for note chunks. IVF-PQ indexing with automatic optimization.
+- **SQLite** (v25 schema): chunks, files, links, tasks, records, summaries, record_tags, record_links, reflection_sources. FTS5 virtual tables for chunks, tasks, and summaries (`fts_summaries`).
+- **LanceDB** (per-brain): 384-dim BGE-small embeddings for note chunks and episodic memory (`sum:{id}` prefix). IVF-PQ indexing with automatic optimization.
 - **Object store** (content-addressed): BLAKE3-hashed blobs for record payloads. Optional zstd compression.
 - **Event log** (per-brain JSONL): Append-only audit trail for records (best-effort, not authoritative).
 
@@ -218,15 +201,16 @@ Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four d
 - Intent-driven weight profiles: lookup, planning, reflection, synthesis (unrecognized intents fall back to a default profile)
 - Fusion confidence triggers cross-encoder reranking when vector/FTS disagree (<0.3)
 - Token-budgeted progressive packing: minimal stubs → expand on demand
+- Episode and reflection stubs returned as first-class results alongside note chunks
 
 **Domains:**
 - **Notes/memory:** Markdown files → chunks → embeddings. Hybrid search via `memory.search_minimal`/`memory.expand`.
 - **Tasks:** CRUD + event sourcing, dependency graph, `tasks.next` prioritization.
 - **Records:** Content-addressed artifacts with metadata, tags, links. No semantic search (addressed by the sibling plan).
-- **Episodic memory:** Partially implemented (see [Episodic Memory Foundation](./episodic-memory.md)).
+- **Episodic memory:** Fully implemented (see [Episodic Memory Foundation](./episodic-memory.md)). Episodes and reflections are written, embedded, FTS-indexed, and retrievable via `search_minimal`. `memory.reflect` supports prepare and commit modes. Cross-brain episode gathering supported.
 
 **Key boundaries:**
-- Brain-scoped: each brain is a directory with its own LanceDB, event log, and content path. SQLite is shared with `brain_id` partitioning (except `summaries`).
+- Brain-scoped: each brain is a directory with its own LanceDB, event log, and content path. SQLite is shared with `brain_id` partitioning on all domain tables including `summaries`.
 - MCP is the only external interface. No REST API, no gRPC.
 - Embedding is local-only (BGE-small-en-v1.5, 384-dim, via candle/safetensors). No remote model dependency on the hot path.
 
@@ -289,12 +273,12 @@ Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four d
 
 ## 3. Recommended Roadmap
 
-### Phase 0 — [Episodic Memory Foundation](./episodic-memory.md) (Blocker)
+### Phase 0 — [Episodic Memory Foundation](./episodic-memory.md) ✓ Complete
 
 **Goal:** Close the episode write → retrieve → reflect → retrieve loop.
 **Why first:** Every later phase depends on summaries being first-class retrievable objects.
 **Benefit:** Agents can build on their own history. Cold starts become warm starts.
-**Risks:** Schema migration (v22) must be backward-compatible. Embedding episodes increases LanceDB index size — monitor optimization thresholds.
+**Delivered:** Schema v25 (`brain_id` on summaries, `fts_summaries`), LanceDB embedding for episodes/reflections, `search_minimal` integration, `memory.reflect` commit mode, cross-brain prepare.
 **Plan:** See [`episodic-memory.md`](./episodic-memory.md) for full implementation details.
 
 ### Phase 1 — Unified `brain://` URI / Object Addressing
@@ -343,9 +327,9 @@ Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four d
 
 ## 4. Concrete Tasks / Issues
 
-### Phase 0 — Episodic Memory Foundation
+### Phase 0 — Episodic Memory Foundation ✓ Complete
 
-See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (Issues 0.1–0.6).
+See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (Issues 0.1–0.6). All issues implemented.
 
 ---
 
@@ -771,10 +755,10 @@ All changes are additive. No existing parameters change meaning. No existing res
 
 ### Migration Strategy
 
-- [Episodic Memory](./episodic-memory.md) requires schema migration v22 (`brain_id` on summaries, `fts_summaries`)
-- Phase 1 requires schema migration v23 (`object_links` table)
-- Phase 2 requires schema migration v24 (`derived_summaries` table)
-- Phase 5 requires schema migration v25 (`parent_id` on summaries)
+- [Episodic Memory](./episodic-memory.md) — **delivered** as schema migration v25 (`brain_id` on summaries, `fts_summaries`)
+- Phase 1 requires schema migration v26 (`object_links` table)
+- Phase 2 requires schema migration v27 (`derived_summaries` table)
+- Phase 5 requires schema migration v28 (`parent_id` on summaries)
 - Phase 6 extends whichever migration the sibling plan uses
 
 Each migration is independent and backward-compatible. Failed migrations should be resumable.
@@ -787,7 +771,7 @@ Each migration is independent and backward-compatible. Failed migrations should 
 
 | Table | Phase | Purpose |
 |-------|-------|---------|
-| `fts_summaries` (FTS5) | 0 | Keyword search over episodes/reflections |
+| `fts_summaries` (FTS5) | 0 ✓ | Keyword search over episodes/reflections |
 | `object_links` | 1 | URI-based cross-domain linking |
 | `derived_summaries` | 2 | Directory/tag/task-group summaries |
 
@@ -795,7 +779,7 @@ Each migration is independent and backward-compatible. Failed migrations should 
 
 | Table | Change | Phase |
 |-------|--------|-------|
-| `summaries` | Add `brain_id` column | 0 |
+| `summaries` | Add `brain_id` column | 0 ✓ |
 | `summaries` | Add `parent_id` column | 5 |
 | `records` | Add abstract/metadata columns | 6 |
 
@@ -803,7 +787,7 @@ Each migration is independent and backward-compatible. Failed migrations should 
 
 | Prefix | Object Type | Phase |
 |--------|-------------|-------|
-| `sum:{id}` | Episodes and reflections | 0 |
+| `sum:{id}` | Episodes and reflections | 0 ✓ |
 | `ds:{id}` | Derived hierarchy summaries | 2 |
 | `rec:{id}` | Records (sibling plan) | Sibling |
 

@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use crate::db::chunks::ChunkRow;
-use crate::db::fts::FtsResult;
+use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::db::summaries::{Episode, SummaryRow};
 use crate::error::Result;
 use crate::store::QueryResult;
@@ -229,13 +229,24 @@ impl FileMetaReader for MockFileMetaReader {
 pub struct MockFtsSearcher {
     /// Results returned by every `search_fts` call.
     pub results: Mutex<Vec<FtsResult>>,
+    /// Results returned by every `search_summaries_fts` call.
+    pub summary_results: Mutex<Vec<FtsSummaryResult>>,
 }
 
 impl MockFtsSearcher {
-    /// Create a searcher that always returns the given results.
+    /// Create a searcher that always returns the given chunk FTS results.
     pub fn with_results(results: Vec<FtsResult>) -> Self {
         Self {
             results: Mutex::new(results),
+            summary_results: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Create a searcher that always returns the given summary FTS results.
+    pub fn with_summary_results(summary_results: Vec<FtsSummaryResult>) -> Self {
+        Self {
+            results: Mutex::new(Vec::new()),
+            summary_results: Mutex::new(summary_results),
         }
     }
 }
@@ -243,6 +254,17 @@ impl MockFtsSearcher {
 impl FtsSearcher for MockFtsSearcher {
     fn search_fts(&self, _query: &str, _limit: usize) -> Result<Vec<FtsResult>> {
         Ok(self.results.lock().unwrap().clone())
+    }
+
+    fn search_summaries_fts(&self, _query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>> {
+        Ok(self
+            .summary_results
+            .lock()
+            .unwrap()
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect())
     }
 }
 
@@ -698,13 +720,40 @@ impl MockEpisodeReader {
 }
 
 impl EpisodeReader for MockEpisodeReader {
-    fn list_episodes(&self, limit: usize) -> Result<Vec<SummaryRow>> {
+    fn list_episodes(&self, limit: usize, brain_id: &str) -> Result<Vec<SummaryRow>> {
         Ok(self
             .episodes
             .lock()
             .unwrap()
             .iter()
+            .filter(|ep| brain_id.is_empty() || ep.brain_id == brain_id)
             .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    fn list_episodes_multi_brain(
+        &self,
+        limit: usize,
+        brain_ids: &[String],
+    ) -> Result<Vec<SummaryRow>> {
+        Ok(self
+            .episodes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|ep| brain_ids.contains(&ep.brain_id))
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    fn get_summaries_by_ids(&self, ids: &[String]) -> Result<Vec<SummaryRow>> {
+        let episodes = self.episodes.lock().unwrap();
+        let id_set: std::collections::HashSet<&String> = ids.iter().collect();
+        Ok(episodes
+            .iter()
+            .filter(|r| id_set.contains(&r.summary_id))
             .cloned()
             .collect())
     }
@@ -1058,6 +1107,7 @@ mod tests {
     fn mock_episode_writer_stores_episodes() {
         let writer = MockEpisodeWriter::default();
         let episode = Episode {
+            brain_id: "brain-test".to_string(),
             goal: "Fix bug".to_string(),
             actions: "Debugged".to_string(),
             outcome: "Fixed".to_string(),
@@ -1078,6 +1128,7 @@ mod tests {
         let episodes = vec![
             SummaryRow {
                 summary_id: "s1".to_string(),
+                brain_id: "brain-a".to_string(),
                 kind: "episode".to_string(),
                 title: Some("Episode 1".to_string()),
                 content: "content 1".to_string(),
@@ -1085,9 +1136,14 @@ mod tests {
                 importance: 1.0,
                 created_at: 100,
                 updated_at: 100,
+                parent_id: None,
+                source_hash: None,
+                confidence: 1.0,
+                valid_from: None,
             },
             SummaryRow {
                 summary_id: "s2".to_string(),
+                brain_id: "brain-a".to_string(),
                 kind: "episode".to_string(),
                 title: Some("Episode 2".to_string()),
                 content: "content 2".to_string(),
@@ -1095,11 +1151,15 @@ mod tests {
                 importance: 1.0,
                 created_at: 200,
                 updated_at: 200,
+                parent_id: None,
+                source_hash: None,
+                confidence: 1.0,
+                valid_from: None,
             },
         ];
         let reader = MockEpisodeReader::with_episodes(episodes);
 
-        let out = reader.list_episodes(1).unwrap();
+        let out = reader.list_episodes(1, "").unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].summary_id, "s1");
     }

@@ -308,6 +308,7 @@ fn test_hybrid_ranking_signal_combination() {
             token_estimate: 10,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         },
         CandidateSignals {
             chunk_id: "vector_champ".into(),
@@ -323,6 +324,7 @@ fn test_hybrid_ranking_signal_combination() {
             token_estimate: 10,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         },
         CandidateSignals {
             chunk_id: "fresh_one".into(),
@@ -338,6 +340,7 @@ fn test_hybrid_ranking_signal_combination() {
             token_estimate: 10,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         },
     ];
 
@@ -400,6 +403,7 @@ fn test_search_minimal_budget_compliance() {
                 token_estimate: tokens,
                 byte_start: 0,
                 byte_end: 0,
+                summary_kind: None,
             }
         })
         .collect();
@@ -442,6 +446,7 @@ fn test_expand_truncates_correctly() {
         token_estimate: estimate_tokens(&long_content),
         byte_start: 0,
         byte_end: 0,
+        summary_kind: None,
     }];
 
     // Budget smaller than the content
@@ -760,6 +765,7 @@ fn test_episode_store_and_list() {
             store_episode(
                 conn,
                 &Episode {
+                    brain_id: "brain-test".into(),
                     goal: "Build indexer".into(),
                     actions: "Wrote chunker and embedder".into(),
                     outcome: "Indexing works".into(),
@@ -775,6 +781,7 @@ fn test_episode_store_and_list() {
             store_episode(
                 conn,
                 &Episode {
+                    brain_id: "brain-test".into(),
                     goal: "Add FTS5".into(),
                     actions: "Created virtual table and triggers".into(),
                     outcome: "Keyword search works".into(),
@@ -786,7 +793,9 @@ fn test_episode_store_and_list() {
         .unwrap();
 
     // List episodes
-    let episodes = db.with_read_conn(|conn| list_episodes(conn, 10)).unwrap();
+    let episodes = db
+        .with_read_conn(|conn| list_episodes(conn, 10, ""))
+        .unwrap();
     assert_eq!(episodes.len(), 2);
 
     // Get specific episode

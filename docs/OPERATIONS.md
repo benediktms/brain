@@ -10,11 +10,18 @@ Brain handles most upgrade tasks automatically on the next startup or index cycl
 
 ### Schema Migrations
 
-When brain opens the SQLite database, `init_schema` checks the stored `user_version` against the compiled `SCHEMA_VERSION` (currently **24**). If the stored version is behind, a version-aware migration dispatch loop runs each migration sequentially in its own transaction — from the current version up to the target. If the stored version is *ahead* of the binary (e.g. you downgraded), brain rejects the database with an error rather than silently corrupting it.
+When brain opens the SQLite database, `init_schema` checks the stored `user_version` against the compiled `SCHEMA_VERSION` (currently **25**). If the stored version is behind, a version-aware migration dispatch loop runs each migration sequentially in its own transaction — from the current version up to the target. If the stored version is *ahead* of the binary (e.g. you downgraded), brain rejects the database with an error rather than silently corrupting it.
+
+#### Migration History (recent)
+
+| Version | Change |
+|---------|--------|
+| v25 | Episodic memory foundation: `brain_id` column added to `summaries` table; `fts_summaries` FTS5 virtual table created; existing episodes backfilled |
+| v24 | Per-brain prefix column on `summaries` |
 
 ### FTS5 Tables
 
-The full-text search tables (`fts_chunks` and `fts_tasks`) and their sync triggers are rebuilt idempotently on **every** startup via `ensure_fts5()`. No manual action is needed.
+The full-text search tables (`fts_chunks`, `fts_tasks`, and `fts_summaries`) and their sync triggers are rebuilt idempotently on **every** startup via `ensure_fts5()`. No manual action is needed.
 
 ### Chunker Version
 

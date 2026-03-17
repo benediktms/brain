@@ -6,13 +6,13 @@ use super::migrations::{
     migrate_v10_to_v11, migrate_v11_to_v12, migrate_v12_to_v13, migrate_v13_to_v14,
     migrate_v14_to_v15, migrate_v15_to_v16, migrate_v16_to_v17, migrate_v17_to_v18,
     migrate_v18_to_v19, migrate_v19_to_v20, migrate_v20_to_v21, migrate_v21_to_v22,
-    migrate_v22_to_v23, migrate_v23_to_v24,
+    migrate_v22_to_v23, migrate_v23_to_v24, migrate_v24_to_v25,
 };
 use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-pub const SCHEMA_VERSION: i32 = 24;
+pub const SCHEMA_VERSION: i32 = 25;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -72,6 +72,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
             21 => migrate_v21_to_v22(conn)?,
             22 => migrate_v22_to_v23(conn)?,
             23 => migrate_v23_to_v24(conn)?,
+            24 => migrate_v24_to_v25(conn)?,
             other => {
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",
@@ -101,6 +102,11 @@ pub fn ensure_brain_registered(conn: &Connection, brain_id: &str, brain_name: &s
         "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES (?1, ?2, ?3, strftime('%s', 'now'))
          ON CONFLICT(brain_id) DO UPDATE SET prefix = COALESCE(brains.prefix, excluded.prefix)",
         rusqlite::params![brain_id, brain_name, prefix],
+    )?;
+    // Backfill brain_id on summaries rows that pre-date v25 migration.
+    conn.execute(
+        "UPDATE summaries SET brain_id = ?1 WHERE brain_id = ''",
+        rusqlite::params![brain_id],
     )?;
     Ok(())
 }
@@ -173,6 +179,43 @@ pub fn ensure_fts5(conn: &Connection) -> Result<()> {
             VALUES ('delete', old.rowid, old.title, COALESCE(old.description, ''));
             INSERT INTO fts_tasks(rowid, title, description)
             VALUES (new.rowid, new.title, COALESCE(new.description, ''));
+        END",
+        [],
+    )?;
+
+    // ── FTS5 for summaries (title + content, porter stemming for prose) ──
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_summaries USING fts5(
+            title, content,
+            content=summaries,
+            content_rowid=rowid,
+            tokenize='porter unicode61'
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS summaries_fts_insert AFTER INSERT ON summaries BEGIN
+            INSERT INTO fts_summaries(rowid, title, content)
+            VALUES (new.rowid, COALESCE(new.title, ''), new.content);
+        END",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS summaries_fts_delete AFTER DELETE ON summaries BEGIN
+            INSERT INTO fts_summaries(fts_summaries, rowid, title, content)
+            VALUES ('delete', old.rowid, COALESCE(old.title, ''), old.content);
+        END",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS summaries_fts_update AFTER UPDATE OF title, content ON summaries BEGIN
+            INSERT INTO fts_summaries(fts_summaries, rowid, title, content)
+            VALUES ('delete', old.rowid, COALESCE(old.title, ''), old.content);
+            INSERT INTO fts_summaries(rowid, title, content)
+            VALUES (new.rowid, COALESCE(new.title, ''), new.content);
         END",
         [],
     )?;

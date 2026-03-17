@@ -132,6 +132,9 @@ pub struct CandidateSignals {
     pub token_estimate: usize,
     pub byte_start: usize,
     pub byte_end: usize,
+    /// For `sum:` candidates: the kind field from the summaries table ("episode" or "reflection").
+    /// `None` for regular chunk candidates.
+    pub summary_kind: Option<String>,
 }
 
 /// A ranked result with hybrid score and signal breakdown.
@@ -146,6 +149,9 @@ pub struct RankedResult {
     pub token_estimate: usize,
     pub byte_start: usize,
     pub byte_end: usize,
+    /// For `sum:` candidates: the kind field from the summaries table ("episode" or "reflection").
+    /// `None` for regular chunk candidates.
+    pub summary_kind: Option<String>,
 }
 
 /// Individual signal scores for debugging/introspection.
@@ -253,6 +259,7 @@ pub fn rank_candidates(
                 token_estimate: c.token_estimate,
                 byte_start: c.byte_start,
                 byte_end: c.byte_end,
+                summary_kind: c.summary_kind.clone(),
             }
         })
         .collect();
@@ -431,6 +438,7 @@ mod tests {
             token_estimate: 20,
             byte_start: 0,
             byte_end: 0,
+            summary_kind: None,
         }
     }
 
@@ -555,6 +563,7 @@ mod tests {
                 token_estimate: 10,
                 byte_start: 0,
                 byte_end: 0,
+                summary_kind: None,
             },
             CandidateSignals {
                 chunk_id: "recent".into(),
@@ -570,6 +579,7 @@ mod tests {
                 token_estimate: 10,
                 byte_start: 0,
                 byte_end: 0,
+                summary_kind: None,
             },
         ];
 

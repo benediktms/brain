@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use crate::db::chunks::ChunkRow;
-use crate::db::fts::FtsResult;
+use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::error::Result;
 use crate::store::QueryResult;
 
@@ -165,6 +165,10 @@ pub trait FtsSearcher: Send + Sync {
     /// Search the FTS5 index and return BM25-ranked results (scores
     /// normalized to [0, 1]).
     fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>>;
+
+    /// Search the FTS5 summaries index (episodes + reflections) and return
+    /// BM25-ranked results (scores normalized to [0, 1]).
+    fn search_summaries_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +307,11 @@ impl FtsSearcher for Db {
     fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>> {
         let query = query.to_string();
         self.with_read_conn(move |conn| crate::db::fts::search_fts(conn, &query, limit))
+    }
+
+    fn search_summaries_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>> {
+        let query = query.to_string();
+        self.with_read_conn(move |conn| crate::db::fts::search_summaries_fts(conn, &query, limit))
     }
 }
 
@@ -584,6 +593,7 @@ pub trait EpisodeWriter: Send + Sync {
 impl EpisodeWriter for Db {
     fn store_episode(&self, episode: &crate::db::summaries::Episode) -> Result<String> {
         // Episode fields must be cloned to cross the closure boundary.
+        let brain_id = episode.brain_id.clone();
         let goal = episode.goal.clone();
         let actions = episode.actions.clone();
         let outcome = episode.outcome.clone();
@@ -593,6 +603,7 @@ impl EpisodeWriter for Db {
             crate::db::summaries::store_episode(
                 conn,
                 &crate::db::summaries::Episode {
+                    brain_id,
                     goal,
                     actions,
                     outcome,
@@ -610,17 +621,57 @@ impl EpisodeWriter for Db {
 
 /// SQLite episode read operations required by the query pipeline.
 ///
-/// Consumers: `QueryPipeline::reflect`.
+/// Consumers: `QueryPipeline::reflect`, `QueryPipeline::search_ranked`.
 pub trait EpisodeReader: Send + Sync {
     /// List recent episodes, newest first, up to `limit` entries.
-    fn list_episodes(&self, limit: usize) -> Result<Vec<crate::db::summaries::SummaryRow>>;
+    /// When `brain_id` is non-empty, filters to that brain. Empty string returns all brains.
+    fn list_episodes(
+        &self,
+        limit: usize,
+        brain_id: &str,
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>>;
+
+    /// List recent episodes across multiple brains.
+    fn list_episodes_multi_brain(
+        &self,
+        limit: usize,
+        brain_ids: &[String],
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>>;
+
+    /// Batch-load summaries by a list of summary IDs.
+    fn get_summaries_by_ids(&self, ids: &[String])
+    -> Result<Vec<crate::db::summaries::SummaryRow>>;
 }
 
 // -- EpisodeReader for Db --------------------------------------------------
 
 impl EpisodeReader for Db {
-    fn list_episodes(&self, limit: usize) -> Result<Vec<crate::db::summaries::SummaryRow>> {
-        self.with_read_conn(move |conn| crate::db::summaries::list_episodes(conn, limit))
+    fn list_episodes(
+        &self,
+        limit: usize,
+        brain_id: &str,
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| crate::db::summaries::list_episodes(conn, limit, &brain_id))
+    }
+
+    fn list_episodes_multi_brain(
+        &self,
+        limit: usize,
+        brain_ids: &[String],
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
+        let brain_ids = brain_ids.to_vec();
+        self.with_read_conn(move |conn| {
+            crate::db::summaries::list_episodes_multi_brain(conn, limit, &brain_ids)
+        })
+    }
+
+    fn get_summaries_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
+        let ids = ids.to_vec();
+        self.with_read_conn(move |conn| crate::db::summaries::get_summaries_by_ids(conn, &ids))
     }
 }
 
@@ -670,6 +721,10 @@ pub trait MaintenanceOps: Send + Sync {
 
     /// Check FTS5 consistency: return (chunk_count, fts_count).
     fn fts_consistency(&self) -> Result<(i64, i64)>;
+
+    /// Rebuild the FTS5 summaries index from the summaries table.
+    /// Returns the number of summaries indexed.
+    fn reindex_summaries_fts(&self) -> Result<usize>;
 }
 
 // -- MaintenanceOps for Db -------------------------------------------------
@@ -694,6 +749,94 @@ impl MaintenanceOps for Db {
 
     fn fts_consistency(&self) -> Result<(i64, i64)> {
         self.with_read_conn(crate::db::fts::fts_consistency)
+    }
+
+    fn reindex_summaries_fts(&self) -> Result<usize> {
+        self.with_write_conn(crate::db::fts::reindex_summaries_fts)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQLite write path — reflections
+// ---------------------------------------------------------------------------
+
+/// SQLite reflection write operations required by the MCP `memory.reflect` tool
+/// in commit mode.
+///
+/// Consumers: `mcp::tools::mem_reflect`.
+pub trait ReflectionWriter: Send + Sync {
+    /// Store a reflection in the summaries table, linked to source summaries.
+    /// Returns the `summary_id`.
+    fn store_reflection(
+        &self,
+        title: &str,
+        content: &str,
+        source_ids: &[String],
+        tags: &[String],
+        importance: f64,
+        brain_id: &str,
+    ) -> Result<String>;
+}
+
+// -- ReflectionWriter for Db -----------------------------------------------
+
+impl ReflectionWriter for Db {
+    fn store_reflection(
+        &self,
+        title: &str,
+        content: &str,
+        source_ids: &[String],
+        tags: &[String],
+        importance: f64,
+        brain_id: &str,
+    ) -> Result<String> {
+        let title = title.to_string();
+        let content = content.to_string();
+        let source_ids = source_ids.to_vec();
+        let tags = tags.to_vec();
+        let brain_id = brain_id.to_string();
+        self.with_write_conn(move |conn| {
+            crate::db::summaries::store_reflection(
+                conn,
+                &title,
+                &content,
+                &source_ids,
+                &tags,
+                importance,
+                &brain_id,
+            )
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LanceDB write path — summary embeddings
+// ---------------------------------------------------------------------------
+
+/// LanceDB write operations for summary (episode/reflection) embeddings.
+///
+/// Consumers: `mcp::tools::mem_write_episode`, `mcp::tools::mem_reflect`.
+pub trait SummaryStoreWriter: Send + Sync {
+    /// Upsert a summary embedding. Uses `file_id = "sum:{summary_id}"` so
+    /// each summary occupies exactly one vector row.
+    fn upsert_summary<'a>(
+        &'a self,
+        summary_id: &'a str,
+        content: &'a str,
+        embedding: &'a [f32],
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
+}
+
+// -- SummaryStoreWriter for Store ------------------------------------------
+
+impl SummaryStoreWriter for Store {
+    fn upsert_summary<'a>(
+        &'a self,
+        summary_id: &'a str,
+        content: &'a str,
+        embedding: &'a [f32],
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        Store::upsert_summary(self, summary_id, content, embedding)
     }
 }
 

@@ -194,6 +194,7 @@ where
                     token_estimate: estimate_tokens(&vr.content),
                     byte_start: 0,
                     byte_end: 0,
+                    summary_kind: None,
                 },
             );
         }
@@ -218,6 +219,7 @@ where
                         token_estimate: 0,
                         byte_start: 0,
                         byte_end: 0,
+                        summary_kind: None,
                     },
                 );
             }
@@ -339,9 +341,47 @@ where
 
     /// Reflect: fetch recent episodes + search for related chunks, return combined result.
     #[instrument(skip_all)]
-    pub async fn reflect(&self, topic: String, budget_tokens: usize) -> Result<ReflectResult> {
-        let episodes = self.db.list_episodes(10).unwrap_or_default();
+    pub async fn reflect(
+        &self,
+        topic: String,
+        budget_tokens: usize,
+        brain_id: &str,
+    ) -> Result<ReflectResult> {
+        let episodes = self.db.list_episodes(10, brain_id).unwrap_or_default();
+        self.reflect_with_episodes(topic, budget_tokens, episodes)
+            .await
+    }
 
+    /// Reflect with a caller-provided episode list.
+    ///
+    /// Callers use this variant when the episode scope has already been
+    /// determined — e.g. multi-brain or "all" mode from `memory.reflect`
+    /// prepare. The `episodes` slice is used as-is; no additional episode
+    /// loading is performed.
+    ///
+    /// # Finding 7 — brain_id post-filter
+    ///
+    /// Once `brain_persistence` adds a `brain_id` column to the `summaries`
+    /// table and updates `SummaryRow` accordingly, add a post-filter here:
+    ///
+    /// ```ignore
+    /// let episodes: Vec<SummaryRow> = episodes
+    ///     .into_iter()
+    ///     .filter(|ep| ep.brain_id == target_brain_id)
+    ///     .collect();
+    /// ```
+    ///
+    /// For regular vector-search candidates enriched from the `chunks` table,
+    /// a similar `brain_id` filter belongs in `search_ranked` after the SQLite
+    /// enrichment step, following the same pattern as the vector-only filter.
+    /// That change also requires `brain_id` on `ChunkRow` from `brain_persistence`.
+    #[instrument(skip_all)]
+    pub async fn reflect_with_episodes(
+        &self,
+        topic: String,
+        budget_tokens: usize,
+        episodes: Vec<SummaryRow>,
+    ) -> Result<ReflectResult> {
         let search_result = self
             .search(&topic, "reflection", budget_tokens / 2, 5, &[])
             .await?;
