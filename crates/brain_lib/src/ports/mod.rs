@@ -757,6 +757,90 @@ impl MaintenanceOps for Db {
 }
 
 // ---------------------------------------------------------------------------
+// SQLite write path — reflections
+// ---------------------------------------------------------------------------
+
+/// SQLite reflection write operations required by the MCP `memory.reflect` tool
+/// in commit mode.
+///
+/// Consumers: `mcp::tools::mem_reflect`.
+pub trait ReflectionWriter: Send + Sync {
+    /// Store a reflection in the summaries table, linked to source summaries.
+    /// Returns the `summary_id`.
+    fn store_reflection(
+        &self,
+        title: &str,
+        content: &str,
+        source_ids: &[String],
+        tags: &[String],
+        importance: f64,
+        brain_id: &str,
+    ) -> Result<String>;
+}
+
+// -- ReflectionWriter for Db -----------------------------------------------
+
+impl ReflectionWriter for Db {
+    fn store_reflection(
+        &self,
+        title: &str,
+        content: &str,
+        source_ids: &[String],
+        tags: &[String],
+        importance: f64,
+        brain_id: &str,
+    ) -> Result<String> {
+        let title = title.to_string();
+        let content = content.to_string();
+        let source_ids = source_ids.to_vec();
+        let tags = tags.to_vec();
+        let brain_id = brain_id.to_string();
+        self.with_write_conn(move |conn| {
+            crate::db::summaries::store_reflection(
+                conn,
+                &title,
+                &content,
+                &source_ids,
+                &tags,
+                importance,
+                &brain_id,
+            )
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LanceDB write path — summary embeddings
+// ---------------------------------------------------------------------------
+
+/// LanceDB write operations for summary (episode/reflection) embeddings.
+///
+/// Consumers: `mcp::tools::mem_write_episode`, `mcp::tools::mem_reflect`.
+pub trait SummaryStoreWriter: Send + Sync {
+    /// Upsert a summary embedding. Uses `file_id = "sum:{summary_id}"` so
+    /// each summary occupies exactly one vector row.
+    fn upsert_summary<'a>(
+        &'a self,
+        summary_id: &'a str,
+        content: &'a str,
+        embedding: &'a [f32],
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
+}
+
+// -- SummaryStoreWriter for Store ------------------------------------------
+
+impl SummaryStoreWriter for Store {
+    fn upsert_summary<'a>(
+        &'a self,
+        summary_id: &'a str,
+        content: &'a str,
+        embedding: &'a [f32],
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        Store::upsert_summary(self, summary_id, content, embedding)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock implementations for testing
 // ---------------------------------------------------------------------------
 

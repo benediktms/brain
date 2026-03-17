@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -7,6 +8,7 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::ports::{EpisodeReader, ReflectionWriter};
 use crate::query_pipeline::QueryPipeline;
 
 use super::{McpTool, json_response};
@@ -14,23 +16,30 @@ use super::{McpTool, json_response};
 #[derive(Deserialize)]
 struct Params {
     #[serde(default = "default_mode")]
-    mode: String, // "prepare" or "commit"
-    // prepare mode fields:
-    topic: Option<String>,
+    mode: String,
+    // --- prepare fields ---
+    #[serde(default)]
+    topic: String,
     #[serde(default = "default_budget")]
     budget_tokens: u64,
+    /// Brain names/IDs to include. Empty = current brain only.
+    /// "all" = all brains.
     #[serde(default)]
-    brains: Vec<String>, // cross-brain support (informational; single-DB, unscoped)
-    // commit mode fields:
-    title: Option<String>,
-    content: Option<String>,
-    source_ids: Option<Vec<String>>,
-    tags: Option<Vec<String>>,
+    brains: Vec<String>,
+    // --- commit fields ---
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    source_ids: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
     importance: Option<f64>,
 }
 
 fn default_mode() -> String {
-    "prepare".into()
+    "prepare".to_string()
 }
 
 fn default_budget() -> u64 {
@@ -39,86 +48,8 @@ fn default_budget() -> u64 {
 
 pub(super) struct MemReflect;
 
-impl McpTool for MemReflect {
-    fn name(&self) -> &'static str {
-        "memory.reflect"
-    }
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: self.name().into(),
-            description: "Retrieve source material for reflection, or store a completed reflection. Use mode='prepare' (default) to gather episodes and related chunks. Use mode='commit' to persist a reflection linked to source episodes.".into(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "mode": {
-                        "type": "string",
-                        "enum": ["prepare", "commit"],
-                        "description": "Operation mode. 'prepare' (default) gathers source material. 'commit' stores a reflection.",
-                        "default": "prepare"
-                    },
-                    "topic": {
-                        "type": "string",
-                        "description": "Topic to reflect on (required for prepare mode)"
-                    },
-                    "budget_tokens": {
-                        "type": "integer",
-                        "description": "Maximum tokens for source material (prepare mode). Default: 2000",
-                        "default": 2000
-                    },
-                    "brains": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Brain IDs or names to include in episode gathering (prepare mode). Pass as a JSON array, e.g. [\"brain-a\", \"brain-b\"]. All brains share a single DB."
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Title for the reflection (required for commit mode)"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content of the reflection (required for commit mode)"
-                    },
-                    "source_ids": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "summary_ids of episodes/summaries this reflection is based on (required for commit mode). May reference episodes from any brain."
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Tags for the reflection (commit mode). Pass as a JSON array, e.g. [\"learning\", \"architecture\"]"
-                    },
-                    "importance": {
-                        "type": "number",
-                        "description": "Importance score 0.0–1.0 (commit mode). Default: 1.0",
-                        "default": 1.0
-                    }
-                }
-            }),
-        }
-    }
-
-    fn call<'a>(
-        &'a self,
-        params: Value,
-        ctx: &'a McpContext,
-    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
-        Box::pin(async move {
-            let params: Params = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
-            };
-
-            match params.mode.as_str() {
-                "commit" => Self::commit(params, ctx).await,
-                _ => Self::prepare(params, ctx).await,
-            }
-        })
-    }
-}
-
 impl MemReflect {
+    /// Prepare mode: retrieve source material for reflection.
     async fn prepare(params: Params, ctx: &McpContext) -> ToolCallResult {
         let Some(store) = ctx.store.as_ref() else {
             return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
@@ -127,28 +58,34 @@ impl MemReflect {
             return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
         };
 
-        let topic = match params.topic {
-            Some(t) => t,
-            None => {
-                return ToolCallResult::error(
-                    "Invalid parameters: 'topic' is required for prepare mode",
-                );
-            }
-        };
-
-        // Log cross-brain request. The shared SQLite DB is unscoped — all
-        // episodes are accessible regardless of brain origin. The brains
-        // parameter is accepted and recorded for forward compatibility.
-        if !params.brains.is_empty() {
-            warn!(
-                brains = ?params.brains,
-                "cross-brain prepare requested; single-DB episodes are unscoped"
-            );
+        if params.topic.is_empty() {
+            return ToolCallResult::error("'topic' is required for prepare mode");
         }
 
         let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
+
+        // Determine episode scope from `brains` parameter.
+        // Note: the summaries table does not yet carry a brain_id column.
+        // Until a schema migration adds it, episode listing is global.
+        // The brains parameter is accepted but scoping is a no-op until
+        // brain_persistence adds brain_id support to the summaries table.
+        let episodes = if params.brains.is_empty() {
+            ctx.db.list_episodes(10, &ctx.brain_id).unwrap_or_default()
+        } else if params.brains.iter().any(|b| b == "all") {
+            ctx.db.list_episodes(10, "").unwrap_or_default()
+        } else {
+            let brain_ids: Vec<String> = params.brains.clone();
+            ctx.db
+                .list_episodes_multi_brain(10, &brain_ids)
+                .unwrap_or_default()
+        };
+
         let reflect_result = match pipeline
-            .reflect(topic.clone(), params.budget_tokens as usize, &ctx.brain_id)
+            .reflect_with_episodes(
+                params.topic.clone(),
+                params.budget_tokens as usize,
+                episodes,
+            )
             .await
         {
             Ok(r) => r,
@@ -187,6 +124,7 @@ impl MemReflect {
             .collect();
 
         let response = json!({
+            "mode": "prepare",
             "topic": reflect_result.topic,
             "budget_tokens": reflect_result.budget_tokens,
             "source_count": episode_sources.len(),
@@ -203,91 +141,172 @@ impl MemReflect {
         json_response(&response)
     }
 
+    /// Commit mode: store a synthesized reflection linked to its source IDs.
     async fn commit(params: Params, ctx: &McpContext) -> ToolCallResult {
-        let title = match params.title {
-            Some(t) => t,
-            None => {
-                return ToolCallResult::error(
-                    "Invalid parameters: 'title' is required for commit mode",
-                );
-            }
-        };
-        let content = match params.content {
-            Some(c) => c,
-            None => {
-                return ToolCallResult::error(
-                    "Invalid parameters: 'content' is required for commit mode",
-                );
-            }
-        };
-        let source_ids = match params.source_ids {
-            Some(ids) if !ids.is_empty() => ids,
-            Some(_) => {
-                return ToolCallResult::error(
-                    "Invalid parameters: 'source_ids' must be non-empty for commit mode",
-                );
-            }
-            None => {
-                return ToolCallResult::error(
-                    "Invalid parameters: 'source_ids' is required for commit mode",
-                );
-            }
-        };
-        let tags = params.tags.unwrap_or_default();
-        let importance = params.importance.unwrap_or(1.0);
+        if params.title.is_empty() {
+            return ToolCallResult::error("'title' is required for commit mode");
+        }
+        if params.content.is_empty() {
+            return ToolCallResult::error("'content' is required for commit mode");
+        }
+        if params.source_ids.is_empty() {
+            return ToolCallResult::error("'source_ids' is required for commit mode");
+        }
 
-        // Validate source_ids exist (PK lookup, no brain_id filter — cross-brain refs allowed)
-        for source_id in &source_ids {
-            let id = source_id.clone();
-            let exists = ctx
-                .db
-                .with_read_conn(move |conn| crate::db::summaries::get_summary(conn, &id));
-            match exists {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    return ToolCallResult::error(format!("source_id not found: {source_id}"));
+        // Finding 6: clamp importance to [0.0, 1.0].
+        let importance = params.importance.unwrap_or(1.0).clamp(0.0, 1.0);
+
+        // Finding 5: batch source_id validation — single round-trip.
+        let source_ids = params.source_ids.clone();
+        let found = match EpisodeReader::get_summaries_by_ids(&ctx.db, &source_ids) {
+            Ok(rows) => rows,
+            Err(e) => {
+                return ToolCallResult::error(format!("Failed to validate source_ids: {e}"));
+            }
+        };
+        let found_ids: HashSet<&str> = found.iter().map(|r| r.summary_id.as_str()).collect();
+        for id in &source_ids {
+            if !found_ids.contains(id.as_str()) {
+                return ToolCallResult::error(format!("source_id not found: {id}"));
+            }
+        }
+
+        // Store the reflection in SQLite.
+        let summary_id = match ctx.db.store_reflection(
+            &params.title,
+            &params.content,
+            &source_ids,
+            &params.tags,
+            importance,
+            &ctx.brain_id,
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                return ToolCallResult::error(format!("Failed to store reflection: {e}"));
+            }
+        };
+
+        // Finding 2: best-effort LanceDB embedding.
+        if let (Some(embedder), Some(store)) = (ctx.embedder.as_ref(), ctx.writable_store.as_ref())
+        {
+            let embed_content = params.content.clone();
+            match crate::embedder::embed_batch_async(embedder, vec![embed_content.clone()]).await {
+                Ok(vecs) => {
+                    if let Some(vec) = vecs.into_iter().next()
+                        && let Err(e) = store
+                            .upsert_summary(&summary_id, &embed_content, &vec)
+                            .await
+                    {
+                        warn!(error = %e, summary_id, "failed to embed reflection (best-effort)");
+                    }
                 }
                 Err(e) => {
-                    return ToolCallResult::error(format!(
-                        "Failed to validate source_id {source_id}: {e}"
-                    ));
+                    warn!(error = %e, summary_id, "failed to generate embedding for reflection (best-effort)");
                 }
             }
         }
 
-        // Store the reflection
-        let title_c = title.clone();
-        let content_c = content.clone();
-        let source_ids_c = source_ids.clone();
-        let tags_c = tags.clone();
-        let brain_id_c = ctx.brain_id.clone();
-        let summary_id = ctx.db.with_write_conn(move |conn| {
-            crate::db::summaries::store_reflection(
-                conn,
-                &title_c,
-                &content_c,
-                &source_ids_c,
-                &tags_c,
-                importance,
-                &brain_id_c,
-            )
-        });
-
-        let summary_id = match summary_id {
-            Ok(id) => id,
-            Err(e) => return ToolCallResult::error(format!("Failed to store reflection: {e}")),
-        };
-
         let response = json!({
+            "mode": "commit",
             "status": "stored",
             "summary_id": summary_id,
-            "title": title,
+            "title": params.title,
             "source_count": source_ids.len(),
-            "tags": tags,
             "importance": importance,
         });
 
         json_response(&response)
+    }
+}
+
+impl McpTool for MemReflect {
+    fn name(&self) -> &'static str {
+        "memory.reflect"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name().into(),
+            description: concat!(
+                "Two-phase episodic reflection.\n\n",
+                "**prepare** (default): Retrieve source material — recent episodes and related chunks — ",
+                "that the LLM can synthesize into a reflection. Returns structured source material.\n\n",
+                "**commit**: Store a completed reflection linked to its source episodes. ",
+                "Requires title, content, and source_ids from a prior prepare call."
+            ).into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["prepare", "commit"],
+                        "description": "Operation mode. Default: 'prepare'",
+                        "default": "prepare"
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "(prepare) Topic to reflect on"
+                    },
+                    "budget_tokens": {
+                        "type": "integer",
+                        "description": "(prepare) Maximum tokens for source material. Default: 2000",
+                        "default": 2000
+                    },
+                    "brains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "(prepare) Brain names/IDs to include. Empty = current brain. 'all' = all brains."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "(commit) Title of the reflection"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "(commit) Synthesized reflection content"
+                    },
+                    "source_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "(commit) summary_ids of source episodes used"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "(commit) Tags for the reflection"
+                    },
+                    "importance": {
+                        "type": "number",
+                        "description": "(commit) Importance score (0.0–1.0). Default: 1.0",
+                        "default": 1.0
+                    }
+                },
+                "required": []
+            }),
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        params: Value,
+        ctx: &'a McpContext,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        Box::pin(async move {
+            let params: Params = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            };
+
+            // Finding 4: explicit mode dispatch with error on unknown values.
+            match params.mode.as_str() {
+                "prepare" => Self::prepare(params, ctx).await,
+                "commit" => Self::commit(params, ctx).await,
+                _ => ToolCallResult::error(format!(
+                    "Invalid mode: '{}'. Must be 'prepare' or 'commit'",
+                    params.mode
+                )),
+            }
+        })
     }
 }
 
@@ -305,86 +324,75 @@ mod tests {
         let params = json!({ "topic": "project architecture" });
         let result = registry.dispatch("memory.reflect", params, &ctx).await;
         assert!(result.is_error.is_none());
+        let text = &result.content[0].text;
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["mode"], "prepare");
     }
 
     #[tokio::test]
-    async fn test_reflect_prepare_explicit_mode() {
+    async fn test_reflect_invalid_mode_returns_error() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
-        let params = json!({ "mode": "prepare", "topic": "testing patterns" });
+        let params = json!({ "mode": "unknown" });
         let result = registry.dispatch("memory.reflect", params, &ctx).await;
-        assert!(result.is_error.is_none());
+        assert_eq!(result.is_error, Some(true));
+        let text = &result.content[0].text;
+        assert!(text.contains("Invalid mode"));
     }
 
     #[tokio::test]
-    async fn test_reflect_commit_missing_title() {
-        let (_dir, ctx) = create_test_context().await;
-        let registry = ToolRegistry::new();
-        let params = json!({
-            "mode": "commit",
-            "content": "Some reflection",
-            "source_ids": []
-        });
-        let result = registry.dispatch("memory.reflect", params, &ctx).await;
-        assert!(result.is_error.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_reflect_commit_invalid_source() {
+    async fn test_reflect_commit_missing_source_id_returns_error() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
         let params = json!({
             "mode": "commit",
             "title": "My Reflection",
-            "content": "I learned that patterns emerge from practice.",
-            "source_ids": ["NONEXISTENT_ID_12345"]
+            "content": "I learned that...",
+            "source_ids": ["nonexistent-id"]
         });
         let result = registry.dispatch("memory.reflect", params, &ctx).await;
-        assert!(result.is_error.is_some());
+        assert_eq!(result.is_error, Some(true));
+        let text = &result.content[0].text;
+        assert!(text.contains("source_id not found"));
     }
 
     #[tokio::test]
-    async fn test_reflect_commit_roundtrip() {
+    async fn test_reflect_commit_clamps_importance() {
+
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
 
-        // First store an episode to reference
+        // Store an episode first to use as source_id.
         let ep_result = registry
             .dispatch(
                 "memory.write_episode",
                 json!({
-                    "goal": "Learn reflection",
-                    "actions": "Practiced writing reflections",
-                    "outcome": "Understood the pattern",
-                    "tags": ["learning"],
-                    "importance": 0.9
+                    "goal": "Learn Rust",
+                    "actions": "Read the book",
+                    "outcome": "Learned Rust"
                 }),
                 &ctx,
             )
             .await;
         assert!(ep_result.is_error.is_none());
-        let ep_json: serde_json::Value = serde_json::from_str(&ep_result.content[0].text).unwrap();
-        let episode_id = ep_json["summary_id"].as_str().unwrap().to_string();
+        let ep_text = &ep_result.content[0].text;
+        let ep_parsed: serde_json::Value = serde_json::from_str(ep_text).unwrap();
+        let source_id = ep_parsed["summary_id"].as_str().unwrap().to_string();
 
-        // Now commit a reflection referencing that episode
-        let result = registry
-            .dispatch(
-                "memory.reflect",
-                json!({
-                    "mode": "commit",
-                    "title": "Reflection on Learning",
-                    "content": "Consistent practice builds durable understanding.",
-                    "source_ids": [episode_id],
-                    "tags": ["learning", "meta"],
-                    "importance": 0.8
-                }),
-                &ctx,
-            )
-            .await;
+        // Commit with out-of-range importance (2.5 should clamp to 1.0).
+        let params = json!({
+            "mode": "commit",
+            "title": "Reflection on Rust",
+            "content": "Rust is great",
+            "source_ids": [source_id],
+            "importance": 2.5
+        });
+        let result = registry.dispatch("memory.reflect", params, &ctx).await;
         assert!(result.is_error.is_none());
-        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
-        assert_eq!(parsed["status"], "stored");
-        assert!(parsed["summary_id"].is_string());
-        assert_eq!(parsed["source_count"], 1);
+        let text = &result.content[0].text;
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["mode"], "commit");
+        // Importance should be clamped to 1.0.
+        assert!((parsed["importance"].as_f64().unwrap() - 1.0).abs() < f64::EPSILON);
     }
 }

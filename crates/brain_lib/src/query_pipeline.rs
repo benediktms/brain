@@ -173,15 +173,6 @@ where
             }
         };
 
-        // 3a. Summary FTS search (episodes + reflections, gracefully degrade on failure)
-        let summary_fts_results = match self.db.search_summaries_fts(query, CANDIDATE_LIMIT) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, "Summary FTS search failed, continuing without summaries");
-                Vec::new()
-            }
-        };
-
         // 4. Union + deduplicate by chunk_id
         let mut candidates: HashMap<String, CandidateSignals> = HashMap::new();
 
@@ -234,35 +225,7 @@ where
             }
         }
 
-        // 4a. Merge summary FTS candidates (sum:{summary_id} key)
-        for sr in &summary_fts_results {
-            let key = format!("sum:{}", sr.summary_id);
-            if let Some(existing) = candidates.get_mut(&key) {
-                existing.bm25 = existing.bm25.max(sr.score);
-            } else {
-                candidates.insert(
-                    key.clone(),
-                    CandidateSignals {
-                        chunk_id: key,
-                        sim_vector: 0.0,
-                        bm25: sr.score,
-                        age_seconds: 0.0,
-                        pagerank_score: 0.0,
-                        tags: vec![],
-                        importance: 1.0,
-                        file_path: String::new(),
-                        heading_path: String::new(),
-                        content: String::new(),
-                        token_estimate: 0,
-                        byte_start: 0,
-                        byte_end: 0,
-                        summary_kind: None,
-                    },
-                );
-            }
-        }
-
-        // 4b. Compute fusion confidence
+        // 4a. Compute fusion confidence
         let vector_ids: Vec<&str> = vector_results.iter().map(|r| r.chunk_id.as_str()).collect();
         let fts_ids: Vec<&str> = fts_results.iter().map(|r| r.chunk_id.as_str()).collect();
         let fusion_confidence =
@@ -296,37 +259,7 @@ where
             }
         }
 
-        // 5a. Enrich sum: candidates from summaries table
-        let summary_ids: Vec<String> = candidates
-            .keys()
-            .filter(|id| id.starts_with("sum:"))
-            .map(|id| id["sum:".len()..].to_string())
-            .collect();
-
-        if !summary_ids.is_empty() {
-            match self.db.get_summaries_by_ids(&summary_ids) {
-                Ok(rows) => {
-                    let now = crate::utils::now_ts();
-                    for row in &rows {
-                        let key = format!("sum:{}", row.summary_id);
-                        if let Some(candidate) = candidates.get_mut(&key) {
-                            candidate.heading_path = row.title.clone().unwrap_or_default();
-                            candidate.content = row.content.clone();
-                            candidate.token_estimate = crate::tokens::estimate_tokens(&row.content);
-                            candidate.importance = row.importance;
-                            candidate.tags = row.tags.clone();
-                            candidate.age_seconds = (now - row.updated_at).max(0) as f64;
-                            candidate.summary_kind = Some(row.kind.clone());
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "Summary enrichment failed, dropping sum: candidates");
-                }
-            }
-        }
-
-        // Remove FTS-only candidates that weren't found in SQLite (chunks) or summaries table
+        // Remove FTS-only candidates that weren't found in SQLite
         let candidate_vec: Vec<CandidateSignals> = candidates
             .into_values()
             .filter(|c| !c.content.is_empty())
@@ -379,72 +312,27 @@ where
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.
-    ///
-    /// `sum:` prefixed IDs are fetched from the summaries table; all others
-    /// are fetched from the chunks table. Results are merged preserving the
-    /// original requested order.
     #[instrument(skip_all)]
     pub async fn expand(
         &self,
         memory_ids: &[String],
         budget_tokens: usize,
     ) -> Result<ExpandResult> {
-        // Partition: sum: IDs go to summaries table, others go to chunks table.
-        let (sum_ids, chunk_ids): (Vec<String>, Vec<String>) = memory_ids
-            .iter()
-            .cloned()
-            .partition(|id| id.starts_with("sum:"));
+        let rows = self.db.get_chunks_by_ids(memory_ids)?;
 
-        // Fetch chunk rows
-        let chunk_rows = self.db.get_chunks_by_ids(&chunk_ids)?;
-        let chunk_map: HashMap<&str, _> = chunk_rows
-            .iter()
-            .map(|r| (r.chunk_id.as_str(), r))
-            .collect();
-
-        // Fetch summary rows (strip "sum:" prefix to get summary_id)
-        let summary_raw_ids: Vec<String> = sum_ids
-            .iter()
-            .map(|id| id["sum:".len()..].to_string())
-            .collect();
-        let summary_rows = self
-            .db
-            .get_summaries_by_ids(&summary_raw_ids)
-            .unwrap_or_default();
-        // Build map keyed by the original "sum:{id}" form
-        let summary_map: HashMap<String, _> = summary_rows
-            .iter()
-            .map(|r| (format!("sum:{}", r.summary_id), r))
-            .collect();
-
-        // Reconstruct in the original requested order
+        // Preserve the requested order
+        let row_map: HashMap<&str, _> = rows.iter().map(|r| (r.chunk_id.as_str(), r)).collect();
         let chunks: Vec<ExpandableChunk> = memory_ids
             .iter()
-            .filter_map(|id| {
-                if id.starts_with("sum:") {
-                    summary_map.get(id.as_str()).map(|row| ExpandableChunk {
-                        chunk_id: format!("sum:{}", row.summary_id),
-                        content: row.content.clone(),
-                        file_path: String::new(),
-                        heading_path: row.title.clone().unwrap_or_default(),
-                        token_estimate: crate::tokens::estimate_tokens(&row.content),
-                        byte_start: 0,
-                        byte_end: 0,
-                    })
-                } else {
-                    chunk_map
-                        .get(id.as_str())
-                        .copied()
-                        .map(|row| ExpandableChunk {
-                            chunk_id: row.chunk_id.clone(),
-                            content: row.content.clone(),
-                            file_path: row.file_path.clone(),
-                            heading_path: row.heading_path.clone(),
-                            token_estimate: row.token_estimate,
-                            byte_start: row.byte_start,
-                            byte_end: row.byte_end,
-                        })
-                }
+            .filter_map(|id| row_map.get(id.as_str()).copied())
+            .map(|row| ExpandableChunk {
+                chunk_id: row.chunk_id.clone(),
+                content: row.content.clone(),
+                file_path: row.file_path.clone(),
+                heading_path: row.heading_path.clone(),
+                token_estimate: row.token_estimate,
+                byte_start: row.byte_start,
+                byte_end: row.byte_end,
             })
             .collect();
 
@@ -453,14 +341,42 @@ where
 
     /// Reflect: fetch recent episodes + search for related chunks, return combined result.
     #[instrument(skip_all)]
-    pub async fn reflect(
+    pub async fn reflect(&self, topic: String, budget_tokens: usize, brain_id: &str) -> Result<ReflectResult> {
+        let episodes = self.db.list_episodes(10, brain_id).unwrap_or_default();
+        self.reflect_with_episodes(topic, budget_tokens, episodes)
+            .await
+    }
+
+    /// Reflect with a caller-provided episode list.
+    ///
+    /// Callers use this variant when the episode scope has already been
+    /// determined — e.g. multi-brain or "all" mode from `memory.reflect`
+    /// prepare. The `episodes` slice is used as-is; no additional episode
+    /// loading is performed.
+    ///
+    /// # Finding 7 — brain_id post-filter
+    ///
+    /// Once `brain_persistence` adds a `brain_id` column to the `summaries`
+    /// table and updates `SummaryRow` accordingly, add a post-filter here:
+    ///
+    /// ```ignore
+    /// let episodes: Vec<SummaryRow> = episodes
+    ///     .into_iter()
+    ///     .filter(|ep| ep.brain_id == target_brain_id)
+    ///     .collect();
+    /// ```
+    ///
+    /// For regular vector-search candidates enriched from the `chunks` table,
+    /// a similar `brain_id` filter belongs in `search_ranked` after the SQLite
+    /// enrichment step, following the same pattern as the vector-only filter.
+    /// That change also requires `brain_id` on `ChunkRow` from `brain_persistence`.
+    #[instrument(skip_all)]
+    pub async fn reflect_with_episodes(
         &self,
         topic: String,
         budget_tokens: usize,
-        brain_id: &str,
+        episodes: Vec<SummaryRow>,
     ) -> Result<ReflectResult> {
-        let episodes = self.db.list_episodes(10, brain_id).unwrap_or_default();
-
         let search_result = self
             .search(&topic, "reflection", budget_tokens / 2, 5, &[])
             .await?;

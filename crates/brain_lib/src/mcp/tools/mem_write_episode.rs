@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::db::summaries::Episode;
 use crate::mcp::McpContext;
@@ -28,41 +28,6 @@ fn default_importance() -> f64 {
 }
 
 pub(super) struct MemWriteEpisode;
-
-impl MemWriteEpisode {
-    fn execute(&self, params: Value, ctx: &McpContext) -> ToolCallResult {
-        let params: Params = match serde_json::from_value(params) {
-            Ok(p) => p,
-            Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
-        };
-
-        let episode = Episode {
-            brain_id: ctx.brain_id.clone(),
-            goal: params.goal.clone(),
-            actions: params.actions,
-            outcome: params.outcome,
-            tags: params.tags.clone(),
-            importance: params.importance,
-        };
-
-        match ctx.db.store_episode(&episode) {
-            Ok(summary_id) => {
-                let response = json!({
-                    "status": "stored",
-                    "summary_id": summary_id,
-                    "goal": params.goal,
-                    "tags": params.tags,
-                    "importance": params.importance
-                });
-                json_response(&response)
-            }
-            Err(e) => {
-                error!(error = %e, "failed to store episode");
-                ToolCallResult::error(format!("Failed to store episode: {e}"))
-            }
-        }
-    }
-}
 
 impl McpTool for MemWriteEpisode {
     fn name(&self) -> &'static str {
@@ -109,7 +74,67 @@ impl McpTool for MemWriteEpisode {
         params: Value,
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
-        Box::pin(std::future::ready(self.execute(params, ctx)))
+        Box::pin(async move {
+            let params: Params = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            };
+
+            // Build the content string that SQLite will store (mirrors store_episode impl).
+            let embed_content = format!(
+                "Goal: {}\nActions: {}\nOutcome: {}",
+                params.goal, params.actions, params.outcome
+            );
+
+            let episode = Episode {
+                brain_id: ctx.brain_id.clone(),
+                goal: params.goal.clone(),
+                actions: params.actions,
+                outcome: params.outcome,
+                tags: params.tags.clone(),
+                importance: params.importance,
+            };
+
+            let summary_id = match ctx.db.store_episode(&episode) {
+                Ok(id) => id,
+                Err(e) => {
+                    error!(error = %e, "failed to store episode");
+                    return ToolCallResult::error(format!("Failed to store episode: {e}"));
+                }
+            };
+
+            // Best-effort: embed the episode into LanceDB for semantic search.
+            // Failure is non-fatal — the episode is still stored in SQLite.
+            if let (Some(embedder), Some(store)) =
+                (ctx.embedder.as_ref(), ctx.writable_store.as_ref())
+            {
+                match crate::embedder::embed_batch_async(embedder, vec![embed_content.clone()])
+                    .await
+                {
+                    Ok(vecs) => {
+                        if let Some(vec) = vecs.into_iter().next()
+                            && let Err(e) = store
+                                .upsert_summary(&summary_id, &embed_content, &vec)
+                                .await
+                        {
+                            warn!(error = %e, summary_id, "failed to embed episode (best-effort)");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, summary_id, "failed to generate embedding for episode (best-effort)");
+                    }
+                }
+            }
+
+            let response = json!({
+                "status": "stored",
+                "summary_id": summary_id,
+                "goal": params.goal,
+                "tags": params.tags,
+                "importance": params.importance
+            });
+            json_response(&response)
+        })
     }
 }
 
