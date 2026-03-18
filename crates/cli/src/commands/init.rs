@@ -149,7 +149,8 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
 
     // Seed project_prefix at init time so first task IDs are stable and derived
     // from init context (`--name` or current directory basename).
-    let db_path = brains_dir.join("brain.db");
+    // Use unified DB path — all brains share ~/.brain/brain.db.
+    let db_path = home.join("brain.db");
     seed_project_prefix_if_missing(&db_path, &brain_name)?;
 
     // Register the brain in the brains table — ensures brains.prefix is populated
