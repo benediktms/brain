@@ -2,6 +2,89 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-03-18
+
+### Bug Fixes
+
+- Resolve clippy warnings and mermaid parse error
+- Byte-offset correctness tests + CRLF paragraph splitting (#84)
+- Isolate fd-heavy perf tests behind #[ignore] + just test-perf (#82)
+- Single daemon model — IPC fallback error discrimination + stale docstring (#79)
+- Task creation architecture remediation — remaining subtasks (#77)
+- Use canonical install path for MCP server binary (#75)
+- Sanitize FTS5 search queries to prevent column-operator errors
+- Route CLI task/record commands through unified DB
+- Route prefix lookups to per-brain DB to prevent collision in unified DB
+- Self-healing pipeline — truncation guard, KV cache fix, repair-on-corrupt
+- MCP brain_id scoping — unified DB + per-session resolution
+- Correct CLI docs --type→--task-type, remove AGENTS.md from git
+- Close single-daemon gaps (BRN-01KKFR) (#69)
+- Resolve clippy doc-overindented-list-items warnings in v18→v19 migration
+- Wire v18→v19, preserve event columns, fix brain_id propagation
+- Eliminate SQL injection via parameterized bindings in migrate_workspace
+- Use __ipc_brain routing key to prevent brain param collision in daemon IPC (#66)
+- Wire up Flan-T5 summarizer at daemon startup (#57)
+
+### Documentation
+
+- Sync ARCHITECTURE.md with JSONL removal and full MCP tool surface
+- Sync AGENTS.md and init.rs template with current implementation
+- Add "Recording Context as Memory" section to AGENTS.md template
+- Update OPERATIONS.md schema version (13→24), remove stale cross-brain label from AGENTS.md
+- Merge semantic search, episodic memory, and roadmap plans
+- Correct factual errors in plan documents
+- Add episodic memory foundation plan
+- Add OpenViking-inspired development roadmap
+- Add semantic search records plan
+- Update AGENTS.md file
+- Document records.task_id denormalization vs record_links
+- Uddate AGENTS.md file
+- Reflect B2 storage refactor — SQLite as runtime source of truth
+
+### Features
+
+- Prefix single source of truth + brain registry DB projection
+- Episodic memory foundation — close write→retrieve→reflect→retrieve loop (#86)
+- Blake3-versioned brain:start markers + pre-commit hook for AGENTS.md sync
+- Extract TaskStore/RecordStore SQL to brain_persistence (#85)
+- Task listing improvements — in-progress priority + exact status filters (#83)
+- Cross-brain task creation via tasks.create MCP tool (#81)
+- Stale root pruning + brain archival (#80)
+- Add brain tasks ext-link CLI subcommand (#78)
+- V23 migration — per-brain prefix column + ambiguous ID UX (#76)
+- Add cargo fmt pre-commit hook
+- Add FK constraint brain_id → brains(brain_id) (#73)
+- JSONL-based migration & command consolidation
+- Daemon-driven embedding with hybrid embedded_at self-heal (#70)
+- Add v19→v20 self-healing migration for corrupted event schemas
+- Add v18→v19 schema hardening migration
+- Workspace unified single-DB storage (#68.2)
+- B2 — SQLite as runtime source of truth (#68)
+- Add brain link command (#67)
+- Single daemon UDS IPC layer (#65)
+- Brain aliases, multi-path roots, and init-as-reference (#64)
+- Cross-brain expansion — bug fix + Tier 1 MCP/CLI support (#63)
+- Cross-brain task fetch and close (#62)
+- Add text param to snapshot and artifact MCP tools (#61)
+- PageRank-inspired link scoring for hybrid ranking (#58)
+- ML summarization pipeline with Flan-T5 integration (#56)
+- Unified tasks.create MCP tool and auto-decode fetch_content (#55)
+
+### Refactoring
+
+- Purge all "vault" references — replace with "brain"
+- Remove JSONL audit trail — SQLite is sole source of truth
+- Brain init uses unified DB path ~/.brain/brain.db
+- Config.rs accepts explicit brain_name — no longer derives from DB path
+- Decouple brain_data_dir from sqlite_db path — use explicit per-brain dirs
+- Resolve_paths sqlite_db → unified ~/.brain/brain.db
+- Extract persistence layer and introduce trait-based ports (#74)
+- BrainStores unified store access abstraction
+
+### Testing
+
+- Update integration tests for unified DB path
+
 ## [0.2.1] - 2026-03-11
 
 ### Bug Fixes
