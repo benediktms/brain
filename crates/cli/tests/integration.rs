@@ -50,12 +50,17 @@ fn setup_brain() -> (TempDir, TempDir) {
     (project, home)
 }
 
-/// Path to the sqlite DB that `brain init` creates inside `brain_home`.
+/// Path to the unified sqlite DB at `brain_home/brain.db`.
 fn sqlite_db_path(brain_home: &std::path::Path) -> std::path::PathBuf {
+    brain_home.join("brain.db")
+}
+
+/// Path to the per-brain LanceDB directory.
+fn lance_db_path(brain_home: &std::path::Path) -> std::path::PathBuf {
     brain_home
         .join("brains")
         .join("test-brain")
-        .join("brain.db")
+        .join("lancedb")
 }
 
 // ---------------------------------------------------------------------------
@@ -193,11 +198,14 @@ fn config_get_prefix_succeeds_after_init() {
     let (project, home) = setup_brain();
     let _ = project;
     let db = sqlite_db_path(home.path());
+    let lance = lance_db_path(home.path());
 
     brain_cmd()
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
+        .arg("--lance-db")
+        .arg(&lance)
         .args(["config", "get", "prefix"])
         .assert()
         .success()
@@ -209,11 +217,14 @@ fn config_set_prefix_succeeds() {
     let (project, home) = setup_brain();
     let _ = project;
     let db = sqlite_db_path(home.path());
+    let lance = lance_db_path(home.path());
 
     brain_cmd()
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
+        .arg("--lance-db")
+        .arg(&lance)
         .args(["config", "set", "prefix", "ABC"])
         .assert()
         .success();
@@ -223,6 +234,8 @@ fn config_set_prefix_succeeds() {
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
+        .arg("--lance-db")
+        .arg(&lance)
         .args(["config", "get", "prefix"])
         .assert()
         .success()
@@ -234,11 +247,14 @@ fn config_set_prefix_rejects_non_three_letter_value() {
     let (project, home) = setup_brain();
     let _ = project;
     let db = sqlite_db_path(home.path());
+    let lance = lance_db_path(home.path());
 
     brain_cmd()
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
+        .arg("--lance-db")
+        .arg(&lance)
         .args(["config", "set", "prefix", "TOOLONG"])
         .assert()
         .failure();
@@ -249,11 +265,14 @@ fn config_get_unknown_key_fails() {
     let (project, home) = setup_brain();
     let _ = project;
     let db = sqlite_db_path(home.path());
+    let lance = lance_db_path(home.path());
 
     brain_cmd()
         .env("BRAIN_HOME", home.path())
         .arg("--sqlite-db")
         .arg(&db)
+        .arg("--lance-db")
+        .arg(&lance)
         .args(["config", "get", "nonexistent_key"])
         .assert()
         .failure();
