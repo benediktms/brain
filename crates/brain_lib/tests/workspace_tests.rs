@@ -353,7 +353,7 @@ fn test_task_store_prefix_isolation_via_brains_table() {
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
 
-    assert_eq!(prefix_a, "ASR", "auth-service → ASR");
+    assert_eq!(prefix_a, "ATH", "auth-service → ATH (service is noise)");
     assert_eq!(prefix_b, "MCP", "my-cool-project → MCP");
     assert_ne!(
         prefix_a, prefix_b,
@@ -383,7 +383,7 @@ fn test_record_store_prefix_isolation_via_brains_table() {
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
 
-    assert_eq!(prefix_a, "ASR", "auth-service → ASR");
+    assert_eq!(prefix_a, "ATH", "auth-service → ATH (service is noise)");
     assert_eq!(prefix_b, "MCP", "my-cool-project → MCP");
     assert_ne!(
         prefix_a, prefix_b,
@@ -439,7 +439,7 @@ fn test_crossbrain_prefix_not_poisoned_by_brain_meta() {
         .ensure_brain_registered("remote-checkout-id", "app-checkout")
         .unwrap();
 
-    // Verify: brains.prefix should be "ACH" (from generate_prefix("app-checkout")), not "BRX"
+    // Verify: brains.prefix should be "CHC" (from generate_prefix("app-checkout") with "app" stripped), not "BRX"
     let prefix: String = unified_db
         .with_read_conn(|conn| {
             conn.query_row(
@@ -452,8 +452,8 @@ fn test_crossbrain_prefix_not_poisoned_by_brain_meta() {
         .unwrap();
 
     assert_eq!(
-        prefix, "ACH",
-        "cross-brain prefix should be derived from brain_name 'app-checkout' (→ ACH), not brain_meta 'BRX'"
+        prefix, "CHC",
+        "cross-brain prefix should be derived from brain_name 'app-checkout' (→ CHC, 'app' is noise), not brain_meta 'BRX'"
     );
 }
 
@@ -476,12 +476,11 @@ fn test_with_brain_id_uses_brain_name_for_prefix() {
         TaskStore::with_brain_id(unified_db.clone(), "remote-id", "payment-service").unwrap();
 
     let prefix = store.get_project_prefix().unwrap();
-    // generate_prefix("payment-service"): two segments ["payment","service"],
-    // prefix_from_two_words: first_a='p', first_b='s', longer="payment",
-    // first consonant after 'p' = 'y' → "PSY"
+    // generate_prefix("payment-service"): "service" stripped → ["payment"],
+    // prefix_from_single_word: first='p', consonants=['y','m','n','t'] → "PYM"
     assert_eq!(
-        prefix, "PSY",
-        "with_brain_id should derive prefix from brain_name 'payment-service' (→ PSY), not brain_meta 'BRX'"
+        prefix, "PYM",
+        "with_brain_id should derive prefix from brain_name 'payment-service' (→ PYM, 'service' is noise), not brain_meta 'BRX'"
     );
 }
 
@@ -513,11 +512,11 @@ fn test_multiple_crossbrain_prefixes_independent() {
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
 
-    // generate_prefix("app-checkout") → "ACH"
-    assert_eq!(prefix_a, "ACH", "app-checkout → ACH");
+    // generate_prefix("app-checkout") → "app" stripped → single word "checkout" → "CHC"
+    assert_eq!(prefix_a, "CHC", "app-checkout → CHC (app is noise)");
     // generate_prefix("packages-buy-on-marketplace-m2"):
     // segments: ["packages","buy","on","marketplace","m2"],
-    // prefix_from_multi_words: p→B→O = "PBO"
+    // prefix_from_multi_words: P→B→O = "PBO"
     assert_eq!(prefix_b, "PBO", "packages-buy-on-marketplace-m2 → PBO");
     assert_ne!(prefix_a, "BRX", "must not read brain_meta");
     assert_ne!(prefix_b, "BRX", "must not read brain_meta");

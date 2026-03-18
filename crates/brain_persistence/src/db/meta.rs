@@ -73,20 +73,34 @@ pub fn get_or_init_project_prefix(conn: &Connection, brain_dir: &Path) -> Result
     Ok(prefix)
 }
 
+/// Noise words stripped before prefix generation — these carry no
+/// distinguishing information and would waste a prefix slot.
+const NOISE_WORDS: &[&str] = &[
+    "app",
+    "application",
+    "service",
+    "svc",
+    "server",
+    "api",
+    "the",
+];
+
 /// Generate a 3-letter project prefix from a name.
 ///
 /// Algorithm:
 /// 1. Split on `-`, `_`, spaces
 /// 2. Drop pure-numeric segments ("02", "v3") — keep mixed like "b2c"
-/// 3. Multi-word (>= 3 segments): first letter of first 3 non-duplicate segments
-/// 4. Two segments: first letter of each + first consonant of longer segment
-/// 5. Single word: first char + next consonants (skip AEIOU)
-/// 6. Uppercase, pad to 3 chars if needed
+/// 3. Drop noise words ("app", "service", …)
+/// 4. Multi-word (>= 3 segments): first letter of first 3 non-duplicate segments
+/// 5. Two segments: first letter of first + first consonant of longer + first letter of second
+/// 6. Single word: first char + next consonants (skip AEIOU)
+/// 7. Uppercase, pad to 3 chars if needed
 pub fn generate_prefix(name: &str) -> String {
     let segments: Vec<&str> = name
         .split(['-', '_', ' '])
         .filter(|s| !s.is_empty())
         .filter(|s| !is_pure_numeric(s))
+        .filter(|s| !NOISE_WORDS.contains(&s.to_ascii_lowercase().as_str()))
         .collect();
 
     let raw = match segments.len() {
@@ -155,16 +169,27 @@ fn prefix_from_single_word(word: &str) -> String {
 }
 
 /// Two words: first letter of each + first consonant of the longer word.
+///
+/// The consonant stays adjacent to its source word's initial to preserve
+/// reading order: "neural_link" → NRL (consonant R from "neural" follows N),
+/// "b2c-gateway" → BGT (consonant T from "gateway" follows G).
 fn prefix_from_two_words(a: &str, b: &str) -> String {
     let first_a = a.chars().next().unwrap_or('X');
     let first_b = b.chars().next().unwrap_or('X');
-    let longer = if a.len() >= b.len() { a } else { b };
+    let a_is_longer = a.len() >= b.len();
+    let longer = if a_is_longer { a } else { b };
     let consonants = consonants_after_first(longer);
-    let third = consonants.first().copied().unwrap_or_else(|| {
-        // fallback: second char of longer word
-        longer.chars().nth(1).unwrap_or('X')
-    });
-    format!("{}{}{}", first_a, first_b, third)
+    let extra = consonants
+        .first()
+        .copied()
+        .unwrap_or_else(|| longer.chars().nth(1).unwrap_or('X'));
+    if a_is_longer {
+        // Consonant from A stays with A: A-consonant-B
+        format!("{}{}{}", first_a, extra, first_b)
+    } else {
+        // Consonant from B stays with B: A-B-consonant
+        format!("{}{}{}", first_a, first_b, extra)
+    }
 }
 
 /// Multi-word (3+): first letter of first 3 segments, skipping duplicate letters.
@@ -240,13 +265,33 @@ mod tests {
 
     #[test]
     fn test_prefix_two_words() {
-        assert_eq!(generate_prefix("auth-service"), "ASR");
+        // "service" is a noise word → stripped → single-word "auth" → ATH
+        assert_eq!(generate_prefix("auth-service"), "ATH");
+    }
+
+    #[test]
+    fn test_prefix_two_words_ordering() {
+        // Two meaningful words: first_a + consonant_of_longer + first_b
+        assert_eq!(generate_prefix("neural_link"), "NRL");
+    }
+
+    #[test]
+    fn test_prefix_noise_words_stripped() {
+        // "app" stripped → single-word "packages"
+        assert_eq!(generate_prefix("app-packages"), "PCK");
+        // "service" stripped → single-word "auth"
+        assert_eq!(generate_prefix("auth-service"), "ATH");
+        // "api" stripped → single-word "gateway"
+        assert_eq!(generate_prefix("api-gateway"), "GTW");
     }
 
     #[test]
     fn test_prefix_multi_word_dedup() {
-        // a-b-a would have duplicate A; skip second A, take next segment
-        assert_eq!(generate_prefix("app-b2c-api-gateway"), "ABG");
+        // "app" and "api" are noise words → stripped → ["b2c", "gateway"]
+        // two-word: B + G + T(consonant from "gateway", the longer word) = BGT
+        assert_eq!(generate_prefix("app-b2c-api-gateway"), "BGT");
+        // Without noise words, dedup still works: a-b-a → duplicate A skipped
+        assert_eq!(generate_prefix("alpha-beta-alpha-gamma"), "ABG");
     }
 
     #[test]
