@@ -681,10 +681,7 @@ mod tests {
             result.lance_db,
             home.join("brains").join("my-brain").join("lancedb")
         );
-        assert_eq!(
-            result.sqlite_db,
-            home.join("brain.db")
-        );
+        assert_eq!(result.sqlite_db, home.join("brain.db"));
     }
 
     #[test]
@@ -733,10 +730,7 @@ mod tests {
             result.lance_db,
             home.join("brains").join("my-brain").join("lancedb")
         );
-        assert_eq!(
-            result.sqlite_db,
-            home.join("brain.db")
-        );
+        assert_eq!(result.sqlite_db, home.join("brain.db"));
     }
 
     #[test]

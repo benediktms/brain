@@ -54,7 +54,12 @@ pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<(
 ///
 /// `brain_name` must be provided explicitly — it can no longer be derived
 /// from `sqlite_db` now that the DB is unified (`~/.brain/brain.db`).
-pub fn run_config_set(sqlite_db: &Path, brain_name: &str, key: &str, value: Option<String>) -> Result<()> {
+pub fn run_config_set(
+    sqlite_db: &Path,
+    brain_name: &str,
+    key: &str,
+    value: Option<String>,
+) -> Result<()> {
     match key {
         "prefix" => {
             // Per-brain data dir for tasks JSONL and prefix generation.

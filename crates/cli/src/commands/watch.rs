@@ -901,10 +901,7 @@ async fn init_brain_instance(
     // Build MCP context from the pipeline's stores + task/record/object stores.
     // Derive brain_data_dir from the LanceDB path (per-brain), not sqlite_db
     // (which now points to the unified ~/.brain/brain.db).
-    let brain_data_dir = paths
-        .lance_db
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
+    let brain_data_dir = paths.lance_db.parent().unwrap_or(std::path::Path::new("."));
 
     let brain_home_path = brain_data_dir
         .parent() // brains/

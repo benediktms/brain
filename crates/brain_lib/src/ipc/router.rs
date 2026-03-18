@@ -83,7 +83,11 @@ mod tests {
     async fn test_dispatch_default_brain_status() {
         let (_dir, ctx) = create_test_context().await;
         // Use a non-empty brain_id — empty strings skip registration
-        let brain_id = if ctx.brain_id.is_empty() { "test-id".to_string() } else { ctx.brain_id.clone() };
+        let brain_id = if ctx.brain_id.is_empty() {
+            "test-id".to_string()
+        } else {
+            ctx.brain_id.clone()
+        };
         ctx.db
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
@@ -96,7 +100,11 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_nonexistent_brain_returns_error() {
         let (_dir, ctx) = create_test_context().await;
-        let brain_id = if ctx.brain_id.is_empty() { "test-id".to_string() } else { ctx.brain_id.clone() };
+        let brain_id = if ctx.brain_id.is_empty() {
+            "test-id".to_string()
+        } else {
+            ctx.brain_id.clone()
+        };
         ctx.db
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
@@ -116,7 +124,11 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_explicit_brain_name() {
         let (_dir, ctx) = create_test_context().await;
-        let brain_id = if ctx.brain_id.is_empty() { "test-id".to_string() } else { ctx.brain_id.clone() };
+        let brain_id = if ctx.brain_id.is_empty() {
+            "test-id".to_string()
+        } else {
+            ctx.brain_id.clone()
+        };
         ctx.db
             .ensure_brain_registered(&brain_id, "my-brain")
             .unwrap();
@@ -125,7 +137,11 @@ mod tests {
         let result = router
             .dispatch(Some("my-brain"), "status", serde_json::json!({}))
             .await;
-        let err_text = result.content.first().map(|c| c.text.as_str()).unwrap_or("(no content)");
+        let err_text = result
+            .content
+            .first()
+            .map(|c| c.text.as_str())
+            .unwrap_or("(no content)");
         assert_ne!(result.is_error, Some(true), "dispatch failed: {err_text}");
     }
 }

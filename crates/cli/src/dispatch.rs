@@ -421,7 +421,11 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 },
                 TasksAction::Export { format, dir } => match format.as_str() {
                     "markdown" | "md" => {
-                        commands::tasks::export_markdown::run(dir, cli.sqlite_db, Some(cli.lance_db))?;
+                        commands::tasks::export_markdown::run(
+                            dir,
+                            cli.sqlite_db,
+                            Some(cli.lance_db),
+                        )?;
                     }
                     other => {
                         anyhow::bail!("Unknown export format: {other}. Supported: markdown");
