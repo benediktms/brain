@@ -202,14 +202,25 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 commands::alias::run_list(brain.as_deref())?;
             }
         },
-        Command::Config { action } => match action {
-            ConfigAction::Get { key } => {
-                commands::config::run_config_get(&cli.sqlite_db, &key)?;
+        Command::Config { action } => {
+            // Derive brain name from the LanceDB path (per-brain), since sqlite_db
+            // now points to the unified ~/.brain/brain.db.
+            let brain_name = cli
+                .lance_db
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("brain")
+                .to_string();
+            match action {
+                ConfigAction::Get { key } => {
+                    commands::config::run_config_get(&cli.sqlite_db, &brain_name, &key)?;
+                }
+                ConfigAction::Set { key, value } => {
+                    commands::config::run_config_set(&cli.sqlite_db, &brain_name, &key, value)?;
+                }
             }
-            ConfigAction::Set { key, value } => {
-                commands::config::run_config_set(&cli.sqlite_db, &key, value)?;
-            }
-        },
+        }
         Command::Tasks {
             json,
             markdown: _,

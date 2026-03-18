@@ -2,21 +2,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
-/// Derive the brain name from the sqlite_db path.
-///
-/// Typical path: `~/.brain/brains/<name>/brain.db` → `<name>`.
-/// Fallback: `~/.brain/brain.db` → directory name or "brain".
-fn brain_name_from_path(sqlite_db: &Path) -> String {
-    let brain_dir = sqlite_db.parent().unwrap_or(Path::new("."));
-    brain_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("brain")
-        .to_string()
-}
-
-/// Try to read the prefix from `brains.prefix` for the brain matching the
-/// directory-derived name. Returns `None` if no match or column is NULL.
+/// Try to read the prefix from `brains.prefix` for the named brain.
+/// Returns `None` if no match or column is NULL.
 fn read_brain_prefix(
     conn: &rusqlite::Connection,
     brain_name: &str,
@@ -33,20 +20,24 @@ fn read_brain_prefix(
 }
 
 /// Get a configuration value by key and print it to stdout.
-pub fn run_config_get(sqlite_db: &Path, key: &str) -> Result<()> {
+///
+/// `brain_name` must be provided explicitly — it can no longer be derived
+/// from `sqlite_db` now that the DB is unified (`~/.brain/brain.db`).
+pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<()> {
     let db = brain_lib::db::Db::open(sqlite_db)?;
     db.with_write_conn(|conn| match key {
         "prefix" => {
-            let brain_name = brain_name_from_path(sqlite_db);
-            if let Some(prefix) = read_brain_prefix(conn, &brain_name)?
+            if let Some(prefix) = read_brain_prefix(conn, brain_name)?
                 .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
             {
                 println!("{prefix}");
                 return Ok(());
             }
-            // Fallback for legacy brains initialized before brains.prefix existed
-            let brain_dir = sqlite_db.parent().unwrap_or(Path::new("."));
-            let fallback = brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
+            // Fallback for legacy brains initialized before brains.prefix existed.
+            // Use the per-brain data dir as the legacy brain_dir.
+            let brain_home = sqlite_db.parent().unwrap_or(Path::new("."));
+            let brain_dir = brain_home.join("brains").join(brain_name);
+            let fallback = brain_lib::db::meta::get_or_init_project_prefix(conn, &brain_dir)?;
             println!("{fallback}");
             Ok(())
         }
@@ -60,15 +51,19 @@ pub fn run_config_get(sqlite_db: &Path, key: &str) -> Result<()> {
 /// Set a configuration value by key.
 ///
 /// Passing `value = None` auto-derives the value (supported for `prefix`).
-pub fn run_config_set(sqlite_db: &Path, key: &str, value: Option<String>) -> Result<()> {
+///
+/// `brain_name` must be provided explicitly — it can no longer be derived
+/// from `sqlite_db` now that the DB is unified (`~/.brain/brain.db`).
+pub fn run_config_set(sqlite_db: &Path, brain_name: &str, key: &str, value: Option<String>) -> Result<()> {
     match key {
         "prefix" => {
-            let brain_dir = sqlite_db.parent().unwrap_or(Path::new("."));
-            let brain_name = brain_name_from_path(sqlite_db);
+            // Per-brain data dir for tasks JSONL and prefix generation.
+            let brain_home = sqlite_db.parent().unwrap_or(Path::new("."));
+            let brain_dir = brain_home.join("brains").join(brain_name);
 
             let db = brain_lib::db::Db::open(sqlite_db)?;
             let (old_prefix, new_prefix) = db.with_write_conn(|conn| {
-                let old = read_brain_prefix(conn, &brain_name)?
+                let old = read_brain_prefix(conn, brain_name)?
                     .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
                     .unwrap_or_else(|| "BRN".to_string());
 
@@ -82,13 +77,7 @@ pub fn run_config_set(sqlite_db: &Path, key: &str, value: Option<String>) -> Res
                         }
                         upper
                     }
-                    None => {
-                        let name = brain_dir
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("BRN");
-                        brain_lib::db::meta::generate_prefix(name)
-                    }
+                    None => brain_lib::db::meta::generate_prefix(brain_name),
                 };
 
                 // Write to brains.prefix
