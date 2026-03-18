@@ -524,7 +524,7 @@ pub(crate) fn resolve_brain_paths_with_home(
     Ok(Some(ResolvedPaths {
         model_dir: home.join("models").join("bge-small-en-v1.5"),
         lance_db: brain_data.join("lancedb"),
-        sqlite_db: brain_data.join("brain.db"),
+        sqlite_db: home.join("brain.db"),
         summarizer_model_dir: if summarizer_model_dir.is_dir() {
             Some(summarizer_model_dir)
         } else {
@@ -553,7 +553,7 @@ pub fn resolve_paths_for_brain_with_home(name: &str, home: &Path) -> ResolvedPat
     ResolvedPaths {
         model_dir: home.join("models").join("bge-small-en-v1.5"),
         lance_db: brain_data.join("lancedb"),
-        sqlite_db: brain_data.join("brain.db"),
+        sqlite_db: home.join("brain.db"),
         summarizer_model_dir: if summarizer_model_dir.is_dir() {
             Some(summarizer_model_dir)
         } else {
@@ -683,7 +683,7 @@ mod tests {
         );
         assert_eq!(
             result.sqlite_db,
-            home.join("brains").join("my-brain").join("brain.db")
+            home.join("brain.db")
         );
     }
 
@@ -735,7 +735,7 @@ mod tests {
         );
         assert_eq!(
             result.sqlite_db,
-            home.join("brains").join("my-brain").join("brain.db")
+            home.join("brain.db")
         );
     }
 
@@ -748,7 +748,8 @@ mod tests {
         let result_b = resolve_paths_for_brain_with_home("brain-b", home);
 
         assert_ne!(result_a.lance_db, result_b.lance_db);
-        assert_ne!(result_a.sqlite_db, result_b.sqlite_db);
+        // sqlite_db is the unified DB — same path regardless of brain name
+        assert_eq!(result_a.sqlite_db, result_b.sqlite_db);
         // model_dir is shared
         assert_eq!(result_a.model_dir, result_b.model_dir);
     }
@@ -765,9 +766,10 @@ mod tests {
             "expected brain name in lancedb path, got: {}",
             result.lance_db.display()
         );
+        // sqlite_db is the unified DB — brain name is NOT in the path
         assert!(
-            result.sqlite_db.to_string_lossy().contains("special-brain"),
-            "expected brain name in sqlite_db path, got: {}",
+            !result.sqlite_db.to_string_lossy().contains("special-brain"),
+            "expected unified DB path (no brain name), got: {}",
             result.sqlite_db.display()
         );
     }
