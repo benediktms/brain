@@ -4,8 +4,6 @@ pub mod objects;
 pub mod projections;
 pub mod queries;
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
@@ -365,12 +363,8 @@ pub struct SnapshotRecord {
 
 // -- RecordStore skeleton --
 
-/// The record store: event log (JSONL) as source of truth, SQLite as projection.
-///
-/// This is the skeleton — append/query logic will be added in subsequent tasks
-/// when the event log writer and SQLite schema migrations are in place.
+/// The record store: SQLite is the sole source of truth.
 pub struct RecordStore {
-    events_path: PathBuf,
     db: Db,
     /// Brain ID that scopes this store's reads and writes.
     ///
@@ -381,60 +375,28 @@ pub struct RecordStore {
 
 impl RecordStore {
     /// Create a new `RecordStore`.
-    ///
-    /// `records_dir` is the directory containing (or that will contain)
-    /// `events.jsonl`. It will be created if it does not exist.
-    pub fn new(records_dir: &std::path::Path, db: Db) -> Result<Self> {
-        std::fs::create_dir_all(records_dir)?;
-        Ok(Self {
-            events_path: records_dir.join("events.jsonl"),
+    pub fn new(db: Db) -> Self {
+        Self {
             db,
             brain_id: String::new(),
-        })
+        }
     }
 
     /// Create a new `RecordStore` with an explicit brain_id scope.
-    pub fn with_brain_id(
-        records_dir: &std::path::Path,
-        db: Db,
-        brain_id: &str,
-        brain_name: &str,
-    ) -> Result<Self> {
-        std::fs::create_dir_all(records_dir)?;
+    pub fn with_brain_id(db: Db, brain_id: &str, brain_name: &str) -> Result<Self> {
         // Ensure the brain is registered — FK on brain_id requires it.
         if !brain_id.is_empty() {
             db.ensure_brain_registered(brain_id, brain_name)?;
         }
         Ok(Self {
-            events_path: records_dir.join("events.jsonl"),
             db,
             brain_id: brain_id.to_string(),
         })
     }
 
-    /// Append a validated event to the log.
-    ///
-    /// Full projection apply logic will be added in a subsequent task when
-    /// the SQLite schema and migrations are in place.
-    pub fn append(&self, event: &events::RecordEvent) -> Result<()> {
-        events::append_event(&self.events_path, event)
-    }
-
-    /// Read all events from the event log.
-    pub fn read_all_events(&self) -> Result<Vec<events::RecordEvent>> {
-        events::read_all_events(&self.events_path)
-    }
-
     /// Access the underlying database handle.
-    ///
-    /// Used by projection and query layers (added in subsequent tasks).
     pub fn db(&self) -> &Db {
         &self.db
-    }
-
-    /// Return the path to the events JSONL file.
-    pub fn events_path(&self) -> &std::path::Path {
-        &self.events_path
     }
 
     /// Import events from a JSONL file into the unified SQLite database.
@@ -473,36 +435,11 @@ impl RecordStore {
         Ok(imported)
     }
 
-    /// Rebuild all records projection tables from the JSONL event log.
-    ///
-    /// Recovery and migration mechanism — not the primary read path. SQLite is
-    /// the runtime source of truth; this method replays the JSONL audit trail
-    /// to reconstruct projections after data loss or schema migration. Wipes
-    /// the four records tables (in FK-safe order), then replays every event in
-    /// `events.jsonl` in order. Returns the number of events applied.
-    pub fn rebuild_projections(&self) -> Result<usize> {
-        let all_events = events::read_all_events(&self.events_path)?;
-        self.db
-            .with_write_conn(|conn| projections::rebuild_from_events(conn, &all_events))
-    }
-
-    /// Apply a single event to the SQLite projection and append it to the log.
-    ///
-    /// SQLite is the authoritative write. The JSONL event log is a best-effort
-    /// audit trail appended after a successful SQLite write. If the JSONL
-    /// append fails, a warning is logged but the operation succeeds — the
-    /// SQLite record is the source of truth. If the SQLite write fails, the
-    /// whole operation fails and nothing is written to the log.
-    pub fn apply_and_append(&self, event: &events::RecordEvent) -> Result<()> {
+    /// Apply a single event to the SQLite projection.
+    pub fn apply_event(&self, event: &events::RecordEvent) -> Result<()> {
         let brain_id = self.brain_id.clone();
-        // SQLite is the authoritative write — if this fails, the operation fails
         self.db
-            .with_write_conn(|conn| projections::apply_event(conn, event, &brain_id))?;
-        // JSONL emit is best-effort audit trail
-        if let Err(e) = events::append_event(&self.events_path, event) {
-            tracing::warn!("failed to append record event to audit log: {e}");
-        }
-        Ok(())
+            .with_write_conn(|conn| projections::apply_event(conn, event, &brain_id))
     }
 
     // -- Query methods --
@@ -589,12 +526,7 @@ impl RecordStore {
         }
         // Unscoped/legacy mode: fall back to brain_meta
         self.db.with_write_conn(|conn| {
-            let brain_dir = self
-                .events_path
-                .parent()
-                .and_then(|p| p.parent())
-                .unwrap_or(std::path::Path::new("."));
-            crate::db::meta::get_or_init_project_prefix(conn, brain_dir)
+            crate::db::meta::get_or_init_project_prefix(conn, std::path::Path::new("."))
         })
     }
 
@@ -657,7 +589,7 @@ impl RecordStore {
             reason: reason.to_string(),
         };
         let event = events::RecordEvent::from_payload(record_id, actor, payload);
-        self.apply_and_append(&event)?;
+        self.apply_event(&event)?;
 
         let other_refs = self.count_payload_refs(&record.content_hash, record_id)?;
         if other_refs == 0 && objects.exists(&record.content_hash) {
@@ -682,7 +614,7 @@ impl RecordStore {
             retention_class: retention_class.map(|s| s.to_string()),
         };
         let event = events::RecordEvent::from_payload(record_id, actor, payload);
-        self.apply_and_append(&event)
+        self.apply_event(&event)
     }
 
     /// Pin a record, preventing it from being evicted.
@@ -697,7 +629,7 @@ impl RecordStore {
             events::RecordEventType::RecordPinned,
             &events::PinPayload {},
         );
-        self.apply_and_append(&event)
+        self.apply_event(&event)
     }
 
     /// Unpin a record, allowing it to be evicted again.
@@ -712,7 +644,7 @@ impl RecordStore {
             events::RecordEventType::RecordUnpinned,
             &events::PinPayload {},
         );
-        self.apply_and_append(&event)
+        self.apply_event(&event)
     }
 }
 
@@ -915,86 +847,17 @@ mod tests {
     }
 
     #[test]
-    fn test_record_store_new_creates_dir() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let records_dir = dir.path().join("records");
-        assert!(!records_dir.exists());
-
+    fn test_record_store_new() {
         let db = crate::db::Db::open_in_memory().unwrap();
-        let store = RecordStore::new(&records_dir, db).unwrap();
-        assert!(records_dir.exists());
-        assert_eq!(
-            store.events_path(),
-            records_dir.join("events.jsonl").as_path()
-        );
-    }
-
-    #[test]
-    fn test_import_from_jsonl_basic_and_idempotent() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let records_dir = dir.path().join("records");
-        let db = crate::db::Db::open_in_memory().unwrap();
-        let store =
-            RecordStore::with_brain_id(&records_dir, db, "test-brain", "test-brain").unwrap();
-
-        // Write two events to JSONL
-        let ev1 = RecordEvent::from_payload(
-            "r1",
-            "agent",
-            RecordCreatedPayload {
-                title: "Artifact One".to_string(),
-                kind: "report".to_string(),
-                content_ref: ContentRefPayload::new("aaaa".repeat(16), 10, None),
-                description: None,
-                task_id: None,
-                tags: vec!["t1".to_string()],
-                scope_type: None,
-                scope_id: None,
-                retention_class: None,
-                producer: None,
-            },
-        );
-        let ev2 = RecordEvent::from_payload(
-            "r2",
-            "agent",
-            RecordCreatedPayload {
-                title: "Artifact Two".to_string(),
-                kind: "snapshot".to_string(),
-                content_ref: ContentRefPayload::new("bbbb".repeat(16), 20, None),
-                description: None,
-                task_id: None,
-                tags: vec![],
-                scope_type: None,
-                scope_id: None,
-                retention_class: None,
-                producer: None,
-            },
-        );
-        store.append(&ev1).unwrap();
-        store.append(&ev2).unwrap();
-
-        // Import from JSONL
-        let count = store.import_from_jsonl(store.events_path()).unwrap();
-        assert_eq!(count, 2);
-
-        // Verify records exist
-        let row1 = store.get_record("r1").unwrap();
-        assert!(row1.is_some(), "r1 should exist after import");
-        let row2 = store.get_record("r2").unwrap();
-        assert!(row2.is_some(), "r2 should exist after import");
-
-        // Import again — idempotent, no new records
-        let count2 = store.import_from_jsonl(store.events_path()).unwrap();
-        assert_eq!(count2, 0, "second import should skip all events");
+        let store = RecordStore::new(db);
+        assert!(store.brain_id.is_empty());
     }
 
     #[test]
     fn test_import_from_jsonl_missing_file() {
         let dir = tempfile::TempDir::new().unwrap();
-        let records_dir = dir.path().join("records");
         let db = crate::db::Db::open_in_memory().unwrap();
-        let store =
-            RecordStore::with_brain_id(&records_dir, db, "test-brain", "test-brain").unwrap();
+        let store = RecordStore::with_brain_id(db, "test-brain", "test-brain").unwrap();
 
         let missing = dir.path().join("nonexistent.jsonl");
         let count = store.import_from_jsonl(&missing).unwrap();
@@ -1002,11 +865,9 @@ mod tests {
     }
 
     #[test]
-    fn test_record_store_append_and_read() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let records_dir = dir.path().join("records");
+    fn test_record_store_apply_event_and_query() {
         let db = crate::db::Db::open_in_memory().unwrap();
-        let store = RecordStore::new(&records_dir, db).unwrap();
+        let store = RecordStore::new(db);
 
         let ev = RecordEvent::from_payload(
             "r1",
@@ -1028,20 +889,18 @@ mod tests {
                 producer: None,
             },
         );
-        store.append(&ev).unwrap();
+        store.apply_event(&ev).unwrap();
 
-        let events = store.read_all_events().unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].record_id, "r1");
-        assert_eq!(events[0].event_type, RecordEventType::RecordCreated);
+        let row = store.get_record("r1").unwrap();
+        assert!(row.is_some(), "r1 should exist after apply_event");
+        assert_eq!(row.unwrap().title, "My Artifact");
     }
 
     // -- Helper for eviction/pin/retention tests --
 
     fn make_store_with_objects(dir: &tempfile::TempDir) -> (RecordStore, objects::ObjectStore) {
-        let records_dir = dir.path().join("records");
         let db = crate::db::Db::open_in_memory().unwrap();
-        let store = RecordStore::new(&records_dir, db).unwrap();
+        let store = RecordStore::new(db);
         let objects = objects::ObjectStore::new(dir.path().join("objects")).unwrap();
         (store, objects)
     }
@@ -1063,7 +922,7 @@ mod tests {
                 producer: None,
             },
         );
-        store.apply_and_append(&ev).unwrap();
+        store.apply_event(&ev).unwrap();
     }
 
     // -- evict_payload tests --

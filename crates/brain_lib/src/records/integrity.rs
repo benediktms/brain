@@ -224,10 +224,10 @@ mod tests {
     fn setup() -> (TempDir, RecordStore, ObjectStore) {
         let dir = TempDir::new().unwrap();
         let sqlite_path = dir.path().join("test.db");
-        let records_dir = dir.path().join("records");
+        let _records_dir = dir.path().join("records");
         let objects_dir = dir.path().join("objects");
         let db = Db::open(&sqlite_path).unwrap();
-        let record_store = RecordStore::new(&records_dir, db).unwrap();
+        let record_store = RecordStore::new(db);
         let object_store = ObjectStore::new(&objects_dir).unwrap();
         (dir, record_store, object_store)
     }
@@ -259,7 +259,7 @@ mod tests {
                 producer: None,
             },
         );
-        record_store.apply_and_append(&event).unwrap();
+        record_store.apply_event(&event).unwrap();
         content_ref.hash
     }
 
@@ -350,7 +350,7 @@ mod tests {
                 reason: "test eviction".to_string(),
             },
         );
-        record_store.apply_and_append(&evict_event).unwrap();
+        record_store.apply_event(&evict_event).unwrap();
 
         // Blob still exists in the store
         assert!(object_store.exists(&hash));
@@ -441,7 +441,7 @@ mod tests {
                 producer: None,
             },
         );
-        record_store.apply_and_append(&event).unwrap();
+        record_store.apply_event(&event).unwrap();
         content_ref.hash
     }
 
@@ -482,7 +482,7 @@ mod tests {
                 reason: "simulated crash".to_string(),
             },
         );
-        record_store.apply_and_append(&evict_event).unwrap();
+        record_store.apply_event(&evict_event).unwrap();
 
         // Blob is still on disk (simulating crash between event commit and delete)
         assert!(object_store.exists(&hash));

@@ -62,10 +62,6 @@ pub fn run_config_set(
 ) -> Result<()> {
     match key {
         "prefix" => {
-            // Per-brain data dir for tasks JSONL and prefix generation.
-            let brain_home = sqlite_db.parent().unwrap_or(Path::new("."));
-            let brain_dir = brain_home.join("brains").join(brain_name);
-
             let db = brain_lib::db::Db::open(sqlite_db)?;
             let (old_prefix, new_prefix) = db.with_write_conn(|conn| {
                 let old = read_brain_prefix(conn, brain_name)?
@@ -98,11 +94,8 @@ pub fn run_config_set(
             if old_prefix == new_prefix {
                 println!("Prefix is already {new_prefix}");
             } else {
-                let tasks_dir = brain_dir.join("tasks");
-                let db2 = brain_lib::db::Db::open(sqlite_db)?;
-                let store = brain_lib::tasks::TaskStore::new(&tasks_dir, db2)?;
-                let count = store.rewrite_prefix(&old_prefix, &new_prefix)?;
-                println!("Rewrote {count} events: {old_prefix} → {new_prefix}");
+                println!("Prefix updated: {old_prefix} → {new_prefix}");
+                println!("Note: existing task IDs retain their original prefix.");
             }
             Ok(())
         }

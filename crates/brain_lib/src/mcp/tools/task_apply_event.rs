@@ -1054,14 +1054,14 @@ mod tests {
         // Build a context with no store and no embedder (tasks-only mode)
         let tmp = tempfile::TempDir::new().unwrap();
         let sqlite_path = tmp.path().join("test.db");
-        let tasks_dir = tmp.path().join("tasks");
+        let _tasks_dir = tmp.path().join("tasks");
 
         let db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
-        let records_dir = tmp.path().join("records");
+        let tasks = crate::tasks::TaskStore::new(tasks_db);
+        let _records_dir = tmp.path().join("records");
         let records_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let records = crate::records::RecordStore::new(&records_dir, records_db).unwrap();
+        let records = crate::records::RecordStore::new(records_db);
         let objects_dir = tmp.path().join("objects");
         let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
 

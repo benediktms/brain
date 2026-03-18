@@ -28,12 +28,7 @@ pub async fn run(
     };
 
     // Open TaskStore
-    let tasks_dir = sqlite_path
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("tasks");
-    let task_store = brain_lib::tasks::TaskStore::new(&tasks_dir, db.clone())?;
-    task_store.rebuild_projections()?;
+    let task_store = brain_lib::tasks::TaskStore::new(db.clone());
 
     // List all tasks
     let all_tasks = task_store.list_all()?;

@@ -57,10 +57,7 @@ fn sqlite_db_path(brain_home: &std::path::Path) -> std::path::PathBuf {
 
 /// Path to the per-brain LanceDB directory.
 fn lance_db_path(brain_home: &std::path::Path) -> std::path::PathBuf {
-    brain_home
-        .join("brains")
-        .join("test-brain")
-        .join("lancedb")
+    brain_home.join("brains").join("test-brain").join("lancedb")
 }
 
 // ---------------------------------------------------------------------------

@@ -323,13 +323,7 @@ pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::
 
     let db = crate::db::Db::open(&paths.sqlite_db)?;
 
-    let tasks_dir = paths
-        .sqlite_db
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("tasks");
-
-    let store = crate::tasks::TaskStore::new(&tasks_dir, db)?;
+    let store = crate::tasks::TaskStore::new(db);
     Ok(store)
 }
 

@@ -103,7 +103,7 @@ impl RecordCreateArtifact {
 
         let event = RecordEvent::from_payload(&record_id, "mcp", payload);
 
-        if let Err(e) = ctx.records.apply_and_append(&event) {
+        if let Err(e) = ctx.records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to save record: {e}"));
         }
 

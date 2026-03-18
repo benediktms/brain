@@ -322,11 +322,7 @@ fn migrate_one_brain(
     .with_context(|| format!("failed to register brain '{name}' ({brain_id})"))?;
 
     // Replay task JSONL sources.
-    // The tasks_dir argument to TaskStore is only used for the events_path field
-    // which we don't use here — we pass explicit paths to import_from_jsonl.
-    let dummy_tasks_dir = std::env::temp_dir().join("brain-migrate-tasks");
-    let task_store =
-        brain_lib::tasks::TaskStore::with_brain_id(&dummy_tasks_dir, db.clone(), brain_id, name)?;
+    let task_store = brain_lib::tasks::TaskStore::with_brain_id(db.clone(), brain_id, name)?;
 
     let mut total_tasks = 0usize;
     for path in &jsonl.task_sources {
@@ -337,13 +333,7 @@ fn migrate_one_brain(
     }
 
     // Replay record JSONL sources.
-    let dummy_records_dir = std::env::temp_dir().join("brain-migrate-records");
-    let record_store = brain_lib::records::RecordStore::with_brain_id(
-        &dummy_records_dir,
-        db.clone(),
-        brain_id,
-        name,
-    )?;
+    let record_store = brain_lib::records::RecordStore::with_brain_id(db.clone(), brain_id, name)?;
 
     let mut total_records = 0usize;
     for path in &jsonl.record_sources {

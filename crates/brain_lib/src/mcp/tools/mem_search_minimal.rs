@@ -239,14 +239,14 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let brain_home = tmp.path().to_path_buf();
         let sqlite_path = tmp.path().join("test.db");
-        let tasks_dir = tmp.path().join("tasks");
+        let _tasks_dir = tmp.path().join("tasks");
 
         let db = crate::db::Db::open(&sqlite_path).unwrap();
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
-        let records_dir = tmp.path().join("records");
+        let tasks = crate::tasks::TaskStore::new(tasks_db);
+        let _records_dir = tmp.path().join("records");
         let records_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let records = crate::records::RecordStore::new(&records_dir, records_db).unwrap();
+        let records = crate::records::RecordStore::new(records_db);
         let objects_dir = tmp.path().join("objects");
         let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
 
@@ -274,7 +274,7 @@ mod tests {
         let brain_home = tmp.path().to_path_buf();
         let sqlite_path = tmp.path().join("test.db");
         let lance_path = tmp.path().join("test_lance");
-        let tasks_dir = tmp.path().join("tasks");
+        let _tasks_dir = tmp.path().join("tasks");
 
         let db = crate::db::Db::open(&sqlite_path).unwrap();
         let store = crate::store::Store::open_or_create(&lance_path)
@@ -282,10 +282,10 @@ mod tests {
             .unwrap();
         let store_reader = crate::store::StoreReader::from_store(&store);
         let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks = crate::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
-        let records_dir = tmp.path().join("records");
+        let tasks = crate::tasks::TaskStore::new(tasks_db);
+        let _records_dir = tmp.path().join("records");
         let records_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let records = crate::records::RecordStore::new(&records_dir, records_db).unwrap();
+        let records = crate::records::RecordStore::new(records_db);
         let objects_dir = tmp.path().join("objects");
         let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
 

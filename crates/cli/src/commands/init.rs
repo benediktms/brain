@@ -201,11 +201,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
 fn import_project_jsonl(db_path: &Path, brain_id: &str, jsonl_path: &Path) {
     let result = (|| -> Result<usize> {
         let db = brain_lib::db::Db::open(db_path)?;
-        let tasks_dir = db_path
-            .parent()
-            .map(|p| p.join("tasks"))
-            .unwrap_or_else(|| PathBuf::from("tasks"));
-        let store = brain_lib::tasks::TaskStore::with_brain_id(&tasks_dir, db, brain_id, brain_id)?;
+        let store = brain_lib::tasks::TaskStore::with_brain_id(db, brain_id, brain_id)?;
         Ok(store.import_from_jsonl(jsonl_path)?)
     })();
     match result {

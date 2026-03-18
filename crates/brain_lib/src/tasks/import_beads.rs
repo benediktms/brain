@@ -433,9 +433,6 @@ pub fn import_beads_issues(
         return Ok(report);
     }
 
-    // Rebuild projections so SQLite matches events.jsonl
-    task_store.rebuild_projections()?;
-
     // Build beads_id → brain_id mapping:
     //   - Already-imported issues: resolve via external_ids table
     //   - New issues: generate a brain-native ID
@@ -914,8 +911,8 @@ mod tests {
     fn setup() -> (TempDir, TaskStore) {
         let dir = TempDir::new().unwrap();
         let db = Db::open_in_memory().unwrap();
-        let tasks_dir = dir.path().join("tasks");
-        let store = TaskStore::new(&tasks_dir, db).unwrap();
+        let _tasks_dir = dir.path().join("tasks");
+        let store = TaskStore::new(db);
         (dir, store)
     }
 

@@ -124,7 +124,7 @@ pub fn create(ctx: &ArtifactCtx, params: CreateParams) -> Result<()> {
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply and append record event")?;
 
     if ctx.json {
@@ -329,7 +329,7 @@ pub fn tag_add(ctx: &ArtifactCtx, id: &str, tag: &str) -> Result<()> {
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply tag_add event")?;
 
     if ctx.json {
@@ -358,7 +358,7 @@ pub fn tag_remove(ctx: &ArtifactCtx, id: &str, tag: &str) -> Result<()> {
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply tag_remove event")?;
 
     if ctx.json {
@@ -399,7 +399,7 @@ pub fn link_add(
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply link_add event")?;
 
     if ctx.json {
@@ -448,7 +448,7 @@ pub fn link_remove(
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply link_remove event")?;
 
     if ctx.json {
@@ -488,7 +488,7 @@ pub fn archive(ctx: &ArtifactCtx, id: &str, reason: Option<String>) -> Result<()
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply archive event")?;
 
     if ctx.json {

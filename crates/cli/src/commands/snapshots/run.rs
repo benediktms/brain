@@ -119,7 +119,7 @@ pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply and append record event")?;
 
     if ctx.json {
@@ -363,7 +363,7 @@ pub fn tag_add(ctx: &SnapshotCtx, id: &str, tag: &str) -> Result<()> {
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply tag_add event")?;
 
     if ctx.json {
@@ -392,7 +392,7 @@ pub fn tag_remove(ctx: &SnapshotCtx, id: &str, tag: &str) -> Result<()> {
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply tag_remove event")?;
 
     if ctx.json {
@@ -433,7 +433,7 @@ pub fn link_add(
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply link_add event")?;
 
     if ctx.json {
@@ -482,7 +482,7 @@ pub fn link_remove(
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply link_remove event")?;
 
     if ctx.json {
@@ -522,7 +522,7 @@ pub fn archive(ctx: &SnapshotCtx, id: &str, reason: Option<String>) -> Result<()
     );
 
     ctx.record_store
-        .apply_and_append(&event)
+        .apply_event(&event)
         .context("Failed to apply archive event")?;
 
     if ctx.json {

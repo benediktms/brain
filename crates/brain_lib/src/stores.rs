@@ -92,19 +92,7 @@ impl BrainStores {
         // Open the unified DB (~/.brain/brain.db).
         let db = Db::open(&paths.sqlite_db)?;
 
-        // Audit trail: project-local JSONL if a root is available.
-        let audit_path = entry
-            .roots
-            .first()
-            .map(|root| root.join(".brain").join("tasks").join("events.jsonl"));
-
-        let mut stores = Self::build(db, brain_id, name, &brain_data_dir, brain_home)?;
-
-        if let Some(p) = audit_path {
-            stores.tasks = stores.tasks.with_audit_path(p);
-        }
-
-        Ok(stores)
+        Self::build(db, brain_id, name, &brain_data_dir, brain_home)
     }
 
     /// Low-level: from a pre-opened Db handle.
@@ -147,18 +135,16 @@ impl BrainStores {
 
         let brain_id_str = brain_id.to_string();
 
-        let tasks_dir = tmp.path().join("tasks");
         let tasks = if brain_id_str.is_empty() {
-            TaskStore::new(&tasks_dir, db.clone())?
+            TaskStore::new(db.clone())
         } else {
-            TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id_str, &brain_id_str)?
+            TaskStore::with_brain_id(db.clone(), &brain_id_str, &brain_id_str)?
         };
 
-        let records_dir = tmp.path().join("records");
         let records = if brain_id_str.is_empty() {
-            RecordStore::new(&records_dir, db.clone())?
+            RecordStore::new(db.clone())
         } else {
-            RecordStore::with_brain_id(&records_dir, db.clone(), &brain_id_str, &brain_id_str)?
+            RecordStore::with_brain_id(db.clone(), &brain_id_str, &brain_id_str)?
         };
 
         let objects_dir = tmp.path().join("objects");
@@ -182,12 +168,6 @@ impl BrainStores {
     /// Access the underlying Db handle.
     pub fn db(&self) -> &Db {
         &self.db
-    }
-
-    /// Set an audit trail path on the TaskStore.
-    pub fn with_audit_path(mut self, path: PathBuf) -> Self {
-        self.tasks = self.tasks.with_audit_path(path);
-        self
     }
 
     // -- internals --
@@ -249,18 +229,16 @@ impl BrainStores {
         if !brain_id.is_empty() {
             db.ensure_brain_registered(&brain_id, &brain_name)?;
         }
-        let tasks_dir = brain_data_dir.join("tasks");
         let tasks = if brain_id.is_empty() {
-            TaskStore::new(&tasks_dir, db.clone())?
+            TaskStore::new(db.clone())
         } else {
-            TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id, &brain_name)?
+            TaskStore::with_brain_id(db.clone(), &brain_id, &brain_name)?
         };
 
-        let records_dir = brain_data_dir.join("records");
         let records = if brain_id.is_empty() {
-            RecordStore::new(&records_dir, db.clone())?
+            RecordStore::new(db.clone())
         } else {
-            RecordStore::with_brain_id(&records_dir, db.clone(), &brain_id, &brain_name)?
+            RecordStore::with_brain_id(db.clone(), &brain_id, &brain_name)?
         };
 
         // ObjectStore: prefer unified brain_home/objects when available.

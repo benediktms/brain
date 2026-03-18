@@ -49,17 +49,17 @@ async fn setup_mcp() -> (McpContext, TempDir) {
     let brain_home = tmp.path().to_path_buf();
     let sqlite_path = tmp.path().join("brain.db");
     let lance_path = tmp.path().join("brain_lancedb");
-    let tasks_dir = tmp.path().join("tasks");
+    let _tasks_dir = tmp.path().join("tasks");
 
     let db = Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let store_reader = brain_lib::store::StoreReader::from_store(&store);
     let embedder = Arc::new(MockEmbedder);
     let tasks_db = Db::open(&sqlite_path).unwrap();
-    let tasks = brain_lib::tasks::TaskStore::new(&tasks_dir, tasks_db).unwrap();
-    let records_dir = tmp.path().join("records");
+    let tasks = brain_lib::tasks::TaskStore::new(tasks_db);
+    let _records_dir = tmp.path().join("records");
     let records_db = Db::open(&sqlite_path).unwrap();
-    let records = brain_lib::records::RecordStore::new(&records_dir, records_db).unwrap();
+    let records = brain_lib::records::RecordStore::new(records_db);
     let objects_dir = tmp.path().join("objects");
     let objects = brain_lib::records::objects::ObjectStore::new(&objects_dir).unwrap();
 
@@ -577,7 +577,7 @@ async fn test_mcp_search_minimal_returns_results() {
     drop(pipeline);
 
     // Create fresh McpContext that sees the indexed data
-    let tasks_dir2 = tmp.path().join("tasks2");
+    let _tasks_dir2 = tmp.path().join("tasks2");
     let store2 = Store::open_or_create(&lance_path).await.unwrap();
     let store2_reader = brain_lib::store::StoreReader::from_store(&store2);
     let ctx_db = Db::open(&sqlite_path).unwrap();
@@ -586,13 +586,8 @@ async fn test_mcp_search_minimal_returns_results() {
         store: Some(store2_reader),
         writable_store: Some(store2),
         embedder: Some(Arc::new(MockEmbedder)),
-        tasks: brain_lib::tasks::TaskStore::new(&tasks_dir2, Db::open(&sqlite_path).unwrap())
-            .unwrap(),
-        records: brain_lib::records::RecordStore::new(
-            &tmp.path().join("records2"),
-            Db::open(&sqlite_path).unwrap(),
-        )
-        .unwrap(),
+        tasks: brain_lib::tasks::TaskStore::new(Db::open(&sqlite_path).unwrap()),
+        records: brain_lib::records::RecordStore::new(Db::open(&sqlite_path).unwrap()),
         objects: brain_lib::records::objects::ObjectStore::new(tmp.path().join("objects2"))
             .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
@@ -653,7 +648,7 @@ async fn test_mcp_expand_returns_full_content() {
     drop(pipeline);
 
     // Create fresh McpContext that sees the indexed data
-    let tasks_dir3 = tmp.path().join("tasks3");
+    let _tasks_dir3 = tmp.path().join("tasks3");
     let store3 = Store::open_or_create(&lance_path).await.unwrap();
     let store3_reader = brain_lib::store::StoreReader::from_store(&store3);
     let ctx_db3 = Db::open(&sqlite_path).unwrap();
@@ -662,13 +657,8 @@ async fn test_mcp_expand_returns_full_content() {
         store: Some(store3_reader),
         writable_store: Some(store3),
         embedder: Some(Arc::new(MockEmbedder)),
-        tasks: brain_lib::tasks::TaskStore::new(&tasks_dir3, Db::open(&sqlite_path).unwrap())
-            .unwrap(),
-        records: brain_lib::records::RecordStore::new(
-            &tmp.path().join("records3"),
-            Db::open(&sqlite_path).unwrap(),
-        )
-        .unwrap(),
+        tasks: brain_lib::tasks::TaskStore::new(Db::open(&sqlite_path).unwrap()),
+        records: brain_lib::records::RecordStore::new(Db::open(&sqlite_path).unwrap()),
         objects: brain_lib::records::objects::ObjectStore::new(tmp.path().join("objects3"))
             .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),

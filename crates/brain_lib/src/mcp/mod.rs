@@ -214,8 +214,7 @@ impl McpContext {
         brain_id: &str,
         brain_name: &str,
     ) -> crate::error::Result<TaskStore> {
-        let tasks_dir = self.brain_home.join("tasks");
-        TaskStore::with_brain_id(&tasks_dir, self.db.clone(), brain_id, brain_name)
+        TaskStore::with_brain_id(self.db.clone(), brain_id, brain_name)
     }
 
     /// Create a brain_id-scoped RecordStore sharing this context's db handle.
@@ -224,8 +223,7 @@ impl McpContext {
         brain_id: &str,
         brain_name: &str,
     ) -> crate::error::Result<RecordStore> {
-        let records_dir = self.brain_home.join("records");
-        RecordStore::with_brain_id(&records_dir, self.db.clone(), brain_id, brain_name)
+        RecordStore::with_brain_id(self.db.clone(), brain_id, brain_name)
     }
 
     /// Clone this context with a different brain_id.

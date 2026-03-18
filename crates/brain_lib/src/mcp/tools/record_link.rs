@@ -55,7 +55,7 @@ impl RecordLinkAdd {
             },
         );
 
-        if let Err(e) = ctx.records.apply_and_append(&event) {
+        if let Err(e) = ctx.records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to add link: {e}"));
         }
 
@@ -150,7 +150,7 @@ impl RecordLinkRemove {
             },
         );
 
-        if let Err(e) = ctx.records.apply_and_append(&event) {
+        if let Err(e) = ctx.records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to remove link: {e}"));
         }
 

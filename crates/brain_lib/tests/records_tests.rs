@@ -1057,47 +1057,36 @@ fn test_object_store_deduplication_with_multiple_records() {
 // ─── 10. RecordStore high-level API ──────────────────────────────
 
 #[test]
-fn test_record_store_apply_and_append_then_rebuild() {
-    let dir = TempDir::new().unwrap();
-    let records_dir = dir.path().join("records");
+fn test_record_store_apply_event_and_query() {
     let db = Db::open_in_memory().unwrap();
-    let store = RecordStore::new(&records_dir, db).unwrap();
+    let store = RecordStore::new(db);
 
     let rid = new_record_id("BRN");
     let ev = make_created_event(&rid, "Store Record", "document");
 
-    // Use high-level API: apply_and_append
-    store.apply_and_append(&ev).unwrap();
+    store.apply_event(&ev).unwrap();
 
-    // Verify the event log has the event
-    let events = store.read_all_events().unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].record_id, rid);
-
-    // Rebuild using the high-level API
-    let count = store.rebuild_projections().unwrap();
-    assert_eq!(count, 1);
+    let row = store.get_record(&rid).unwrap();
+    assert!(row.is_some(), "record should exist after apply_event");
+    assert_eq!(row.unwrap().title, "Store Record");
 }
 
 #[test]
-fn test_record_store_append_then_rebuild_recovers_projection() {
-    let dir = TempDir::new().unwrap();
-    let records_dir = dir.path().join("records");
+fn test_record_store_apply_multiple_events() {
     let db = Db::open_in_memory().unwrap();
-    let store = RecordStore::new(&records_dir, db).unwrap();
+    let store = RecordStore::new(db);
 
     let r1 = new_record_id("BRN");
     let r2 = new_record_id("BRN");
 
-    // Append events to log only (no projection applied)
     store
-        .append(&make_created_event(&r1, "One", "report"))
+        .apply_event(&make_created_event(&r1, "One", "report"))
         .unwrap();
     store
-        .append(&make_created_event(&r2, "Two", "diff"))
+        .apply_event(&make_created_event(&r2, "Two", "diff"))
         .unwrap();
     store
-        .append(&RecordEvent::new(
+        .apply_event(&RecordEvent::new(
             &r1,
             "agent",
             RecordEventType::TagAdded,
@@ -1106,10 +1095,6 @@ fn test_record_store_append_then_rebuild_recovers_projection() {
             },
         ))
         .unwrap();
-
-    // Rebuild from log
-    let count = store.rebuild_projections().unwrap();
-    assert_eq!(count, 3);
 
     // Verify projected state via DB
     let total: i64 = store
@@ -1149,110 +1134,4 @@ fn test_record_status_from_str() {
         RecordStatus::Archived
     );
     assert!(RecordStatus::from_str("invalid").is_err());
-}
-
-// ─── 12. B2: SQLite-first write semantics ────────────────────────
-
-#[test]
-fn test_record_sqlite_write_succeeds_when_jsonl_dir_is_read_only() {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = TempDir::new().unwrap();
-    let records_dir = dir.path().join("records");
-    let db = Db::open_in_memory().unwrap();
-    let store = RecordStore::new(&records_dir, db).unwrap();
-
-    // Make the records directory read-only so JSONL append will fail
-    let perms = fs::Permissions::from_mode(0o555);
-    fs::set_permissions(&records_dir, perms).unwrap();
-
-    let rid = new_record_id("BRN");
-    let ev = make_created_event(&rid, "Read-only Test", "report");
-
-    // apply_and_append must succeed even though JSONL dir is read-only
-    let result = store.apply_and_append(&ev);
-    assert!(
-        result.is_ok(),
-        "apply_and_append must succeed when JSONL dir is read-only"
-    );
-
-    // Record exists in SQLite
-    let record = store.get_record(&rid).unwrap();
-    assert!(record.is_some(), "record must be in SQLite after write");
-    assert_eq!(record.unwrap().title, "Read-only Test");
-
-    // Restore permissions so TempDir cleanup works
-    let perms = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&records_dir, perms).unwrap();
-}
-
-#[test]
-fn test_record_jsonl_audit_trail_populated_on_success() {
-    use std::fs;
-
-    let dir = TempDir::new().unwrap();
-    let records_dir = dir.path().join("records");
-    let db = Db::open_in_memory().unwrap();
-    let store = RecordStore::new(&records_dir, db).unwrap();
-
-    let rid = new_record_id("BRN");
-    let ev = make_created_event(&rid, "Audit Record", "document");
-    store.apply_and_append(&ev).unwrap();
-
-    // SQLite has the record
-    assert!(store.get_record(&rid).unwrap().is_some());
-
-    // JSONL also has the event
-    let jsonl_path = records_dir.join("events.jsonl");
-    assert!(
-        jsonl_path.exists(),
-        "events.jsonl must exist after successful write"
-    );
-    let content = fs::read_to_string(&jsonl_path).unwrap();
-    assert!(!content.is_empty(), "events.jsonl must contain the event");
-    assert!(
-        content.contains(rid.as_str()),
-        "events.jsonl must reference the record id"
-    );
-}
-
-#[test]
-fn test_record_rebuild_from_jsonl_recovers_projections() {
-    let dir = TempDir::new().unwrap();
-    let records_dir = dir.path().join("records");
-    let db = Db::open_in_memory().unwrap();
-    let store = RecordStore::new(&records_dir, db).unwrap();
-
-    let r1 = new_record_id("BRN");
-    let r2 = new_record_id("BRN");
-    store
-        .apply_and_append(&make_created_event(&r1, "One", "report"))
-        .unwrap();
-    store
-        .apply_and_append(&make_created_event(&r2, "Two", "diff"))
-        .unwrap();
-
-    // Verify both in SQLite
-    assert_eq!(count_records(store.db()), 2);
-
-    // Wipe SQLite projections manually
-    store
-        .db()
-        .with_write_conn(|conn| {
-            conn.execute_batch("DELETE FROM records")
-                .map_err(Into::into)
-        })
-        .unwrap();
-    assert_eq!(count_records(store.db()), 0, "SQLite wiped");
-
-    // Rebuild from JSONL
-    let event_count = store.rebuild_projections().unwrap();
-    assert_eq!(event_count, 2);
-
-    // Both records restored
-    assert_eq!(count_records(store.db()), 2);
-    assert!(store.get_record(&r1).unwrap().is_some());
-    let r2_row = store.get_record(&r2).unwrap().unwrap();
-    assert_eq!(r2_row.title, "Two");
 }

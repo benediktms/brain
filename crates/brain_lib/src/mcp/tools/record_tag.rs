@@ -47,7 +47,7 @@ impl RecordTagAdd {
             },
         );
 
-        if let Err(e) = ctx.records.apply_and_append(&event) {
+        if let Err(e) = ctx.records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to add tag: {e}"));
         }
 
@@ -130,7 +130,7 @@ impl RecordTagRemove {
             },
         );
 
-        if let Err(e) = ctx.records.apply_and_append(&event) {
+        if let Err(e) = ctx.records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to remove tag: {e}"));
         }
 

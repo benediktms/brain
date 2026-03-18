@@ -27,10 +27,10 @@ const PLACEHOLDER_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934c
 /// Returns the stores and the shared `Db` so callers can create additional stores.
 fn make_shared_db_stores(dir: &TempDir) -> (TaskStore, TaskStore, Db) {
     let db = Db::open_in_memory().unwrap();
-    let tasks_dir_a = dir.path().join("tasks_a");
-    let tasks_dir_b = dir.path().join("tasks_b");
-    let store_a = TaskStore::with_brain_id(&tasks_dir_a, db.clone(), "brain-a", "brain-a").unwrap();
-    let store_b = TaskStore::with_brain_id(&tasks_dir_b, db.clone(), "brain-b", "brain-b").unwrap();
+    let _tasks_dir_a = dir.path().join("tasks_a");
+    let _tasks_dir_b = dir.path().join("tasks_b");
+    let store_a = TaskStore::with_brain_id(db.clone(), "brain-a", "brain-a").unwrap();
+    let store_b = TaskStore::with_brain_id(db.clone(), "brain-b", "brain-b").unwrap();
     (store_a, store_b, db)
 }
 
@@ -57,10 +57,10 @@ fn create_task(store: &TaskStore, task_id: &str, title: &str) {
 /// Create a `RecordStore` and `ObjectStore` pair from the given `Db`,
 /// scoped to `brain_id`.
 fn make_record_store(dir: &TempDir, db: Db, brain_id: &str) -> (RecordStore, ObjectStore) {
-    let records_dir = dir.path().join(format!("records_{brain_id}"));
+    let _records_dir = dir.path().join(format!("records_{brain_id}"));
     // Object store is shared — same path for both brains (unified dedup).
     let objects_dir = dir.path().join("objects");
-    let store = RecordStore::with_brain_id(&records_dir, db, brain_id, brain_id).unwrap();
+    let store = RecordStore::with_brain_id(db, brain_id, brain_id).unwrap();
     let objects = ObjectStore::new(objects_dir).unwrap();
     (store, objects)
 }
@@ -83,7 +83,7 @@ fn create_record(store: &RecordStore, record_id: &str, content_hash: &str, size:
             producer: None,
         },
     );
-    store.apply_and_append(&ev).unwrap();
+    store.apply_event(&ev).unwrap();
 }
 
 // ─── 1. Multi-brain task creation and query ──────────────────────────────────
@@ -110,8 +110,8 @@ fn test_multi_brain_task_isolation() {
     assert_eq!(tasks_b[0].task_id, "task-b1");
 
     // An unscoped store on the same DB sees all three tasks.
-    let tasks_dir_all = dir.path().join("tasks_all");
-    let store_all = TaskStore::new(&tasks_dir_all, db_all).unwrap();
+    let _tasks_dir_all = dir.path().join("tasks_all");
+    let store_all = TaskStore::new(db_all);
     let all_tasks = store_all.list_all().unwrap();
     assert_eq!(all_tasks.len(), 3, "unscoped store should see all 3 tasks");
 }
@@ -256,13 +256,13 @@ fn test_unified_object_dedup() {
 /// to the configured brain. Tasks belonging to other brains are not visible.
 #[test]
 fn test_task_store_brain_id_scoping() {
-    let dir = TempDir::new().unwrap();
+    let _dir = TempDir::new().unwrap();
 
     // Three brains sharing one DB.
     let db = Db::open_in_memory().unwrap();
-    let store_x = TaskStore::with_brain_id(&dir.path().join("tx"), db.clone(), "x", "x").unwrap();
-    let store_y = TaskStore::with_brain_id(&dir.path().join("ty"), db.clone(), "y", "y").unwrap();
-    let store_z = TaskStore::with_brain_id(&dir.path().join("tz"), db, "z", "z").unwrap();
+    let store_x = TaskStore::with_brain_id(db.clone(), "x", "x").unwrap();
+    let store_y = TaskStore::with_brain_id(db.clone(), "y", "y").unwrap();
+    let store_z = TaskStore::with_brain_id(db, "z", "z").unwrap();
 
     create_task(&store_x, "x1", "X task 1");
     create_task(&store_x, "x2", "X task 2");
@@ -313,8 +313,8 @@ fn test_record_store_brain_id_scoping() {
     assert_eq!(records_b[0].record_id, "rb1");
 
     // Unscoped store sees all records.
-    let records_dir_all = dir.path().join("records_all");
-    let store_all = RecordStore::new(&records_dir_all, db).unwrap();
+    let _records_dir_all = dir.path().join("records_all");
+    let store_all = RecordStore::new(db);
     let all_records = store_all.list_records(&filter).unwrap();
     assert_eq!(
         all_records.len(),
@@ -345,12 +345,10 @@ fn test_task_store_prefix_isolation_via_brains_table() {
         .ensure_brain_registered("brain-b", "my-cool-project")
         .unwrap();
 
-    let tasks_dir_a = dir.path().join("tasks_a");
-    let tasks_dir_b = dir.path().join("tasks_b");
-    let store_a =
-        TaskStore::with_brain_id(&tasks_dir_a, unified_db.clone(), "brain-a", "brain-a").unwrap();
-    let store_b =
-        TaskStore::with_brain_id(&tasks_dir_b, unified_db.clone(), "brain-b", "brain-b").unwrap();
+    let _tasks_dir_a = dir.path().join("tasks_a");
+    let _tasks_dir_b = dir.path().join("tasks_b");
+    let store_a = TaskStore::with_brain_id(unified_db.clone(), "brain-a", "brain-a").unwrap();
+    let store_b = TaskStore::with_brain_id(unified_db.clone(), "brain-b", "brain-b").unwrap();
 
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
@@ -377,14 +375,10 @@ fn test_record_store_prefix_isolation_via_brains_table() {
         .ensure_brain_registered("brain-b", "my-cool-project")
         .unwrap();
 
-    let records_dir_a = dir.path().join("records_a");
-    let records_dir_b = dir.path().join("records_b");
-    let store_a =
-        RecordStore::with_brain_id(&records_dir_a, unified_db.clone(), "brain-a", "brain-a")
-            .unwrap();
-    let store_b =
-        RecordStore::with_brain_id(&records_dir_b, unified_db.clone(), "brain-b", "brain-b")
-            .unwrap();
+    let _records_dir_a = dir.path().join("records_a");
+    let _records_dir_b = dir.path().join("records_b");
+    let store_a = RecordStore::with_brain_id(unified_db.clone(), "brain-a", "brain-a").unwrap();
+    let store_b = RecordStore::with_brain_id(unified_db.clone(), "brain-b", "brain-b").unwrap();
 
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
@@ -404,15 +398,13 @@ fn test_prefix_no_collision_without_meta_db() {
     let dir = TempDir::new().unwrap();
     let unified_db = Db::open_in_memory().unwrap();
 
-    let tasks_dir_a = dir.path().join("tasks_a");
-    let tasks_dir_b = dir.path().join("tasks_b");
+    let _tasks_dir_a = dir.path().join("tasks_a");
+    let _tasks_dir_b = dir.path().join("tasks_b");
 
     // `with_brain_id` calls `ensure_brain_registered(brain_id, brain_id)`,
     // so brains "brain-a" and "brain-b" get distinct prefixes.
-    let store_a =
-        TaskStore::with_brain_id(&tasks_dir_a, unified_db.clone(), "brain-a", "brain-a").unwrap();
-    let store_b =
-        TaskStore::with_brain_id(&tasks_dir_b, unified_db.clone(), "brain-b", "brain-b").unwrap();
+    let store_a = TaskStore::with_brain_id(unified_db.clone(), "brain-a", "brain-a").unwrap();
+    let store_b = TaskStore::with_brain_id(unified_db.clone(), "brain-b", "brain-b").unwrap();
 
     let prefix_a = store_a.get_project_prefix().unwrap();
     let prefix_b = store_b.get_project_prefix().unwrap();
@@ -471,7 +463,7 @@ fn test_crossbrain_prefix_not_poisoned_by_brain_meta() {
 /// into a TaskStore created for a different brain.
 #[test]
 fn test_with_brain_id_uses_brain_name_for_prefix() {
-    let dir = TempDir::new().unwrap();
+    let _dir = TempDir::new().unwrap();
     let unified_db = Db::open_in_memory().unwrap();
 
     // Poison brain_meta with host brain's prefix
@@ -480,14 +472,8 @@ fn test_with_brain_id_uses_brain_name_for_prefix() {
         .unwrap();
 
     // Create TaskStore with explicit brain_name — prefix must come from brain_name
-    let tasks_dir = dir.path().join("tasks");
-    let store = TaskStore::with_brain_id(
-        &tasks_dir,
-        unified_db.clone(),
-        "remote-id",
-        "payment-service",
-    )
-    .unwrap();
+    let store =
+        TaskStore::with_brain_id(unified_db.clone(), "remote-id", "payment-service").unwrap();
 
     let prefix = store.get_project_prefix().unwrap();
     // generate_prefix("payment-service"): two segments ["payment","service"],
@@ -513,13 +499,11 @@ fn test_multiple_crossbrain_prefixes_independent() {
         .with_write_conn(|conn| brain_lib::db::meta::set_meta(conn, "project_prefix", "BRX"))
         .unwrap();
 
-    let tasks_a = dir.path().join("tasks_a");
-    let tasks_b = dir.path().join("tasks_b");
+    let _tasks_a = dir.path().join("tasks_a");
+    let _tasks_b = dir.path().join("tasks_b");
 
-    let store_a =
-        TaskStore::with_brain_id(&tasks_a, unified_db.clone(), "brain-a", "app-checkout").unwrap();
+    let store_a = TaskStore::with_brain_id(unified_db.clone(), "brain-a", "app-checkout").unwrap();
     let store_b = TaskStore::with_brain_id(
-        &tasks_b,
         unified_db.clone(),
         "brain-b",
         "packages-buy-on-marketplace-m2",
@@ -566,18 +550,15 @@ async fn test_mcp_context_unified_db_task_scoping() {
     let brain_id_a = "brain-id-alpha";
     let brain_id_b = "brain-id-beta";
 
-    let tasks_dir_a = tmp.path().join("tasks_a");
-    let tasks_dir_b = tmp.path().join("tasks_b");
-    let records_dir_a = tmp.path().join("records_a");
+    let _tasks_dir_a = tmp.path().join("tasks_a");
+    let _tasks_dir_b = tmp.path().join("tasks_b");
+    let _records_dir_a = tmp.path().join("records_a");
     let objects_dir = tmp.path().join("objects");
 
     // Both TaskStores use the same db but different brain_ids.
-    let tasks_a =
-        TaskStore::with_brain_id(&tasks_dir_a, db.clone(), brain_id_a, brain_id_a).unwrap();
-    let tasks_b =
-        TaskStore::with_brain_id(&tasks_dir_b, db.clone(), brain_id_b, brain_id_b).unwrap();
-    let records_a =
-        RecordStore::with_brain_id(&records_dir_a, db.clone(), brain_id_a, brain_id_a).unwrap();
+    let tasks_a = TaskStore::with_brain_id(db.clone(), brain_id_a, brain_id_a).unwrap();
+    let tasks_b = TaskStore::with_brain_id(db.clone(), brain_id_b, brain_id_b).unwrap();
+    let records_a = RecordStore::with_brain_id(db.clone(), brain_id_a, brain_id_a).unwrap();
     let objects = ObjectStore::new(&objects_dir).unwrap();
 
     // Build context for brain-a.
@@ -615,9 +596,8 @@ async fn test_mcp_context_unified_db_task_scoping() {
     );
 
     // brain-b's TaskStore (same db, different brain_id) must not see alpha's task.
-    let records_dir_b2 = tmp.path().join("records_b2");
-    let records_b =
-        RecordStore::with_brain_id(&records_dir_b2, db.clone(), brain_id_b, brain_id_b).unwrap();
+    let _records_dir_b2 = tmp.path().join("records_b2");
+    let records_b = RecordStore::with_brain_id(db.clone(), brain_id_b, brain_id_b).unwrap();
     let objects_b = ObjectStore::new(tmp.path().join("objects_b")).unwrap();
     let ctx_b = McpContext {
         db: db.clone(),
