@@ -283,6 +283,26 @@ pub fn resolve_brain_id(entry: &BrainEntry, _name: &str) -> Result<String> {
     }
 }
 
+/// Resolve a brain by any identifier, trying DB first then TOML fallback.
+///
+/// Used by CLI commands that may run without a daemon. When the daemon has
+/// projected config.toml into the brains table, DB resolution is fast and
+/// supports aliases/roots. Falls back to TOML parsing on cold start.
+pub fn resolve_brain_with_fallback(
+    db: Option<&crate::db::Db>,
+    name_or_id: &str,
+) -> Result<(String, String)> {
+    if let Some(db) = db {
+        if let Ok((id, name)) = db.resolve_brain(name_or_id) {
+            return Ok((name, id));
+        }
+    }
+    // Fallback to TOML parsing (cold start, daemon not running)
+    let (name, entry) = resolve_brain_entry(name_or_id)?;
+    let bid = resolve_brain_id(&entry, &name)?;
+    Ok((name, bid))
+}
+
 /// Open a local [`crate::tasks::TaskStore`] for a brain identified by `name`.
 ///
 /// Resolves the brain's data paths, creates the database directory if needed,

@@ -152,6 +152,13 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     let db_path = brains_dir.join("brain.db");
     seed_project_prefix_if_missing(&db_path, &brain_name)?;
 
+    // Register the brain in the brains table — ensures brains.prefix is populated
+    // from brain_name. This is the single source of truth for prefix resolution.
+    {
+        let db = brain_lib::db::Db::open(&db_path)?;
+        db.ensure_brain_registered(&brain_id, &brain_name)?;
+    }
+
     // 5b. One-time import: if the project already has a .brain/tasks/events.jsonl
     // (e.g. this is a cloned repo), replay those events into the unified SQLite.
     let project_jsonl = brain_dir.join("tasks").join("events.jsonl");
@@ -197,7 +204,7 @@ fn import_project_jsonl(db_path: &Path, brain_id: &str, jsonl_path: &Path) {
             .parent()
             .map(|p| p.join("tasks"))
             .unwrap_or_else(|| PathBuf::from("tasks"));
-        let store = brain_lib::tasks::TaskStore::with_brain_id(&tasks_dir, db, brain_id)?;
+        let store = brain_lib::tasks::TaskStore::with_brain_id(&tasks_dir, db, brain_id, brain_id)?;
         Ok(store.import_from_jsonl(jsonl_path)?)
     })();
     match result {

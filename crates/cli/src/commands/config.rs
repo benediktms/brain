@@ -37,7 +37,6 @@ pub fn run_config_get(sqlite_db: &Path, key: &str) -> Result<()> {
     let db = brain_lib::db::Db::open(sqlite_db)?;
     db.with_write_conn(|conn| match key {
         "prefix" => {
-            // Try brains.prefix first
             let brain_name = brain_name_from_path(sqlite_db);
             if let Some(prefix) = read_brain_prefix(conn, &brain_name)?
                 .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
@@ -45,10 +44,10 @@ pub fn run_config_get(sqlite_db: &Path, key: &str) -> Result<()> {
                 println!("{prefix}");
                 return Ok(());
             }
-            // Fallback: legacy brain_meta
+            // Fallback for legacy brains initialized before brains.prefix existed
             let brain_dir = sqlite_db.parent().unwrap_or(Path::new("."));
-            let prefix = brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
-            println!("{prefix}");
+            let fallback = brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)?;
+            println!("{fallback}");
             Ok(())
         }
         other => Err(brain_lib::error::BrainCoreError::Config(format!(
@@ -69,13 +68,9 @@ pub fn run_config_set(sqlite_db: &Path, key: &str, value: Option<String>) -> Res
 
             let db = brain_lib::db::Db::open(sqlite_db)?;
             let (old_prefix, new_prefix) = db.with_write_conn(|conn| {
-                // Read current prefix: brains.prefix → brain_meta fallback
                 let old = read_brain_prefix(conn, &brain_name)?
                     .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
-                    .map(Ok)
-                    .unwrap_or_else(|| {
-                        brain_lib::db::meta::get_or_init_project_prefix(conn, brain_dir)
-                    })?;
+                    .unwrap_or_else(|| "BRN".to_string());
 
                 let new = match value {
                     Some(ref v) => {
@@ -102,8 +97,6 @@ pub fn run_config_set(sqlite_db: &Path, key: &str, value: Option<String>) -> Res
                     rusqlite::params![new, brain_name],
                 )?;
 
-                // Also write to brain_meta for backward compatibility
-                brain_lib::db::meta::set_meta(conn, "project_prefix", &new)?;
                 Ok((old, new))
             })?;
             drop(db);

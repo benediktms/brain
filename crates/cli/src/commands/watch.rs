@@ -26,6 +26,9 @@ use tracing::{debug, info, warn};
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
 use tokio::signal::unix::SignalKind;
 
+use brain_lib::db::meta::generate_prefix;
+use brain_lib::db::schema::BrainProjection;
+
 /// Outcome of the watch shutdown sequence.
 #[allow(dead_code)]
 pub struct ShutdownOutcome {
@@ -421,12 +424,45 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     info!(brains = brains.len(), "multi-brain daemon started");
 
-    // ── 3b. Start IPC server ─────────────────────────────────────────────
-    // Build brain name → brain_id map for the router.
-    let ipc_brain_map: HashMap<String, String> = brains
-        .iter()
-        .map(|(name, inst)| (name.clone(), inst.mcp_context.brain_id.clone()))
-        .collect();
+    // ── 3b. Project config.toml into brains table ────────────────────────
+    // Projects all registered brains into the SQL brains table so that
+    // resolve_brain() can look up by name, alias, or root path without
+    // parsing config.toml on every request.
+    {
+        let shared_db = &brains
+            .values()
+            .next()
+            .expect("at least one brain")
+            .mcp_context
+            .db;
+        let projections: Vec<BrainProjection> = brains
+            .iter()
+            .filter_map(|(name, inst)| {
+                global_cfg.brains.get(name).map(|entry| BrainProjection {
+                    brain_id: inst.mcp_context.brain_id.clone(),
+                    name: name.clone(),
+                    prefix: generate_prefix(name),
+                    roots_json: serde_json::to_string(&entry.roots)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    notes_json: serde_json::to_string(&entry.notes)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    aliases_json: serde_json::to_string(&entry.aliases)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    archived: entry.archived,
+                })
+            })
+            .collect();
+        if let Err(e) = shared_db.project_config_to_brains(&projections) {
+            warn!(error = %e, "failed to project config into brains table");
+        } else {
+            info!(
+                brains = projections.len(),
+                "brain registry projected into DB"
+            );
+        }
+    }
+
+    // ── 3c. Start IPC server ─────────────────────────────────────────────
     // Use the first brain's McpContext as the shared base (all brains share
     // the unified ~/.brain/brain.db so any instance's Db is the right one).
     let shared_ctx = brains
@@ -434,7 +470,8 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         .next()
         .map(|inst| Arc::clone(&inst.mcp_context))
         .expect("at least one brain is initialised");
-    let router = BrainRouter::new(shared_ctx, ipc_brain_map);
+    let default_brain_id = shared_ctx.brain_id.clone();
+    let router = BrainRouter::new(shared_ctx, default_brain_id);
 
     let sock_path = brain_home()
         .map(|h| h.join("brain.sock"))
@@ -473,6 +510,42 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
         }
     }
+
+    // ── 5b. Separate notify watcher for config.toml ───────────────────────
+    // BrainWatcher filters for .md files only (is_markdown()), so config.toml
+    // events would be silently dropped. A separate watcher is required.
+    let config_path = brain_home()?.join("config.toml");
+    let config_dir = config_path.parent().unwrap().to_path_buf();
+    let (config_tx, mut config_rx) = tokio::sync::mpsc::channel::<()>(4);
+
+    let _config_watcher = {
+        let config_tx = config_tx.clone();
+        let config_file = config_path.file_name().unwrap().to_owned();
+        notify_debouncer_full::new_debouncer(
+            Duration::from_millis(500),
+            None,
+            move |result: notify_debouncer_full::DebounceEventResult| {
+                if let Ok(events) = result {
+                    let is_config = events
+                        .iter()
+                        .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&config_file)));
+                    if is_config {
+                        let _ = config_tx.blocking_send(());
+                    }
+                }
+            },
+        )
+        .and_then(|mut w| {
+            w.watch(
+                &config_dir,
+                notify_debouncer_full::notify::RecursiveMode::NonRecursive,
+            )?;
+            info!(path = %config_dir.display(), "watching config.toml for changes");
+            Ok(w)
+        })
+        .map_err(|e| warn!(error = %e, "failed to watch config.toml; changes won't auto-reload"))
+        .ok()
+    };
 
     // ── 6. Signal handlers ───────────────────────────────────────────────
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -601,24 +674,25 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             _ = root_validation_tick.tick() => {
                 if validate_roots(&mut brains, &mut watcher) {
                     prefix_map = build_prefix_map(&brains);
-                    let updated_brain_map: HashMap<String, String> = brains
-                        .iter()
-                        .map(|(name, inst)| (name.clone(), inst.mcp_context.brain_id.clone()))
-                        .collect();
-                    router.update_brains(updated_brain_map).await;
+                }
+            }
+            _ = config_rx.recv() => {
+                info!("config.toml changed, reloading brain registry");
+                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
+                    Ok(()) => {
+                        prefix_map = build_prefix_map(&brains);
+                        info!(brains = brains.len(), "brain registry re-projected from config.toml");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "config.toml reload failed");
+                    }
                 }
             }
             _ = sighup.recv() => {
                 info!("received SIGHUP, reloading brain registry");
-                match reload_brains(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
+                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
                     Ok(()) => {
                         prefix_map = build_prefix_map(&brains);
-                        // Rebuild brain_id map and update the IPC router.
-                        let updated_brain_map: HashMap<String, String> = brains
-                            .iter()
-                            .map(|(name, inst)| (name.clone(), inst.mcp_context.brain_id.clone()))
-                            .collect();
-                        router.update_brains(updated_brain_map).await;
                         info!(brains = brains.len(), "brain registry reloaded");
                     }
                     Err(e) => {
@@ -922,6 +996,47 @@ fn sync_brain_ids(global_cfg: &brain_lib::config::GlobalConfig) {
             }
         }
     }
+}
+
+/// Reload the brain registry and re-project all brains into the SQL brains table.
+///
+/// Combines `reload_brains()` with a fresh projection so that SQL-based brain
+/// resolution stays in sync after any config change or SIGHUP. Called by both
+/// the config.toml watcher and the SIGHUP handler.
+async fn reload_and_project(
+    brains: &mut HashMap<String, BrainInstance>,
+    watcher: &mut BrainWatcher,
+    embedder: Arc<dyn Embed>,
+) -> Result<()> {
+    reload_brains(brains, watcher, Arc::clone(&embedder)).await?;
+
+    // Load the freshest config after reload to build projections.
+    let cfg = load_global_config()?;
+
+    if let Some(db) = brains.values().next().map(|inst| &inst.mcp_context.db) {
+        let projections: Vec<BrainProjection> = brains
+            .iter()
+            .filter_map(|(name, inst)| {
+                cfg.brains.get(name).map(|entry| BrainProjection {
+                    brain_id: inst.mcp_context.brain_id.clone(),
+                    name: name.clone(),
+                    prefix: generate_prefix(name),
+                    roots_json: serde_json::to_string(&entry.roots)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    notes_json: serde_json::to_string(&entry.notes)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    aliases_json: serde_json::to_string(&entry.aliases)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    archived: entry.archived,
+                })
+            })
+            .collect();
+        if let Err(e) = db.project_config_to_brains(&projections) {
+            warn!(error = %e, "failed to re-project config into brains table");
+        }
+    }
+
+    Ok(())
 }
 
 /// Reload the brain registry from disk, diffing against the current state.

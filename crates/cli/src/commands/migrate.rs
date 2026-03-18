@@ -324,7 +324,7 @@ fn migrate_one_brain(
     // which we don't use here — we pass explicit paths to import_from_jsonl.
     let dummy_tasks_dir = std::env::temp_dir().join("brain-migrate-tasks");
     let task_store =
-        brain_lib::tasks::TaskStore::with_brain_id(&dummy_tasks_dir, db.clone(), brain_id)?;
+        brain_lib::tasks::TaskStore::with_brain_id(&dummy_tasks_dir, db.clone(), brain_id, name)?;
 
     let mut total_tasks = 0usize;
     for path in &jsonl.task_sources {
@@ -336,8 +336,12 @@ fn migrate_one_brain(
 
     // Replay record JSONL sources.
     let dummy_records_dir = std::env::temp_dir().join("brain-migrate-records");
-    let record_store =
-        brain_lib::records::RecordStore::with_brain_id(&dummy_records_dir, db.clone(), brain_id)?;
+    let record_store = brain_lib::records::RecordStore::with_brain_id(
+        &dummy_records_dir,
+        db.clone(),
+        brain_id,
+        name,
+    )?;
 
     let mut total_records = 0usize;
     for path in &jsonl.record_sources {

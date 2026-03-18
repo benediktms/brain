@@ -5,7 +5,6 @@
 //! behaviour. All tests use tokio multi-thread runtime to support concurrent
 //! connection tests.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::json;
@@ -26,9 +25,10 @@ async fn start_server(
     sock: &std::path::Path,
 ) -> (tempfile::TempDir, tokio_util::sync::CancellationToken) {
     let (dir, ctx) = create_test_context().await;
-    let mut map = HashMap::new();
-    map.insert("test-brain".to_string(), String::new());
-    let router = BrainRouter::new(Arc::new(ctx), map);
+    ctx.db
+        .ensure_brain_registered("test-brain", "test-brain")
+        .unwrap();
+    let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
     let server = IpcServer::bind(sock, router).expect("bind failed");
     let token = server.cancellation_token();
     let token2 = token.clone();
@@ -313,9 +313,10 @@ async fn ipc_stale_socket_cleanup() {
 
     // Bind should detect the stale file, remove it, and succeed.
     let (dir, ctx) = create_test_context().await;
-    let mut map = HashMap::new();
-    map.insert("test-brain".to_string(), String::new());
-    let router = BrainRouter::new(Arc::new(ctx), map);
+    ctx.db
+        .ensure_brain_registered("test-brain", "test-brain")
+        .unwrap();
+    let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
 
     let server = IpcServer::bind(&sock, router).expect("bind should succeed after stale removal");
     let token = server.cancellation_token();
@@ -386,9 +387,10 @@ async fn ipc_graceful_shutdown() {
     let sock = tmp.path().join("shutdown.sock");
 
     let (dir, ctx) = create_test_context().await;
-    let mut map = HashMap::new();
-    map.insert("test-brain".to_string(), String::new());
-    let router = BrainRouter::new(Arc::new(ctx), map);
+    ctx.db
+        .ensure_brain_registered("test-brain", "test-brain")
+        .unwrap();
+    let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
 
     let server = IpcServer::bind(&sock, router).expect("bind failed");
     let token = server.cancellation_token();

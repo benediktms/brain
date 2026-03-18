@@ -23,6 +23,7 @@ chrono = { workspace = true }
 toml = "0.8"
 libc = "0.2"
 dirs = "6"
+notify-debouncer-full = "0.7"
 rusqlite = { workspace = true }
 blake3 = { workspace = true }
 

@@ -200,8 +200,6 @@ fn serialize_error(err: &JsonRpcError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
@@ -212,9 +210,10 @@ mod tests {
 
     async fn start_test_server(socket_path: &Path) -> CancellationToken {
         let (_dir, ctx) = create_test_context().await;
-        let mut map = HashMap::new();
-        map.insert("test-brain".to_string(), String::new());
-        let router = BrainRouter::new(Arc::new(ctx), map);
+        ctx.db
+            .ensure_brain_registered("test-brain", "test-brain")
+            .unwrap();
+        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
         let server = IpcServer::bind(socket_path, router).expect("bind failed");
         let token = server.cancellation_token();
         let token2 = token.clone();

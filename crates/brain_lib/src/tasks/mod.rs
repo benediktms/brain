@@ -19,11 +19,6 @@ use events::TaskEvent;
 pub struct TaskStore {
     events_path: PathBuf,
     db: Db,
-    /// Optional per-brain DB for `brain_meta` lookups (project prefix).
-    ///
-    /// When set, `get_project_prefix()` reads from this DB instead of
-    /// `self.db`, avoiding prefix collision in the unified DB.
-    meta_db: Option<Db>,
     /// Brain ID that scopes this store's reads and writes.
     ///
     /// Empty string means "all brains" (legacy / single-brain mode).
@@ -50,23 +45,26 @@ impl TaskStore {
         Ok(Self {
             events_path: tasks_dir.join("events.jsonl"),
             db,
-            meta_db: None,
             brain_id: String::new(),
             audit_path: None,
         })
     }
 
     /// Create a new TaskStore with an explicit brain_id scope.
-    pub fn with_brain_id(tasks_dir: &std::path::Path, db: Db, brain_id: &str) -> Result<Self> {
+    pub fn with_brain_id(
+        tasks_dir: &std::path::Path,
+        db: Db,
+        brain_id: &str,
+        brain_name: &str,
+    ) -> Result<Self> {
         std::fs::create_dir_all(tasks_dir)?;
         // Ensure the brain is registered — FK on brain_id requires it.
         if !brain_id.is_empty() {
-            db.ensure_brain_registered(brain_id, brain_id)?;
+            db.ensure_brain_registered(brain_id, brain_name)?;
         }
         Ok(Self {
             events_path: tasks_dir.join("events.jsonl"),
             db,
-            meta_db: None,
             brain_id: brain_id.to_string(),
             audit_path: None,
         })
@@ -79,15 +77,6 @@ impl TaskStore {
     /// git-trackable audit trail. Parent directories are created on first write.
     pub fn with_audit_path(mut self, path: PathBuf) -> Self {
         self.audit_path = Some(path);
-        self
-    }
-
-    /// Set a separate DB for `brain_meta` lookups (project prefix).
-    ///
-    /// In multi-brain setups the per-brain DB holds the correct prefix while
-    /// `self.db` (unified) would return a shared/colliding one.
-    pub fn with_meta_db(mut self, db: Db) -> Self {
-        self.meta_db = Some(db);
         self
     }
 
@@ -439,8 +428,8 @@ impl TaskStore {
 
     /// Get the project prefix for this brain.
     ///
-    /// When `brain_id` is set, reads from `brains.prefix` (per-brain column).
-    /// Falls back to `brain_meta.project_prefix` for legacy/unscoped mode.
+    /// Reads from `brains.prefix` (per-brain column). If `brain_id` is not
+    /// set or the prefix is missing/invalid, returns an error.
     pub fn get_project_prefix(&self) -> Result<String> {
         let brain_id = self.brain_id.clone();
         if !brain_id.is_empty() {
@@ -460,10 +449,12 @@ impl TaskStore {
             {
                 return Ok(prefix.clone());
             }
+            return Err(crate::error::BrainCoreError::Config(
+                "brains.prefix not set for this brain".into(),
+            ));
         }
-        // Fallback: legacy brain_meta path
-        let db = self.meta_db.as_ref().unwrap_or(&self.db);
-        db.with_write_conn(|conn| {
+        // Unscoped/legacy mode: fall back to brain_meta
+        self.db.with_write_conn(|conn| {
             let brain_dir = self
                 .events_path
                 .parent()

@@ -32,7 +32,7 @@ impl RecordGet {
                         return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                     }
                 };
-                match ctx.records_for_brain(&bid) {
+                match ctx.records_for_brain(&bid, &brain_name) {
                     Ok(recs) => Some((brain_name, recs)),
                     Err(e) => {
                         return ToolCallResult::error(format!("Failed to open brain stores: {e}"));

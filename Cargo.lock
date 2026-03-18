@@ -628,6 +628,7 @@ dependencies = [
  "clap",
  "dirs",
  "libc",
+ "notify-debouncer-full",
  "predicates",
  "rusqlite",
  "serde_json",

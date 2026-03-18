@@ -130,14 +130,14 @@ impl BrainStores {
         let tasks = if brain_id_str.is_empty() {
             TaskStore::new(&tasks_dir, db.clone())?
         } else {
-            TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id_str)?
+            TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id_str, &brain_id_str)?
         };
 
         let records_dir = tmp.path().join("records");
         let records = if brain_id_str.is_empty() {
             RecordStore::new(&records_dir, db.clone())?
         } else {
-            RecordStore::with_brain_id(&records_dir, db.clone(), &brain_id_str)?
+            RecordStore::with_brain_id(&records_dir, db.clone(), &brain_id_str, &brain_id_str)?
         };
 
         let objects_dir = tmp.path().join("objects");
@@ -232,14 +232,14 @@ impl BrainStores {
         let tasks = if brain_id.is_empty() {
             TaskStore::new(&tasks_dir, db.clone())?
         } else {
-            TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id)?
+            TaskStore::with_brain_id(&tasks_dir, db.clone(), &brain_id, &brain_name)?
         };
 
         let records_dir = brain_data_dir.join("records");
         let records = if brain_id.is_empty() {
             RecordStore::new(&records_dir, db.clone())?
         } else {
-            RecordStore::with_brain_id(&records_dir, db.clone(), &brain_id)?
+            RecordStore::with_brain_id(&records_dir, db.clone(), &brain_id, &brain_name)?
         };
 
         // ObjectStore: prefer unified brain_home/objects when available.

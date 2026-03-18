@@ -127,6 +127,21 @@ impl Db {
         self.with_write_conn(|conn| schema::ensure_brain_registered(conn, brain_id, brain_name))
     }
 
+    /// Project config.toml brain entries into the brains table.
+    ///
+    /// Sets projected=1 for all provided brains. Stale projected rows (no longer
+    /// in config) are cleared to projected=0. Preserves existing prefix values.
+    pub fn project_config_to_brains(&self, brains: &[schema::BrainProjection]) -> Result<()> {
+        self.with_write_conn(|conn| schema::project_config_to_brains(conn, brains))
+    }
+
+    /// Resolve a brain by name, brain_id, alias, or root path.
+    ///
+    /// Returns `(brain_id, name)`. Resolution order: name → id → alias → root path.
+    pub fn resolve_brain(&self, input: &str) -> Result<(String, String)> {
+        self.with_read_conn(|conn| schema::resolve_brain(conn, input))
+    }
+
     /// Flush the WAL file to the main database and truncate it.
     ///
     /// This ensures all committed transactions are persisted to the main

@@ -147,7 +147,7 @@ impl TaskCreate {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            let remote_tasks = match ctx.tasks_for_brain(&bid) {
+            let remote_tasks = match ctx.tasks_for_brain(&bid, &remote_brain_name) {
                 Ok(t) => t,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to open brain stores: {e}"));

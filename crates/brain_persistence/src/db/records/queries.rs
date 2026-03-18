@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::db::meta;
 use crate::error::{BrainCoreError, Result};
 
 /// Minimum ULID prefix length (after project prefix + separator).
@@ -196,10 +195,10 @@ pub fn record_exists(conn: &Connection, record_id: &str) -> Result<bool> {
 /// - Fast path: exact match
 /// - Normalize to uppercase
 /// - Handle prefixed IDs (e.g. "BRN-01JPH...")
-/// - Handle bare ULID prefix (auto-prepend project prefix from brain_meta)
+/// - Handle bare ULID prefix (auto-prepend project prefix from brains.prefix)
 /// - Range scan on PRIMARY KEY
 /// - Error on ambiguous/not-found
-pub fn resolve_record_id(conn: &Connection, input: &str) -> Result<String> {
+pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> Result<String> {
     // Fast path: exact match
     if record_exists(conn, input)? {
         return Ok(input.to_string());
@@ -231,8 +230,19 @@ pub fn resolve_record_id(conn: &Connection, input: &str) -> Result<String> {
                     normalized.len()
                 )));
             }
-            let prefix =
-                meta::get_meta(conn, "project_prefix")?.unwrap_or_else(|| "BRN".to_string());
+            let prefix = if !brain_id.is_empty() {
+                conn.query_row(
+                    "SELECT prefix FROM brains WHERE brain_id = ?1",
+                    [brain_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten()
+                .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
+                .unwrap_or_else(|| "BRN".to_string())
+            } else {
+                "BRN".to_string()
+            };
             format!("{prefix}-{normalized}")
         }
     };
@@ -690,7 +700,7 @@ mod tests {
     fn test_resolve_exact_match() {
         let conn = setup();
         create_record(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Record", "report");
-        let resolved = resolve_record_id(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M").unwrap();
+        let resolved = resolve_record_id(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "").unwrap();
         assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
     }
 
@@ -698,7 +708,7 @@ mod tests {
     fn test_resolve_prefix() {
         let conn = setup();
         create_record(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Record", "report");
-        let resolved = resolve_record_id(&conn, "BRN-01JPHZ").unwrap();
+        let resolved = resolve_record_id(&conn, "BRN-01JPHZ", "").unwrap();
         assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
     }
 
@@ -706,7 +716,7 @@ mod tests {
     fn test_resolve_case_insensitive() {
         let conn = setup();
         create_record(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Record", "report");
-        let resolved = resolve_record_id(&conn, "brn-01jphz").unwrap();
+        let resolved = resolve_record_id(&conn, "brn-01jphz", "").unwrap();
         assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
     }
 
@@ -715,7 +725,7 @@ mod tests {
         let conn = setup();
         crate::db::meta::set_meta(&conn, "project_prefix", "BRN").unwrap();
         create_record(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Record", "report");
-        let resolved = resolve_record_id(&conn, "01JPHZ").unwrap();
+        let resolved = resolve_record_id(&conn, "01JPHZ", "").unwrap();
         assert_eq!(resolved, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M");
     }
 
@@ -723,7 +733,7 @@ mod tests {
     fn test_resolve_not_found() {
         let conn = setup();
         create_record(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Record", "report");
-        let result = resolve_record_id(&conn, "BRN-99ZZZZ");
+        let result = resolve_record_id(&conn, "BRN-99ZZZZ", "");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("no record found"));
     }
@@ -733,7 +743,7 @@ mod tests {
         let conn = setup();
         create_record(&conn, "BRN-01JPHZAAAA", "Record A", "report");
         create_record(&conn, "BRN-01JPHZAAAB", "Record B", "report");
-        let result = resolve_record_id(&conn, "BRN-01JPHZAAA");
+        let result = resolve_record_id(&conn, "BRN-01JPHZAAA", "");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("ambiguous"));
     }
@@ -742,7 +752,7 @@ mod tests {
     fn test_resolve_too_short() {
         let conn = setup();
         create_record(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Record", "report");
-        let result = resolve_record_id(&conn, "BRN-01J");
+        let result = resolve_record_id(&conn, "BRN-01J", "");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("too short"));
     }

@@ -372,11 +372,6 @@ pub struct SnapshotRecord {
 pub struct RecordStore {
     events_path: PathBuf,
     db: Db,
-    /// Optional per-brain DB for `brain_meta` lookups (project prefix).
-    ///
-    /// When set, `get_project_prefix()` reads from this DB instead of
-    /// `self.db`, avoiding prefix collision in the unified DB.
-    meta_db: Option<Db>,
     /// Brain ID that scopes this store's reads and writes.
     ///
     /// Empty string means "all brains" (legacy / single-brain mode).
@@ -394,33 +389,27 @@ impl RecordStore {
         Ok(Self {
             events_path: records_dir.join("events.jsonl"),
             db,
-            meta_db: None,
             brain_id: String::new(),
         })
     }
 
     /// Create a new `RecordStore` with an explicit brain_id scope.
-    pub fn with_brain_id(records_dir: &std::path::Path, db: Db, brain_id: &str) -> Result<Self> {
+    pub fn with_brain_id(
+        records_dir: &std::path::Path,
+        db: Db,
+        brain_id: &str,
+        brain_name: &str,
+    ) -> Result<Self> {
         std::fs::create_dir_all(records_dir)?;
         // Ensure the brain is registered — FK on brain_id requires it.
         if !brain_id.is_empty() {
-            db.ensure_brain_registered(brain_id, brain_id)?;
+            db.ensure_brain_registered(brain_id, brain_name)?;
         }
         Ok(Self {
             events_path: records_dir.join("events.jsonl"),
             db,
-            meta_db: None,
             brain_id: brain_id.to_string(),
         })
-    }
-
-    /// Set a separate DB for `brain_meta` lookups (project prefix).
-    ///
-    /// In multi-brain setups the per-brain DB holds the correct prefix while
-    /// `self.db` (unified) would return a shared/colliding one.
-    pub fn with_meta_db(mut self, db: Db) -> Self {
-        self.meta_db = Some(db);
-        self
     }
 
     /// Append a validated event to the log.
@@ -557,8 +546,9 @@ impl RecordStore {
     }
 
     pub fn resolve_record_id(&self, input: &str) -> Result<String> {
+        let brain_id = self.brain_id.clone();
         self.db
-            .with_read_conn(|conn| queries::resolve_record_id(conn, input))
+            .with_read_conn(|conn| queries::resolve_record_id(conn, input, &brain_id))
     }
 
     pub fn compact_record_id(&self, record_id: &str) -> Result<String> {
@@ -572,8 +562,8 @@ impl RecordStore {
 
     /// Get the project prefix for record ID generation.
     ///
-    /// When `brain_id` is set, reads from `brains.prefix` (per-brain column).
-    /// Falls back to `brain_meta.project_prefix` for legacy/unscoped mode.
+    /// Reads from `brains.prefix` (per-brain column). If `brain_id` is not
+    /// set or the prefix is missing/invalid, returns an error.
     pub fn get_project_prefix(&self) -> Result<String> {
         if !self.brain_id.is_empty() {
             let brain_id = self.brain_id.clone();
@@ -593,12 +583,18 @@ impl RecordStore {
             {
                 return Ok(prefix.clone());
             }
+            return Err(crate::error::BrainCoreError::Config(
+                "brains.prefix not set for this brain".into(),
+            ));
         }
-        // Fallback: legacy brain_meta path
-        let db = self.meta_db.as_ref().unwrap_or(&self.db);
-        db.with_read_conn(|conn| {
-            Ok(crate::db::meta::get_meta(conn, "project_prefix")?
-                .unwrap_or_else(|| "BRN".to_string()))
+        // Unscoped/legacy mode: fall back to brain_meta
+        self.db.with_write_conn(|conn| {
+            let brain_dir = self
+                .events_path
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or(std::path::Path::new("."));
+            crate::db::meta::get_or_init_project_prefix(conn, brain_dir)
         })
     }
 
@@ -938,7 +934,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let records_dir = dir.path().join("records");
         let db = crate::db::Db::open_in_memory().unwrap();
-        let store = RecordStore::with_brain_id(&records_dir, db, "test-brain").unwrap();
+        let store =
+            RecordStore::with_brain_id(&records_dir, db, "test-brain", "test-brain").unwrap();
 
         // Write two events to JSONL
         let ev1 = RecordEvent::from_payload(
@@ -996,7 +993,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let records_dir = dir.path().join("records");
         let db = crate::db::Db::open_in_memory().unwrap();
-        let store = RecordStore::with_brain_id(&records_dir, db, "test-brain").unwrap();
+        let store =
+            RecordStore::with_brain_id(&records_dir, db, "test-brain", "test-brain").unwrap();
 
         let missing = dir.path().join("nonexistent.jsonl");
         let count = store.import_from_jsonl(&missing).unwrap();

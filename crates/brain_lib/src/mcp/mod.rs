@@ -13,7 +13,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::config::resolve_brain_entry;
 use crate::db::Db;
 use crate::embedder::{Embed, Embedder};
 use crate::ipc::client::IpcClient;
@@ -197,26 +196,35 @@ impl McpContext {
         Ok((store, store_reader, embedder))
     }
 
-    /// Resolve a brain name or ID to a `(brain_name, brain_id)` pair.
+    /// Resolve a brain name or ID to a `(brain_name, brain_id)` pair via the DB.
     ///
-    /// Looks up the global config registry to find the brain entry, then
-    /// resolves its stable ID.
+    /// Note: returns `(name, id)` to match the convention used by all MCP tool
+    /// callers. The underlying `Db::resolve_brain` returns `(id, name)`.
     pub fn resolve_brain_id(&self, name_or_id: &str) -> crate::error::Result<(String, String)> {
-        let (name, entry) = resolve_brain_entry(name_or_id)?;
-        let bid = crate::config::resolve_brain_id(&entry, &name)?;
-        Ok((name, bid))
+        let (id, name) = self.db.resolve_brain(name_or_id).map_err(|e| {
+            crate::error::BrainCoreError::Config(format!("brain resolution failed: {e}"))
+        })?;
+        Ok((name, id))
     }
 
     /// Create a brain_id-scoped TaskStore sharing this context's db handle.
-    pub fn tasks_for_brain(&self, brain_id: &str) -> crate::error::Result<TaskStore> {
+    pub fn tasks_for_brain(
+        &self,
+        brain_id: &str,
+        brain_name: &str,
+    ) -> crate::error::Result<TaskStore> {
         let tasks_dir = self.brain_home.join("tasks");
-        TaskStore::with_brain_id(&tasks_dir, self.db.clone(), brain_id)
+        TaskStore::with_brain_id(&tasks_dir, self.db.clone(), brain_id, brain_name)
     }
 
     /// Create a brain_id-scoped RecordStore sharing this context's db handle.
-    pub fn records_for_brain(&self, brain_id: &str) -> crate::error::Result<RecordStore> {
+    pub fn records_for_brain(
+        &self,
+        brain_id: &str,
+        brain_name: &str,
+    ) -> crate::error::Result<RecordStore> {
         let records_dir = self.brain_home.join("records");
-        RecordStore::with_brain_id(&records_dir, self.db.clone(), brain_id)
+        RecordStore::with_brain_id(&records_dir, self.db.clone(), brain_id, brain_name)
     }
 
     /// Clone this context with a different brain_id.
@@ -229,8 +237,8 @@ impl McpContext {
         brain_id: &str,
         brain_name: &str,
     ) -> crate::error::Result<Arc<Self>> {
-        let tasks = self.tasks_for_brain(brain_id)?;
-        let records = self.records_for_brain(brain_id)?;
+        let tasks = self.tasks_for_brain(brain_id, brain_name)?;
+        let records = self.records_for_brain(brain_id, brain_name)?;
         let objects = ObjectStore::new(self.objects.root())?;
         Ok(Arc::new(Self {
             db: self.db.clone(),

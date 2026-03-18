@@ -36,13 +36,13 @@ impl TaskLabelsBatch {
 
         // Remote brain path
         if let Some(ref brain) = params.brain {
-            let (_brain_name, bid) = match ctx.resolve_brain_id(brain) {
+            let (brain_name, bid) = match ctx.resolve_brain_id(brain) {
                 Ok(r) => r,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            let remote_tasks = match ctx.tasks_for_brain(&bid) {
+            let remote_tasks = match ctx.tasks_for_brain(&bid, &brain_name) {
                 Ok(t) => t,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
