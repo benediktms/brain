@@ -370,7 +370,7 @@ The workspace has three crates:
 ### Dependency rules
 
 - `brain_lib` must NOT depend on `lancedb`, `arrow-schema`, or `arrow-array` directly — enforced by `just check-deps`
-- `brain_lib` defines persistence port traits in `brain_lib::ports` (13 traits covering LanceDB and SQLite operations)
+- `brain_lib` defines persistence port traits in `brain_lib::ports` (17 traits covering LanceDB and SQLite operations)
 - Trait implementations live in `brain_lib::ports` (impl blocks for concrete types from `brain_persistence`)
 - Schema migrations live in `brain_persistence`
 - Pipelines are generic over store and DB types: `IndexPipeline<S = Store>`, `QueryPipeline<'a, S = StoreReader, D = Db>`
@@ -384,14 +384,14 @@ This project uses `brain` for task tracking. **Always use MCP tools for task ope
 When running as an MCP server (`brain mcp`), these tools are available:
 
 **Task tools:**
-- `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
+- `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`, `external_id_added`, `external_id_removed`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
 - `tasks_create` — Create a task with a flat schema (no event envelope). Required param: `title`. Optional: `description`, `priority` (0-4, default 4), `task_type` (task|bug|feature|epic|spike), `assignee`, `parent` (task ID prefix), `due_ts` (ISO 8601), `defer_until` (ISO 8601), `actor` (default: mcp). For remote creation: add `brain` (target brain name or ID from registry); optionally `link_from` (local task ID) and `link_type` (depends_on|blocks|related, default: related). Returns `{task_id, task, unblocked_task_ids}` for local creation, or `{remote_task_id, remote_brain_name, remote_brain_id, local_ref_created}` for remote creation.
-- `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`, `in_progress` (exact match), `cancelled` (exact match). Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description).
-- `tasks_get` — Get full task details including relationships, comments, labels, and linked notes. Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
+- `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`, `in_progress` (exact match), `cancelled` (exact match). Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description). Optional `brain` parameter for cross-brain queries.
+- `tasks_get` — Get full task details including relationships, comments, labels, linked notes, and external IDs (`external_ids`). Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
 - `tasks_next` — Get highest-priority ready tasks sorted by status (in-progress first), then priority, then due date. Use for "what should I work on?" queries.
 - `tasks_close` — Close one or more tasks by ID/prefix. Accepts a single string or array of task IDs. Returns closed tasks and newly unblocked task IDs.
 - `tasks_labels_summary` — Get all unique labels with counts and associated task IDs (short prefixes). No parameters. Use for label discovery and taxonomy overview.
-- `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Returns succeeded/failed/summary.
+- `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Supports `brain` param for cross-brain label management. Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
 **Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
@@ -400,17 +400,17 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Also callable as `brains_list`.
 
 **Memory tools:**
-- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`).
+- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain.
 - `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
 **Records tools:**
-- `records.create_artifact` — Create a new artifact record with base64-encoded content.
-- `records.save_snapshot` — Save an opaque state bundle as a snapshot record.
-- `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution).
-- `records.list` — List records with optional filters (kind, status, tag, task_id).
-- `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata.
+- `records.create_artifact` — Create a new artifact record with `text` (plain) or `data` (base64) content.
+- `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content.
+- `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution). Supports `brain` param for cross-brain access.
+- `records.list` — List records with optional filters (kind, status, tag, task_id). Supports `brain` param for cross-brain access.
+- `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata. Supports `brain` param for cross-brain access.
 - `records.archive` — Archive a record (metadata-only, payload preserved).
 - `records.tag_add` — Add a tag to a record (idempotent).
 - `records.tag_remove` — Remove a tag from a record (idempotent).
@@ -456,6 +456,36 @@ brain tasks label purge old-label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Setup & management
+brain init                     # Initialize a new brain in cwd
+brain link <name>              # Link cwd as additional root for brain
+brain alias add <alias> <name> # Add alias for a brain
+brain alias remove <alias>     # Remove alias
+brain alias list               # List aliases
+brain config set <key> <val>   # Set brain config value
+brain config get <key>         # Get brain config value
+brain remove <name>            # Remove a brain from registry (alias: rm)
+brain id                       # Show brain ID for current directory
+
+# Daemon
+brain daemon start [notes]     # Start background daemon
+brain daemon stop              # Stop daemon
+brain daemon status            # Check daemon status
+brain daemon install           # Install launchd/systemd service
+brain daemon uninstall         # Uninstall service
+
+# Indexing & maintenance
+brain reindex --full <path>    # Full reindex of notes
+brain reindex --file <file>    # Reindex single file
+brain vacuum                   # Clean stale data (default: >30 days)
+
+# MCP server
+brain mcp                      # Start MCP server (stdio)
+brain mcp setup claude         # Auto-configure Claude Code MCP
+brain mcp setup cursor         # Auto-configure Cursor MCP
+brain mcp setup vscode         # Auto-configure VS Code MCP
+brain hooks install            # Install git hooks
 
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md
