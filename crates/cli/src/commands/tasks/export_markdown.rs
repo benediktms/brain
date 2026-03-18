@@ -66,8 +66,8 @@ fn render_task_markdown(
     out
 }
 
-pub fn run(dir: PathBuf, sqlite_db: PathBuf) -> Result<()> {
-    let stores = BrainStores::from_path(&sqlite_db)?;
+pub fn run(dir: PathBuf, sqlite_db: PathBuf, lance_db: Option<PathBuf>) -> Result<()> {
+    let stores = BrainStores::from_path(&sqlite_db, lance_db.as_deref())?;
     let store = stores.tasks;
 
     let tasks = store.list_all()?;

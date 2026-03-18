@@ -2,7 +2,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use brain_lib::config::{brain_home, load_global_config, resolve_paths_for_brain_with_home};
+use brain_lib::config::{brain_home, load_global_config};
 use rusqlite::Connection;
 
 /// Arguments for `brain migrate`.
@@ -228,13 +228,15 @@ pub fn run(args: MigrateArgs) -> Result<()> {
         println!();
         println!("Cleanup: removing per-brain brain.db files…");
         for (name, _entry) in &to_migrate {
-            let paths = resolve_paths_for_brain_with_home(name, &home);
-            if paths.sqlite_db.exists() {
-                match std::fs::remove_file(&paths.sqlite_db) {
-                    Ok(_) => println!("  Removed: {}", paths.sqlite_db.display()),
+            // Compute per-brain path explicitly — paths.sqlite_db now points to
+            // the unified ~/.brain/brain.db and must not be removed here.
+            let per_brain_db = home.join("brains").join(name).join("brain.db");
+            if per_brain_db.exists() {
+                match std::fs::remove_file(&per_brain_db) {
+                    Ok(_) => println!("  Removed: {}", per_brain_db.display()),
                     Err(e) => eprintln!(
                         "  Warning: could not remove {}: {}",
-                        paths.sqlite_db.display(),
+                        per_brain_db.display(),
                         e
                     ),
                 }
@@ -378,12 +380,9 @@ fn migrate_objects(home: &Path, entries: &[(String, brain_lib::config::BrainEntr
         if entry.id.is_none() {
             continue;
         }
-        let paths = resolve_paths_for_brain_with_home(name, home);
-        let brain_data_dir = paths
-            .sqlite_db
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| home.join("brains").join(name));
+        // Per-brain data dir derived from home + name — sqlite_db now points to
+        // the unified DB so we cannot use paths.sqlite_db.parent() here.
+        let brain_data_dir = home.join("brains").join(name);
         let brain_objects = brain_data_dir.join("objects");
 
         if !brain_objects.exists() {

@@ -99,7 +99,8 @@ impl McpContext {
         // Step 1: resolve DBs and build stores via BrainStores.
         let stores = tokio::task::spawn_blocking({
             let sqlite_db = sqlite_db.to_path_buf();
-            move || crate::stores::BrainStores::from_path(&sqlite_db)
+            let lance_db = lance_db.to_path_buf();
+            move || crate::stores::BrainStores::from_path(&sqlite_db, Some(&lance_db))
         })
         .await
         .map_err(|e| crate::error::BrainCoreError::Database(format!("spawn_blocking: {e}")))??;

@@ -24,8 +24,8 @@ pub struct SnapshotCtx {
 }
 
 impl SnapshotCtx {
-    pub fn new(sqlite_db: &Path, json: bool) -> Result<Self> {
-        let stores = BrainStores::from_path(sqlite_db)?;
+    pub fn new(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Result<Self> {
+        let stores = BrainStores::from_path(sqlite_db, lance_db)?;
         Ok(Self {
             record_store: stores.records,
             object_store: stores.objects,

@@ -5,7 +5,12 @@ use anyhow::{Context, Result, bail};
 use brain_lib::stores::BrainStores;
 use brain_lib::tasks::import_beads::import_beads_issues;
 
-pub fn run(jsonl_path: Option<PathBuf>, sqlite_db: PathBuf, dry_run: bool) -> Result<()> {
+pub fn run(
+    jsonl_path: Option<PathBuf>,
+    sqlite_db: PathBuf,
+    lance_db: Option<PathBuf>,
+    dry_run: bool,
+) -> Result<()> {
     let path = jsonl_path.unwrap_or_else(|| PathBuf::from(".beads/issues.jsonl"));
 
     if !path.exists() {
@@ -15,7 +20,7 @@ pub fn run(jsonl_path: Option<PathBuf>, sqlite_db: PathBuf, dry_run: bool) -> Re
         );
     }
 
-    let stores = BrainStores::from_path(&sqlite_db)?;
+    let stores = BrainStores::from_path(&sqlite_db, lance_db.as_deref())?;
     let store = stores.tasks;
 
     if dry_run {

@@ -32,12 +32,35 @@ pub struct BrainStores {
 }
 
 impl BrainStores {
-    /// Construct from a per-brain `sqlite_db` path.
+    /// Construct from a `sqlite_db` path and optional per-brain `lance_db` path.
+    ///
+    /// When `lance_db` is provided, `brain_data_dir` and `brain_name` are
+    /// derived from it (`lance_db.parent()` = per-brain data dir). This is
+    /// required after consolidation because `sqlite_db` now points to the
+    /// unified `~/.brain/brain.db`, not a per-brain path.
     ///
     /// Resolves brain_home, opens the unified DB, resolves brain_id from the
     /// config registry, and builds all stores.
-    pub fn from_path(sqlite_db: &Path) -> Result<Self> {
-        Self::from_path_inner(sqlite_db, None)
+    pub fn from_path(sqlite_db: &Path, lance_db: Option<&Path>) -> Result<Self> {
+        let (brain_data_dir, brain_name) = if let Some(ldb) = lance_db {
+            let data_dir = ldb.parent().unwrap_or(Path::new(".")).to_path_buf();
+            let name = data_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            (data_dir, name)
+        } else {
+            // Fallback: derive from sqlite_db (legacy / unified DB path → empty name)
+            let data_dir = sqlite_db.parent().unwrap_or(Path::new(".")).to_path_buf();
+            let name = data_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            (data_dir, name)
+        };
+        Self::from_path_inner(sqlite_db, &brain_data_dir, &brain_name, None)
     }
 
     /// Construct from a brain name or ID via the global registry.
@@ -49,27 +72,25 @@ impl BrainStores {
         let brain_id = config::resolve_brain_id(&entry, &name)?;
         let paths = config::resolve_paths_for_brain(&name)?;
 
-        // Ensure data directory exists.
+        // brain_home is the parent of sqlite_db (which is now ~/.brain/brain.db).
+        let brain_home = paths
+            .sqlite_db
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| config::brain_home().unwrap_or_else(|_| PathBuf::from(".")));
+
+        // Per-brain data dir: always derived from brain_home + name, independent
+        // of sqlite_db path (which is now unified and not per-brain).
+        let brain_data_dir = brain_home.join("brains").join(&name);
+
+        // Ensure data directory and unified DB parent exist.
+        std::fs::create_dir_all(&brain_data_dir).map_err(BrainCoreError::Io)?;
         if let Some(parent) = paths.sqlite_db.parent() {
             std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
         }
 
-        let brain_data_dir = paths
-            .sqlite_db
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
-
-        // Derive brain_home from path convention.
-        let brain_home = brain_data_dir
-            .parent() // brains/
-            .and_then(|p| p.parent()) // $BRAIN_HOME
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| brain_data_dir.clone());
-
-        // Open the unified DB (~/.brain/brain.db) as the single database.
-        let unified_db_path = brain_home.join("brain.db");
-        let db = Db::open(&unified_db_path)?;
+        // Open the unified DB (~/.brain/brain.db).
+        let db = Db::open(&paths.sqlite_db)?;
 
         // Audit trail: project-local JSONL if a root is available.
         let audit_path = entry
@@ -171,13 +192,13 @@ impl BrainStores {
 
     // -- internals --
 
-    fn from_path_inner(sqlite_db: &Path, brain_home_override: Option<&Path>) -> Result<Self> {
-        let brain_data_dir = sqlite_db.parent().unwrap_or(Path::new("."));
-        let brain_name = brain_data_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
+    fn from_path_inner(
+        sqlite_db: &Path,
+        brain_data_dir: &Path,
+        brain_name: &str,
+        brain_home_override: Option<&Path>,
+    ) -> Result<Self> {
+        let brain_name = brain_name.to_string();
 
         // Resolve brain_home: override > path convention > config > data dir.
         let path_derived_home = brain_data_dir
@@ -314,8 +335,15 @@ mod tests {
     fn from_path_with_unified_db() {
         let tmp = TempDir::new().unwrap();
         let sqlite_db = make_brain_dirs(tmp.path(), "my-project", true);
+        let brain_data_dir = tmp.path().join("brains").join("my-project");
 
-        let stores = BrainStores::from_path_inner(&sqlite_db, Some(tmp.path())).unwrap();
+        let stores = BrainStores::from_path_inner(
+            &sqlite_db,
+            &brain_data_dir,
+            "my-project",
+            Some(tmp.path()),
+        )
+        .unwrap();
 
         assert_eq!(stores.brain_home, tmp.path());
         assert_eq!(stores.brain_name, "my-project");
@@ -327,8 +355,15 @@ mod tests {
     fn from_path_without_unified_db() {
         let tmp = TempDir::new().unwrap();
         let sqlite_db = make_brain_dirs(tmp.path(), "my-project", false);
+        let brain_data_dir = tmp.path().join("brains").join("my-project");
 
-        let stores = BrainStores::from_path_inner(&sqlite_db, Some(tmp.path())).unwrap();
+        let stores = BrainStores::from_path_inner(
+            &sqlite_db,
+            &brain_data_dir,
+            "my-project",
+            Some(tmp.path()),
+        )
+        .unwrap();
 
         // No unified DB → falls back to per-brain path
         assert_eq!(stores.brain_home, tmp.path());

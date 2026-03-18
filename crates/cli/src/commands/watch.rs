@@ -899,8 +899,10 @@ async fn init_brain_instance(
     let consolidator = ConsolidationScheduler::new(last_event_ts);
 
     // Build MCP context from the pipeline's stores + task/record/object stores.
+    // Derive brain_data_dir from the LanceDB path (per-brain), not sqlite_db
+    // (which now points to the unified ~/.brain/brain.db).
     let brain_data_dir = paths
-        .sqlite_db
+        .lance_db
         .parent()
         .unwrap_or(std::path::Path::new("."));
 

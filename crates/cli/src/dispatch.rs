@@ -169,7 +169,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             }
         },
         Command::ImportBeads { path, dry_run } => {
-            commands::import_beads::run(path, cli.sqlite_db, dry_run)?;
+            commands::import_beads::run(path, cli.sqlite_db, Some(cli.lance_db), dry_run)?;
         }
         Command::Init {
             name,
@@ -216,7 +216,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             action,
         } => {
             use commands::tasks::run::{CreateParams, ListParams, TaskCtx, UpdateParams};
-            let ctx = TaskCtx::new(&cli.sqlite_db, json)?;
+            let ctx = TaskCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
 
             match action {
                 TasksAction::Create {
@@ -410,7 +410,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 },
                 TasksAction::Export { format, dir } => match format.as_str() {
                     "markdown" | "md" => {
-                        commands::tasks::export_markdown::run(dir, cli.sqlite_db)?;
+                        commands::tasks::export_markdown::run(dir, cli.sqlite_db, Some(cli.lance_db))?;
                     }
                     other => {
                         anyhow::bail!("Unknown export format: {other}. Supported: markdown");
@@ -465,7 +465,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Snapshots { json, action } => {
             use commands::snapshots::run::{ListParams, SaveParams, SnapshotCtx};
-            let ctx = SnapshotCtx::new(&cli.sqlite_db, json)?;
+            let ctx = SnapshotCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
 
             match action {
                 SnapshotsAction::Save {
@@ -522,7 +522,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Artifacts { json, action } => {
             use commands::artifacts::run::ArtifactCtx;
-            let ctx = ArtifactCtx::new(&cli.sqlite_db, json)?;
+            let ctx = ArtifactCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
 
             match action {
                 ArtifactsAction::Create {
@@ -602,7 +602,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Records { json, action } => {
             use commands::records::RecordsCtx;
-            let ctx = RecordsCtx::new(&cli.sqlite_db, json)?;
+            let ctx = RecordsCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
 
             match action {
                 RecordsAction::Verify { verbose } => {
