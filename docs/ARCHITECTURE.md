@@ -9,8 +9,8 @@ A **brain** is a named knowledge container with its own notes, tasks, indexes, a
 **Core invariant**: Each domain has exactly one source of truth, and sync is always unidirectional:
 
 - **Notes**: Markdown files are the source of truth. SQLite metadata, LanceDB embeddings, and FTS indexes are derived projections, rebuildable from source.
-- **Tasks**: SQLite is the runtime source of truth — writes are applied to SQLite first. The append-only event log (`.brain/tasks/events.jsonl`, git-tracked) is a best-effort audit trail. Event log failures are logged but do not fail the operation. `rebuild_projections()` is retained as a recovery mechanism only.
-- **Records**: SQLite is the runtime source of truth — writes are applied to SQLite first. The append-only event log (`~/.brain/brains/<name>/records/events.jsonl`) is a best-effort audit trail. Payloads are stored out-of-line in a content-addressed object store (`~/.brain/brains/<name>/objects/`). Event log failures are logged but do not fail the operation. See [docs/RECORDS.md](./RECORDS.md) for the full design.
+- **Tasks**: SQLite is the sole source of truth. All mutations go directly to SQLite — no event log. One-time `import_from_jsonl` exists for migrating legacy `.brain/tasks/events.jsonl` files into the database.
+- **Records**: SQLite is the sole source of truth. Payloads are stored out-of-line in a content-addressed object store (`~/.brain/objects/`). No event log — all mutations go directly to SQLite. See [docs/RECORDS.md](./RECORDS.md) for the full design.
 
 Notes, tasks, and records are parallel subsystems that can cross-reference each other (tasks link to note chunks, records link to tasks and note chunks) but have decoupled lifecycles and mutation patterns.
 
@@ -27,13 +27,9 @@ Notes, tasks, and records are parallel subsystems that can cross-reference each 
     <brain-name>/                          # Per-brain derived data
       config.toml                          # Per-brain config (overrides global)
       lancedb/                             # Per-brain vector index (semantic space is distinct)
-      records/
-        events.jsonl                       # Record event log (audit trail)
 ~/code/my-project/                         # A project with brain notes
   .brain/
     brain.toml                             # Brain marker: name + note paths
-    tasks/
-      events.jsonl                         # Task event log (audit trail, git-tracked)
   docs/
     architecture.md                        # Indexed as notes
   notes/
@@ -62,9 +58,7 @@ notes = ["~/notes"]
 - **Unified SQLite** (`~/.brain/brain.db`) is shared by all brains. Tasks and records tables partition by `brain_id`.
 - Per-brain vector indexes (`~/.brain/brains/<name>/lancedb/`) maintain distinct semantic spaces — vectors from different brains are not comparable.
 - Object store (`~/.brain/objects/`) is shared globally — deduplication is across all brains.
-- SQLite is the runtime source of truth for tasks and records. Writes are applied to SQLite first.
-- Task event logs (`.brain/tasks/events.jsonl` in project repos) are git-tracked for local audit trails. Record event logs (`~/.brain/brains/<name>/records/events.jsonl`) are per-brain best-effort audit trails.
-- `rebuild_projections()` is retained only for recovery; normal startup reads hit SQLite directly.
+- SQLite is the sole source of truth for tasks and records — all mutations go directly to SQLite with no event log.
 - A brain can index multiple note directories (e.g., `docs/` and `notes/` from one project)
 - Moving a project just means updating the path in the registry
 - No symlinks — just paths in config files
@@ -100,8 +94,9 @@ graph TB
             EX["memory.expand"]
             WE["memory.write_episode"]
             RF["memory.reflect"]
-            TA["tasks.apply_event"]
-            TN["tasks.next"]
+            TA["tasks.*"]
+            RC["records.*"]
+            BL["brains.list / status"]
         end
     end
 
@@ -110,9 +105,10 @@ graph TB
             FT[files table<br/>identity + hash gate]
             CT[chunks table<br/>metadata + FTS5]
             LT[links table<br/>wiki-links + backlinks]
-            TT[tasks table<br/>projected from event log]
+            TT[tasks table<br/>direct writes]
             TD[task_deps table<br/>dependency graph]
             TL[task_note_links table<br/>cross-references]
+            RT[records table<br/>artifacts + snapshots]
             ST[summaries table<br/>episodes + reflections]
         end
 
@@ -120,9 +116,6 @@ graph TB
             VT[chunks table<br/>content + 384-dim embeddings]
         end
 
-        subgraph TaskLog["Task Event Log (Source of Truth)"]
-            EL[".brain/tasks/events.jsonl<br/>append-only UUID v7-ordered"]
-        end
     end
 
     subgraph Agent["AI Agent (Orchestrator LLM)"]
@@ -139,21 +132,20 @@ graph TB
 
     LLM <-->|stdio JSON-RPC| Server
     Server --> Query
-    Server -->|task events| EL
-    EL -->|replay/project| SQLite
+    Server -->|task/record writes| SQLite
     Query --> SQLite
     Query --> LanceDB
 ```
 
 ## Storage Role Separation
 
-| Concern | SQLite (Runtime Source of Truth) | LanceDB (Per-Brain Data Plane) | Task Event Log | Record Event Log | Object Store (Global) |
-|---------|----------------------|---------------------|----------------|-----------------|--------------|
-| **Role** | Transactional runtime state — partitioned by brain_id, writes succeed here first | Per-brain vector similarity search — semantic spaces are independent | Best-effort audit trail (task events, git-tracked) | Best-effort audit trail (record events per brain) | Global payload storage — deduplication across all brains |
-| **Stores** | File identity, content hashes, chunk metadata, links, tasks (partitioned by brain_id), records (partitioned by brain_id), FTS5 index, summaries, schema versions | Per-brain chunk text, 384-dim embeddings, tags, timestamps, scores | Append-only task events (ULID-ordered JSONL, git-tracked in project) | Append-only record events per brain (ULID-ordered JSONL) | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
-| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 (reads hit directly, no rebuild). Queries filter by brain_id to isolate results. | Per-brain kNN vector search, batch upserts | Sequential append (failures logged but non-blocking) | Sequential append (failures logged but non-blocking) | Write-once keyed by hash, read by hash path. Shared across all brains. |
-| **Concurrency** | WAL mode (concurrent readers, single writer across all brains) | Arc\<Table\> per brain, shared across threads | Single writer per project (append-only) | Single writer per brain (append-only) | Atomic rename on write; concurrent reads safe |
-| **Consistency anchor** | SQLite is authoritative for all runtime state across all brains. LanceDB and event logs are kept consistent per-brain, but failures are non-fatal. | Derived per-brain from SQLite state; may lag during vector index failures | Event log is audit trail only. Failures do not block operations. Retained for recovery via rebuild_projections(). | Event log is audit trail only. Failures do not block operations. Payloads are write-before-event-append. | Hash is the identity; write-before-event-append ordering prevents dangling refs. Deduplication is global. |
+| Concern | SQLite (Sole Source of Truth) | LanceDB (Per-Brain Data Plane) | Object Store (Global) |
+|---------|----------------------|---------------------|--------------|
+| **Role** | Transactional state for all domains — partitioned by brain_id, all writes go here directly | Per-brain vector similarity search — semantic spaces are independent | Global payload storage — deduplication across all brains |
+| **Stores** | File identity, content hashes, chunk metadata, links, tasks (partitioned by brain_id), records (partitioned by brain_id), FTS5 index, summaries, schema versions | Per-brain chunk text, 384-dim embeddings, tags, timestamps, scores | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
+| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25. Queries filter by brain_id to isolate results. | Per-brain kNN vector search, batch upserts | Write-once keyed by hash, read by hash path. Shared across all brains. |
+| **Concurrency** | WAL mode (concurrent readers, single writer across all brains) | Arc\<Table\> per brain, shared across threads | Atomic rename on write; concurrent reads safe |
+| **Consistency anchor** | SQLite is authoritative for all state across all brains. LanceDB is a derived index; failures are non-fatal. | Derived per-brain from SQLite state; may lag during vector index failures | Hash is the identity. Deduplication is global. |
 
 ## Sequence Diagrams
 
@@ -178,8 +170,8 @@ sequenceDiagram
     Main->>Vec: Check lancedb_schema_version vs expected
     alt Schema mismatch
         Vec-->>Main: Full rebuild required
-        Main->>DB: Trigger rebuild_projections() for this brain (recovery only)
         Main->>DB: Clear all content_hash values for brain_id = ?
+        Note over DB: Forces full re-index on next vault scan
     end
     Main->>Model: Load BGE-small weights (mmap safetensors)
     Main->>Model: Load tokenizer.json
@@ -399,7 +391,7 @@ sequenceDiagram
 
 ### 5. Dual-Store Consistency (Indexing State Machine)
 
-SQLite is the runtime source of truth. The indexing state machine ensures that SQLite updates succeed before attempting to update LanceDB or JSONL event logs.
+SQLite is the sole source of truth. The indexing state machine ensures that SQLite updates succeed before attempting to update LanceDB.
 
 ```mermaid
 stateDiagram-v2
@@ -444,7 +436,7 @@ stateDiagram-v2
     indexed --> indexing_started: File changed again
 ```
 
-The event log (JSONL) updates occur after SQLite and are best-effort. Event log failures are logged but do not fail the operation — unified SQLite is the source of truth for all brains. Task events are appended to the project's `.brain/tasks/events.jsonl` file (git-tracked). Record events are appended to the per-brain `~/.brain/brains/<name>/records/events.jsonl` file.
+There are no event logs — SQLite is the sole source of truth for all task and record mutations across all brains. Legacy JSONL event logs can be imported via `import_from_jsonl` as a one-time migration.
 
 ### 6. Graceful Shutdown
 
@@ -530,12 +522,26 @@ quadrantChart
 
 The retrieval policy is **progressive and budget-first**:
 
-1. **search_minimal** returns compact stubs (Tier 2/3 cost) — covers both notes and task capsules
-2. **expand** fetches raw chunks on demand (Tier 1 cost)
-3. **write_episode** stores structured events (creates Tier 1)
-4. **reflect** consolidates into summaries (creates Tier 3 from Tier 1)
-5. **tasks.apply_event** creates/mutates tasks via event log (task subsystem)
-6. **tasks.next** returns highest-priority ready task (deterministic selection)
+1. **memory.search_minimal** returns compact stubs (Tier 2/3 cost) — covers both notes and task capsules
+2. **memory.expand** fetches raw chunks on demand (Tier 1 cost)
+3. **memory.write_episode** stores structured events (creates Tier 1)
+4. **memory.reflect** consolidates into summaries (creates Tier 3 from Tier 1)
+5. **tasks.apply_event** creates/mutates tasks directly in SQLite
+6. **tasks.create** creates a new task
+7. **tasks.close** closes a task (done/cancelled)
+8. **tasks.get** returns full task details including description and dependencies
+9. **tasks.list** lists tasks filtered by status
+10. **tasks.next** returns highest-priority ready task (deterministic selection)
+11. **tasks.deps_batch** batch-manages task dependencies
+12. **tasks.labels_batch** batch-manages task labels
+13. **tasks.labels_summary** summarizes label usage
+14. **records.create_artifact** / **records.save_snapshot** create records
+15. **records.get** / **records.list** / **records.fetch_content** retrieve records
+16. **records.archive** archives a record
+17. **records.tag_add** / **records.tag_remove** manage record tags
+18. **records.link_add** / **records.link_remove** manage record links
+19. **brains.list** lists all registered brains
+20. **status** returns daemon/brain health status
 
 ## Hybrid Scoring
 
