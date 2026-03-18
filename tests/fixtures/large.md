@@ -206,7 +206,7 @@ In a knowledge base tool, implicit feedback comes from which stubs the agent cho
 
 ### Explicit Feedback
 
-Explicit relevance judgments are more informative but harder to collect at scale. In an interactive setting, the user or agent can mark results as relevant or irrelevant. These judgments can be used to train a learning-to-rank model that optimizes the weight combination for the specific vault's content distribution.
+Explicit relevance judgments are more informative but harder to collect at scale. In an interactive setting, the user or agent can mark results as relevant or irrelevant. These judgments can be used to train a learning-to-rank model that optimizes the weight combination for the specific brain's content distribution.
 
 ### Cold Start and Adaptation
 
@@ -232,7 +232,7 @@ A simple keyword-based classifier is sufficient for most cases. The fallback is 
 
 Another query understanding technique is query expansion, where the system augments the original query with related terms. For a query about "embedding models", the system might also search for "vector representations" and "sentence transformers". This improves recall for queries that use different terminology than the stored documents.
 
-Query expansion can be implemented using the embedding model itself: embed the query, find the nearest terms in the vocabulary, and add them to the BM25 search. Alternatively, a thesaurus or the vault's own link structure can suggest related terms. The risk of query expansion is topic drift, where added terms pull in irrelevant results. Limiting expansion to a small number of high-confidence terms mitigates this risk.
+Query expansion can be implemented using the embedding model itself: embed the query, find the nearest terms in the vocabulary, and add them to the BM25 search. Alternatively, a thesaurus or the brain's own link structure can suggest related terms. The risk of query expansion is topic drift, where added terms pull in irrelevant results. Limiting expansion to a small number of high-confidence terms mitigates this risk.
 
 ## Indexing Pipeline Architecture
 
@@ -240,7 +240,7 @@ The journey from a raw Markdown file to searchable chunks involves multiple proc
 
 ### File Discovery and Change Detection
 
-The first stage discovers which files need processing. A file watcher monitors the vault directory for changes, but it cannot catch modifications that happen while the daemon is not running. A startup scan compares the current filesystem state against the metadata store to detect offline changes.
+The first stage discovers which files need processing. A file watcher monitors the brain directory for changes, but it cannot catch modifications that happen while the daemon is not running. A startup scan compares the current filesystem state against the metadata store to detect offline changes.
 
 Content hashing provides a gate that prevents redundant work. Each file's content is hashed, and the hash is compared against the stored hash from the last indexing run. Only files with changed hashes are sent through the rest of the pipeline. This is crucial for performance because the embedding stage is expensive, and re-embedding unchanged files wastes both CPU and time.
 

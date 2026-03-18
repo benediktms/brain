@@ -31,7 +31,7 @@ async fn setup() -> (IndexPipeline, TempDir) {
 }
 
 /// Generate `count` markdown files with 2 heading sections each.
-fn generate_vault(dir: &std::path::Path, count: usize) -> Vec<PathBuf> {
+fn generate_brain(dir: &std::path::Path, count: usize) -> Vec<PathBuf> {
     (0..count)
         .map(|i| {
             let path = dir.join(format!("file_{i:04}.md"));
@@ -58,13 +58,13 @@ fn bench_indexing(c: &mut Criterion) {
         group.bench_function(format!("index_files_batch/{count}"), |b| {
             b.to_async(&rt).iter_batched(
                 || {
-                    // Setup: fresh pipeline + vault per iteration
+                    // Setup: fresh pipeline + brain per iteration
                     let rt2 = tokio::runtime::Handle::current();
                     rt2.block_on(async {
                         let (pipeline, tmp) = setup().await;
                         let dir = tmp.path().join("notes");
                         std::fs::create_dir_all(&dir).unwrap();
-                        let paths = generate_vault(&dir, count);
+                        let paths = generate_brain(&dir, count);
                         (pipeline, tmp, paths)
                     })
                 },
@@ -116,7 +116,7 @@ fn bench_querying(c: &mut Criterion) {
                 let (pipeline, tmp) = setup().await;
                 let dir = tmp.path().join("notes");
                 std::fs::create_dir_all(&dir).unwrap();
-                let paths = generate_vault(&dir, corpus_size);
+                let paths = generate_brain(&dir, corpus_size);
                 pipeline.index_files_batch(&paths).await.unwrap();
                 pipeline.store().optimizer().force_optimize().await;
 
@@ -178,7 +178,7 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
         let (pipeline, tmp) = setup().await;
         let dir = tmp.path().join("notes");
         std::fs::create_dir_all(&dir).unwrap();
-        let paths = generate_vault(&dir, corpus_size);
+        let paths = generate_brain(&dir, corpus_size);
         pipeline.index_files_batch(&paths).await.unwrap();
         pipeline.store().optimizer().force_optimize().await;
 

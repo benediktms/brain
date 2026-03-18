@@ -158,7 +158,7 @@ sequenceDiagram
     participant Model as Candle Embedder
     participant DB as SQLite
     participant Vec as LanceDB
-    participant Scanner as Vault Scanner
+    participant Scanner as Brain Scanner
     participant Watcher as File Watcher
     participant MCP as MCP Server
 
@@ -171,14 +171,14 @@ sequenceDiagram
     alt Schema mismatch
         Vec-->>Main: Full rebuild required
         Main->>DB: Clear all content_hash values for brain_id = ?
-        Note over DB: Forces full re-index on next vault scan
+        Note over DB: Forces full re-index on next brain scan
     end
     Main->>Model: Load BGE-small weights (mmap safetensors)
     Main->>Model: Load tokenizer.json
     Main->>Model: Validate hidden_size == 384
     Note over Model: Model kept hot in RAM for session lifetime
 
-    Main->>Scanner: Full vault scan (catch offline changes, filtered by brain_id)
+    Main->>Scanner: Full brain scan (catch offline changes, filtered by brain_id)
     loop Each *.md file
         Scanner->>DB: Check content_hash WHERE file_id = ? AND brain_id = ?
         alt Hash changed or new file
@@ -193,7 +193,7 @@ sequenceDiagram
     Note over Main: No rebuild on normal startup — reads hit SQLite directly<br/>Unified DB is queried by (file_id, brain_id) tuples
 
     par Start concurrent services
-        Main->>Watcher: Start watching vault (recursive, 250ms debounce)
+        Main->>Watcher: Start watching brain (recursive, 250ms debounce)
         Main->>MCP: Start stdio JSON-RPC listener
     end
 
@@ -611,7 +611,7 @@ Retrieval draws candidates from three sources, fused before scoring:
 | Keyword search | SQLite FTS5 | Phase 2 | Top-50 by BM25 |
 | Graph expansion | SQLite links | Phase 3+ | 1-hop neighbors of top-10 seeds (capped at 100) |
 
-Graph expansion captures transitively relevant content in interlinked vaults: a query matching note A will also surface note B if A links to B, even when B has low direct similarity. Candidates from all sources are unioned, deduplicated, then scored through the hybrid formula.
+Graph expansion captures transitively relevant content in interlinked brains: a query matching note A will also surface note B if A links to B, even when B has low direct similarity. Candidates from all sources are unioned, deduplicated, then scored through the hybrid formula.
 
 ## Key Technology Choices
 
@@ -698,11 +698,11 @@ Target daemon baseline RSS: **300–400MB** (embedder + SQLite + LanceDB structu
 
 ### Performance Expectations
 
-Assumes a "medium" vault: 2k–10k Markdown files, 20k–200k chunks, 384-dim embeddings.
+Assumes a "medium" brain: 2k–10k Markdown files, 20k–200k chunks, 384-dim embeddings.
 
 | Operation | Expected Latency | Notes |
 |-----------|-----------------|-------|
-| SQLite FTS5 query | 5–30ms | Scales with vault size |
+| SQLite FTS5 query | 5–30ms | Scales with brain size |
 | LanceDB vector search | 10–50ms | After compaction; warm indexes |
 | Hybrid fusion + scoring | 1–10ms | Lightweight arithmetic |
 | `search_minimal` end-to-end | 20–80ms | FTS + vector + fusion + stub packing |

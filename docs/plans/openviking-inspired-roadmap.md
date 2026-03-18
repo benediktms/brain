@@ -796,7 +796,7 @@ All use the same 384-dim BGE-small embeddings in the same per-brain LanceDB tabl
 ### Rebuild / Reindex Costs
 
 - [Episodic Memory](./episodic-memory.md) backfill: embed all existing episodes (typically <1000; fast)
-- Phase 2 generation: one-time summary generation for all directories/tags (potentially slow for large vaults; should be incremental)
+- Phase 2 generation: one-time summary generation for all directories/tags (potentially slow for large brains; should be incremental)
 - Phase 6 abstraction: one-time for existing records (bounded by record count)
 
 All derived data is regenerable from source. Dropping and rebuilding the LanceDB table + FTS tables is always safe.

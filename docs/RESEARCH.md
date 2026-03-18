@@ -25,7 +25,7 @@ Implementation-wise, the recommended embedding baseline is **BAAI/bge-small-en-v
 
 ### Assumptions
 
-- The vault is a normal filesystem directory
+- The brain is a normal filesystem directory
 - Hardware may be CPU-only or CPU+GPU
 - Model weights (`model.safetensors` and `tokenizer.json`) are available locally
 - The agent runtime communicates through MCP stdio JSON-RPC
@@ -412,7 +412,7 @@ Run a long-lived Rust daemon that:
 | LanceDB vector search (warm) | 10–50ms | Interactive |
 | Hybrid fusion + scoring | 1–10ms | Interactive |
 | Daemon with warm models | Instant (no load cost) | Interactive |
-| Initial full vault indexing | Minutes (one-time) | Background |
+| Initial full brain indexing | Minutes (one-time) | Background |
 | Embedding large chunk sets | CPU-heavy | Background |
 | Cross-encoder reranking | 200ms–1s+ | Optional |
 | ML summarization | Expensive | Deferred |
@@ -421,7 +421,7 @@ Run a long-lived Rust daemon that:
 
 #### 1. Eager Summarization
 
-If you summarize every chunk on ingestion, you burn CPU constantly. Even for small vaults this creates noticeable lag on file saves.
+If you summarize every chunk on ingestion, you burn CPU constantly. Even for small brains this creates noticeable lag on file saves.
 
 **Mitigation — Capsule generation strategy:**
 - Always generate tiny **deterministic capsules** (rule-based) on ingest: title from heading hierarchy + first meaningful sentence + heading outline
@@ -487,7 +487,7 @@ Without periodic `optimize()`, queries fall back to brute-force scan on unindexe
 
 ### Practical Performance Expectations
 
-For a "medium" vault (2k–10k Markdown files, 20k–200k chunks):
+For a "medium" brain (2k–10k Markdown files, 20k–200k chunks):
 
 **Initial indexing:**
 - ~5–15ms per embedding on CPU (BGE-small, no acceleration)
@@ -876,7 +876,7 @@ N(S) = { v ∈ V : ∃u ∈ S, (u→v) ∈ E ∪ (v→u) ∈ E }
 Complexity: O(|S| × avg_degree)
 ```
 
-The 100-node cap prevents explosion in densely-linked vaults. Multi-hop (2+) is exponential: O(|S| × avg_degree²) — stay at 1-hop for v1.
+The 100-node cap prevents explosion in densely-linked brains. Multi-hop (2+) is exponential: O(|S| × avg_degree²) — stay at 1-hop for v1.
 
 Design rationale: captures transitive relevance. If query matches note A and A links to B, then B is surfaced even with low direct similarity.
 
@@ -900,7 +900,7 @@ Converges in 20-50 iterations
 Time: O(k × (|V| + |E|)), ~25ms for 100k chunks
 ```
 
-Recommended after vault exceeds 50k chunks and evidence shows backlink count insufficient. Precompute during `optimize()` cycles (background task).
+Recommended after brain exceeds 50k chunks and evidence shows backlink count insufficient. Precompute during `optimize()` cycles (background task).
 
 #### Task Dependency DAG
 

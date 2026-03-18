@@ -11,7 +11,7 @@ use crate::error::Result;
 ///
 /// The backfill uses the same Rust resolution logic as `replace_links()` rather
 /// than raw SQL pattern matching, because `files.path` stores absolute paths
-/// (e.g. `/vault/headings.md`) while `links.target_path` stores bare names or
+/// (e.g. `/brain/headings.md`) while `links.target_path` stores bare names or
 /// relative paths (`"headings"`, `"simple.md"`). Pure SQL LIKE patterns would
 /// produce double-extension matches and ambiguous multi-row subqueries.
 pub fn migrate_v15_to_v16(conn: &Connection) -> Result<()> {
@@ -176,9 +176,9 @@ mod tests {
         // Seed files with absolute paths (as the real indexer stores them)
         conn.execute_batch(
             "INSERT INTO files (file_id, path) VALUES
-                 ('f1', '/vault/notes/source.md'),
-                 ('f2', '/vault/notes/headings.md'),
-                 ('f3', '/vault/notes/simple.md');",
+                 ('f1', '/brain/notes/source.md'),
+                 ('f2', '/brain/notes/headings.md'),
+                 ('f3', '/brain/notes/simple.md');",
         )
         .unwrap();
 
@@ -193,7 +193,7 @@ mod tests {
 
         migrate_v15_to_v16(&conn).unwrap();
 
-        // Wiki bare stem "headings" → /vault/notes/headings.md → f2
+        // Wiki bare stem "headings" → /brain/notes/headings.md → f2
         let wiki_target: Option<String> = conn
             .query_row(
                 "SELECT target_file_id FROM links WHERE link_id = 'l1'",
@@ -207,7 +207,7 @@ mod tests {
             "wiki link should resolve to f2"
         );
 
-        // Markdown relative "simple.md" → /vault/notes/simple.md → f3
+        // Markdown relative "simple.md" → /brain/notes/simple.md → f3
         let md_target: Option<String> = conn
             .query_row(
                 "SELECT target_file_id FROM links WHERE link_id = 'l2'",
@@ -244,8 +244,8 @@ mod tests {
 
         conn.execute_batch(
             "INSERT INTO files (file_id, path) VALUES
-                 ('f1', '/vault/source.md'),
-                 ('f2', '/vault/simple.md');",
+                 ('f1', '/brain/source.md'),
+                 ('f2', '/brain/simple.md');",
         )
         .unwrap();
         conn.execute(
@@ -264,7 +264,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        // Should resolve to f2 (/vault/simple.md), not fail or match a phantom .md.md
+        // Should resolve to f2 (/brain/simple.md), not fail or match a phantom .md.md
         assert_eq!(
             target,
             Some("f2".to_string()),
@@ -281,9 +281,9 @@ mod tests {
 
         conn.execute_batch(
             "INSERT INTO files (file_id, path) VALUES
-                 ('f1', '/vault/source.md'),
-                 ('f2', '/vault/notes.md'),
-                 ('f3', '/vault/subdir/archive/notes.md');",
+                 ('f1', '/brain/source.md'),
+                 ('f2', '/brain/notes.md'),
+                 ('f3', '/brain/subdir/archive/notes.md');",
         )
         .unwrap();
         conn.execute(
@@ -302,7 +302,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        // /vault/notes.md (len=14) is shorter than /vault/subdir/archive/notes.md
+        // /brain/notes.md (len=15) is shorter than /brain/subdir/archive/notes.md
         assert_eq!(target, Some("f2".to_string()), "shortest path should win");
     }
 
@@ -329,7 +329,7 @@ mod tests {
         setup_v15(&conn);
 
         conn.execute(
-            "INSERT INTO files (file_id, path) VALUES ('f1', '/vault/source.md')",
+            "INSERT INTO files (file_id, path) VALUES ('f1', '/brain/source.md')",
             [],
         )
         .unwrap();

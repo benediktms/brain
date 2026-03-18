@@ -34,29 +34,29 @@
     }
   ],
   "expected_orders": {
-    "synthesis": [
-      "vector_king",
-      "link_hub",
-      "recent_gem",
-      "keyword_king"
-    ],
     "planning": [
       "link_hub",
       "vector_king",
       "keyword_king",
       "recent_gem"
     ],
-    "reflection": [
-      "recent_gem",
-      "keyword_king",
-      "vector_king",
-      "link_hub"
-    ],
     "lookup": [
       "keyword_king",
       "link_hub",
       "recent_gem",
       "vector_king"
+    ],
+    "synthesis": [
+      "vector_king",
+      "link_hub",
+      "recent_gem",
+      "keyword_king"
+    ],
+    "reflection": [
+      "recent_gem",
+      "keyword_king",
+      "vector_king",
+      "link_hub"
     ]
   }
 }

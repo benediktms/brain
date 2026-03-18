@@ -5,7 +5,7 @@ Current priorities and open work items for the knowledge base project.
 ## Phase 0: Proof of Concept
 
 - [x] Set up Cargo workspace with core dependencies #infrastructure
-- [x] Implement vault scanner to find Markdown files #scanner
+- [x] Implement brain scanner to find Markdown files #scanner
 - [x] Build double-newline and heading chunker #chunker
 - [x] Load BGE-small embedding model via Candle #embeddings
 - [x] Create LanceDB store with insert and query #storage

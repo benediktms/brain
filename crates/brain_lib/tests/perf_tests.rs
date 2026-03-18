@@ -45,7 +45,7 @@ fn write_md(dir: &Path, name: &str, content: &str) -> PathBuf {
 }
 
 /// Generate `count` markdown files, each with 2 heading sections (= 2 chunks).
-fn generate_vault(dir: &Path, count: usize) -> Vec<PathBuf> {
+fn generate_brain(dir: &Path, count: usize) -> Vec<PathBuf> {
     (0..count)
         .map(|i| {
             write_md(
@@ -73,8 +73,8 @@ async fn test_batch_vs_single_equivalence() {
     std::fs::create_dir_all(&dir_a).unwrap();
     std::fs::create_dir_all(&dir_b).unwrap();
 
-    // Create identical 20-file vaults in both directories
-    let paths_a = generate_vault(&dir_a, 20);
+    // Create identical 20-file brains in both directories
+    let paths_a = generate_brain(&dir_a, 20);
     let mut paths_b = Vec::new();
     for (i, pa) in paths_a.iter().enumerate() {
         let content = std::fs::read_to_string(pa).unwrap();
@@ -130,7 +130,7 @@ async fn test_backpressure_no_dropped_events() {
     let notes_dir = tmp.path().join("notes");
     std::fs::create_dir_all(&notes_dir).unwrap();
 
-    let file_paths = generate_vault(&notes_dir, 150);
+    let file_paths = generate_brain(&notes_dir, 150);
 
     // Send 150 Created events through a bounded channel from a std thread.
     // Channel capacity 16 forces the producer to block (backpressure).
@@ -216,7 +216,7 @@ async fn test_concurrent_read_write_no_deadlocks() {
     std::fs::create_dir_all(&notes_dir).unwrap();
 
     // Seed 20 files via full_scan
-    let seed_paths = generate_vault(&notes_dir, 20);
+    let seed_paths = generate_brain(&notes_dir, 20);
     let _ = seed_paths; // files exist on disk
     let stats = pipeline
         .full_scan(std::slice::from_ref(&notes_dir))
@@ -234,7 +234,7 @@ async fn test_concurrent_read_write_no_deadlocks() {
     // Writer: index 30 new files sequentially
     let writer_dir = tmp.path().join("notes_new");
     std::fs::create_dir_all(&writer_dir).unwrap();
-    let new_paths = generate_vault(&writer_dir, 30);
+    let new_paths = generate_brain(&writer_dir, 30);
 
     // Spawn 4 reader tasks
     let mut reader_handles = Vec::new();
@@ -296,7 +296,7 @@ async fn test_optimize_row_threshold() {
     std::fs::create_dir_all(&notes_dir).unwrap();
 
     // Generate 120 files × 2 chunks = 240 chunks > DEFAULT_ROW_THRESHOLD (200)
-    let paths = generate_vault(&notes_dir, 120);
+    let paths = generate_brain(&notes_dir, 120);
     let stats = pipeline.index_files_batch(&paths).await.unwrap();
     assert_eq!(stats.indexed, 120);
 
@@ -370,7 +370,7 @@ async fn test_scan_watcher_race_idempotent() {
     let notes_dir = tmp.path().join("notes");
     std::fs::create_dir_all(&notes_dir).unwrap();
 
-    let file_paths = generate_vault(&notes_dir, 30);
+    let file_paths = generate_brain(&notes_dir, 30);
 
     // Full scan indexes all 30 files
     let stats = pipeline
@@ -453,7 +453,7 @@ async fn test_ivf_pq_index_creation() {
     std::fs::create_dir_all(&notes_dir).unwrap();
 
     // Need >256 rows for index creation (128 files × 2 chunks = 256)
-    let paths = generate_vault(&notes_dir, 130);
+    let paths = generate_brain(&notes_dir, 130);
     let stats = pipeline.index_files_batch(&paths).await.unwrap();
     assert_eq!(stats.indexed, 130);
 
@@ -481,7 +481,7 @@ async fn test_ivf_pq_query_returns_results() {
     let notes_dir = tmp.path().join("notes");
     std::fs::create_dir_all(&notes_dir).unwrap();
 
-    let paths = generate_vault(&notes_dir, 130);
+    let paths = generate_brain(&notes_dir, 130);
     pipeline.index_files_batch(&paths).await.unwrap();
 
     // Create index
@@ -514,7 +514,7 @@ async fn test_auto_index_on_optimize() {
 
     // Generate enough files to exceed both row threshold and MIN_ROWS_FOR_INDEX
     // 150 files × 2 chunks = 300 > 256 (MIN_ROWS_FOR_INDEX)
-    let paths = generate_vault(&notes_dir, 150);
+    let paths = generate_brain(&notes_dir, 150);
     pipeline.index_files_batch(&paths).await.unwrap();
 
     // Force optimize — should also auto-create index

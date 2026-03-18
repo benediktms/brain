@@ -388,12 +388,12 @@ async fn test_force_optimize_resets_counter() {
     );
 }
 
-// ─── 6. Empty vault: no crash ───────────────────────────────────
+// ─── 6. Empty brain: no crash ───────────────────────────────────
 
 #[tokio::test]
-async fn test_empty_vault_no_crash() {
+async fn test_empty_brain_no_crash() {
     let (pipeline, tmp) = setup().await;
-    let notes_dir = tmp.path().join("empty_vault");
+    let notes_dir = tmp.path().join("empty_brain");
     std::fs::create_dir_all(&notes_dir).unwrap();
 
     let stats = pipeline.full_scan(&[notes_dir]).await.unwrap();
@@ -404,12 +404,12 @@ async fn test_empty_vault_no_crash() {
 }
 
 #[tokio::test]
-async fn test_empty_vault_query_returns_nothing() {
+async fn test_empty_brain_query_returns_nothing() {
     let (pipeline, tmp) = setup().await;
-    let notes_dir = tmp.path().join("empty_vault");
+    let notes_dir = tmp.path().join("empty_brain");
     std::fs::create_dir_all(&notes_dir).unwrap();
 
-    // Index empty vault
+    // Index empty brain
     let _ = pipeline.full_scan(&[notes_dir]).await.unwrap();
 
     // Query against empty index
@@ -424,7 +424,7 @@ async fn test_empty_vault_query_returns_nothing() {
 }
 
 #[tokio::test]
-async fn test_vault_with_only_empty_files() {
+async fn test_brain_with_only_empty_files() {
     let (pipeline, tmp) = setup().await;
     let notes_dir = tmp.path().join("notes");
     std::fs::create_dir_all(&notes_dir).unwrap();
