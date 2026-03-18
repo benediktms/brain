@@ -248,10 +248,8 @@ pub fn resolve_brain(conn: &Connection, input: &str) -> Result<(String, String)>
         })?;
         for row in rows {
             let (id, name, aliases_json) = row?;
-            if let Ok(aliases) = serde_json::from_str::<Vec<String>>(&aliases_json) {
-                if aliases.iter().any(|a| a == input) {
-                    return Ok((id, name));
-                }
+            if let Ok(aliases) = serde_json::from_str::<Vec<String>>(&aliases_json) && aliases.iter().any(|a| a == input) {
+                return Ok((id, name));
             }
         }
     }

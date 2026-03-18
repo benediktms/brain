@@ -292,10 +292,8 @@ pub fn resolve_brain_with_fallback(
     db: Option<&crate::db::Db>,
     name_or_id: &str,
 ) -> Result<(String, String)> {
-    if let Some(db) = db {
-        if let Ok((id, name)) = db.resolve_brain(name_or_id) {
-            return Ok((name, id));
-        }
+    if let Some(db) = db && let Ok((id, name)) = db.resolve_brain(name_or_id) {
+        return Ok((name, id));
     }
     // Fallback to TOML parsing (cold start, daemon not running)
     let (name, entry) = resolve_brain_entry(name_or_id)?;

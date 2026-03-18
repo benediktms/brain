@@ -166,7 +166,7 @@ sequenceDiagram
     Main->>Config: Resolve brain_id from registry
     Main->>DB: Open unified SQLite (~/.brain/brain.db, WAL mode, foreign keys)
     Main->>DB: Run schema migrations (check schema_version)
-    Main->>Vec: Connect per-brain LanceDB (~/.brain/brains/&lt;name&gt;/lancedb/)
+    Main->>Vec: Connect per-brain LanceDB
     Main->>Vec: Check lancedb_schema_version vs expected
     alt Schema mismatch
         Vec-->>Main: Full rebuild required
