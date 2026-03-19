@@ -147,6 +147,42 @@ pub fn upsert_task_chunk(
     Ok(())
 }
 
+/// Upsert a record capsule chunk into SQLite.
+///
+/// Creates a synthetic `files` row if needed (with path = file_id),
+/// then replaces the chunk metadata. This ensures record capsule chunks
+/// are found by both FTS5 and the enrichment JOIN in get_chunks_by_ids.
+pub fn upsert_record_chunk(
+    conn: &Connection,
+    record_file_id: &str, // e.g. "record:BRN-01ABC"
+    capsule_text: &str,
+) -> Result<()> {
+    // Ensure a synthetic files row exists
+    conn.execute(
+        "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?1, 'idle')",
+        [record_file_id],
+    )?;
+    // Update last_indexed_at for recency signal
+    conn.execute(
+        "UPDATE files SET last_indexed_at = strftime('%s','now') WHERE file_id = ?1",
+        [record_file_id],
+    )?;
+    // Replace chunk (delete + insert for FTS trigger)
+    conn.execute("DELETE FROM chunks WHERE file_id = ?1", [record_file_id])?;
+    let chunk_id = format!("{record_file_id}:0");
+    conn.execute(
+        "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate)
+         VALUES (?1, ?2, 0, '', ?3, '', 0, 0, ?4)",
+        rusqlite::params![
+            chunk_id,
+            record_file_id,
+            capsule_text,
+            crate::tokens::estimate_tokens(capsule_text) as i64,
+        ],
+    )?;
+    Ok(())
+}
+
 /// Set `embedded_at` on a batch of chunks, marking them as current in LanceDB.
 ///
 /// `chunk_ids` must be non-empty. Skips gracefully if the slice is empty.

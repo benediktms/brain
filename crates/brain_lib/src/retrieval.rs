@@ -274,6 +274,8 @@ fn derive_kind(chunk_id: &str, summary_kind: Option<&str>) -> String {
         "task-outcome".to_string()
     } else if chunk_id.starts_with("task:") {
         "task".to_string()
+    } else if chunk_id.starts_with("record:") {
+        "record".to_string()
     } else {
         "note".to_string()
     }
@@ -460,6 +462,7 @@ mod tests {
             derive_kind("sum:01JXYZ1234", Some("reflection")),
             "reflection"
         );
+        assert_eq!(derive_kind("record:BRN-01ABC:0", None), "record");
         assert_eq!(derive_kind("sum:01JXYZ1234", None), "episode");
     }
 

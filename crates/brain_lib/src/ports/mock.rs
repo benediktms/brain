@@ -575,6 +575,14 @@ impl ChunkMetaWriter for MockChunkMetaWriter {
             .insert(task_file_id.to_string(), capsule_text.to_string());
         Ok(())
     }
+
+    fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()> {
+        self.task_chunks
+            .lock()
+            .unwrap()
+            .insert(record_file_id.to_string(), capsule_text.to_string());
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -590,6 +598,8 @@ pub struct MockEmbeddingResetter {
     pub tasks_reset_count: Mutex<usize>,
     /// Number of times `reset_chunks_embedded_at` was called.
     pub chunks_reset_count: Mutex<usize>,
+    /// Number of times `reset_records_embedded_at` was called.
+    pub records_reset_count: Mutex<usize>,
 }
 
 impl EmbeddingResetter for MockEmbeddingResetter {
@@ -600,6 +610,11 @@ impl EmbeddingResetter for MockEmbeddingResetter {
 
     fn reset_chunks_embedded_at(&self) -> Result<()> {
         *self.chunks_reset_count.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    fn reset_records_embedded_at(&self) -> Result<()> {
+        *self.records_reset_count.lock().unwrap() += 1;
         Ok(())
     }
 }
@@ -1076,9 +1091,11 @@ mod tests {
         resetter.reset_tasks_embedded_at().unwrap();
         resetter.reset_tasks_embedded_at().unwrap();
         resetter.reset_chunks_embedded_at().unwrap();
+        resetter.reset_records_embedded_at().unwrap();
 
         assert_eq!(*resetter.tasks_reset_count.lock().unwrap(), 2);
         assert_eq!(*resetter.chunks_reset_count.lock().unwrap(), 1);
+        assert_eq!(*resetter.records_reset_count.lock().unwrap(), 1);
     }
 
     #[test]

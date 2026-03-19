@@ -1662,3 +1662,79 @@ When working on tasks:
 - **Task types**: task, bug, feature, epic, spike
 - **Statuses**: open, in_progress, blocked, done, cancelled
 <!-- brain:end -->
+
+<!-- neural_link:start:a407b84a -->
+## neural_link — Multi-Agent Coordination
+
+neural_link provides coordination between agents working on related tasks.
+It is available as an MCP server — all tools below are MCP tool calls.
+
+### When to use neural_link
+
+Use neural_link when multiple agents are dispatched and their work is related or overlapping:
+
+- **Partitioned work on shared files** — agents analyzing, reviewing, or modifying files that may affect each other
+- **Sequential handoffs** — one agent's output is another agent's input
+- **Parallel work with shared context** — agents need to share findings, flag blockers, or agree on decisions
+- **Review workflows** — an agent requests review from another agent
+
+Do NOT use neural_link for fully independent parallel tasks where agents have no interaction.
+
+### Coordination flow
+
+1. **Open a room** — one agent creates a room for the coordination concern (`room_open`)
+2. **Join** — each participating agent joins the room (`room_join`)
+3. **Communicate** — agents exchange typed messages (`message_send`)
+4. **Read and acknowledge** — agents read their inbox (`inbox_read`) and acknowledge messages (`message_ack`)
+5. **Wait when blocked** — if an agent needs another agent's output before continuing, it blocks with `wait_for`
+6. **Close** — when coordination is complete, close the room with a resolution (`room_close`)
+
+### Message kinds
+
+Every message has a `kind` that signals its intent. Use the right kind — other agents filter on it.
+
+| Kind | When to use |
+|------|-------------|
+| `finding` | You discovered something another agent needs to know |
+| `handoff` | Your part is done — another agent should take over |
+| `blocker` | You cannot proceed until something is resolved |
+| `decision` | Recording a choice that affects other agents |
+| `question` | Asking another agent for information |
+| `answer` | Responding to a question |
+| `review_request` | Asking another agent to review your work |
+| `review_result` | Delivering review feedback |
+| `artifact_ref` | Pointing to a file, commit, or output another agent should consume |
+| `summary` | Summarizing progress or conclusions |
+
+### Waiting for other agents
+
+`wait_for` is a blocking call. When you call it, your tool call is held open on the server until a matching message arrives or the timeout expires (default: 30s, max: 120s). You are effectively paused.
+
+- **Use `wait_for` when you have nothing else to do** until a specific message arrives (e.g., waiting for a handoff, a review result, or an answer to your question)
+- **Do not use `wait_for` if you have other work to do** — use `inbox_read` periodically instead
+- **Filter precisely** — use the `kinds` and `from` params to match only what you need, avoiding false wakeups
+- **Set reasonable timeouts** — a stuck `wait_for` blocks you for up to 120 seconds
+
+### Tools reference
+
+- **`room_open`** — Create a coordination room. Params: title (required), purpose, external_ref, tags, brains
+- **`room_join`** — Join a room as a participant. Params: room_id (required), participant_id (required), display_name (required), role
+- **`message_send`** — Send a typed message to a room. Params: room_id (required), from (required), kind (required), summary (required), to, body, thread_id, persist_hint
+- **`inbox_read`** — Read your pending messages in a room. Params: room_id (required), participant_id (required)
+- **`message_ack`** — Acknowledge messages you have processed. Params: room_id (required), participant_id (required), message_ids (required)
+- **`wait_for`** — Block until a matching message arrives (long-poll). Params: room_id (required), participant_id (required), since_sequence, kinds, from, timeout_ms
+- **`thread_summarize`** — Get a summary of messages in a room or thread. Params: room_id (required), thread_id
+- **`room_close`** — Close a room when coordination is complete. Params: room_id (required), resolution (required: completed|cancelled|superseded|failed)
+
+### Rules
+
+1. **Always acknowledge messages you have read.** Call `message_ack` after processing inbox messages. This prevents your inbox from growing unbounded and signals to the sender that you received the message.
+2. **One room per coordination concern.** Do not multiplex unrelated work into a single room.
+3. **Close rooms when done.** Always call `room_close` with a resolution (`completed`, `cancelled`, `superseded`, `failed`). Unclosed rooms leak state.
+4. **Send `handoff` before going idle.** If you are done with your part and another agent is waiting, send a handoff message. Silent completion causes deadlocks.
+5. **Never ignore a `blocker`.** If you receive a blocker message, respond to it or escalate. Dropping blockers stalls the coordination.
+6. **Use `thread_id` in multi-topic rooms.** If a room covers multiple sub-topics, tag messages with a thread ID to keep conversations separable.
+7. **Do not use neural_link as a logging system.** Rooms are for agent-to-agent communication. Use brain records for persisting artifacts and findings.
+8. **Do not send messages to yourself.** If you need to record something, use the appropriate persistence tool, not a self-addressed message.
+9. **Do not poll `inbox_read` in a loop.** Use `wait_for` to block until a message arrives. Polling wastes resources.
+<!-- neural_link:end -->
