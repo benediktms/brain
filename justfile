@@ -168,7 +168,8 @@ check-deps:
 
 # ── Release ───────────────────────────────────────────────────────────────
 
-# Bump version, update changelog, commit and tag (patch|minor|major)
+# Bump version, update changelog, commit, tag, and push (patch|minor|major)
 [group('release')]
 tag level:
     ./scripts/tag-release.sh {{level}}
+    git push origin master --tags

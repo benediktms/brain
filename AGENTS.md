@@ -222,7 +222,7 @@ This file is the canonical reference for all AI agents working on this codebase 
 
 If unsure whether a change warrants a docs update, err on the side of updating — stale docs cause more harm than verbose docs.
 
-<!-- brain:start:5e90d323 -->
+<!-- brain:start:d84b50ab -->
 ## Build & Test
 
 ```bash
@@ -286,6 +286,8 @@ brain tasks list --status=open # Filter by status
 brain tasks list --search "query" # Full-text search
 brain tasks list --priority 1 --label urgent # Combined filters
 brain tasks show <id>          # Detailed task view
+brain tasks next               # Top 10 actionable tasks (priority-sorted)
+brain tasks next -k 3          # Top 3 actionable tasks
 
 # Creating & updating
 brain tasks create --title="..." --description="..." --task-type=task --priority=2
@@ -312,6 +314,24 @@ brain tasks label purge old-label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Memory (semantic search & episodes)
+brain memory search "query"                  # Search notes/tasks (compact stubs)
+brain memory search -i lookup "exact term"   # Keyword-heavy search
+brain memory search --brain all "patterns"   # Search all registered brains
+brain memory expand <id1> <id2>              # Expand stubs to full content
+brain memory write-episode --goal "..." --actions "..." --outcome "..."
+brain memory reflect --topic "architecture"  # Prepare: get source material
+brain memory reflect --commit --title "..." --content "..." --source-ids ep1,ep2
+
+# Records
+brain artifacts restore <id>          # Print artifact content to stdout
+brain artifacts restore <id> -o file  # Write artifact content to file
+brain snapshots restore <id>          # Print snapshot content to stdout
+
+# Status
+brain status                  # Brain health check (task counts, index stats)
+brain status --json           # Machine-readable JSON output
 
 # Setup & management
 brain init                     # Initialize a new brain in cwd
