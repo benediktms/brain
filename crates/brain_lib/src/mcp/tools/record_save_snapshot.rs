@@ -23,6 +23,7 @@ struct Params {
     #[serde(default)]
     tags: Vec<String>,
     media_type: Option<String>,
+    brain: Option<String>,
 }
 
 pub(super) struct RecordSaveSnapshot;
@@ -32,6 +33,41 @@ impl RecordSaveSnapshot {
         let params: Params = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+        };
+
+        // Resolve target brain (local or remote)
+        let records = if let Some(ref brain_param) = params.brain {
+            let (brain_name, bid) = match ctx.resolve_brain_id(brain_param) {
+                Ok(r) => r,
+                Err(e) => return ToolCallResult::error(format!("Failed to resolve brain: {e}")),
+            };
+            // Guard: reject writes to archived brains
+            match super::is_brain_archived(ctx.db(), &bid) {
+                Ok(true) => {
+                    return ToolCallResult::error(format!(
+                        "Target brain '{brain_name}' is archived"
+                    ));
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    return ToolCallResult::error(format!(
+                        "Failed to check archived status: {e}"
+                    ));
+                }
+            }
+            // Short-circuit if same brain
+            if bid == ctx.brain_id() {
+                ctx.stores.records.clone()
+            } else {
+                match crate::records::RecordStore::with_brain_id(
+                    ctx.db().clone(), &bid, &brain_name,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => return ToolCallResult::error(format!("Failed to open remote brain: {e}")),
+                }
+            }
+        } else {
+            ctx.stores.records.clone()
         };
 
         let (raw_bytes, media_type) = match (&params.data, &params.text) {
@@ -74,7 +110,7 @@ impl RecordSaveSnapshot {
             Err(e) => return ToolCallResult::error(format!("Failed to write object: {e}")),
         };
 
-        let prefix = match ctx.stores.records.get_project_prefix() {
+        let prefix = match records.get_project_prefix() {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Failed to get project prefix: {e}")),
         };
@@ -101,15 +137,23 @@ impl RecordSaveSnapshot {
 
         let event = RecordEvent::from_payload(&record_id, "mcp", payload);
 
-        if let Err(e) = ctx.stores.records.apply_event(&event) {
+        if let Err(e) = records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to save record: {e}"));
         }
 
-        let result = json!({
+        let mut result = json!({
             "record_id": record_id,
             "content_hash": content_ref.hash,
             "size": content_ref.size,
         });
+
+        // If remote brain, include brain info in response
+        if let Some(ref brain_param) = params.brain {
+            if let Ok((brain_name, bid)) = ctx.resolve_brain_id(brain_param) {
+                result["brain_name"] = json!(brain_name);
+                result["brain_id"] = json!(bid);
+            }
+        }
 
         json_response(&result)
     }
@@ -157,6 +201,10 @@ impl McpTool for RecordSaveSnapshot {
                     "media_type": {
                         "type": "string",
                         "description": "MIME type hint. Defaults to 'text/plain' for text, 'application/octet-stream' for data."
+                    },
+                    "brain": {
+                        "type": "string",
+                        "description": "Target brain name or ID. Writes to current brain if omitted."
                     }
                 },
                 "required": ["title"]

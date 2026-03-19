@@ -365,6 +365,7 @@ pub struct SnapshotRecord {
 // -- RecordStore skeleton --
 
 /// The record store: SQLite is the sole source of truth.
+#[derive(Clone)]
 pub struct RecordStore {
     db: Db,
     /// Brain ID that scopes this store's reads and writes.
