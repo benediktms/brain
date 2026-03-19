@@ -37,6 +37,10 @@ pub(crate) enum ArtifactsAction {
         /// Media type (e.g. text/plain, application/json)
         #[arg(long)]
         media_type: Option<String>,
+
+        /// Target brain name or ID (writes to current brain if omitted)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// List artifacts

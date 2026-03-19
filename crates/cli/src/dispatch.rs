@@ -494,6 +494,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     task,
                     tag,
                     media_type,
+                    brain,
                 } => {
                     commands::snapshots::run::save(
                         &ctx,
@@ -505,6 +506,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             task,
                             tags: tag,
                             media_type,
+                            brain,
                         },
                     )?;
                 }
@@ -552,6 +554,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     task,
                     tag,
                     media_type,
+                    brain,
                 } => {
                     commands::artifacts::run::create(
                         &ctx,
@@ -564,6 +567,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             task,
                             tags: tag,
                             media_type,
+                            brain,
                         },
                     )?;
                 }

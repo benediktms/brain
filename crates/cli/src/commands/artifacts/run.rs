@@ -68,6 +68,7 @@ pub struct CreateParams {
     pub task: Option<String>,
     pub tags: Vec<String>,
     pub media_type: Option<String>,
+    pub brain: Option<String>,
 }
 
 pub fn create(ctx: &ArtifactCtx, params: CreateParams) -> Result<()> {
@@ -99,9 +100,19 @@ pub fn create(ctx: &ArtifactCtx, params: CreateParams) -> Result<()> {
         original_size,
     );
 
+    // Resolve target brain (if --brain provided)
+    let remote_records = if let Some(ref brain) = params.brain {
+        let db = ctx.record_store.db();
+        let (bid, bname) = brain_lib::config::resolve_brain_with_fallback(Some(db), brain)
+            .with_context(|| format!("Failed to resolve brain: {brain}"))?;
+        Some(brain_lib::records::RecordStore::with_brain_id(db.clone(), &bid, &bname)?)
+    } else {
+        None
+    };
+    let record_store = remote_records.as_ref().unwrap_or(&ctx.record_store);
+
     // Generate record ID
-    let prefix = ctx
-        .record_store
+    let prefix = record_store
         .get_project_prefix()
         .context("Failed to get project prefix")?;
     let record_id = brain_lib::records::events::new_record_id(&prefix);
@@ -124,7 +135,7 @@ pub fn create(ctx: &ArtifactCtx, params: CreateParams) -> Result<()> {
         },
     );
 
-    ctx.record_store
+    record_store
         .apply_event(&event)
         .context("Failed to apply and append record event")?;
 
