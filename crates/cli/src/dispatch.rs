@@ -605,6 +605,10 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         commands::artifacts::run::link_remove(&ctx, &id, task, chunk)?;
                     }
                 },
+                ArtifactsAction::Restore { .. } => {
+                    // Wiring handled in a separate task — stub to satisfy exhaustiveness.
+                    todo!("artifacts restore dispatch not yet wired")
+                }
             }
         }
         Command::Migrate {
@@ -639,6 +643,16 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     commands::records::unpin(&ctx, &id)?;
                 }
             }
+        }
+        Command::Memory { json, action } => {
+            // Wiring handled in a separate task — stub to satisfy exhaustiveness.
+            let _ = (json, action);
+            todo!("brain memory dispatch not yet wired")
+        }
+        Command::Status { json } => {
+            // Wiring handled in a separate task — stub to satisfy exhaustiveness.
+            let _ = json;
+            todo!("brain status dispatch not yet wired")
         }
     }
 
