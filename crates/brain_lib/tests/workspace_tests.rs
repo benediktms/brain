@@ -536,9 +536,6 @@ async fn test_mcp_context_unified_db_task_scoping() {
     use brain_lib::mcp::McpContext;
     use brain_lib::mcp::tools::ToolRegistry;
     use brain_lib::metrics::Metrics;
-    use brain_lib::records::RecordStore;
-    use brain_lib::records::objects::ObjectStore;
-    use brain_lib::tasks::TaskStore;
     use tempfile::TempDir;
 
     let tmp = TempDir::new().unwrap();
@@ -549,30 +546,22 @@ async fn test_mcp_context_unified_db_task_scoping() {
     let brain_id_a = "brain-id-alpha";
     let brain_id_b = "brain-id-beta";
 
-    let _tasks_dir_a = tmp.path().join("tasks_a");
-    let _tasks_dir_b = tmp.path().join("tasks_b");
-    let _records_dir_a = tmp.path().join("records_a");
-    let objects_dir = tmp.path().join("objects");
+    // Distinct data dirs so from_dbs derives unique brain_names.
+    let data_dir_a = tmp.path().join("brains").join("alpha");
+    let data_dir_b = tmp.path().join("brains").join("beta");
+    std::fs::create_dir_all(&data_dir_a).unwrap();
+    std::fs::create_dir_all(&data_dir_b).unwrap();
 
-    // Both TaskStores use the same db but different brain_ids.
-    let tasks_a = TaskStore::with_brain_id(db.clone(), brain_id_a, brain_id_a).unwrap();
-    let tasks_b = TaskStore::with_brain_id(db.clone(), brain_id_b, brain_id_b).unwrap();
-    let records_a = RecordStore::with_brain_id(db.clone(), brain_id_a, brain_id_a).unwrap();
-    let objects = ObjectStore::new(&objects_dir).unwrap();
+    // Build BrainStores for brain-a.
+    let stores_a =
+        brain_lib::stores::BrainStores::from_dbs(db.clone(), brain_id_a, &data_dir_a, tmp.path())
+            .unwrap();
 
-    // Build context for brain-a.
     let ctx_a = McpContext {
-        db: db.clone(),
-        store: None,
+        stores: stores_a,
+        search: None,
         writable_store: None,
-        embedder: None,
-        tasks: tasks_a,
-        records: records_a,
-        objects,
         metrics: Arc::new(Metrics::new()),
-        brain_home: tmp.path().to_path_buf(),
-        brain_name: "alpha".to_string(),
-        brain_id: brain_id_a.to_string(),
     };
 
     // Create a task for brain-a via MCP tool.
@@ -594,22 +583,16 @@ async fn test_mcp_context_unified_db_task_scoping() {
         result.content[0].text
     );
 
-    // brain-b's TaskStore (same db, different brain_id) must not see alpha's task.
-    let _records_dir_b2 = tmp.path().join("records_b2");
-    let records_b = RecordStore::with_brain_id(db.clone(), brain_id_b, brain_id_b).unwrap();
-    let objects_b = ObjectStore::new(tmp.path().join("objects_b")).unwrap();
+    // brain-b's BrainStores (same db, different brain_id) must not see alpha's task.
+    let stores_b =
+        brain_lib::stores::BrainStores::from_dbs(db.clone(), brain_id_b, &data_dir_b, tmp.path())
+            .unwrap();
+
     let ctx_b = McpContext {
-        db: db.clone(),
-        store: None,
+        stores: stores_b,
+        search: None,
         writable_store: None,
-        embedder: None,
-        tasks: tasks_b,
-        records: records_b,
-        objects: objects_b,
         metrics: Arc::new(Metrics::new()),
-        brain_home: tmp.path().to_path_buf(),
-        brain_name: "beta".to_string(),
-        brain_id: brain_id_b.to_string(),
     };
 
     let list_result = registry

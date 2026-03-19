@@ -60,10 +60,10 @@ impl McpTool for MemExpand {
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            let Some(store) = ctx.store.as_ref() else {
+            let Some(store) = ctx.store() else {
                 return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
             };
-            let Some(embedder) = ctx.embedder.as_ref() else {
+            let Some(embedder) = ctx.embedder() else {
                 return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
             };
 
@@ -72,7 +72,7 @@ impl McpTool for MemExpand {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
+            let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
             let expand_result = match pipeline
                 .expand(&params.memory_ids, params.budget_tokens as usize)
                 .await

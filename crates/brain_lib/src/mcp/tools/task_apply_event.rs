@@ -199,7 +199,7 @@ impl TaskApplyEvent {
 
         // Reject task creation on archived brains (other event types pass through)
         if event_type == EventType::TaskCreated {
-            match super::is_brain_archived(&ctx.db, &ctx.brain_id) {
+            match super::is_brain_archived(ctx.db(), ctx.brain_id()) {
                 Ok(true) => {
                     return ExecuteResult {
                         result: ToolCallResult::error(
@@ -225,7 +225,7 @@ impl TaskApplyEvent {
                     id.to_string()
                 } else {
                     // Resolve prefix for non-create events
-                    match ctx.tasks.resolve_task_id(id) {
+                    match ctx.stores.tasks.resolve_task_id(id) {
                         Ok(resolved) => resolved,
                         Err(e) => {
                             return ExecuteResult {
@@ -239,7 +239,7 @@ impl TaskApplyEvent {
             }
             None => {
                 if event_type == EventType::TaskCreated {
-                    let prefix = match ctx.tasks.get_project_prefix() {
+                    let prefix = match ctx.stores.tasks.get_project_prefix() {
                         Ok(p) => p,
                         Err(e) => {
                             return ExecuteResult {
@@ -264,7 +264,7 @@ impl TaskApplyEvent {
         if let Some(dep_id) = payload.get("depends_on_task_id").and_then(|v| v.as_str())
             && !dep_id.is_empty()
         {
-            match ctx.tasks.resolve_task_id(dep_id) {
+            match ctx.stores.tasks.resolve_task_id(dep_id) {
                 Ok(resolved) => payload["depends_on_task_id"] = json!(resolved),
                 Err(e) => {
                     return ExecuteResult {
@@ -278,7 +278,7 @@ impl TaskApplyEvent {
         if let Some(parent_id) = payload.get("parent_task_id").and_then(|v| v.as_str())
             && !parent_id.is_empty()
         {
-            match ctx.tasks.resolve_task_id(parent_id) {
+            match ctx.stores.tasks.resolve_task_id(parent_id) {
                 Ok(resolved) => payload["parent_task_id"] = json!(resolved),
                 Err(e) => {
                     return ExecuteResult {
@@ -312,17 +312,17 @@ impl TaskApplyEvent {
         );
 
         // Append (validates + writes JSONL + applies projection)
-        if let Err(e) = ctx.tasks.append(&event) {
+        if let Err(e) = ctx.stores.tasks.append(&event) {
             return ExecuteResult {
                 result: ToolCallResult::error(format!("Task event failed: {e}")),
             };
         }
 
         // Fetch resulting task state
-        let task_json = match ctx.tasks.get_task(&task_id) {
+        let task_json = match ctx.stores.tasks.get_task(&task_id) {
             Ok(Some(row)) => {
                 let labels = store_or_warn(
-                    ctx.tasks.get_task_labels(&task_id),
+                    ctx.stores.tasks.get_task_labels(&task_id),
                     "get_task_labels",
                     &mut warnings,
                 );
@@ -347,18 +347,24 @@ impl TaskApplyEvent {
 
         let unblocked_task_ids: Vec<String> = if is_terminal {
             store_or_warn(
-                ctx.tasks.list_newly_unblocked(&task_id),
+                ctx.stores.tasks.list_newly_unblocked(&task_id),
                 "list_newly_unblocked",
                 &mut warnings,
             )
             .iter()
-            .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
+            .map(|id| {
+                ctx.stores
+                    .tasks
+                    .compact_id(id)
+                    .unwrap_or_else(|_| id.clone())
+            })
             .collect()
         } else {
             vec![]
         };
 
         let short_id = ctx
+            .stores
             .tasks
             .compact_id(&task_id)
             .unwrap_or_else(|_| task_id.clone());
@@ -688,7 +694,7 @@ mod tests {
         assert!(result.is_error.is_none());
 
         // Verify comment stored by fetching via TaskStore
-        let comments = ctx.tasks.get_task_comments("t1").unwrap();
+        let comments = ctx.stores.tasks.get_task_comments("t1").unwrap();
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].body, "This needs review");
         assert_eq!(comments[0].author, "bob");
@@ -766,7 +772,7 @@ mod tests {
         assert_eq!(parsed["task"]["defer_until"], "2026-12-01T00:00:00+00:00");
 
         // Verify stored as i64 internally
-        let row = ctx.tasks.get_task("t1").unwrap().unwrap();
+        let row = ctx.stores.tasks.get_task("t1").unwrap().unwrap();
         assert_eq!(row.defer_until, Some(1796083200));
     }
 
@@ -790,7 +796,7 @@ mod tests {
         // Response should still be ISO 8601 string
         assert_eq!(parsed["task"]["defer_until"], "2026-12-01T00:00:00+00:00");
 
-        let row = ctx.tasks.get_task("t1").unwrap().unwrap();
+        let row = ctx.stores.tasks.get_task("t1").unwrap().unwrap();
         assert_eq!(row.defer_until, Some(1796083200));
     }
 
@@ -987,11 +993,11 @@ mod tests {
     }
 
     fn mark_brain_archived(ctx: &crate::mcp::McpContext) {
-        ctx.db
+        ctx.db()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
-                    [&ctx.brain_id],
+                    [ctx.brain_id()],
                 )?;
                 Ok(())
             })
@@ -1052,31 +1058,12 @@ mod tests {
         use std::sync::Arc;
 
         // Build a context with no store and no embedder (tasks-only mode)
-        let tmp = tempfile::TempDir::new().unwrap();
-        let sqlite_path = tmp.path().join("test.db");
-        let _tasks_dir = tmp.path().join("tasks");
-
-        let db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks = crate::tasks::TaskStore::new(tasks_db);
-        let _records_dir = tmp.path().join("records");
-        let records_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let records = crate::records::RecordStore::new(records_db);
-        let objects_dir = tmp.path().join("objects");
-        let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
-
+        let (_tmp, stores) = crate::stores::BrainStores::in_memory().unwrap();
         let ctx = crate::mcp::McpContext {
-            db,
-            store: None,
+            stores,
+            search: None,
             writable_store: None,
-            embedder: None,
-            tasks,
-            records,
-            objects,
             metrics: Arc::new(crate::metrics::Metrics::new()),
-            brain_home: tmp.path().to_path_buf(),
-            brain_name: "test-brain".to_string(),
-            brain_id: String::new(),
         };
 
         let registry = ToolRegistry::new();

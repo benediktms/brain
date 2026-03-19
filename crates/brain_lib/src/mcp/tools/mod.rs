@@ -203,21 +203,16 @@ pub(crate) mod tests {
         let store_reader = crate::store::StoreReader::from_store(&store);
         let embedder = Arc::new(crate::embedder::MockEmbedder);
 
-        let brain_home = stores.brain_home.clone();
         (
             tmp,
             McpContext {
-                db: stores.db().clone(),
-                store: Some(store_reader),
+                stores,
+                search: Some(crate::search_service::SearchService {
+                    store: store_reader,
+                    embedder,
+                }),
                 writable_store: Some(store),
-                embedder: Some(embedder),
-                tasks: stores.tasks,
-                records: stores.records,
-                objects: stores.objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
-                brain_home,
-                brain_name: stores.brain_name,
-                brain_id: stores.brain_id,
             },
         )
     }

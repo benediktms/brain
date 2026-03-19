@@ -40,7 +40,7 @@ impl TaskNext {
         let k = params.k.min(100) as usize;
 
         // Get ready actionable tasks (excludes epics)
-        let ready_tasks = match ctx.tasks.list_ready_actionable() {
+        let ready_tasks = match ctx.stores.tasks.list_ready_actionable() {
             Ok(tasks) => tasks,
             Err(e) => {
                 error!(error = %e, "failed to list ready tasks");
@@ -71,7 +71,7 @@ impl TaskNext {
         let selected: Vec<_> = tasks.into_iter().take(k).collect();
 
         // Build enriched task JSON with batch label fetching
-        let mut results_json = enrich_task_summaries(&ctx.tasks, &selected);
+        let mut results_json = enrich_task_summaries(&ctx.stores.tasks, &selected);
 
         // Replace task_id with short form and strip description from each task
         for task_val in &mut results_json {
@@ -81,7 +81,11 @@ impl TaskNext {
                     .and_then(|v| v.as_str())
                     .map(String::from)
                 {
-                    let short = ctx.tasks.compact_id(&tid).unwrap_or_else(|_| tid.clone());
+                    let short = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&tid)
+                        .unwrap_or_else(|_| tid.clone());
                     obj.insert("task_id".into(), json!(short));
                 }
                 obj.remove("description");
@@ -96,6 +100,7 @@ impl TaskNext {
                     continue;
                 }
                 let epic_val = ctx
+                    .stores
                     .tasks
                     .get_task(parent_id)
                     .ok()
@@ -103,6 +108,7 @@ impl TaskNext {
                     .filter(|t| t.task_type == TaskType::Epic)
                     .map(|t| {
                         let short_id = ctx
+                            .stores
                             .tasks
                             .compact_id(&t.task_id)
                             .unwrap_or_else(|_| t.task_id.clone());
@@ -155,7 +161,7 @@ impl TaskNext {
         // Get aggregate counts
         let mut warnings = Vec::new();
         let (ready_count, blocked_count) = store_or_warn(
-            ctx.tasks.count_ready_blocked(),
+            ctx.stores.tasks.count_ready_blocked(),
             "count_ready_blocked",
             &mut warnings,
         );

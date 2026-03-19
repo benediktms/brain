@@ -70,14 +70,14 @@ impl TaskGet {
         };
 
         // 1. Resolve task_id
-        let task_id = match ctx.tasks.resolve_task_id(&params.task_id) {
+        let task_id = match ctx.stores.tasks.resolve_task_id(&params.task_id) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve task_id: {e}")),
         };
 
         // 2. Get task
         let task_id = task_id.as_str();
-        let task = match ctx.tasks.get_task(task_id) {
+        let task = match ctx.stores.tasks.get_task(task_id) {
             Ok(Some(t)) => t,
             Ok(None) => return ToolCallResult::error(format!("Task not found: {task_id}")),
             Err(e) => {
@@ -88,24 +88,24 @@ impl TaskGet {
 
         // 3. Fetch enrichment data
         let labels = store_or_warn(
-            ctx.tasks.get_task_labels(task_id),
+            ctx.stores.tasks.get_task_labels(task_id),
             "get_task_labels",
             &mut warnings,
         );
         let external_ids = store_or_warn(
-            ctx.tasks.get_external_ids(task_id),
+            ctx.stores.tasks.get_external_ids(task_id),
             "get_external_ids",
             &mut warnings,
         );
 
         let comments = store_or_warn(
-            ctx.tasks.get_task_comments(task_id),
+            ctx.stores.tasks.get_task_comments(task_id),
             "get_task_comments",
             &mut warnings,
         );
         let comments_json = comments_to_json(&comments);
 
-        let dep_summary = match ctx.tasks.get_dependency_summary(task_id) {
+        let dep_summary = match ctx.stores.tasks.get_dependency_summary(task_id) {
             Ok(summary) => summary,
             Err(err) => {
                 warnings.push(Warning {
@@ -121,19 +121,19 @@ impl TaskGet {
         };
 
         let note_links = store_or_warn(
-            ctx.tasks.get_task_note_links(task_id),
+            ctx.stores.tasks.get_task_note_links(task_id),
             "get_task_note_links",
             &mut warnings,
         );
         let linked_notes_json = note_links_to_json(&note_links);
 
         let children = store_or_warn(
-            ctx.tasks.get_children(task_id),
+            ctx.stores.tasks.get_children(task_id),
             "get_children",
             &mut warnings,
         );
         let blocks = store_or_warn(
-            ctx.tasks.get_tasks_blocking(task_id),
+            ctx.stores.tasks.get_tasks_blocking(task_id),
             "get_tasks_blocking",
             &mut warnings,
         );
@@ -144,12 +144,12 @@ impl TaskGet {
                 .as_deref()
                 .map(|pid| {
                     let Some(parent) =
-                        store_or_warn(ctx.tasks.get_task(pid), "get_task", &mut warnings)
+                        store_or_warn(ctx.stores.tasks.get_task(pid), "get_task", &mut warnings)
                     else {
                         return task_stub(pid, "(not found)");
                     };
                     let parent_labels = store_or_warn(
-                        ctx.tasks.get_task_labels(pid),
+                        ctx.stores.tasks.get_task_labels(pid),
                         "get_task_labels",
                         &mut warnings,
                     );
@@ -160,7 +160,8 @@ impl TaskGet {
             task.parent_task_id
                 .as_deref()
                 .map(|pid| {
-                    ctx.tasks
+                    ctx.stores
+                        .tasks
                         .get_task(pid)
                         .ok()
                         .flatten()
@@ -176,7 +177,7 @@ impl TaskGet {
                 .iter()
                 .map(|c| {
                     let labels = store_or_warn(
-                        ctx.tasks.get_task_labels(&c.task_id),
+                        ctx.stores.tasks.get_task_labels(&c.task_id),
                         "get_task_labels",
                         &mut warnings,
                     );
@@ -201,12 +202,12 @@ impl TaskGet {
                 .iter()
                 .map(|id| {
                     let Some(blocking_task) =
-                        store_or_warn(ctx.tasks.get_task(id), "get_task", &mut warnings)
+                        store_or_warn(ctx.stores.tasks.get_task(id), "get_task", &mut warnings)
                     else {
                         return task_stub(id, "(not found)");
                     };
                     let blocking_labels = store_or_warn(
-                        ctx.tasks.get_task_labels(id),
+                        ctx.stores.tasks.get_task_labels(id),
                         "get_task_labels",
                         &mut warnings,
                     );
@@ -218,7 +219,8 @@ impl TaskGet {
                 .blocking_task_ids
                 .iter()
                 .filter_map(|id| {
-                    ctx.tasks
+                    ctx.stores
+                        .tasks
                         .get_task(id)
                         .ok()
                         .flatten()
@@ -233,7 +235,7 @@ impl TaskGet {
                 .iter()
                 .map(|b| {
                     let labels = store_or_warn(
-                        ctx.tasks.get_task_labels(&b.task_id),
+                        ctx.stores.tasks.get_task_labels(&b.task_id),
                         "get_task_labels",
                         &mut warnings,
                     );
@@ -253,6 +255,7 @@ impl TaskGet {
 
         // 8. Build base task JSON
         let short_id = ctx
+            .stores
             .tasks
             .compact_id(task_id)
             .unwrap_or_else(|_| task_id.to_string());

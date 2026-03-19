@@ -100,10 +100,10 @@ impl McpTool for MemSearchMinimal {
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            let Some(store) = ctx.store.as_ref() else {
+            let Some(store) = ctx.store() else {
                 return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
             };
-            let Some(embedder) = ctx.embedder.as_ref() else {
+            let Some(embedder) = ctx.embedder() else {
                 return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
             };
 
@@ -131,7 +131,7 @@ impl McpTool for MemSearchMinimal {
 
             let search_result = if params.brains.is_empty() {
                 // Single-brain path — unchanged behaviour.
-                let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
+                let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
                 match pipeline.search(&search_params).await {
                     Ok(r) => r,
                     Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
@@ -139,7 +139,7 @@ impl McpTool for MemSearchMinimal {
             } else {
                 // Federated path — open remote brain contexts.
                 let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-                    match crate::config::list_brain_keys(&ctx.brain_home) {
+                    match crate::config::list_brain_keys(ctx.brain_home()) {
                         Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
                         Err(e) => {
                             return ToolCallResult::error(format!("Failed to list brains: {e}"));
@@ -152,15 +152,15 @@ impl McpTool for MemSearchMinimal {
                 // Build the brain list: local brain first, then each remote.
                 // All share the same unified `ctx.db` — no separate Db per brain.
                 let mut brains: Vec<(String, Option<crate::store::StoreReader>)> = Vec::new();
-                brains.push((ctx.brain_name.clone(), Some(store.clone())));
+                brains.push((ctx.brain_name().to_string(), Some(store.clone())));
 
                 for key in &brain_keys {
-                    if key == &ctx.brain_name {
+                    if key == ctx.brain_name() {
                         // Local brain already added above.
                         continue;
                     }
                     match crate::config::open_remote_search_context(
-                        &ctx.brain_home,
+                        ctx.brain_home(),
                         key,
                         std::path::Path::new(""),
                         embedder,
@@ -180,7 +180,7 @@ impl McpTool for MemSearchMinimal {
                 }
 
                 let federated = FederatedPipeline {
-                    db: &ctx.db,
+                    db: ctx.db(),
                     brains,
                     embedder,
                     metrics: &ctx.metrics,
@@ -244,73 +244,34 @@ mod tests {
 
     /// Build a context with store and embedder both absent (tasks-only mode).
     async fn create_tasks_only_context() -> (tempfile::TempDir, McpContext) {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let brain_home = tmp.path().to_path_buf();
-        let sqlite_path = tmp.path().join("test.db");
-        let _tasks_dir = tmp.path().join("tasks");
-
-        let db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks = crate::tasks::TaskStore::new(tasks_db);
-        let _records_dir = tmp.path().join("records");
-        let records_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let records = crate::records::RecordStore::new(records_db);
-        let objects_dir = tmp.path().join("objects");
-        let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
+        let (tmp, stores) = crate::stores::BrainStores::in_memory().unwrap();
 
         (
             tmp,
             McpContext {
-                db,
-                store: None,
+                stores,
+                search: None,
                 writable_store: None,
-                embedder: None,
-                tasks,
-                records,
-                objects,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
-                brain_home,
-                brain_name: "test-brain".to_string(),
-                brain_id: String::new(),
             },
         )
     }
 
     /// Build a context with store present but embedder absent.
+    ///
+    /// After the McpContext refactor, store and embedder are bundled together
+    /// in `SearchService`. To simulate "no embedder", we set `search: None`.
+    /// The test still validates that the tool returns MEMORY_UNAVAILABLE.
     async fn create_no_embedder_context() -> (tempfile::TempDir, McpContext) {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let brain_home = tmp.path().to_path_buf();
-        let sqlite_path = tmp.path().join("test.db");
-        let lance_path = tmp.path().join("test_lance");
-        let _tasks_dir = tmp.path().join("tasks");
-
-        let db = crate::db::Db::open(&sqlite_path).unwrap();
-        let store = crate::store::Store::open_or_create(&lance_path)
-            .await
-            .unwrap();
-        let store_reader = crate::store::StoreReader::from_store(&store);
-        let tasks_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let tasks = crate::tasks::TaskStore::new(tasks_db);
-        let _records_dir = tmp.path().join("records");
-        let records_db = crate::db::Db::open(&sqlite_path).unwrap();
-        let records = crate::records::RecordStore::new(records_db);
-        let objects_dir = tmp.path().join("objects");
-        let objects = crate::records::objects::ObjectStore::new(&objects_dir).unwrap();
+        let (tmp, stores) = crate::stores::BrainStores::in_memory().unwrap();
 
         (
             tmp,
             McpContext {
-                db,
-                store: Some(store_reader),
-                writable_store: Some(store),
-                embedder: None,
-                tasks,
-                records,
-                objects,
+                stores,
+                search: None,
+                writable_store: None,
                 metrics: Arc::new(crate::metrics::Metrics::new()),
-                brain_home,
-                brain_name: "test-brain".to_string(),
-                brain_id: String::new(),
             },
         )
     }

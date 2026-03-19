@@ -25,7 +25,7 @@ async fn start_server(
     sock: &std::path::Path,
 ) -> (tempfile::TempDir, tokio_util::sync::CancellationToken) {
     let (dir, ctx) = create_test_context().await;
-    ctx.db
+    ctx.db()
         .ensure_brain_registered("test-brain", "test-brain")
         .unwrap();
     let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -313,7 +313,7 @@ async fn ipc_stale_socket_cleanup() {
 
     // Bind should detect the stale file, remove it, and succeed.
     let (dir, ctx) = create_test_context().await;
-    ctx.db
+    ctx.db()
         .ensure_brain_registered("test-brain", "test-brain")
         .unwrap();
     let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -387,7 +387,7 @@ async fn ipc_graceful_shutdown() {
     let sock = tmp.path().join("shutdown.sock");
 
     let (dir, ctx) = create_test_context().await;
-    ctx.db
+    ctx.db()
         .ensure_brain_registered("test-brain", "test-brain")
         .unwrap();
     let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());

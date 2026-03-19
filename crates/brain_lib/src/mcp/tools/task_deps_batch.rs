@@ -72,7 +72,7 @@ impl TaskDepsBatch {
 
         // Process sequentially so cycle detection sees accumulated state
         for pair in pairs {
-            let task_id = match ctx.tasks.resolve_task_id(&pair.task_id) {
+            let task_id = match ctx.stores.tasks.resolve_task_id(&pair.task_id) {
                 Ok(id) => id,
                 Err(e) => {
                     failed.push(json!({
@@ -83,7 +83,7 @@ impl TaskDepsBatch {
                     continue;
                 }
             };
-            let depends_on = match ctx.tasks.resolve_task_id(&pair.depends_on_task_id) {
+            let depends_on = match ctx.stores.tasks.resolve_task_id(&pair.depends_on_task_id) {
                 Ok(id) => id,
                 Err(e) => {
                     failed.push(json!({
@@ -104,7 +104,7 @@ impl TaskDepsBatch {
                 },
             );
 
-            match ctx.tasks.append(&event) {
+            match ctx.stores.tasks.append(&event) {
                 Ok(()) => {
                     succeeded.push(json!({
                         "task_id": task_id,
@@ -138,7 +138,7 @@ impl TaskDepsBatch {
         let mut resolved = Vec::new();
         let mut failed = Vec::new();
         for raw_id in task_ids {
-            match ctx.tasks.resolve_task_id(raw_id) {
+            match ctx.stores.tasks.resolve_task_id(raw_id) {
                 Ok(id) => resolved.push(id),
                 Err(e) => {
                     failed.push(json!({
@@ -169,7 +169,7 @@ impl TaskDepsBatch {
                 },
             );
 
-            match ctx.tasks.append(&event) {
+            match ctx.stores.tasks.append(&event) {
                 Ok(()) => {
                     succeeded.push(json!({
                         "task_id": task_id,
@@ -203,7 +203,7 @@ impl TaskDepsBatch {
             return batch_response(vec![], vec![]);
         }
 
-        let source_resolved = match ctx.tasks.resolve_task_id(source) {
+        let source_resolved = match ctx.stores.tasks.resolve_task_id(source) {
             Ok(id) => id,
             Err(e) => {
                 return ToolCallResult::error(format!("Failed to resolve source_task_id: {e}"));
@@ -214,7 +214,7 @@ impl TaskDepsBatch {
         let mut failed = Vec::new();
 
         for raw_id in dependents {
-            let dep_id = match ctx.tasks.resolve_task_id(raw_id) {
+            let dep_id = match ctx.stores.tasks.resolve_task_id(raw_id) {
                 Ok(id) => id,
                 Err(e) => {
                     failed.push(json!({
@@ -235,7 +235,7 @@ impl TaskDepsBatch {
                 },
             );
 
-            match ctx.tasks.append(&event) {
+            match ctx.stores.tasks.append(&event) {
                 Ok(()) => {
                     succeeded.push(json!({
                         "task_id": dep_id,
@@ -261,12 +261,12 @@ impl TaskDepsBatch {
             _ => return ToolCallResult::error("Missing required parameter: task_id"),
         };
 
-        let resolved = match ctx.tasks.resolve_task_id(task_id) {
+        let resolved = match ctx.stores.tasks.resolve_task_id(task_id) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve task_id: {e}")),
         };
 
-        let deps = match ctx.tasks.get_deps_for_task(&resolved) {
+        let deps = match ctx.stores.tasks.get_deps_for_task(&resolved) {
             Ok(d) => d,
             Err(e) => {
                 return ToolCallResult::error(format!("Failed to query dependencies: {e}"));
@@ -291,7 +291,7 @@ impl TaskDepsBatch {
             })
             .collect();
 
-        let results = ctx.tasks.append_batch(&events);
+        let results = ctx.stores.tasks.append_batch(&events);
         let mut succeeded = Vec::new();
         let mut failed = Vec::new();
 
@@ -493,11 +493,11 @@ mod tests {
         assert_eq!(parsed["summary"]["failed"], 0);
 
         // t2 should depend on t1
-        let deps = ctx.tasks.get_deps_for_task("t2").unwrap();
+        let deps = ctx.stores.tasks.get_deps_for_task("t2").unwrap();
         assert!(deps.contains(&"t1".to_string()));
 
         // t3 should depend on t2
-        let deps = ctx.tasks.get_deps_for_task("t3").unwrap();
+        let deps = ctx.stores.tasks.get_deps_for_task("t3").unwrap();
         assert!(deps.contains(&"t2".to_string()));
     }
 
@@ -534,7 +534,7 @@ mod tests {
 
         // All should depend on t1
         for tid in &["t2", "t3", "t4"] {
-            let deps = ctx.tasks.get_deps_for_task(tid).unwrap();
+            let deps = ctx.stores.tasks.get_deps_for_task(tid).unwrap();
             assert!(deps.contains(&"t1".to_string()));
         }
     }
@@ -566,7 +566,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["summary"]["succeeded"], 2);
 
-        let deps = ctx.tasks.get_deps_for_task("t3").unwrap();
+        let deps = ctx.stores.tasks.get_deps_for_task("t3").unwrap();
         assert!(deps.is_empty());
     }
 

@@ -87,7 +87,7 @@ impl McpTool for MemWriteEpisode {
             );
 
             let episode = Episode {
-                brain_id: ctx.brain_id.clone(),
+                brain_id: ctx.brain_id().to_string(),
                 goal: params.goal.clone(),
                 actions: params.actions,
                 outcome: params.outcome,
@@ -95,7 +95,7 @@ impl McpTool for MemWriteEpisode {
                 importance: params.importance,
             };
 
-            let summary_id = match ctx.db.store_episode(&episode) {
+            let summary_id = match ctx.db().store_episode(&episode) {
                 Ok(id) => id,
                 Err(e) => {
                     error!(error = %e, "failed to store episode");
@@ -105,9 +105,7 @@ impl McpTool for MemWriteEpisode {
 
             // Best-effort: embed the episode into LanceDB for semantic search.
             // Failure is non-fatal — the episode is still stored in SQLite.
-            if let (Some(embedder), Some(store)) =
-                (ctx.embedder.as_ref(), ctx.writable_store.as_ref())
-            {
+            if let (Some(embedder), Some(store)) = (ctx.embedder(), ctx.writable_store.as_ref()) {
                 match crate::embedder::embed_batch_async(embedder, vec![embed_content.clone()])
                     .await
                 {

@@ -17,10 +17,9 @@ use crate::db::Db;
 use crate::embedder::{Embed, Embedder};
 use crate::ipc::client::IpcClient;
 use crate::metrics::Metrics;
-use crate::records::RecordStore;
-use crate::records::objects::ObjectStore;
+use crate::search_service::SearchService;
 use crate::store::{Store, StoreReader};
-use crate::tasks::TaskStore;
+use crate::stores::BrainStores;
 
 use protocol::{
     InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ServerCapabilities,
@@ -54,43 +53,55 @@ enum DispatchMode {
 
 /// Shared context for MCP tool handlers.
 ///
-/// `store` and `embedder` are optional — they require the embedding model to
-/// be downloaded. When absent, task tools still work but memory/search tools
-/// return an error asking the user to download the model via the HuggingFace CLI.
-///
-/// A single database handle is maintained:
-/// - `db`: SQLite (`~/.brain/brain.db`) shared across all brains.  TaskStore,
-///   RecordStore, and the indexing pipeline all use this handle so that
-///   brain_id-scoped queries work correctly across the full workspace.
+/// Composes `BrainStores` (the single repo layer for SQLite-backed stores)
+/// with an optional `SearchService` (LanceDB vector search + embedder).
+/// When the search layer is absent, task tools still work but memory/search
+/// tools return an error asking the user to download the embedding model.
 pub struct McpContext {
-    /// SQLite (`~/.brain/brain.db`) — tasks, records, record_events, and
-    /// indexing tables (files, chunks, summaries, brain_meta).
-    pub db: Db,
-    pub store: Option<StoreReader>,
-    pub writable_store: Option<Store>, // for task capsule embedding
-    pub embedder: Option<Arc<dyn Embed>>,
-    pub tasks: TaskStore,
-    pub records: RecordStore,
-    pub objects: ObjectStore,
+    /// Unified repo layer: Db, TaskStore, RecordStore, ObjectStore.
+    pub stores: BrainStores,
+    /// Read-side search (LanceDB + embedder). `None` in tasks-only mode.
+    pub search: Option<SearchService>,
+    /// Writable LanceDB store for task capsule embedding.
+    pub writable_store: Option<Store>,
     pub metrics: Arc<Metrics>,
-    /// The brain home directory (`$BRAIN_HOME` or `~/.brain`).
-    pub brain_home: std::path::PathBuf,
-    /// Human-readable name of the current brain (from its data directory path).
-    pub brain_name: String,
-    /// Stable ID of the current brain (from the `.brain/brain_id` file).
-    pub brain_id: String,
 }
 
 impl McpContext {
+    // ── Convenience accessors ────────────────────────────────────────────
+    // Minimise churn in tool files — they keep using short paths.
+
+    pub fn db(&self) -> &Db {
+        self.stores.db()
+    }
+
+    pub fn store(&self) -> Option<&StoreReader> {
+        self.search.as_ref().map(|s| &s.store)
+    }
+
+    pub fn embedder(&self) -> Option<&Arc<dyn Embed>> {
+        self.search.as_ref().map(|s| &s.embedder)
+    }
+
+    pub fn brain_id(&self) -> &str {
+        &self.stores.brain_id
+    }
+
+    pub fn brain_name(&self) -> &str {
+        &self.stores.brain_name
+    }
+
+    pub fn brain_home(&self) -> &std::path::Path {
+        &self.stores.brain_home
+    }
+
+    // ── Construction ─────────────────────────────────────────────────────
+
     /// Bootstrap an MCP context with layered initialization.
     ///
-    /// Always opens SQLite and creates a TaskStore (lightweight, reliable).
+    /// Always opens SQLite and creates stores (lightweight, reliable).
     /// Then optionally attempts to open LanceDB and load the embedder — if
-    /// either fails the server still starts in tasks-only mode without
-    /// memory/search tool support.
-    ///
-    /// This avoids the old approach of going through `IndexPipeline::new()`
-    /// which always loads all three components before falling back.
+    /// either fails the server still starts in tasks-only mode.
     pub async fn bootstrap(
         model_dir: &Path,
         lance_db: &Path,
@@ -100,78 +111,59 @@ impl McpContext {
         let stores = tokio::task::spawn_blocking({
             let sqlite_db = sqlite_db.to_path_buf();
             let lance_db = lance_db.to_path_buf();
-            move || crate::stores::BrainStores::from_path(&sqlite_db, Some(&lance_db))
+            move || BrainStores::from_path(&sqlite_db, Some(&lance_db))
         })
         .await
         .map_err(|e| crate::error::BrainCoreError::Database(format!("spawn_blocking: {e}")))??;
 
         // Step 2: optionally load LanceDB + embedder. Failures are logged and
         // result in tasks-only mode — no hard error.
-        let (writable_store, store, embedder) =
+        let (writable_store, search) =
             match Self::try_load_search_layer(model_dir, lance_db, stores.db()).await {
-                Ok((ws, s, e)) => (Some(ws), Some(s), Some(e)),
+                Ok((ws, sr, emb)) => (
+                    Some(ws),
+                    Some(SearchService {
+                        store: sr,
+                        embedder: emb,
+                    }),
+                ),
                 Err(err) => {
                     info!("embedding model unavailable ({err}), starting in tasks-only mode");
-                    (None, None, None)
+                    (None, None)
                 }
             };
 
         let metrics = Arc::new(Metrics::new());
 
         Ok(Arc::new(Self {
-            db: stores.db().clone(),
-            store,
+            stores,
+            search,
             writable_store,
-            embedder,
-            tasks: stores.tasks,
-            records: stores.records,
-            objects: stores.objects,
             metrics,
-            brain_home: stores.brain_home,
-            brain_name: stores.brain_name,
-            brain_id: stores.brain_id,
         }))
     }
 
-    /// Build an McpContext from pre-opened stores.
+    /// Build an McpContext from pre-opened BrainStores.
     ///
     /// Used by the daemon to create per-brain MCP contexts without going
-    /// through the full bootstrap sequence (which opens its own stores).
-    ///
-    /// `db` is the single SQLite handle (`~/.brain/brain.db`) used for all
-    /// tables — tasks, records, and indexing.
-    #[allow(clippy::too_many_arguments)]
+    /// through the full bootstrap sequence.
     pub fn from_stores(
-        db: Db,
-        store: Option<StoreReader>,
+        stores: BrainStores,
+        search: Option<SearchService>,
         writable_store: Option<Store>,
-        embedder: Option<Arc<dyn Embed>>,
-        tasks: TaskStore,
-        records: RecordStore,
-        objects: ObjectStore,
         metrics: Arc<Metrics>,
-        brain_home: std::path::PathBuf,
-        brain_name: String,
     ) -> Arc<Self> {
-        let brain_id = tasks.brain_id.clone();
         Arc::new(Self {
-            db,
-            store,
+            stores,
+            search,
             writable_store,
-            embedder,
-            tasks,
-            records,
-            objects,
             metrics,
-            brain_home,
-            brain_name,
-            brain_id,
         })
     }
 
     /// Attempt to open the LanceDB store and load the embedder.
     ///
-    /// Returns both as a pair on success. Any error causes the entire search
+    /// Returns all three on success. Any error causes the entire search
     /// layer to be skipped — we don't want a partially-loaded state.
     async fn try_load_search_layer(
         model_dir: &Path,
@@ -198,59 +190,31 @@ impl McpContext {
     }
 
     /// Resolve a brain name or ID to a `(brain_name, brain_id)` pair via the DB.
-    ///
-    /// Note: returns `(name, id)` to match the convention used by all MCP tool
-    /// callers. The underlying `Db::resolve_brain` returns `(id, name)`.
     pub fn resolve_brain_id(&self, name_or_id: &str) -> crate::error::Result<(String, String)> {
-        let (id, name) = self.db.resolve_brain(name_or_id).map_err(|e| {
+        let (id, name) = self.stores.db().resolve_brain(name_or_id).map_err(|e| {
             crate::error::BrainCoreError::Config(format!("brain resolution failed: {e}"))
         })?;
         Ok((name, id))
     }
 
-    /// Create a brain_id-scoped TaskStore sharing this context's db handle.
-    pub fn tasks_for_brain(
-        &self,
-        brain_id: &str,
-        brain_name: &str,
-    ) -> crate::error::Result<TaskStore> {
-        TaskStore::with_brain_id(self.db.clone(), brain_id, brain_name)
-    }
-
-    /// Create a brain_id-scoped RecordStore sharing this context's db handle.
-    pub fn records_for_brain(
-        &self,
-        brain_id: &str,
-        brain_name: &str,
-    ) -> crate::error::Result<RecordStore> {
-        RecordStore::with_brain_id(self.db.clone(), brain_id, brain_name)
-    }
-
     /// Clone this context with a different brain_id.
     ///
-    /// All shared resources (Db, embedder, metrics, LanceDB store) are
-    /// re-used. TaskStore and RecordStore are re-created scoped to
-    /// `brain_id`. ObjectStore is re-opened at the same root path.
+    /// Delegates store re-scoping to `BrainStores::with_brain_id()`.
+    /// Search layer and metrics are shared.
     pub fn with_brain_id(
         &self,
         brain_id: &str,
         brain_name: &str,
     ) -> crate::error::Result<Arc<Self>> {
-        let tasks = self.tasks_for_brain(brain_id, brain_name)?;
-        let records = self.records_for_brain(brain_id, brain_name)?;
-        let objects = ObjectStore::new(self.objects.root())?;
+        let stores = self.stores.with_brain_id(brain_id, brain_name)?;
         Ok(Arc::new(Self {
-            db: self.db.clone(),
-            store: self.store.clone(),
+            stores,
+            search: self.search.as_ref().map(|s| SearchService {
+                store: s.store.clone(),
+                embedder: Arc::clone(&s.embedder),
+            }),
             writable_store: None, // shared read-only via IPC
-            embedder: self.embedder.clone(),
-            tasks,
-            records,
-            objects,
             metrics: Arc::clone(&self.metrics),
-            brain_home: self.brain_home.clone(),
-            brain_name: brain_name.to_string(),
-            brain_id: brain_id.to_string(),
         }))
     }
 }
@@ -274,7 +238,7 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
         let sock = IpcClient::default_socket_path();
         // session_brain_name starts as the startup-resolved brain; updated on
         // initialize when the client provides roots pointing at a different brain.
-        let session_brain_name = Arc::new(RwLock::new(ctx.brain_name.clone()));
+        let session_brain_name = Arc::new(RwLock::new(ctx.brain_name().to_string()));
         match IpcClient::connect(&sock).await {
             Ok(client) => {
                 info!("connected to daemon via UDS, routing tool calls through daemon");
@@ -526,7 +490,7 @@ async fn handle_request(
                     // re-scope the context so TaskStore/RecordStore queries
                     // filter by the correct brain_id.
                     let session = session_brain_name.read().await.clone();
-                    if session != ctx.brain_name {
+                    if session != ctx.brain_name() {
                         match ctx.resolve_brain_id(&session) {
                             Ok((name, bid)) => match ctx.with_brain_id(&bid, &name) {
                                 Ok(scoped_ctx) => {
@@ -603,7 +567,7 @@ mod tests {
     async fn call(method: &str, params: Value) -> String {
         let (_dir, ctx) = tools::tests::create_test_context().await;
         let registry = ToolRegistry::new();
-        let session_brain_name = Arc::new(RwLock::new(ctx.brain_name.clone()));
+        let session_brain_name = Arc::new(RwLock::new(ctx.brain_name().to_string()));
         let mode = DispatchMode::Local {
             ctx: Arc::new(ctx),
             session_brain_name,

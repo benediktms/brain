@@ -42,16 +42,17 @@ impl TaskLabelsBatch {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            let remote_tasks = match ctx.tasks_for_brain(&bid, &brain_name) {
-                Ok(t) => t,
-                Err(e) => {
-                    return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
-                }
-            };
+            let remote_tasks =
+                match crate::tasks::TaskStore::with_brain_id(ctx.db().clone(), &bid, &brain_name) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
+                    }
+                };
             return self.execute_with_store(params, &remote_tasks);
         }
 
-        self.execute_with_store(params, &ctx.tasks)
+        self.execute_with_store(params, &ctx.stores.tasks)
     }
 
     fn execute_with_store(&self, params: Params, store: &TaskStore) -> ToolCallResult {
@@ -356,7 +357,7 @@ mod tests {
         assert_eq!(parsed["summary"]["failed"], 0);
 
         // Verify labels were actually added
-        let labels = ctx.tasks.get_task_labels("t1").unwrap();
+        let labels = ctx.stores.tasks.get_task_labels("t1").unwrap();
         assert!(labels.contains(&"urgent".to_string()));
     }
 
@@ -386,7 +387,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["summary"]["succeeded"], 2);
 
-        let labels = ctx.tasks.get_task_labels("t1").unwrap();
+        let labels = ctx.stores.tasks.get_task_labels("t1").unwrap();
         assert!(!labels.contains(&"old-label".to_string()));
     }
 
@@ -417,7 +418,7 @@ mod tests {
         assert_eq!(parsed["summary"]["succeeded"], 3);
 
         // Verify old label gone, new label present
-        let labels = ctx.tasks.get_task_labels("t1").unwrap();
+        let labels = ctx.stores.tasks.get_task_labels("t1").unwrap();
         assert!(!labels.contains(&"old-name".to_string()));
         assert!(labels.contains(&"new-name".to_string()));
     }
@@ -447,7 +448,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["summary"]["succeeded"], 2);
 
-        let ids = ctx.tasks.get_task_ids_with_label("doomed").unwrap();
+        let ids = ctx.stores.tasks.get_task_ids_with_label("doomed").unwrap();
         assert!(ids.is_empty());
     }
 

@@ -19,7 +19,7 @@ use brain_lib::pipeline::IndexPipeline;
 use brain_lib::pipeline::consolidation::ConsolidationScheduler;
 use brain_lib::pipeline::embed_poll;
 use brain_lib::prelude::*;
-use brain_lib::store::{Store, StoreReader};
+use brain_lib::store::Store;
 use brain_lib::summarizer::FlanT5Summarizer;
 use tracing::{debug, info, warn};
 
@@ -429,17 +429,17 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // resolve_brain() can look up by name, alias, or root path without
     // parsing config.toml on every request.
     {
-        let shared_db = &brains
+        let shared_ctx = &brains
             .values()
             .next()
             .expect("at least one brain")
-            .mcp_context
-            .db;
+            .mcp_context;
+        let shared_db = shared_ctx.db();
         let projections: Vec<BrainProjection> = brains
             .iter()
             .filter_map(|(name, inst)| {
                 global_cfg.brains.get(name).map(|entry| BrainProjection {
-                    brain_id: inst.mcp_context.brain_id.clone(),
+                    brain_id: inst.mcp_context.brain_id().to_string(),
                     name: name.clone(),
                     prefix: generate_prefix(name),
                     roots_json: serde_json::to_string(&entry.roots)
@@ -470,7 +470,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         .next()
         .map(|inst| Arc::clone(&inst.mcp_context))
         .expect("at least one brain is initialised");
-    let default_brain_id = shared_ctx.brain_id.clone();
+    let default_brain_id = shared_ctx.brain_id().to_string();
     let router = BrainRouter::new(shared_ctx, default_brain_id);
 
     let sock_path = brain_home()
@@ -649,7 +649,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = embed_poll_interval.tick() => {
                 for instance in brains.values() {
-                    let brain_id = &instance.mcp_context.brain_id;
+                    let brain_id = &instance.mcp_context.brain_id();
                     let n_tasks = embed_poll::poll_stale_tasks(
                         instance.pipeline.db(),
                         instance.pipeline.store(),
@@ -915,20 +915,12 @@ async fn init_brain_instance(
         brain_data_dir,
         &brain_home_path,
     )?;
-    let store_reader = StoreReader::from_store(pipeline.store());
     let metrics = Arc::clone(pipeline.metrics());
 
     let mcp_context = McpContext::from_stores(
-        stores.db().clone(),
-        Some(store_reader),
+        stores, None, // search: no embedder available in daemon context
         None, // writable_store: pipeline.store() is owned by pipeline; IPC is read-only
-        None, // embedder: not needed for task/record operations via IPC
-        stores.tasks,
-        stores.records,
-        stores.objects,
         metrics,
-        stores.brain_home,
-        stores.brain_name,
     );
 
     Ok(BrainInstance {
@@ -1012,12 +1004,12 @@ async fn reload_and_project(
     // Load the freshest config after reload to build projections.
     let cfg = load_global_config()?;
 
-    if let Some(db) = brains.values().next().map(|inst| &inst.mcp_context.db) {
+    if let Some(db) = brains.values().next().map(|inst| inst.mcp_context.db()) {
         let projections: Vec<BrainProjection> = brains
             .iter()
             .filter_map(|(name, inst)| {
                 cfg.brains.get(name).map(|entry| BrainProjection {
-                    brain_id: inst.mcp_context.brain_id.clone(),
+                    brain_id: inst.mcp_context.brain_id().to_string(),
                     name: name.clone(),
                     prefix: generate_prefix(name),
                     roots_json: serde_json::to_string(&entry.roots)
@@ -1215,7 +1207,7 @@ fn validate_roots(brains: &mut HashMap<String, BrainInstance>, watcher: &mut Bra
                 }
 
                 // Mark archived in the DB.
-                let brain_id = instance.mcp_context.brain_id.clone();
+                let brain_id = instance.mcp_context.brain_id();
                 if let Err(e) = instance.pipeline.db().with_write_conn(|conn| {
                     conn.execute(
                         "UPDATE brains SET archived = 1 WHERE brain_id = ?1",

@@ -54,7 +54,7 @@ impl TaskClose {
         let mut warnings: Vec<Warning> = Vec::new();
 
         for raw_id in &ids {
-            let resolved = match ctx.tasks.resolve_task_id(raw_id) {
+            let resolved = match ctx.stores.tasks.resolve_task_id(raw_id) {
                 Ok(r) => r,
                 Err(e) => {
                     failed.push(json!({
@@ -73,7 +73,7 @@ impl TaskClose {
                 },
             );
 
-            if let Err(e) = ctx.tasks.append(&event) {
+            if let Err(e) = ctx.stores.tasks.append(&event) {
                 failed.push(json!({
                     "task_id": raw_id,
                     "error": format!("{e}"),
@@ -82,14 +82,20 @@ impl TaskClose {
             }
 
             let unblocked: Vec<String> = store_or_warn(
-                ctx.tasks.list_newly_unblocked(&resolved),
+                ctx.stores.tasks.list_newly_unblocked(&resolved),
                 "list_newly_unblocked",
                 &mut warnings,
             )
             .iter()
-            .map(|id| ctx.tasks.compact_id(id).unwrap_or_else(|_| id.clone()))
+            .map(|id| {
+                ctx.stores
+                    .tasks
+                    .compact_id(id)
+                    .unwrap_or_else(|_| id.clone())
+            })
             .collect();
             let short_id = ctx
+                .stores
                 .tasks
                 .compact_id(&resolved)
                 .unwrap_or_else(|_| resolved.clone());
@@ -191,7 +197,7 @@ mod tests {
         assert_eq!(parsed["closed"][0]["task_id"], "t1");
 
         // Verify task is actually done
-        let task = ctx.tasks.get_task("t1").unwrap().unwrap();
+        let task = ctx.stores.tasks.get_task("t1").unwrap().unwrap();
         assert_eq!(task.status, "done");
     }
 

@@ -106,7 +106,7 @@ pub(super) struct TaskCreate;
 impl TaskCreate {
     async fn execute(&self, raw_params: Value, ctx: &McpContext) -> ToolCallResult {
         // Reject task creation on archived brains
-        match super::is_brain_archived(&ctx.db, &ctx.brain_id) {
+        match super::is_brain_archived(ctx.db(), ctx.brain_id()) {
             Ok(true) => {
                 return ToolCallResult::error(
                     "Cannot create tasks: brain is archived. Use `brain link` to add a root and unarchive.",
@@ -147,7 +147,11 @@ impl TaskCreate {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            let remote_tasks = match ctx.tasks_for_brain(&bid, &remote_brain_name) {
+            let remote_tasks = match crate::tasks::TaskStore::with_brain_id(
+                ctx.db().clone(),
+                &bid,
+                &remote_brain_name,
+            ) {
                 Ok(t) => t,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
@@ -226,7 +230,7 @@ impl TaskCreate {
             // Optionally create bidirectional cross-brain references
             let mut local_ref_created = false;
             if let Some(ref link_from) = params.link_from {
-                let local_task_id = match ctx.tasks.resolve_task_id(link_from) {
+                let local_task_id = match ctx.stores.tasks.resolve_task_id(link_from) {
                     Ok(id) => id,
                     Err(e) => {
                         return ToolCallResult::error(format!(
@@ -237,7 +241,7 @@ impl TaskCreate {
 
                 let resolved_link_type = params.link_type.as_deref().unwrap_or("related");
                 let link_source = format!("brain:{remote_brain_name}:{resolved_link_type}");
-                let local_source = format!("brain:{}:{resolved_link_type}", ctx.brain_name);
+                let local_source = format!("brain:{}:{resolved_link_type}", ctx.brain_name());
 
                 // ExternalIdAdded on the local task pointing to the remote task
                 let local_ref_event = TaskEvent::new(
@@ -250,7 +254,7 @@ impl TaskCreate {
                         external_url: None,
                     },
                 );
-                if let Err(e) = ctx.tasks.append(&local_ref_event) {
+                if let Err(e) = ctx.stores.tasks.append(&local_ref_event) {
                     warn!(error = %e, "failed to create local cross-brain ref");
                 } else {
                     // ExternalIdAdded on the remote task pointing back to the local task
@@ -294,7 +298,7 @@ impl TaskCreate {
             let defer_until = params.defer_until.as_ref().and_then(parse_timestamp);
 
             // Generate task ID
-            let prefix = match ctx.tasks.get_project_prefix() {
+            let prefix = match ctx.stores.tasks.get_project_prefix() {
                 Ok(p) => p,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to get project prefix: {e}"));
@@ -304,7 +308,7 @@ impl TaskCreate {
 
             // Resolve parent task ID if provided
             let parent_task_id = if let Some(ref parent) = params.parent {
-                match ctx.tasks.resolve_task_id(parent) {
+                match ctx.stores.tasks.resolve_task_id(parent) {
                     Ok(resolved) => Some(resolved),
                     Err(e) => {
                         return ToolCallResult::error(format!(
@@ -331,15 +335,15 @@ impl TaskCreate {
 
             let event = TaskEvent::from_payload(&task_id, &params.actor, payload);
 
-            if let Err(e) = ctx.tasks.append(&event) {
+            if let Err(e) = ctx.stores.tasks.append(&event) {
                 return ToolCallResult::error(format!("Task event failed: {e}"));
             }
 
             // Fetch resulting task state
-            let task_json = match ctx.tasks.get_task(&task_id) {
+            let task_json = match ctx.stores.tasks.get_task(&task_id) {
                 Ok(Some(row)) => {
                     let labels = store_or_warn(
-                        ctx.tasks.get_task_labels(&task_id),
+                        ctx.stores.tasks.get_task_labels(&task_id),
                         "get_task_labels",
                         &mut warnings,
                     );
@@ -353,6 +357,7 @@ impl TaskCreate {
             };
 
             let short_id = ctx
+                .stores
                 .tasks
                 .compact_id(&task_id)
                 .unwrap_or_else(|_| task_id.clone());
@@ -401,11 +406,11 @@ mod tests {
     use super::TaskCreate;
 
     fn mark_brain_archived(ctx: &crate::mcp::McpContext) {
-        ctx.db
+        ctx.db()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
-                    [&ctx.brain_id],
+                    [ctx.brain_id()],
                 )?;
                 Ok(())
             })

@@ -170,6 +170,25 @@ impl BrainStores {
         &self.db
     }
 
+    /// Clone this store bundle with a different brain_id.
+    ///
+    /// All shared resources (Db, ObjectStore root) are re-used. TaskStore and
+    /// RecordStore are re-created scoped to `brain_id`.
+    pub fn with_brain_id(&self, brain_id: &str, brain_name: &str) -> Result<Self> {
+        let tasks = TaskStore::with_brain_id(self.db.clone(), brain_id, brain_name)?;
+        let records = RecordStore::with_brain_id(self.db.clone(), brain_id, brain_name)?;
+        let objects = ObjectStore::new(self.objects.root())?;
+        Ok(Self {
+            db: self.db.clone(),
+            tasks,
+            records,
+            objects,
+            brain_id: brain_id.to_string(),
+            brain_name: brain_name.to_string(),
+            brain_home: self.brain_home.clone(),
+        })
+    }
+
     // -- internals --
 
     fn from_path_inner(
@@ -357,6 +376,20 @@ mod tests {
 
         // Stores are functional
         let tasks = stores.tasks.list_all().unwrap();
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn with_brain_id_rescopes_stores() {
+        let (_tmp, stores) = BrainStores::in_memory_with_brain_id("brain-a").unwrap();
+        assert_eq!(stores.brain_id, "brain-a");
+
+        let rescoped = stores.with_brain_id("brain-b", "other-brain").unwrap();
+        assert_eq!(rescoped.brain_id, "brain-b");
+        assert_eq!(rescoped.brain_name, "other-brain");
+
+        // Stores are functional
+        let tasks = rescoped.tasks.list_all().unwrap();
         assert!(tasks.is_empty());
     }
 

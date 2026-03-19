@@ -81,7 +81,11 @@ impl TaskList {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            let remote_tasks = match ctx.tasks_for_brain(&bid, &remote_brain_name) {
+            let remote_tasks = match crate::tasks::TaskStore::with_brain_id(
+                ctx.db().clone(),
+                &bid,
+                &remote_brain_name,
+            ) {
                 Ok(t) => t,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
@@ -100,7 +104,7 @@ impl TaskList {
             return result;
         }
 
-        Self::execute_with_store(params, &ctx.tasks)
+        Self::execute_with_store(params, &ctx.stores.tasks)
     }
 
     fn execute_with_store(params: Params, store: &TaskStore) -> ToolCallResult {

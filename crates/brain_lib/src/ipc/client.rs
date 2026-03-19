@@ -290,7 +290,7 @@ mod integration_tests {
         let sock = tmp.path().join("client_test.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.db
+        ctx.db()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -315,7 +315,7 @@ mod integration_tests {
         let sock = tmp.path().join("avail_test.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.db
+        ctx.db()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -335,7 +335,7 @@ mod integration_tests {
         let sock = tmp.path().join("tools_call_test.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.db
+        ctx.db()
             .ensure_brain_registered("my-brain", "my-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "my-brain".to_string());

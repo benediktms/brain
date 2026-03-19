@@ -54,27 +54,19 @@ async fn setup_mcp() -> (McpContext, TempDir) {
     let db = Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let store_reader = brain_lib::store::StoreReader::from_store(&store);
-    let embedder = Arc::new(MockEmbedder);
-    let tasks_db = Db::open(&sqlite_path).unwrap();
-    let tasks = brain_lib::tasks::TaskStore::new(tasks_db);
-    let _records_dir = tmp.path().join("records");
-    let records_db = Db::open(&sqlite_path).unwrap();
-    let records = brain_lib::records::RecordStore::new(records_db);
-    let objects_dir = tmp.path().join("objects");
-    let objects = brain_lib::records::objects::ObjectStore::new(&objects_dir).unwrap();
+    let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+
+    let stores =
+        brain_lib::stores::BrainStores::from_dbs(db, "", &brain_home, &brain_home).unwrap();
 
     let ctx = McpContext {
-        db,
-        store: Some(store_reader),
+        stores,
+        search: Some(brain_lib::search_service::SearchService {
+            store: store_reader,
+            embedder,
+        }),
         writable_store: Some(store),
-        embedder: Some(embedder),
-        tasks,
-        records,
-        objects,
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
-        brain_home,
-        brain_name: "test-brain".to_string(),
-        brain_id: String::new(),
     };
     (ctx, tmp)
 }
@@ -537,7 +529,7 @@ async fn test_mcp_write_episode_and_retrieve() {
 
     // Verify episode is in the database
     let episode = ctx
-        .db
+        .db()
         .with_read_conn(|conn| get_summary(conn, summary_id))
         .unwrap();
     assert!(episode.is_some(), "episode should be retrievable");
@@ -577,23 +569,19 @@ async fn test_mcp_search_minimal_returns_results() {
     drop(pipeline);
 
     // Create fresh McpContext that sees the indexed data
-    let _tasks_dir2 = tmp.path().join("tasks2");
     let store2 = Store::open_or_create(&lance_path).await.unwrap();
     let store2_reader = brain_lib::store::StoreReader::from_store(&store2);
     let ctx_db = Db::open(&sqlite_path).unwrap();
+    let stores2 =
+        brain_lib::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path()).unwrap();
     let ctx = McpContext {
-        db: ctx_db,
-        store: Some(store2_reader),
+        stores: stores2,
+        search: Some(brain_lib::search_service::SearchService {
+            store: store2_reader,
+            embedder: Arc::new(MockEmbedder),
+        }),
         writable_store: Some(store2),
-        embedder: Some(Arc::new(MockEmbedder)),
-        tasks: brain_lib::tasks::TaskStore::new(Db::open(&sqlite_path).unwrap()),
-        records: brain_lib::records::RecordStore::new(Db::open(&sqlite_path).unwrap()),
-        objects: brain_lib::records::objects::ObjectStore::new(tmp.path().join("objects2"))
-            .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
-        brain_home: tmp.path().to_path_buf(),
-        brain_name: "test-brain".to_string(),
-        brain_id: String::new(),
     };
 
     // Search — MockEmbedder won't give semantic results, but pipeline should not error.
@@ -648,29 +636,25 @@ async fn test_mcp_expand_returns_full_content() {
     drop(pipeline);
 
     // Create fresh McpContext that sees the indexed data
-    let _tasks_dir3 = tmp.path().join("tasks3");
     let store3 = Store::open_or_create(&lance_path).await.unwrap();
     let store3_reader = brain_lib::store::StoreReader::from_store(&store3);
     let ctx_db3 = Db::open(&sqlite_path).unwrap();
+    let stores3 =
+        brain_lib::stores::BrainStores::from_dbs(ctx_db3, "", tmp.path(), tmp.path()).unwrap();
     let ctx = McpContext {
-        db: ctx_db3,
-        store: Some(store3_reader),
+        stores: stores3,
+        search: Some(brain_lib::search_service::SearchService {
+            store: store3_reader,
+            embedder: Arc::new(MockEmbedder),
+        }),
         writable_store: Some(store3),
-        embedder: Some(Arc::new(MockEmbedder)),
-        tasks: brain_lib::tasks::TaskStore::new(Db::open(&sqlite_path).unwrap()),
-        records: brain_lib::records::RecordStore::new(Db::open(&sqlite_path).unwrap()),
-        objects: brain_lib::records::objects::ObjectStore::new(tmp.path().join("objects3"))
-            .unwrap(),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
-        brain_home: tmp.path().to_path_buf(),
-        brain_name: "test-brain".to_string(),
-        brain_id: String::new(),
     };
 
     // Get the chunk_id
     let chunk_ids: Vec<String> = ctx
-        .db
-        .with_read_conn(|conn| {
+        .db()
+        .with_read_conn(|conn: &rusqlite::Connection| {
             let mut stmt = conn.prepare("SELECT chunk_id FROM chunks")?;
             let rows = stmt.query_map([], |row| row.get(0))?;
             let mut ids = Vec::new();

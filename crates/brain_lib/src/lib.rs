@@ -20,6 +20,7 @@ pub mod ranking;
 pub mod records;
 pub mod retrieval;
 pub mod scanner;
+pub mod search_service;
 pub use brain_persistence::store;
 pub mod stores;
 pub mod summarizer;

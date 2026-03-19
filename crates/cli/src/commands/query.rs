@@ -2,13 +2,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use brain_lib::config::{list_brain_keys, load_brain_toml, open_remote_search_context};
+use brain_lib::config::{list_brain_keys, open_remote_search_context};
 use brain_lib::embedder::{Embed, Embedder};
 use brain_lib::metrics::Metrics;
 use brain_lib::prelude::*;
 use brain_lib::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
 use brain_lib::ranking::resolve_intent;
 use brain_lib::retrieval::SearchResult;
+use brain_lib::search_service::SearchService;
+use brain_lib::store::StoreReader;
+use brain_lib::stores::BrainStores;
 
 /// Parameters for a CLI query invocation.
 pub struct QueryParams {
@@ -114,6 +117,7 @@ pub async fn run_with_pipeline(
 
 /// Query the knowledge base using full hybrid search (vector + FTS + ranking).
 pub async fn run(params: QueryParams) -> Result<()> {
+    let stores = BrainStores::from_path(&params.sqlite_path, Some(&params.db_path))?;
     let embedder = Embedder::load(&params.model_dir)?;
     let embedder_arc: Arc<dyn Embed> = Arc::new(embedder);
     let metrics = Arc::new(Metrics::new());
@@ -121,21 +125,21 @@ pub async fn run(params: QueryParams) -> Result<()> {
     if params.brains.is_empty() {
         // Single-brain path (backward compatible).
         let store = Store::open_or_create(&params.db_path).await?;
-        let store_reader = brain_lib::store::StoreReader::from_store(&store);
-        let db = brain_lib::db::Db::open(&params.sqlite_path)?;
-        let pipeline = QueryPipeline::new(&db, &store_reader, &embedder_arc, &metrics);
+        let search = SearchService {
+            store: StoreReader::from_store(&store),
+            embedder: embedder_arc.clone(),
+        };
+        let pipeline = QueryPipeline::new(stores.db(), &search.store, &search.embedder, &metrics);
         let output = run_with_pipeline(&params, &pipeline).await?;
         print!("{output}");
         return Ok(());
     }
 
     // Federated path.
-    let brain_home = brain_lib::config::brain_home()
-        .map_err(|e| anyhow::anyhow!("cannot determine brain home: {e}"))?;
 
     // Determine which brain names to search.
     let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-        list_brain_keys(&brain_home)?
+        list_brain_keys(&stores.brain_home)?
             .into_iter()
             .map(|(name, _id)| name)
             .collect()
@@ -143,30 +147,22 @@ pub async fn run(params: QueryParams) -> Result<()> {
         params.brains.clone()
     };
 
-    // Determine the local brain name from cwd brain.toml.
-    let local_brain_name = {
-        let cwd = std::env::current_dir()?;
-        brain_lib::config::find_brain_root(&cwd)
-            .and_then(|root| load_brain_toml(&root.join(".brain")).ok().map(|t| t.name))
-            .unwrap_or_else(|| "local".to_string())
-    };
-
-    // Open local brain stores.
+    // Open local brain LanceDB store.
     let local_store = Store::open_or_create(&params.db_path).await?;
-    let local_store_reader = brain_lib::store::StoreReader::from_store(&local_store);
-    let local_db = brain_lib::db::Db::open(&params.sqlite_path)?;
+    let local_store_reader = StoreReader::from_store(&local_store);
 
     // Build brain list: local first, then each remote.
-    // All share the same unified `local_db`.
-    let mut brains: Vec<(String, Option<brain_lib::store::StoreReader>)> = Vec::new();
-    brains.push((local_brain_name.clone(), Some(local_store_reader)));
+    // All share the same unified DB via `stores.db()`.
+    let mut brains: Vec<(String, Option<StoreReader>)> = Vec::new();
+    brains.push((stores.brain_name.clone(), Some(local_store_reader)));
 
     for key in &brain_keys {
-        if key == &local_brain_name {
+        if key == &stores.brain_name {
             // Local brain already added above.
             continue;
         }
-        match open_remote_search_context(&brain_home, key, &params.model_dir, &embedder_arc).await?
+        match open_remote_search_context(&stores.brain_home, key, &params.model_dir, &embedder_arc)
+            .await?
         {
             Some(ctx) => {
                 brains.push((ctx.brain_name, ctx.store));
@@ -178,7 +174,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
     }
 
     let federated = FederatedPipeline {
-        db: &local_db,
+        db: stores.db(),
         brains,
         embedder: &embedder_arc,
         metrics: &metrics,

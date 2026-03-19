@@ -67,7 +67,7 @@ impl RecordCreateArtifact {
             (None, None) => (vec![], params.media_type.clone()),
         };
 
-        let (content_ref, encoding, original_size) = match ctx.objects.write_compressed(
+        let (content_ref, encoding, original_size) = match ctx.stores.objects.write_compressed(
             &raw_bytes,
             media_type.clone(),
             COMPRESSION_THRESHOLD,
@@ -76,7 +76,7 @@ impl RecordCreateArtifact {
             Err(e) => return ToolCallResult::error(format!("Failed to write object: {e}")),
         };
 
-        let prefix = match ctx.records.get_project_prefix() {
+        let prefix = match ctx.stores.records.get_project_prefix() {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Failed to get project prefix: {e}")),
         };
@@ -103,7 +103,7 @@ impl RecordCreateArtifact {
 
         let event = RecordEvent::from_payload(&record_id, "mcp", payload);
 
-        if let Err(e) = ctx.records.apply_event(&event) {
+        if let Err(e) = ctx.stores.records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to save record: {e}"));
         }
 

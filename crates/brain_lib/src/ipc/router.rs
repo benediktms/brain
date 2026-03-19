@@ -45,7 +45,7 @@ impl BrainRouter {
         let (brain_id, brain_name) = match brain {
             Some(input) => {
                 // DB lookup via resolve_brain (name, id, alias, or root path)
-                match self.ctx.db.resolve_brain(input) {
+                match self.ctx.db().resolve_brain(input) {
                     Ok(pair) => pair,
                     Err(_) => {
                         return ToolCallResult::error(format!("Brain not found: {input}"));
@@ -54,7 +54,7 @@ impl BrainRouter {
             }
             None => {
                 // Default brain — resolve by ID
-                match self.ctx.db.resolve_brain(&self.default_brain_id) {
+                match self.ctx.db().resolve_brain(&self.default_brain_id) {
                     Ok(pair) => pair,
                     Err(_) => (self.default_brain_id.clone(), String::new()),
                 }
@@ -83,12 +83,12 @@ mod tests {
     async fn test_dispatch_default_brain_status() {
         let (_dir, ctx) = create_test_context().await;
         // Use a non-empty brain_id — empty strings skip registration
-        let brain_id = if ctx.brain_id.is_empty() {
+        let brain_id = if ctx.brain_id().is_empty() {
             "test-id".to_string()
         } else {
-            ctx.brain_id.clone()
+            ctx.brain_id().to_string()
         };
-        ctx.db
+        ctx.db()
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);
@@ -100,12 +100,12 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_nonexistent_brain_returns_error() {
         let (_dir, ctx) = create_test_context().await;
-        let brain_id = if ctx.brain_id.is_empty() {
+        let brain_id = if ctx.brain_id().is_empty() {
             "test-id".to_string()
         } else {
-            ctx.brain_id.clone()
+            ctx.brain_id().to_string()
         };
-        ctx.db
+        ctx.db()
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);
@@ -124,12 +124,12 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_explicit_brain_name() {
         let (_dir, ctx) = create_test_context().await;
-        let brain_id = if ctx.brain_id.is_empty() {
+        let brain_id = if ctx.brain_id().is_empty() {
             "test-id".to_string()
         } else {
-            ctx.brain_id.clone()
+            ctx.brain_id().to_string()
         };
-        ctx.db
+        ctx.db()
             .ensure_brain_registered(&brain_id, "my-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);

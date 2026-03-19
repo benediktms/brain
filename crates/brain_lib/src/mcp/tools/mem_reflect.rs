@@ -51,10 +51,10 @@ pub(super) struct MemReflect;
 impl MemReflect {
     /// Prepare mode: retrieve source material for reflection.
     async fn prepare(params: Params, ctx: &McpContext) -> ToolCallResult {
-        let Some(store) = ctx.store.as_ref() else {
+        let Some(store) = ctx.store() else {
             return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
         };
-        let Some(embedder) = ctx.embedder.as_ref() else {
+        let Some(embedder) = ctx.embedder() else {
             return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
         };
 
@@ -62,7 +62,7 @@ impl MemReflect {
             return ToolCallResult::error("'topic' is required for prepare mode");
         }
 
-        let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
+        let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
 
         // Determine episode scope from `brains` parameter.
         // Note: the summaries table does not yet carry a brain_id column.
@@ -70,12 +70,14 @@ impl MemReflect {
         // The brains parameter is accepted but scoping is a no-op until
         // brain_persistence adds brain_id support to the summaries table.
         let episodes = if params.brains.is_empty() {
-            ctx.db.list_episodes(10, &ctx.brain_id).unwrap_or_default()
+            ctx.db()
+                .list_episodes(10, ctx.brain_id())
+                .unwrap_or_default()
         } else if params.brains.iter().any(|b| b == "all") {
-            ctx.db.list_episodes(10, "").unwrap_or_default()
+            ctx.db().list_episodes(10, "").unwrap_or_default()
         } else {
             let brain_ids: Vec<String> = params.brains.clone();
-            ctx.db
+            ctx.db()
                 .list_episodes_multi_brain(10, &brain_ids)
                 .unwrap_or_default()
         };
@@ -158,7 +160,7 @@ impl MemReflect {
 
         // Finding 5: batch source_id validation — single round-trip.
         let source_ids = params.source_ids.clone();
-        let found = match EpisodeReader::get_summaries_by_ids(&ctx.db, &source_ids) {
+        let found = match EpisodeReader::get_summaries_by_ids(ctx.db(), &source_ids) {
             Ok(rows) => rows,
             Err(e) => {
                 return ToolCallResult::error(format!("Failed to validate source_ids: {e}"));
@@ -172,13 +174,13 @@ impl MemReflect {
         }
 
         // Store the reflection in SQLite.
-        let summary_id = match ctx.db.store_reflection(
+        let summary_id = match ctx.db().store_reflection(
             &params.title,
             &params.content,
             &source_ids,
             &params.tags,
             importance,
-            &ctx.brain_id,
+            ctx.brain_id(),
         ) {
             Ok(id) => id,
             Err(e) => {
@@ -187,8 +189,7 @@ impl MemReflect {
         };
 
         // Finding 2: best-effort LanceDB embedding.
-        if let (Some(embedder), Some(store)) = (ctx.embedder.as_ref(), ctx.writable_store.as_ref())
-        {
+        if let (Some(embedder), Some(store)) = (ctx.embedder(), ctx.writable_store.as_ref()) {
             let embed_content = params.content.clone();
             match crate::embedder::embed_batch_async(embedder, vec![embed_content.clone()]).await {
                 Ok(vecs) => {

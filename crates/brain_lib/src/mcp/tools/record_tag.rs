@@ -27,12 +27,12 @@ impl RecordTagAdd {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let record_id = match ctx.records.resolve_record_id(&params.record_id) {
+        let record_id = match ctx.stores.records.resolve_record_id(&params.record_id) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };
 
-        match ctx.records.get_record(&record_id) {
+        match ctx.stores.records.get_record(&record_id) {
             Ok(Some(_)) => {}
             Ok(None) => return ToolCallResult::error(format!("Record not found: {record_id}")),
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
@@ -47,11 +47,12 @@ impl RecordTagAdd {
             },
         );
 
-        if let Err(e) = ctx.records.apply_event(&event) {
+        if let Err(e) = ctx.stores.records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to add tag: {e}"));
         }
 
         let compact_id = ctx
+            .stores
             .records
             .compact_record_id(&record_id)
             .unwrap_or_else(|_| record_id.clone());
@@ -110,12 +111,12 @@ impl RecordTagRemove {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let record_id = match ctx.records.resolve_record_id(&params.record_id) {
+        let record_id = match ctx.stores.records.resolve_record_id(&params.record_id) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };
 
-        match ctx.records.get_record(&record_id) {
+        match ctx.stores.records.get_record(&record_id) {
             Ok(Some(_)) => {}
             Ok(None) => return ToolCallResult::error(format!("Record not found: {record_id}")),
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
@@ -130,11 +131,12 @@ impl RecordTagRemove {
             },
         );
 
-        if let Err(e) = ctx.records.apply_event(&event) {
+        if let Err(e) = ctx.stores.records.apply_event(&event) {
             return ToolCallResult::error(format!("Failed to remove tag: {e}"));
         }
 
         let compact_id = ctx
+            .stores
             .records
             .compact_record_id(&record_id)
             .unwrap_or_else(|_| record_id.clone());

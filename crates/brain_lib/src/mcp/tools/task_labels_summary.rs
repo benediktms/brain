@@ -12,13 +12,13 @@ pub(super) struct TaskLabelsSummary;
 
 impl TaskLabelsSummary {
     fn execute(&self, _params: Value, ctx: &McpContext) -> ToolCallResult {
-        let summaries = match ctx.tasks.label_summary() {
+        let summaries = match ctx.stores.tasks.label_summary() {
             Ok(s) => s,
             Err(e) => return ToolCallResult::error(format!("Failed to query labels: {e}")),
         };
 
         let mut warnings: Vec<Warning> = Vec::new();
-        let prefixes = store_or_warn(ctx.tasks.compact_ids(), "compact_ids", &mut warnings);
+        let prefixes = store_or_warn(ctx.stores.tasks.compact_ids(), "compact_ids", &mut warnings);
 
         let labels: Vec<Value> = summaries
             .into_iter()
