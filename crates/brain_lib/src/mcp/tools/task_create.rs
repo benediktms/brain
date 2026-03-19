@@ -147,6 +147,18 @@ impl TaskCreate {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
+            // Guard: reject writes to archived brains
+            match super::is_brain_archived(ctx.db(), &bid) {
+                Ok(true) => {
+                    return ToolCallResult::error(format!(
+                        "Target brain '{remote_brain_name}' is archived"
+                    ));
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to check archived status: {e}"));
+                }
+            }
             let remote_tasks = match crate::tasks::TaskStore::with_brain_id(
                 ctx.db().clone(),
                 &bid,

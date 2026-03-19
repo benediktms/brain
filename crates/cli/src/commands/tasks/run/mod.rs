@@ -110,9 +110,8 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
 
         // Guard: reject writes to archived brains.
         let archived = db.with_read_conn(|conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT archived FROM brains WHERE brain_id = ?1",
-            )?;
+            let mut stmt =
+                conn.prepare_cached("SELECT archived FROM brains WHERE brain_id = ?1")?;
             let mut rows = stmt.query([bid.as_str()])?;
             if let Some(row) = rows.next()? {
                 let v: i64 = row.get(0)?;

@@ -50,9 +50,7 @@ impl RecordSaveSnapshot {
                 }
                 Ok(false) => {}
                 Err(e) => {
-                    return ToolCallResult::error(format!(
-                        "Failed to check archived status: {e}"
-                    ));
+                    return ToolCallResult::error(format!("Failed to check archived status: {e}"));
                 }
             }
             // Short-circuit if same brain
@@ -60,10 +58,14 @@ impl RecordSaveSnapshot {
                 ctx.stores.records.clone()
             } else {
                 match crate::records::RecordStore::with_brain_id(
-                    ctx.db().clone(), &bid, &brain_name,
+                    ctx.db().clone(),
+                    &bid,
+                    &brain_name,
                 ) {
                     Ok(s) => s,
-                    Err(e) => return ToolCallResult::error(format!("Failed to open remote brain: {e}")),
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                    }
                 }
             }
         } else {
@@ -148,11 +150,11 @@ impl RecordSaveSnapshot {
         });
 
         // If remote brain, include brain info in response
-        if let Some(ref brain_param) = params.brain {
-            if let Ok((brain_name, bid)) = ctx.resolve_brain_id(brain_param) {
-                result["brain_name"] = json!(brain_name);
-                result["brain_id"] = json!(bid);
-            }
+        if let Some(ref brain_param) = params.brain
+            && let Ok((brain_name, bid)) = ctx.resolve_brain_id(brain_param)
+        {
+            result["brain_name"] = json!(brain_name);
+            result["brain_id"] = json!(bid);
         }
 
         json_response(&result)

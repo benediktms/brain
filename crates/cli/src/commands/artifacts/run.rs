@@ -101,12 +101,35 @@ pub fn create(ctx: &ArtifactCtx, params: CreateParams) -> Result<()> {
     );
 
     // Resolve target brain (if --brain provided)
+    let remote_brain_info: Option<(String, String)>;
     let remote_records = if let Some(ref brain) = params.brain {
         let db = ctx.record_store.db();
-        let (bid, bname) = brain_lib::config::resolve_brain_with_fallback(Some(db), brain)
+        let (bid, bname) = db
+            .resolve_brain(brain)
             .with_context(|| format!("Failed to resolve brain: {brain}"))?;
-        Some(brain_lib::records::RecordStore::with_brain_id(db.clone(), &bid, &bname)?)
+        // Guard: reject writes to archived brains
+        let archived = db.with_read_conn(|conn| {
+            let mut stmt =
+                conn.prepare_cached("SELECT archived FROM brains WHERE brain_id = ?1")?;
+            let mut rows = stmt.query([bid.as_str()])?;
+            if let Some(row) = rows.next()? {
+                let v: i64 = row.get(0)?;
+                Ok(v != 0)
+            } else {
+                Ok(false)
+            }
+        })?;
+        if archived {
+            bail!("Target brain '{bname}' is archived");
+        }
+        remote_brain_info = Some((bname.clone(), bid.clone()));
+        Some(brain_lib::records::RecordStore::with_brain_id(
+            db.clone(),
+            &bid,
+            &bname,
+        )?)
     } else {
+        remote_brain_info = None;
         None
     };
     let record_store = remote_records.as_ref().unwrap_or(&ctx.record_store);
@@ -140,15 +163,22 @@ pub fn create(ctx: &ArtifactCtx, params: CreateParams) -> Result<()> {
         .context("Failed to apply and append record event")?;
 
     if ctx.json {
-        let out = json!({
+        let mut out = json!({
             "record_id": record_id,
             "content_hash": content_ref.hash,
             "size": content_ref.size,
             "media_type": content_ref.media_type,
         });
+        if let Some((ref bname, ref bid)) = remote_brain_info {
+            out["brain_name"] = json!(bname);
+            out["brain_id"] = json!(bid);
+        }
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Created artifact {record_id}");
+        if let Some((ref bname, _)) = remote_brain_info {
+            println!("  Brain: {bname}");
+        }
         println!("  Title: {}", params.title);
         println!("  Kind:  {}", params.kind);
         println!("  Size:  {}", format_size(content_ref.size as i64));

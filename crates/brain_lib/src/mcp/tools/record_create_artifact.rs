@@ -43,40 +43,43 @@ impl RecordCreateArtifact {
 
         // Resolve target brain (local or remote)
         // remote_records holds the store when targeting a different brain
-        let remote_records: Option<crate::records::RecordStore> =
-            if let Some(ref brain_param) = params.brain {
-                let (brain_name, bid) = match ctx.resolve_brain_id(brain_param) {
-                    Ok(r) => r,
-                    Err(e) => return ToolCallResult::error(format!("Failed to resolve brain: {e}")),
-                };
-                // Guard: reject writes to archived brains
-                match super::is_brain_archived(ctx.db(), &bid) {
-                    Ok(true) => {
-                        return ToolCallResult::error(format!(
-                            "Target brain '{brain_name}' is archived"
-                        ));
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        return ToolCallResult::error(format!(
-                            "Failed to check archived status: {e}"
-                        ));
-                    }
-                }
-                // Short-circuit if same brain
-                if bid == ctx.brain_id() {
-                    None
-                } else {
-                    match crate::records::RecordStore::with_brain_id(
-                        ctx.db().clone(), &bid, &brain_name,
-                    ) {
-                        Ok(s) => Some(s),
-                        Err(e) => return ToolCallResult::error(format!("Failed to open remote brain: {e}")),
-                    }
-                }
-            } else {
-                None
+        let remote_records: Option<crate::records::RecordStore> = if let Some(ref brain_param) =
+            params.brain
+        {
+            let (brain_name, bid) = match ctx.resolve_brain_id(brain_param) {
+                Ok(r) => r,
+                Err(e) => return ToolCallResult::error(format!("Failed to resolve brain: {e}")),
             };
+            // Guard: reject writes to archived brains
+            match super::is_brain_archived(ctx.db(), &bid) {
+                Ok(true) => {
+                    return ToolCallResult::error(format!(
+                        "Target brain '{brain_name}' is archived"
+                    ));
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to check archived status: {e}"));
+                }
+            }
+            // Short-circuit if same brain
+            if bid == ctx.brain_id() {
+                None
+            } else {
+                match crate::records::RecordStore::with_brain_id(
+                    ctx.db().clone(),
+                    &bid,
+                    &brain_name,
+                ) {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
+                    }
+                }
+            }
+        } else {
+            None
+        };
         let records: &crate::records::RecordStore =
             remote_records.as_ref().unwrap_or(&ctx.stores.records);
 
@@ -154,11 +157,11 @@ impl RecordCreateArtifact {
         });
 
         // If remote brain, include brain info in response
-        if let Some(ref brain_param) = params.brain {
-            if let Ok((brain_name, bid)) = ctx.resolve_brain_id(brain_param) {
-                result["brain_name"] = json!(brain_name);
-                result["brain_id"] = json!(bid);
-            }
+        if let Some(ref brain_param) = params.brain
+            && let Ok((brain_name, bid)) = ctx.resolve_brain_id(brain_param)
+        {
+            result["brain_name"] = json!(brain_name);
+            result["brain_id"] = json!(bid);
         }
 
         json_response(&result)
