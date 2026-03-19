@@ -1,5 +1,3 @@
-use anyhow::bail;
-
 mod deps;
 mod labels;
 mod list;
@@ -16,7 +14,7 @@ pub use show::*;
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
@@ -105,10 +103,84 @@ pub(super) fn priority_label(p: i32) -> &'static str {
 // ── create ──────────────────────────────────────────────────
 
 pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
-    if params.brain.is_some() {
-        bail!("cross-brain creation removed — all brains share a unified DB");
+    if let Some(ref brain) = params.brain {
+        // Cross-brain task creation: resolve target brain and write into its scope.
+        let db = ctx.store.db();
+        let (bid, bname) = db.resolve_brain(brain)?;
+
+        // Guard: reject writes to archived brains.
+        let archived = db.with_read_conn(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT archived FROM brains WHERE brain_id = ?1",
+            )?;
+            let mut rows = stmt.query([bid.as_str()])?;
+            if let Some(row) = rows.next()? {
+                let v: i64 = row.get(0)?;
+                Ok(v == 1)
+            } else {
+                Ok(false)
+            }
+        })?;
+        if archived {
+            bail!("target brain '{bname}' is archived");
+        }
+
+        let remote_store = TaskStore::with_brain_id(db.clone(), &bid, &bname)?;
+        let prefix = remote_store.get_project_prefix()?;
+        let task_id = events::new_task_id(&prefix);
+
+        // Resolve parent task ID against the remote brain if provided.
+        let parent = match params.parent {
+            Some(ref p) => Some(remote_store.resolve_task_id(p)?),
+            None => None,
+        };
+
+        let event = TaskEvent::from_payload(
+            &task_id,
+            "cli",
+            TaskCreatedPayload {
+                title: params.title.clone(),
+                description: params.description.clone(),
+                priority: params.priority,
+                status: TaskStatus::Open,
+                due_ts: None,
+                task_type: Some(params.task_type),
+                assignee: params.assignee.clone(),
+                defer_until: None,
+                parent_task_id: parent.clone(),
+            },
+        );
+
+        remote_store.append(&event)?;
+
+        if ctx.json {
+            let task = remote_store
+                .get_task(&task_id)?
+                .ok_or_else(|| anyhow::anyhow!("Task not found after creation: {task_id}"))?;
+            let labels = remote_store.get_task_labels(&task_id)?;
+            let out = json!({
+                "event_id": event.event_id,
+                "task": task_row_to_json(&task, labels),
+                "brain": bname,
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("Created task {task_id} in brain '{bname}'");
+            println!("  Title: {}", params.title);
+            println!("  Priority: {}", priority_label(params.priority));
+            println!("  Type: {}", params.task_type.as_str());
+            if let Some(ref a) = params.assignee {
+                println!("  Assignee: {a}");
+            }
+            if let Some(ref p) = params.parent {
+                println!("  Parent: {p}");
+            }
+        }
+
+        return Ok(());
     }
 
+    // Local brain path.
     let prefix = ctx.store.get_project_prefix()?;
     let task_id = events::new_task_id(&prefix);
 

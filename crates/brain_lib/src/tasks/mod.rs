@@ -47,6 +47,11 @@ impl TaskStore {
         })
     }
 
+    /// Access the underlying Db handle.
+    pub fn db(&self) -> &Db {
+        &self.db
+    }
+
     /// Append a validated event to SQLite.
     ///
     /// Validation runs before any write:
