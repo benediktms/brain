@@ -222,7 +222,7 @@ This file is the canonical reference for all AI agents working on this codebase 
 
 If unsure whether a change warrants a docs update, err on the side of updating — stale docs cause more harm than verbose docs.
 
-<!-- brain:start:5e90d323 -->
+<!-- brain:start:d84b50ab -->
 ## Build & Test
 
 ```bash
@@ -286,6 +286,8 @@ brain tasks list --status=open # Filter by status
 brain tasks list --search "query" # Full-text search
 brain tasks list --priority 1 --label urgent # Combined filters
 brain tasks show <id>          # Detailed task view
+brain tasks next               # Top 10 actionable tasks (priority-sorted)
+brain tasks next -k 3          # Top 3 actionable tasks
 
 # Creating & updating
 brain tasks create --title="..." --description="..." --task-type=task --priority=2
@@ -312,6 +314,24 @@ brain tasks label purge old-label
 # Completing work
 brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
+
+# Memory (semantic search & episodes)
+brain memory search "query"                  # Search notes/tasks (compact stubs)
+brain memory search -i lookup "exact term"   # Keyword-heavy search
+brain memory search --brain all "patterns"   # Search all registered brains
+brain memory expand <id1> <id2>              # Expand stubs to full content
+brain memory write-episode --goal "..." --actions "..." --outcome "..."
+brain memory reflect --topic "architecture"  # Prepare: get source material
+brain memory reflect --commit --title "..." --content "..." --source-ids ep1,ep2
+
+# Records
+brain artifacts restore <id>          # Print artifact content to stdout
+brain artifacts restore <id> -o file  # Write artifact content to file
+brain snapshots restore <id>          # Print snapshot content to stdout
+
+# Status
+brain status                  # Brain health check (task counts, index stats)
+brain status --json           # Machine-readable JSON output
 
 # Setup & management
 brain init                     # Initialize a new brain in cwd
@@ -1663,7 +1683,7 @@ When working on tasks:
 - **Statuses**: open, in_progress, blocked, done, cancelled
 <!-- brain:end -->
 
-<!-- neural_link:start:a407b84a -->
+<!-- neural_link:start:55bef6bb -->
 ## neural_link — Multi-Agent Coordination
 
 neural_link provides coordination between agents working on related tasks.
@@ -1687,7 +1707,9 @@ Do NOT use neural_link for fully independent parallel tasks where agents have no
 3. **Communicate** — agents exchange typed messages (`message_send`)
 4. **Read and acknowledge** — agents read their inbox (`inbox_read`) and acknowledge messages (`message_ack`)
 5. **Wait when blocked** — if an agent needs another agent's output before continuing, it blocks with `wait_for`
-6. **Close** — when coordination is complete, close the room with a resolution (`room_close`)
+6. **Check status mid-flight** — use `thread_summarize` to see decisions, open questions, and blockers without closing the room
+7. **Close** — when coordination is complete, close the room with a resolution (`room_close`). If brains were declared on `room_open`, the server persists the full conversation as a brain artifact. Returns structured extraction data (decisions, open questions, blockers, participant list, message count, artifact record ID).
+8. **Present the summary** — the orchestrating agent uses the structured extraction from `room_close` (decisions, open questions, blockers, artifact record ID) to compose a narrative summary for the user.
 
 ### Message kinds
 
@@ -1723,8 +1745,8 @@ Every message has a `kind` that signals its intent. Use the right kind — other
 - **`inbox_read`** — Read your pending messages in a room. Params: room_id (required), participant_id (required)
 - **`message_ack`** — Acknowledge messages you have processed. Params: room_id (required), participant_id (required), message_ids (required)
 - **`wait_for`** — Block until a matching message arrives (long-poll). Params: room_id (required), participant_id (required), since_sequence, kinds, from, timeout_ms
-- **`thread_summarize`** — Get a summary of messages in a room or thread. Params: room_id (required), thread_id
-- **`room_close`** — Close a room when coordination is complete. Params: room_id (required), resolution (required: completed|cancelled|superseded|failed)
+- **`thread_summarize`** — Get structured coordination status (decisions, open questions, blockers) — read-only, no persistence. Params: room_id (required), thread_id
+- **`room_close`** — Close a room. Persists full conversation as brain artifact, returns structured extraction. Params: room_id (required), resolution (required: completed|cancelled|superseded|failed)
 
 ### Rules
 
@@ -1737,4 +1759,5 @@ Every message has a `kind` that signals its intent. Use the right kind — other
 7. **Do not use neural_link as a logging system.** Rooms are for agent-to-agent communication. Use brain records for persisting artifacts and findings.
 8. **Do not send messages to yourself.** If you need to record something, use the appropriate persistence tool, not a self-addressed message.
 9. **Do not poll `inbox_read` in a loop.** Use `wait_for` to block until a message arrives. Polling wastes resources.
+10. **The orchestrator presents the summary.** `room_close` returns structured extraction data (decisions, open questions, blockers, artifact record ID). The lead agent composes a narrative summary for the user from this data. The server does not generate the summary text.
 <!-- neural_link:end -->

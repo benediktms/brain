@@ -508,12 +508,18 @@ pub fn archive(ctx: &ArtifactCtx, id: &str, reason: Option<String>) -> Result<()
 // -- restore --
 
 pub fn restore(ctx: &ArtifactCtx, id: &str, output: Option<std::path::PathBuf>) -> Result<()> {
-    let record_id = ctx.record_store.resolve_record_id(id)
+    let record_id = ctx
+        .record_store
+        .resolve_record_id(id)
         .with_context(|| format!("Could not resolve artifact ID: {id}"))?;
-    let record = ctx.record_store.get_record(&record_id)
+    let record = ctx
+        .record_store
+        .get_record(&record_id)
         .context("Failed to get artifact")?
         .with_context(|| format!("Artifact not found: {record_id}"))?;
-    let bytes = ctx.object_store.read_auto(&record.content_hash)
+    let bytes = ctx
+        .object_store
+        .read_auto(&record.content_hash)
         .with_context(|| format!("Failed to read object for artifact {record_id}"))?;
 
     match output {
@@ -528,11 +534,17 @@ pub fn restore(ctx: &ArtifactCtx, id: &str, output: Option<std::path::PathBuf>) 
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                println!("Restored {} to {}", format_size(bytes.len() as i64), path.display());
+                println!(
+                    "Restored {} to {}",
+                    format_size(bytes.len() as i64),
+                    path.display()
+                );
             }
         }
         None => {
-            std::io::stdout().write_all(&bytes).context("Failed to write to stdout")?;
+            std::io::stdout()
+                .write_all(&bytes)
+                .context("Failed to write to stdout")?;
         }
     }
     Ok(())

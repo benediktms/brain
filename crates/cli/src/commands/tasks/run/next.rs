@@ -12,13 +12,12 @@ use crate::markdown_table::MarkdownTable;
 use super::{TaskCtx, priority_label};
 
 pub fn next(ctx: &TaskCtx, k: usize) -> Result<()> {
+    let k = k.min(100);
     // Fetch ready actionable tasks (epics excluded by the store query)
     let mut tasks = ctx.store.list_ready_actionable()?;
 
     // Sort: in-progress first, then priority ascending (0=critical), then due_date
-    let status_ord = |status: &str| -> u8 {
-        if status == "in_progress" { 0 } else { 1 }
-    };
+    let status_ord = |status: &str| -> u8 { if status == "in_progress" { 0 } else { 1 } };
     tasks.sort_by(|a, b| {
         status_ord(&a.status)
             .cmp(&status_ord(&b.status))
@@ -50,10 +49,7 @@ pub fn next(ctx: &TaskCtx, k: usize) -> Result<()> {
                     .and_then(|v| v.as_str())
                     .map(String::from)
                 {
-                    let short = ctx
-                        .store
-                        .compact_id(&tid)
-                        .unwrap_or_else(|_| tid.clone());
+                    let short = ctx.store.compact_id(&tid).unwrap_or_else(|_| tid.clone());
                     obj.insert("task_id".into(), json!(short));
                 }
                 obj.remove("description");
@@ -116,7 +112,7 @@ pub fn next(ctx: &TaskCtx, k: usize) -> Result<()> {
             .collect();
 
         let out = json!({
-            "tasks": groups_json,
+            "results": groups_json,
             "ready_count": ready_count,
             "blocked_count": blocked_count,
         });
@@ -138,14 +134,14 @@ pub fn next(ctx: &TaskCtx, k: usize) -> Result<()> {
                 if epic_titles.contains_key(&task.task_id) {
                     continue;
                 }
-                if let Ok(Some(parent)) = ctx.store.get_task(parent_id) {
-                    if parent.task_type == TaskType::Epic {
-                        let short = short_ids
-                            .get(parent_id)
-                            .cloned()
-                            .unwrap_or_else(|| parent_id.clone());
-                        epic_titles.insert(task.task_id.clone(), format!("{short} {}", parent.title));
-                    }
+                if let Ok(Some(parent)) = ctx.store.get_task(parent_id)
+                    && parent.task_type == TaskType::Epic
+                {
+                    let short = short_ids
+                        .get(parent_id)
+                        .cloned()
+                        .unwrap_or_else(|| parent_id.clone());
+                    epic_titles.insert(task.task_id.clone(), format!("{short} {}", parent.title));
                 }
             }
         }

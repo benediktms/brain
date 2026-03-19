@@ -96,7 +96,10 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
         };
 
         let mut brains: Vec<(String, Option<StoreReader>)> = Vec::new();
-        brains.push((ctx.stores.brain_name.clone(), Some(ctx.search.store.clone())));
+        brains.push((
+            ctx.stores.brain_name.clone(),
+            Some(ctx.search.store.clone()),
+        ));
 
         for key in &brain_keys {
             if key == &ctx.stores.brain_name {
@@ -239,7 +242,11 @@ pub async fn expand(ctx: &MemoryCtx, memory_ids: &[String], budget: usize) -> Re
         println!(
             "{} memor{} expanded | {}/{} tokens used",
             result.memories.len(),
-            if result.memories.len() == 1 { "y" } else { "ies" },
+            if result.memories.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
             result.used_tokens_est,
             result.budget_tokens,
         );
@@ -285,16 +292,18 @@ pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Resul
             Ok(store) => {
                 match embed_batch_async(&ctx.search.embedder, vec![embed_content.clone()]).await {
                     Ok(vecs) => {
-                        if let Some(vec) = vecs.into_iter().next() {
-                            if let Err(e) =
-                                store.upsert_summary(&summary_id, &embed_content, &vec).await
-                            {
-                                eprintln!("warning: failed to embed episode (best-effort): {e}");
-                            }
+                        if let Some(vec) = vecs.into_iter().next()
+                            && let Err(e) = store
+                                .upsert_summary(&summary_id, &embed_content, &vec)
+                                .await
+                        {
+                            eprintln!("warning: failed to embed episode (best-effort): {e}");
                         }
                     }
                     Err(e) => {
-                        eprintln!("warning: failed to generate embedding for episode (best-effort): {e}");
+                        eprintln!(
+                            "warning: failed to generate embedding for episode (best-effort): {e}"
+                        );
                     }
                 }
             }
@@ -494,16 +503,18 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
                 let embed_content = params.content.clone();
                 match embed_batch_async(&ctx.search.embedder, vec![embed_content.clone()]).await {
                     Ok(vecs) => {
-                        if let Some(vec) = vecs.into_iter().next() {
-                            if let Err(e) =
-                                store.upsert_summary(&summary_id, &embed_content, &vec).await
-                            {
-                                eprintln!("warning: failed to embed reflection (best-effort): {e}");
-                            }
+                        if let Some(vec) = vecs.into_iter().next()
+                            && let Err(e) = store
+                                .upsert_summary(&summary_id, &embed_content, &vec)
+                                .await
+                        {
+                            eprintln!("warning: failed to embed reflection (best-effort): {e}");
                         }
                     }
                     Err(e) => {
-                        eprintln!("warning: failed to generate embedding for reflection (best-effort): {e}");
+                        eprintln!(
+                            "warning: failed to generate embedding for reflection (best-effort): {e}"
+                        );
                     }
                 }
             }
