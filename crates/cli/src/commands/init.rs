@@ -239,20 +239,31 @@ pub fn upsert_agent_docs(cwd: &std::path::Path, brain_name: &str) -> Result<()> 
 
     if agents_md_path.exists() {
         let existing = fs::read_to_string(&agents_md_path)?;
-        if let Some(start) = existing.find(BRAIN_SECTION_START_PREFIX) {
-            // Replace existing brain section (handles both legacy and versioned markers).
-            let end = existing
-                .find(BRAIN_SECTION_END)
-                .map(|i| i + BRAIN_SECTION_END.len())
-                .unwrap_or(existing.len());
-            let mut updated = String::with_capacity(existing.len());
-            updated.push_str(&existing[..start]);
-            updated.push_str(&brain_section);
-            // Skip any trailing newline after the old end marker.
-            let rest = &existing[end..];
-            let rest = rest.strip_prefix('\n').unwrap_or(rest);
-            updated.push_str(rest);
-            fs::write(&agents_md_path, updated)?;
+        if let Some(first_pos) = existing.find(BRAIN_SECTION_START_PREFIX) {
+            // Remove ALL brain:start...brain:end blocks, then insert once at the
+            // position of the first removed block. This cleans up stale duplicates.
+            let mut cleaned = existing.clone();
+            let mut insert_pos = first_pos;
+            let mut first_removal = true;
+            while let Some(start) = cleaned.find(BRAIN_SECTION_START_PREFIX) {
+                let end = cleaned[start..]
+                    .find(BRAIN_SECTION_END)
+                    .map(|i| start + i + BRAIN_SECTION_END.len())
+                    .unwrap_or(cleaned.len());
+                // Strip trailing newline after the end marker.
+                let end = if cleaned.as_bytes().get(end) == Some(&b'\n') {
+                    end + 1
+                } else {
+                    end
+                };
+                cleaned.replace_range(start..end, "");
+                if first_removal {
+                    insert_pos = start;
+                    first_removal = false;
+                }
+            }
+            cleaned.insert_str(insert_pos, &brain_section);
+            fs::write(&agents_md_path, cleaned)?;
             println!("Updated brain section in AGENTS.md");
         } else {
             // Append brain section.
@@ -276,19 +287,29 @@ pub fn upsert_agent_docs(cwd: &std::path::Path, brain_name: &str) -> Result<()> 
     let bridge_ref = "Read [AGENTS.md](./AGENTS.md) for project instructions — it is the canonical reference for all AI agents.\n".to_string();
     if claude_md_path.exists() {
         let existing = fs::read_to_string(&claude_md_path)?;
-        if let Some(start) = existing.find(BRAIN_SECTION_START_PREFIX) {
-            // Replace the brain section with the bridge reference, preserving surrounding content.
-            let end = existing
-                .find(BRAIN_SECTION_END)
-                .map(|i| i + BRAIN_SECTION_END.len())
-                .unwrap_or(existing.len());
-            let mut updated = String::with_capacity(existing.len());
-            updated.push_str(&existing[..start]);
-            updated.push_str(&bridge_ref);
-            let rest = &existing[end..];
-            let rest = rest.strip_prefix('\n').unwrap_or(rest);
-            updated.push_str(rest);
-            fs::write(&claude_md_path, updated)?;
+        if existing.contains(BRAIN_SECTION_START_PREFIX) {
+            // Remove ALL brain:start...brain:end blocks, insert bridge at first position.
+            let mut cleaned = existing.clone();
+            let mut insert_pos = cleaned.find(BRAIN_SECTION_START_PREFIX).unwrap();
+            let mut first_removal = true;
+            while let Some(start) = cleaned.find(BRAIN_SECTION_START_PREFIX) {
+                let end = cleaned[start..]
+                    .find(BRAIN_SECTION_END)
+                    .map(|i| start + i + BRAIN_SECTION_END.len())
+                    .unwrap_or(cleaned.len());
+                let end = if cleaned.as_bytes().get(end) == Some(&b'\n') {
+                    end + 1
+                } else {
+                    end
+                };
+                cleaned.replace_range(start..end, "");
+                if first_removal {
+                    insert_pos = start;
+                    first_removal = false;
+                }
+            }
+            cleaned.insert_str(insert_pos, &bridge_ref);
+            fs::write(&claude_md_path, cleaned)?;
             println!("Replaced brain section in CLAUDE.md with bridge to AGENTS.md");
         }
         // Otherwise leave existing CLAUDE.md untouched.
@@ -390,8 +411,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
 **Records tools:**
-- `records.create_artifact` — Create a new artifact record with `text` (plain) or `data` (base64) content.
-- `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content.
+- `records.create_artifact` — Create a new artifact record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes. Records created cross-brain are stored immediately but may not appear in vector search until the target brain's daemon indexes them.
+- `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes.
 - `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution). Supports `brain` param for cross-brain access.
 - `records.list` — List records with optional filters (kind, status, tag, task_id). Supports `brain` param for cross-brain access.
 - `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata. Supports `brain` param for cross-brain access.
@@ -452,7 +473,11 @@ brain memory write-episode --goal "..." --actions "..." --outcome "..."
 brain memory reflect --topic "architecture"  # Prepare: get source material
 brain memory reflect --commit --title "..." --content "..." --source-ids ep1,ep2
 
-# Records
+# Records (cross-brain writes supported via --brain)
+brain artifacts create --title "Report" --file report.md
+brain artifacts create --title "Report" --brain other-brain --stdin
+brain snapshots save --title "State" --file state.json
+brain snapshots save --title "State" --brain other-brain --stdin
 brain artifacts restore <id>          # Print artifact content to stdout
 brain artifacts restore <id> -o file  # Write artifact content to file
 brain snapshots restore <id>          # Print snapshot content to stdout
@@ -766,6 +791,48 @@ mod tests {
             result, custom,
             "CLAUDE.md without markers must be left untouched"
         );
+    }
+
+    #[test]
+    fn duplicate_brain_sections_are_collapsed() {
+        let dir = tempdir().unwrap();
+        let agents_path = dir.path().join("AGENTS.md");
+
+        let before = "# Project\n\nPreamble.\n\n";
+        let block1 = "<!-- brain:start:aaaa1111 -->\nfirst block\n<!-- brain:end -->\n";
+        let middle = "\n## Middle Section\n\nKeep this.\n\n";
+        let block2 = "<!-- brain:start -->\nsecond block\n<!-- brain:end -->\n";
+        let after = "\n## After Section\n\nAlso keep.\n";
+        fs::write(
+            &agents_path,
+            format!("{before}{block1}{middle}{block2}{after}"),
+        )
+        .unwrap();
+
+        upsert_agent_docs(dir.path(), "test-brain").unwrap();
+
+        let result = fs::read_to_string(&agents_path).unwrap();
+        // Exactly one brain section remains.
+        assert_eq!(
+            result.matches(BRAIN_SECTION_START_PREFIX).count(),
+            1,
+            "must have exactly one brain:start marker"
+        );
+        assert_eq!(
+            result.matches(BRAIN_SECTION_END).count(),
+            1,
+            "must have exactly one brain:end marker"
+        );
+        // Old block contents removed.
+        assert!(!result.contains("first block"), "stale block 1 removed");
+        assert!(!result.contains("second block"), "stale block 2 removed");
+        // Content before first block preserved.
+        assert!(result.starts_with(before), "preamble preserved");
+        // Content between and after blocks preserved.
+        assert!(result.contains("## Middle Section"), "middle preserved");
+        assert!(result.contains("## After Section"), "after preserved");
+        // New brain content present.
+        assert!(result.contains("## Task Management"), "new content present");
     }
 
     #[test]
