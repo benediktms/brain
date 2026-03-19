@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-03-19
+
+### Bug Fixes
+
+- Remove brain-specific crate architecture from AGENTS.md template
+- Prefix generation — strip noise words and preserve reading order
+
+### Documentation
+
+- Remove phase status table from README
+
+### Features
+
+- CLI parity with MCP tools — 7 new subcommands (#87)
+- Add VectorSearchMode knob for determinism control
+
+### Refactoring
+
+- Unify McpContext behind BrainStores + SearchService
+
 ## [0.3.0] - 2026-03-18
 
 ### Bug Fixes
