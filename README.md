@@ -4,19 +4,6 @@ A local-first personal knowledge base daemon that indexes Markdown notes into a 
 
 ---
 
-## Status
-
-| Phase                 | Goal                                                          | Status      |
-| --------------------- | ------------------------------------------------------------- | ----------- |
-| 0 — POC               | Scaffolding, embedding model, vector store, CLI               | Done        |
-| 1 — MVP               | Incremental indexing, content hashing, file identity          | Done        |
-| 2 — Feature Complete  | Hybrid retrieval, MCP server, structured parsing, task system | Done        |
-| 3 — Hardening         | Batching, concurrency, observability, index optimization      | Done        |
-| 4 — Release Candidate | Migrations, packaging, daemon lifecycle, test suite           | Done        |
-| 5 — Post-RC           | Records domain, adaptive reranking, ML consolidation          | In Progress |
-
----
-
 ## Why brain?
 
 Long-running AI agents face a hard constraint: context windows are finite, and filling them with irrelevant content wastes both money and reasoning quality. Research on agentic memory systems — [MemGPT](https://arxiv.org/abs/2310.08560), [Generative Agents](https://arxiv.org/abs/2304.03442), [Mem0](https://github.com/mem0ai/mem0) — has converged on the same insight: agents need explicit mechanisms to control _what_ they read and _how much_ they read, not just better retrieval.
