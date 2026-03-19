@@ -476,6 +476,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 TasksAction::Labels => {
                     commands::tasks::run::labels(&ctx)?;
                 }
+                TasksAction::Next { k } => {
+                    commands::tasks::run::next(&ctx, k)?;
+                }
             }
         }
         Command::Snapshots { json, action } => {
