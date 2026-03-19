@@ -224,7 +224,7 @@ proptest! {
                     let store = Store::open_or_create(&tmp.path().join("brain_lancedb"))
                         .await
                         .unwrap();
-                    let results = store.query(&query_vec[0], 3, 20).await.unwrap();
+                    let results = store.query(&query_vec[0], 3, 20, Default::default()).await.unwrap();
                     assert!(
                         results.iter().any(|r| r.file_path.ends_with("test.md")),
                         "indexed file should appear in query results"

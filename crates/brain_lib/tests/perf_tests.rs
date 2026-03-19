@@ -243,7 +243,7 @@ async fn test_concurrent_read_write_no_deadlocks() {
         let qv = query_vec.clone();
         reader_handles.push(tokio::spawn(async move {
             for i in 0..25 {
-                let results = r.query(&qv, 5, 20).await;
+                let results = r.query(&qv, 5, 20, Default::default()).await;
                 assert!(
                     results.is_ok(),
                     "reader {task_id} query {i} failed: {:?}",
@@ -313,7 +313,11 @@ async fn test_optimize_row_threshold() {
     // Queries should still work after optimize
     let embedder = pipeline.embedder().clone();
     let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
-    let results = pipeline.store().query(&query_vec, 5, 20).await.unwrap();
+    let results = pipeline
+        .store()
+        .query(&query_vec, 5, 20, Default::default())
+        .await
+        .unwrap();
     assert!(
         !results.is_empty(),
         "queries should return results after optimize"
@@ -491,7 +495,11 @@ async fn test_ivf_pq_query_returns_results() {
     // Query with nprobes
     let embedder = pipeline.embedder().clone();
     let query_vec = embedder.embed_batch(&["search query"]).unwrap()[0].clone();
-    let results = pipeline.store().query(&query_vec, 10, 20).await.unwrap();
+    let results = pipeline
+        .store()
+        .query(&query_vec, 10, 20, Default::default())
+        .await
+        .unwrap();
 
     assert!(
         !results.is_empty(),
@@ -533,7 +541,11 @@ async fn test_auto_index_on_optimize() {
     // Queries should still work with the index
     let embedder = pipeline.embedder().clone();
     let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
-    let results = pipeline.store().query(&query_vec, 5, 20).await.unwrap();
+    let results = pipeline
+        .store()
+        .query(&query_vec, 5, 20, Default::default())
+        .await
+        .unwrap();
     assert!(
         !results.is_empty(),
         "queries should return results after auto-index"

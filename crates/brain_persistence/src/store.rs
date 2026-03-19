@@ -34,6 +34,57 @@ const MIN_ROWS_FOR_INDEX: u64 = 256;
 /// Default nprobes used when querying with an IVF index.
 pub const DEFAULT_NPROBES: usize = 20;
 
+/// Default refine factor for ANN-refined mode.
+const DEFAULT_REFINE_FACTOR: u32 = 10;
+
+/// Controls the vector search strategy, trading determinism for speed.
+///
+/// Vector search can operate in two fundamental modes: **exact** (brute-force
+/// comparison against every stored vector) or **ANN** (Approximate Nearest
+/// Neighbor — uses index structures like IVF-PQ to narrow candidates quickly,
+/// trading some accuracy for much faster search at scale).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum VectorSearchMode {
+    /// Brute-force scan — bypasses any ANN index and compares the query vector
+    /// against every stored vector. O(n) cost, 100% accurate, fully
+    /// deterministic. Use for golden tests and debugging.
+    Exact,
+    /// ANN search with refinement — the index finds approximate candidates,
+    /// then LanceDB fetches the full uncompressed vectors and rescores them
+    /// (`refine_factor`). Good balance of speed and fidelity: fast ANN
+    /// candidate selection with accurate final ordering.
+    #[default]
+    AnnRefined,
+    /// Pure ANN search — uses only the compressed (quantized) vectors stored
+    /// in the index. Fastest mode, but distances are approximate and results
+    /// can shift across index rebuilds.
+    AnnFast,
+}
+
+impl std::fmt::Display for VectorSearchMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exact => write!(f, "exact"),
+            Self::AnnRefined => write!(f, "ann_refined"),
+            Self::AnnFast => write!(f, "ann_fast"),
+        }
+    }
+}
+
+impl std::str::FromStr for VectorSearchMode {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "exact" => Ok(Self::Exact),
+            "ann_refined" => Ok(Self::AnnRefined),
+            "ann_fast" => Ok(Self::AnnFast),
+            other => Err(format!(
+                "unknown vector_search_mode '{other}'; expected exact, ann_refined, or ann_fast"
+            )),
+        }
+    }
+}
+
 /// Configuration for IVF-PQ vector index creation.
 #[derive(Debug, Clone)]
 pub struct IvfPqConfig {
@@ -273,8 +324,9 @@ impl StoreReader {
         embedding: &[f32],
         top_k: usize,
         nprobes: usize,
+        mode: VectorSearchMode,
     ) -> crate::error::Result<Vec<QueryResult>> {
-        query_impl(&self.table, embedding, top_k, nprobes).await
+        query_impl(&self.table, embedding, top_k, nprobes, mode).await
     }
 }
 
@@ -540,8 +592,9 @@ impl Store {
         embedding: &[f32],
         top_k: usize,
         nprobes: usize,
+        mode: VectorSearchMode,
     ) -> crate::error::Result<Vec<QueryResult>> {
-        query_impl(&self.table, embedding, top_k, nprobes).await
+        query_impl(&self.table, embedding, top_k, nprobes, mode).await
     }
 
     /// Upsert a single summary embedding into LanceDB.
@@ -659,16 +712,31 @@ async fn query_impl(
     embedding: &[f32],
     top_k: usize,
     nprobes: usize,
+    mode: VectorSearchMode,
 ) -> crate::error::Result<Vec<QueryResult>> {
     use futures::TryStreamExt;
     use lancedb::query::{ExecutableQuery, QueryBase};
 
-    let results = table
+    let mut builder = table
         .vector_search(embedding)
         .map_err(|e| BrainCoreError::VectorDb(format!("search setup failed: {e}")))?
         .distance_type(lancedb::DistanceType::Dot)
         .nprobes(nprobes)
-        .limit(top_k)
+        .limit(top_k);
+
+    match mode {
+        VectorSearchMode::Exact => {
+            builder = builder.bypass_vector_index();
+        }
+        VectorSearchMode::AnnRefined => {
+            builder = builder.refine_factor(DEFAULT_REFINE_FACTOR);
+        }
+        VectorSearchMode::AnnFast => {
+            // Use ANN defaults — no additional configuration.
+        }
+    }
+
+    let results = builder
         .execute()
         .await
         .map_err(|e| BrainCoreError::VectorDb(format!("search failed: {e}")))?;
@@ -1015,5 +1083,32 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let store = Store::open_or_create(tmp.path()).await.unwrap();
         assert!(store.current_schema_matches_expected().await);
+    }
+
+    // ─── VectorSearchMode tests ──────────────────────────────────────
+
+    #[test]
+    fn vector_search_mode_display_roundtrip() {
+        for mode in [
+            VectorSearchMode::Exact,
+            VectorSearchMode::AnnRefined,
+            VectorSearchMode::AnnFast,
+        ] {
+            let s = mode.to_string();
+            let parsed: VectorSearchMode = s.parse().unwrap();
+            assert_eq!(mode, parsed, "round-trip failed for {s}");
+        }
+    }
+
+    #[test]
+    fn vector_search_mode_from_str_rejects_unknown() {
+        let result = "turbo".parse::<VectorSearchMode>();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown vector_search_mode"));
+    }
+
+    #[test]
+    fn vector_search_mode_default_is_ann_refined() {
+        assert_eq!(VectorSearchMode::default(), VectorSearchMode::AnnRefined);
     }
 }

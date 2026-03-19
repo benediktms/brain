@@ -6,7 +6,7 @@ use brain_lib::config::{list_brain_keys, load_brain_toml, open_remote_search_con
 use brain_lib::embedder::{Embed, Embedder};
 use brain_lib::metrics::Metrics;
 use brain_lib::prelude::*;
-use brain_lib::query_pipeline::{FederatedPipeline, QueryPipeline};
+use brain_lib::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
 use brain_lib::ranking::resolve_intent;
 use brain_lib::retrieval::SearchResult;
 
@@ -91,26 +91,18 @@ pub async fn run_with_pipeline(
     params: &QueryParams,
     pipeline: &QueryPipeline<'_>,
 ) -> Result<String> {
+    let empty_tags: Vec<String> = Vec::new();
+    let search_params = SearchParams::new(
+        &params.query,
+        &params.intent,
+        params.budget,
+        params.top_k,
+        &empty_tags,
+    );
     let search_result = if params.verbose {
-        pipeline
-            .search_with_scores(
-                &params.query,
-                &params.intent,
-                params.budget,
-                params.top_k,
-                &[],
-            )
-            .await?
+        pipeline.search_with_scores(&search_params).await?
     } else {
-        pipeline
-            .search(
-                &params.query,
-                &params.intent,
-                params.budget,
-                params.top_k,
-                &[],
-            )
-            .await?
+        pipeline.search(&search_params).await?
     };
 
     Ok(format_search_results(
@@ -192,15 +184,15 @@ pub async fn run(params: QueryParams) -> Result<()> {
         metrics: &metrics,
     };
 
-    let search_result = federated
-        .search(
-            &params.query,
-            &params.intent,
-            params.budget,
-            params.top_k,
-            &[],
-        )
-        .await?;
+    let empty_tags: Vec<String> = Vec::new();
+    let fed_search_params = SearchParams::new(
+        &params.query,
+        &params.intent,
+        params.budget,
+        params.top_k,
+        &empty_tags,
+    );
+    let search_result = federated.search(&fed_search_params).await?;
 
     let output = format_search_results(&search_result, &params.intent, params.budget);
     print!("{output}");

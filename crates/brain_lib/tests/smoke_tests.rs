@@ -272,7 +272,10 @@ async fn test_roundtrip_index_then_query() {
     let store = Store::open_or_create(&tmp.path().join("brain_lancedb"))
         .await
         .unwrap();
-    let results = store.query(&query_vec[0], 5, 20).await.unwrap();
+    let results = store
+        .query(&query_vec[0], 5, 20, Default::default())
+        .await
+        .unwrap();
 
     assert!(!results.is_empty(), "query should return results");
 
@@ -331,7 +334,10 @@ async fn test_roundtrip_with_fixtures() {
     let store = Store::open_or_create(&tmp.path().join("brain_lancedb"))
         .await
         .unwrap();
-    let results = store.query(&query_vec[0], 10, 20).await.unwrap();
+    let results = store
+        .query(&query_vec[0], 10, 20, Default::default())
+        .await
+        .unwrap();
 
     assert!(
         !results.is_empty(),
@@ -419,7 +425,10 @@ async fn test_empty_brain_query_returns_nothing() {
     let store = Store::open_or_create(&tmp.path().join("brain_lancedb"))
         .await
         .unwrap();
-    let results = store.query(&query_vec[0], 5, 20).await.unwrap();
+    let results = store
+        .query(&query_vec[0], 5, 20, Default::default())
+        .await
+        .unwrap();
     assert!(results.is_empty(), "empty index should return no results");
 }
 
@@ -436,4 +445,66 @@ async fn test_brain_with_only_empty_files() {
     // Empty files are still "indexed" (state tracked) but produce no chunks
     assert_eq!(stats.indexed, 2);
     assert_eq!(stats.errors, 0);
+}
+
+#[tokio::test]
+async fn test_vector_search_mode_exact_returns_results() {
+    let (pipeline, tmp) = setup().await;
+    let notes_dir = tmp.path().join("notes");
+    std::fs::create_dir_all(&notes_dir).unwrap();
+    write_md(
+        &notes_dir,
+        "cooking.md",
+        "Boil water, add salt, cook spaghetti for 8 minutes.",
+    );
+    pipeline.full_scan(&[notes_dir]).await.unwrap();
+
+    let embedder = MockEmbedder;
+    let query_text = "Boil water, add salt, cook spaghetti for 8 minutes.";
+    let query_vec = embedder.embed_batch(&[query_text]).unwrap();
+
+    let store = Store::open_or_create(&tmp.path().join("brain_lancedb"))
+        .await
+        .unwrap();
+
+    // Exact mode: brute-force scan, bypasses any ANN index.
+    let exact_results = store
+        .query(&query_vec[0], 5, 20, VectorSearchMode::Exact)
+        .await
+        .unwrap();
+
+    // AnnFast mode: pure ANN (falls back to brute-force when no index exists).
+    let fast_results = store
+        .query(&query_vec[0], 5, 20, VectorSearchMode::AnnFast)
+        .await
+        .unwrap();
+
+    // AnnRefined mode (default).
+    let refined_results = store
+        .query(&query_vec[0], 5, 20, VectorSearchMode::AnnRefined)
+        .await
+        .unwrap();
+
+    // All three modes should return results and agree on the top hit.
+    assert!(
+        !exact_results.is_empty(),
+        "Exact mode should return results"
+    );
+    assert!(
+        !fast_results.is_empty(),
+        "AnnFast mode should return results"
+    );
+    assert!(
+        !refined_results.is_empty(),
+        "AnnRefined mode should return results"
+    );
+
+    assert_eq!(
+        exact_results[0].chunk_id, fast_results[0].chunk_id,
+        "Exact and AnnFast should agree on the top result (no index exists)"
+    );
+    assert_eq!(
+        exact_results[0].chunk_id, refined_results[0].chunk_id,
+        "Exact and AnnRefined should agree on the top result (no index exists)"
+    );
 }

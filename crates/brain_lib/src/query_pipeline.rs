@@ -22,6 +22,7 @@ use crate::ranking::{
     compute_fusion_confidence, rank_candidates, resolve_intent,
 };
 use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
+use crate::store::VectorSearchMode;
 use crate::store::{DEFAULT_NPROBES, StoreReader};
 use crate::tokens::estimate_tokens;
 
@@ -34,6 +35,45 @@ pub struct ReflectResult {
     pub budget_tokens: usize,
     pub episodes: Vec<SummaryRow>,
     pub search_result: SearchResult,
+}
+
+/// Parameters for a hybrid search query.
+pub struct SearchParams<'a> {
+    pub query: &'a str,
+    pub intent: &'a str,
+    pub budget_tokens: usize,
+    pub k: usize,
+    pub query_tags: &'a [String],
+    /// Controls the ANN (Approximate Nearest Neighbor) vs exact search
+    /// tradeoff. Defaults to `AnnRefined`. See [`VectorSearchMode`] for
+    /// details on each variant.
+    pub mode: VectorSearchMode,
+}
+
+impl<'a> SearchParams<'a> {
+    /// Construct with required fields, defaulting to `AnnRefined` mode.
+    pub fn new(
+        query: &'a str,
+        intent: &'a str,
+        budget_tokens: usize,
+        k: usize,
+        query_tags: &'a [String],
+    ) -> Self {
+        Self {
+            query,
+            intent,
+            budget_tokens,
+            k,
+            query_tags,
+            mode: VectorSearchMode::default(),
+        }
+    }
+
+    /// Override the vector search mode.
+    pub fn with_mode(mut self, mode: VectorSearchMode) -> Self {
+        self.mode = mode;
+        self
+    }
 }
 
 /// Orchestrates the read-path: hybrid search, expand, and reflect.
@@ -98,34 +138,30 @@ where
 
     /// Hybrid search: vector + FTS union, enriched, ranked, packed within budget.
     #[instrument(skip_all)]
-    pub async fn search(
-        &self,
-        query: &str,
-        intent: &str,
-        budget_tokens: usize,
-        k: usize,
-        query_tags: &[String],
-    ) -> Result<SearchResult> {
-        let (ranked, confidence) = self.search_ranked(query, intent, query_tags).await?;
+    pub async fn search(&self, params: &SearchParams<'_>) -> Result<SearchResult> {
+        let (ranked, confidence) = self
+            .search_ranked(params.query, params.intent, params.query_tags, params.mode)
+            .await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
-        let mut result = pack_minimal(&ranked, budget_tokens, k, false, &ml_summaries);
+        let mut result = pack_minimal(
+            &ranked,
+            params.budget_tokens,
+            params.k,
+            false,
+            &ml_summaries,
+        );
         result.fusion_confidence = Some(confidence);
         Ok(result)
     }
 
     /// Hybrid search returning stubs with per-signal score breakdowns.
     #[instrument(skip_all)]
-    pub async fn search_with_scores(
-        &self,
-        query: &str,
-        intent: &str,
-        budget_tokens: usize,
-        k: usize,
-        query_tags: &[String],
-    ) -> Result<SearchResult> {
-        let (ranked, confidence) = self.search_ranked(query, intent, query_tags).await?;
+    pub async fn search_with_scores(&self, params: &SearchParams<'_>) -> Result<SearchResult> {
+        let (ranked, confidence) = self
+            .search_ranked(params.query, params.intent, params.query_tags, params.mode)
+            .await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
-        let mut result = pack_minimal(&ranked, budget_tokens, k, true, &ml_summaries);
+        let mut result = pack_minimal(&ranked, params.budget_tokens, params.k, true, &ml_summaries);
         result.fusion_confidence = Some(confidence);
         Ok(result)
     }
@@ -145,6 +181,7 @@ where
         query: &str,
         intent: &str,
         query_tags: &[String],
+        mode: VectorSearchMode,
     ) -> Result<(Vec<crate::ranking::RankedResult>, FusionConfidence)> {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
@@ -160,7 +197,7 @@ where
         // 2. Vector search (top-50)
         let vector_results = self
             .store
-            .query(&query_vec, CANDIDATE_LIMIT, DEFAULT_NPROBES)
+            .query(&query_vec, CANDIDATE_LIMIT, DEFAULT_NPROBES, mode)
             .await?;
 
         // 3. FTS search (top-50, gracefully degrade on failure)
@@ -382,9 +419,9 @@ where
         budget_tokens: usize,
         episodes: Vec<SummaryRow>,
     ) -> Result<ReflectResult> {
-        let search_result = self
-            .search(&topic, "reflection", budget_tokens / 2, 5, &[])
-            .await?;
+        let empty_tags: Vec<String> = Vec::new();
+        let params = SearchParams::new(&topic, "reflection", budget_tokens / 2, 5, &empty_tags);
+        let search_result = self.search(&params).await?;
 
         Ok(ReflectResult {
             topic,
@@ -459,15 +496,12 @@ where
     /// skipped with a warning — the search continues with the remaining brains.
     pub async fn search(
         &self,
-        query: &str,
-        intent: &str,
-        budget_tokens: usize,
-        k: usize,
-        query_tags: &[String],
+        params: &SearchParams<'_>,
     ) -> Result<crate::retrieval::SearchResult> {
         // ── 1. Build per-brain vector-search futures ──────────────────────────
         type BrainResult = (String, Vec<crate::ranking::RankedResult>);
 
+        let mode = params.mode;
         let mut futs: Vec<
             std::pin::Pin<Box<dyn std::future::Future<Output = BrainResult> + Send + '_>>,
         > = Vec::new();
@@ -488,11 +522,14 @@ where
             // FTS and chunk-enrichment queries run against the unified SQLite.
             let pipeline = QueryPipeline::new(self.db, store, self.embedder, self.metrics);
             let brain_name = brain_name.clone();
-            let query = query.to_string();
-            let intent = intent.to_string();
-            let query_tags = query_tags.to_vec();
+            let query = params.query.to_string();
+            let intent = params.intent.to_string();
+            let query_tags = params.query_tags.to_vec();
             futs.push(Box::pin(async move {
-                match pipeline.search_ranked(&query, &intent, &query_tags).await {
+                match pipeline
+                    .search_ranked(&query, &intent, &query_tags, mode)
+                    .await
+                {
                     Ok((ranked, _confidence)) => (brain_name, ranked),
                     Err(e) => {
                         warn!(brain = %brain_name, error = %e, "brain search failed");
@@ -540,8 +577,13 @@ where
         // ── 5. Pack into SearchResult ─────────────────────────────────────────
         // ML summary preloading skipped for federated search — results span
         // multiple brain namespaces.
-        let mut search_result =
-            crate::retrieval::pack_minimal(&merged, budget_tokens, k, false, &HashMap::new());
+        let mut search_result = crate::retrieval::pack_minimal(
+            &merged,
+            params.budget_tokens,
+            params.k,
+            false,
+            &HashMap::new(),
+        );
 
         // ── 6. Annotate each stub with its source brain name ──────────────────
         for stub in &mut search_result.results {

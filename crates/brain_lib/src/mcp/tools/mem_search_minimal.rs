@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::query_pipeline::{FederatedPipeline, QueryPipeline};
+use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
+use crate::store::VectorSearchMode;
 
 use super::{McpTool, json_response};
 
@@ -23,6 +24,9 @@ struct Params {
     tags: Vec<String>,
     #[serde(default)]
     brains: Vec<String>,
+    /// Vector search strategy: "exact", "ann_refined" (default), or "ann_fast".
+    #[serde(default)]
+    vector_search_mode: Option<String>,
 }
 
 fn default_intent() -> String {
@@ -78,6 +82,11 @@ impl McpTool for MemSearchMinimal {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Optional list of brain names or IDs to search across multiple brains. Use [\"all\"] to search all registered brains. When omitted, searches only the current brain. Call brains.list first to discover available brain names."
+                    },
+                    "vector_search_mode": {
+                        "type": "string",
+                        "enum": ["exact", "ann_refined", "ann_fast"],
+                        "description": "Vector search strategy controlling the ANN (Approximate Nearest Neighbor) tradeoff. exact: brute-force scan against all vectors — fully deterministic, slowest. ann_refined (default): ANN index finds candidates, then rescores against full uncompressed vectors for accurate ordering. ann_fast: pure ANN with compressed vectors only — fastest, but distances are approximate."
                     }
                 },
                 "required": ["query"]
@@ -103,19 +112,27 @@ impl McpTool for MemSearchMinimal {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
+            let mode = match params.vector_search_mode.as_deref() {
+                Some(s) => match s.parse::<VectorSearchMode>() {
+                    Ok(m) => m,
+                    Err(e) => return ToolCallResult::error(e),
+                },
+                None => VectorSearchMode::default(),
+            };
+
+            let search_params = SearchParams::new(
+                &params.query,
+                &params.intent,
+                params.budget_tokens as usize,
+                params.k as usize,
+                &params.tags,
+            )
+            .with_mode(mode);
+
             let search_result = if params.brains.is_empty() {
                 // Single-brain path — unchanged behaviour.
                 let pipeline = QueryPipeline::new(&ctx.db, store, embedder, &ctx.metrics);
-                match pipeline
-                    .search(
-                        &params.query,
-                        &params.intent,
-                        params.budget_tokens as usize,
-                        params.k as usize,
-                        &params.tags,
-                    )
-                    .await
-                {
+                match pipeline.search(&search_params).await {
                     Ok(r) => r,
                     Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
                 }
@@ -169,16 +186,7 @@ impl McpTool for MemSearchMinimal {
                     metrics: &ctx.metrics,
                 };
 
-                match federated
-                    .search(
-                        &params.query,
-                        &params.intent,
-                        params.budget_tokens as usize,
-                        params.k as usize,
-                        &params.tags,
-                    )
-                    .await
-                {
+                match federated.search(&search_params).await {
                     Ok(r) => r,
                     Err(e) => {
                         return ToolCallResult::error(format!("Federated search failed: {e}"));

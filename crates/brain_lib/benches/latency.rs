@@ -9,7 +9,7 @@ use std::sync::Arc;
 use brain_lib::db::Db;
 use brain_lib::embedder::{Embed, MockEmbedder};
 use brain_lib::pipeline::IndexPipeline;
-use brain_lib::store::Store;
+use brain_lib::store::{Store, VectorSearchMode};
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use tempfile::TempDir;
@@ -132,7 +132,7 @@ fn bench_querying(c: &mut Criterion) {
                 let qv = query_vec.clone();
                 let store = pipeline.store();
                 async move {
-                    black_box(store.query(&qv, 10, 20).await.unwrap());
+                    black_box(store.query(&qv, 10, 20, Default::default()).await.unwrap());
                 }
             });
         });
@@ -189,10 +189,14 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
         let query_strs: Vec<&str> = queries.iter().map(|s| s.as_str()).collect();
         let query_vecs = pipeline.embedder().embed_batch(&query_strs).unwrap();
 
-        // Brute-force ground truth (no index, nprobes ignored)
+        // Brute-force ground truth — Exact mode bypasses any ANN index.
         let mut ground_truth = Vec::new();
         for qv in &query_vecs {
-            let results = pipeline.store().query(qv, 10, 20).await.unwrap();
+            let results = pipeline
+                .store()
+                .query(qv, 10, 20, VectorSearchMode::Exact)
+                .await
+                .unwrap();
             let ids: Vec<String> = results.into_iter().map(|r| r.chunk_id).collect();
             ground_truth.push(ids);
         }
@@ -211,7 +215,12 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
                 let qvs = &query_vecs;
                 async move {
                     for qv in qvs {
-                        black_box(store.query(qv, 10, nprobes).await.unwrap());
+                        black_box(
+                            store
+                                .query(qv, 10, nprobes, Default::default())
+                                .await
+                                .unwrap(),
+                        );
                     }
                 }
             });
@@ -224,7 +233,11 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
         for nprobes in [5, 10, 20, 40] {
             let mut total_recall = 0.0;
             for (i, qv) in query_vecs.iter().enumerate() {
-                let ann_results = pipeline.store().query(qv, 10, nprobes).await.unwrap();
+                let ann_results = pipeline
+                    .store()
+                    .query(qv, 10, nprobes, Default::default())
+                    .await
+                    .unwrap();
                 let ann_ids: std::collections::HashSet<&str> =
                     ann_results.iter().map(|r| r.chunk_id.as_str()).collect();
                 let gt_ids: std::collections::HashSet<&str> =

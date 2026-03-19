@@ -19,7 +19,7 @@ use crate::db::chunks::ChunkRow;
 use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::db::summaries::{Episode, SummaryRow};
 use crate::error::Result;
-use crate::store::QueryResult;
+use crate::store::{QueryResult, VectorSearchMode};
 
 use super::{
     ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, EmbeddingResetter,
@@ -138,6 +138,7 @@ impl ChunkSearcher for MockChunkSearcher {
         _embedding: &'a [f32],
         _top_k: usize,
         _nprobes: usize,
+        _mode: VectorSearchMode,
     ) -> impl std::future::Future<Output = Result<Vec<QueryResult>>> + Send + 'a {
         async move {
             let guard = self.results.lock().unwrap();
@@ -830,7 +831,10 @@ mod tests {
             score: Some(0.9),
         }];
         let searcher = MockChunkSearcher::with_results(results);
-        let out = searcher.query(&[0.1_f32, 0.2], 10, 20).await.unwrap();
+        let out = searcher
+            .query(&[0.1_f32, 0.2], 10, 20, VectorSearchMode::default())
+            .await
+            .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].chunk_id, "c1");
     }
@@ -951,7 +955,7 @@ mod tests {
 
         // search_ranked embeds the query and calls store.query — both are mocked.
         let (ranked, _confidence) = pipeline
-            .search_ranked("fox", "semantic", &[])
+            .search_ranked("fox", "semantic", &[], VectorSearchMode::default())
             .await
             .unwrap();
 

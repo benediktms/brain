@@ -40,14 +40,14 @@ pub mod prelude {
     pub use crate::metrics::Metrics;
     pub use crate::parser::{ParsedDocument, parse_document};
     pub use crate::pipeline::{IndexPipeline, ScanStats, VacuumStats};
-    pub use crate::query_pipeline::{FederatedPipeline, QueryPipeline};
+    pub use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
     pub use crate::ranking::{
         FusionConfidence, RankedResult, RerankCandidate, RerankResult, Reranker, RerankerPolicy,
         WeightProfile,
     };
     pub use crate::retrieval::{ExpandResult, ExpandedMemory, MemoryStub, SearchResult};
     pub use crate::scanner::{ScannedFile, scan_brain};
-    pub use crate::store::{QueryResult, Store};
+    pub use crate::store::{QueryResult, Store, VectorSearchMode};
     pub use crate::tokens::estimate_tokens;
     pub use crate::utils::content_hash;
     pub use crate::watcher::{BrainWatcher, FileEvent};

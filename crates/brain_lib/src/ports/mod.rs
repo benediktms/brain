@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use crate::db::chunks::ChunkRow;
 use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::error::Result;
-use crate::store::QueryResult;
+use crate::store::{QueryResult, VectorSearchMode};
 
 // ---------------------------------------------------------------------------
 // Write path — used by IndexPipeline, embed_poll
@@ -109,11 +109,15 @@ pub trait SchemaMeta: Send + Sync {
 /// Consumers: `QueryPipeline`, `FederatedPipeline`.
 pub trait ChunkSearcher: Send + Sync {
     /// Search for the top-`top_k` most similar chunks to `embedding`.
+    ///
+    /// `mode` controls the ANN (Approximate Nearest Neighbor) vs exact search
+    /// tradeoff — see [`VectorSearchMode`].
     fn query<'a>(
         &'a self,
         embedding: &'a [f32],
         top_k: usize,
         nprobes: usize,
+        mode: VectorSearchMode,
     ) -> impl std::future::Future<Output = Result<Vec<QueryResult>>> + Send + 'a;
 }
 
@@ -253,8 +257,9 @@ impl ChunkSearcher for StoreReader {
         embedding: &'a [f32],
         top_k: usize,
         nprobes: usize,
+        mode: VectorSearchMode,
     ) -> impl std::future::Future<Output = Result<Vec<QueryResult>>> + Send + 'a {
-        StoreReader::query(self, embedding, top_k, nprobes)
+        StoreReader::query(self, embedding, top_k, nprobes, mode)
     }
 }
 
@@ -266,8 +271,9 @@ impl ChunkSearcher for Store {
         embedding: &'a [f32],
         top_k: usize,
         nprobes: usize,
+        mode: VectorSearchMode,
     ) -> impl std::future::Future<Output = Result<Vec<QueryResult>>> + Send + 'a {
-        Store::query(self, embedding, top_k, nprobes)
+        Store::query(self, embedding, top_k, nprobes, mode)
     }
 }
 
