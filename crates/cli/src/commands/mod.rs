@@ -22,6 +22,7 @@ pub mod records;
 pub mod registry;
 pub mod reindex;
 pub mod snapshots;
+pub mod status;
 pub mod tasks;
 pub mod vacuum;
 pub mod watch;
