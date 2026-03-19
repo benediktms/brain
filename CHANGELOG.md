@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-03-19
+
+### Bug Fixes
+
+- Deduplicate brain sections in AGENTS.md and fix upsert logic
+
+### Features
+
+- Add archived-brain guards and improve CLI output
+- Add --brain flag to brain snapshots save
+- Add --brain flag to artifacts create
+- Implement cross-brain task creation in CLI tasks create
+- Add optional brain param to records.save_snapshot tool
+- Add optional brain param to records.create_artifact
+
 ## [0.3.1] - 2026-03-19
 
 ### Bug Fixes

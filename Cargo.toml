@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/brain_lib", "crates/brain_persistence", "crates/cli"]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 
 [workspace.dependencies]
