@@ -63,6 +63,7 @@ pub struct SaveParams {
     pub task: Option<String>,
     pub tags: Vec<String>,
     pub media_type: Option<String>,
+    pub brain: Option<String>,
 }
 
 pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
@@ -95,8 +96,16 @@ pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
         original_size,
     );
 
-    let prefix = ctx
-        .record_store
+    let remote_records = if let Some(ref brain) = params.brain {
+        let db = ctx.record_store.db();
+        let (bid, bname) = db.resolve_brain(brain)?;
+        Some(brain_lib::records::RecordStore::with_brain_id(db.clone(), &bid, &bname)?)
+    } else {
+        None
+    };
+    let record_store = remote_records.as_ref().unwrap_or(&ctx.record_store);
+
+    let prefix = record_store
         .get_project_prefix()
         .context("Failed to get project prefix")?;
     let record_id = brain_lib::records::events::new_record_id(&prefix);
@@ -118,7 +127,7 @@ pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
         },
     );
 
-    ctx.record_store
+    record_store
         .apply_event(&event)
         .context("Failed to apply and append record event")?;
 

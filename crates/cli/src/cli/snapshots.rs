@@ -33,6 +33,10 @@ pub(crate) enum SnapshotsAction {
         /// Media type (default: application/octet-stream)
         #[arg(long)]
         media_type: Option<String>,
+
+        /// Target brain name or ID (writes to current brain if omitted)
+        #[arg(long)]
+        brain: Option<String>,
     },
 
     /// List snapshots
