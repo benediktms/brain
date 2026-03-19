@@ -30,7 +30,7 @@ pub(crate) enum MemoryAction {
         query: String,
 
         /// Maximum number of results to return
-        #[arg(short, long, default_value = "5")]
+        #[arg(short, long, default_value = "10")]
         k: usize,
 
         /// Ranking intent profile
@@ -107,7 +107,7 @@ pub(crate) enum MemoryAction {
         tags: Vec<String>,
 
         /// Importance score (0.0 to 1.0)
-        #[arg(long, default_value = "0.5")]
+        #[arg(long, default_value = "1.0")]
         importance: f64,
     },
 

@@ -605,9 +605,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         commands::artifacts::run::link_remove(&ctx, &id, task, chunk)?;
                     }
                 },
-                ArtifactsAction::Restore { .. } => {
-                    // Wiring handled in a separate task — stub to satisfy exhaustiveness.
-                    todo!("artifacts restore dispatch not yet wired")
+                ArtifactsAction::Restore { id, output } => {
+                    commands::artifacts::run::restore(&ctx, &id, output)?;
                 }
             }
         }
@@ -645,14 +644,100 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Memory { json, action } => {
-            // Wiring handled in a separate task — stub to satisfy exhaustiveness.
-            let _ = (json, action);
-            todo!("brain memory dispatch not yet wired")
+            use commands::memory::run::{
+                MemoryCtx, ReflectCommitParams, ReflectPrepareParams, SearchParams2,
+                WriteEpisodeParams,
+            };
+            let ctx = MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
+
+            match action {
+                MemoryAction::Search {
+                    query,
+                    k,
+                    intent,
+                    budget,
+                    tags,
+                    brains,
+                } => {
+                    commands::memory::run::search(
+                        &ctx,
+                        SearchParams2 {
+                            query,
+                            k,
+                            intent: intent.as_str().to_string(),
+                            budget,
+                            tags,
+                            brains,
+                        },
+                    )
+                    .await?;
+                }
+                MemoryAction::Expand { memory_ids, budget } => {
+                    commands::memory::run::expand(&ctx, &memory_ids, budget).await?;
+                }
+                MemoryAction::WriteEpisode {
+                    goal,
+                    actions,
+                    outcome,
+                    tags,
+                    importance,
+                } => {
+                    commands::memory::run::write_episode(
+                        &ctx,
+                        WriteEpisodeParams {
+                            goal,
+                            actions,
+                            outcome,
+                            tags,
+                            importance,
+                            lance_db: Some(cli.lance_db.clone()),
+                        },
+                    )
+                    .await?;
+                }
+                MemoryAction::Reflect {
+                    commit,
+                    topic,
+                    budget,
+                    brains,
+                    title,
+                    content,
+                    source_ids,
+                    tags,
+                    importance,
+                } => {
+                    if commit {
+                        commands::memory::run::reflect_commit(
+                            &ctx,
+                            ReflectCommitParams {
+                                title: title.unwrap_or_default(),
+                                content: content.unwrap_or_default(),
+                                source_ids,
+                                tags,
+                                importance: importance.unwrap_or(1.0),
+                                lance_db: Some(cli.lance_db.clone()),
+                            },
+                        )
+                        .await?;
+                    } else {
+                        let topic = topic.ok_or_else(|| {
+                            anyhow::anyhow!("--topic is required in prepare mode (omit --commit)")
+                        })?;
+                        commands::memory::run::reflect_prepare(
+                            &ctx,
+                            ReflectPrepareParams {
+                                topic,
+                                budget,
+                                brains,
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
         }
         Command::Status { json } => {
-            // Wiring handled in a separate task — stub to satisfy exhaustiveness.
-            let _ = json;
-            todo!("brain status dispatch not yet wired")
+            commands::status::run(&cli.sqlite_db, Some(&cli.lance_db), json)?;
         }
     }
 

@@ -139,6 +139,7 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
                     "summary": stub.summary_2sent,
                     "score": stub.hybrid_score,
                     "file_path": stub.file_path,
+                    "heading_path": stub.heading_path,
                     "kind": stub.kind,
                 });
                 if let Some(ref bn) = stub.brain_name {
@@ -259,7 +260,6 @@ pub struct WriteEpisodeParams {
     pub importance: f64,
     /// Optional writable LanceDB store for best-effort embedding.
     pub lance_db: Option<std::path::PathBuf>,
-    pub model_dir: std::path::PathBuf,
 }
 
 pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Result<()> {
