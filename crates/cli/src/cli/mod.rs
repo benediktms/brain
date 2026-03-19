@@ -1,4 +1,5 @@
 mod artifacts;
+mod memory;
 mod record_common;
 mod records;
 mod snapshots;
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 
 pub(crate) use artifacts::*;
+pub(crate) use memory::*;
 pub(crate) use record_common::*;
 pub(crate) use records::*;
 pub(crate) use snapshots::*;
@@ -410,6 +412,45 @@ pub(crate) enum Command {
 
         #[command(subcommand)]
         action: RecordsAction,
+    },
+
+    /// Search and manage episodic memory (search, expand, write-episode, reflect)
+    #[command(
+        visible_alias = "mem",
+        long_about = "Search and manage episodic memory.\n\n\
+            Provides direct CLI access to the memory pipeline: hybrid search, \
+            content expansion, episode writing, and two-phase reflection.\n\n\
+            Subcommands:\n  \
+            - search        Hybrid search returning compact memory stubs\n  \
+            - expand        Expand stubs to full content\n  \
+            - write-episode Record a goal/actions/outcome episode\n  \
+            - reflect       Retrieve source material or commit a reflection"
+    )]
+    Memory {
+        /// Output as JSON instead of human-readable text
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
+
+    /// Show brain health status (task counts, index stats, brain ID)
+    #[command(
+        long_about = "Show brain health status for the current project.\n\n\
+            Returns:\n  \
+            - Brain name and ID\n  \
+            - Task counts by status (open, in_progress, blocked, done)\n  \
+            - Index stats (stuck files, stale hash prevention count)\n\n\
+            Useful as a quick health check or for dashboards.",
+        after_help = "EXAMPLES:\n  \
+            brain status              # Human-readable summary\n  \
+            brain status --json       # Machine-readable JSON output"
+    )]
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Migrate all per-brain SQLite databases into the unified ~/.brain/brain.db (polished)

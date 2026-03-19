@@ -4,12 +4,14 @@ mod deps;
 mod labels;
 mod list;
 mod mutate;
+mod next;
 mod show;
 
 pub use deps::*;
 pub use labels::*;
 pub use list::*;
 pub use mutate::*;
+pub use next::*;
 pub use show::*;
 
 use std::path::Path;

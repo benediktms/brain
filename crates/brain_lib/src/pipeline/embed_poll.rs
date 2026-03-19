@@ -13,6 +13,7 @@ use crate::db::Db;
 use crate::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
 use crate::embedder::{Embed, embed_batch_async};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
+use crate::records::capsule::build_record_capsule;
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
 use crate::tasks::queries::{TaskPollRow, find_stale_tasks_for_embedding, get_labels_for_tasks};
 
@@ -276,6 +277,148 @@ pub async fn poll_stale_chunks(
     count
 }
 
+// ── Records ─────────────────────────────────────────────────────────────────
+
+/// Poll for records whose capsule is stale (searchable=1, active, and
+/// `updated_at > embedded_at` or `embedded_at IS NULL`).
+///
+/// Builds record capsules, batch-embeds them, upserts to LanceDB and
+/// SQLite FTS, then marks the records as embedded.
+///
+/// `brain_id` — when non-empty, filters records to this brain only; when
+/// empty, processes all records.
+///
+/// Returns the number of records successfully embedded.
+pub async fn poll_stale_records(
+    db: &Db,
+    store: &impl ChunkIndexWriter,
+    embedder: &Arc<dyn Embed>,
+    brain_id: &str,
+) -> usize {
+    debug!("embed_poll: scanning stale records");
+
+    // ── 1. Fetch stale record rows ───────────────────────────────────────
+    let brain_id_owned = brain_id.to_string();
+    let rows = match db.with_read_conn(move |conn| {
+        crate::db::records::queries::find_stale_records_for_embedding(conn, &brain_id_owned)
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "embed_poll: failed to query stale records");
+            return 0;
+        }
+    };
+
+    if rows.is_empty() {
+        debug!("embed_poll: no stale records");
+        return 0;
+    }
+
+    info!(count = rows.len(), "embed_poll: embedding stale records");
+
+    // ── 2. Fetch tags for each record ────────────────────────────────────
+    let record_id_refs: Vec<&str> = rows.iter().map(|r| r.record_id.as_str()).collect();
+    let record_ids_owned: Vec<String> = record_id_refs.iter().map(|s| s.to_string()).collect();
+
+    let tag_map: std::collections::HashMap<String, Vec<String>> =
+        match db.with_read_conn(move |conn| {
+            let refs: Vec<&str> = record_ids_owned.iter().map(String::as_str).collect();
+            crate::db::records::queries::get_tags_for_records(conn, &refs)
+        }) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(error = %e, "embed_poll: failed to fetch tags for stale records");
+                std::collections::HashMap::new()
+            }
+        };
+
+    // ── 3. Build capsule texts ───────────────────────────────────────────
+    struct CapsuleEntry {
+        record_id: String,
+        title: String,
+        file_id: String,
+        capsule_text: String,
+    }
+
+    let mut capsules: Vec<CapsuleEntry> = Vec::new();
+
+    for row in &rows {
+        let tags = tag_map.get(&row.record_id).cloned().unwrap_or_default();
+        let capsule_text =
+            build_record_capsule(&row.title, &row.kind, row.description.as_deref(), &tags);
+        let file_id = format!("record:{}", row.record_id);
+        capsules.push(CapsuleEntry {
+            record_id: row.record_id.clone(),
+            title: row.title.clone(),
+            file_id,
+            capsule_text,
+        });
+    }
+
+    // ── 4. Batch embed ───────────────────────────────────────────────────
+    let texts: Vec<String> = capsules.iter().map(|c| c.capsule_text.clone()).collect();
+
+    let embeddings = match embed_batch_async(embedder, texts).await {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(error = %e, "embed_poll: failed to embed record capsules");
+            return 0;
+        }
+    };
+
+    // ── 5. Upsert to LanceDB + SQLite FTS ───────────────────────────────
+    let mut embedded_record_ids: HashSet<String> = HashSet::new();
+
+    for (entry, embedding) in capsules.iter().zip(embeddings.iter()) {
+        // LanceDB upsert
+        if let Err(e) = store
+            .upsert_chunks(
+                &entry.file_id,
+                &entry.title,
+                &[(0, entry.capsule_text.as_str())],
+                std::slice::from_ref(embedding),
+            )
+            .await
+        {
+            warn!(
+                record_id = %entry.record_id,
+                file_id = %entry.file_id,
+                error = %e,
+                "embed_poll: LanceDB upsert failed for record capsule"
+            );
+            continue;
+        }
+
+        // SQLite FTS upsert via ChunkMetaWriter port
+        if let Err(e) = db.upsert_record_chunk(&entry.file_id, &entry.capsule_text) {
+            warn!(
+                record_id = %entry.record_id,
+                file_id = %entry.file_id,
+                error = %e,
+                "embed_poll: SQLite FTS upsert failed for record capsule"
+            );
+            continue;
+        }
+
+        embedded_record_ids.insert(entry.record_id.clone());
+    }
+
+    // ── 6. Mark embedded ─────────────────────────────────────────────────
+    if !embedded_record_ids.is_empty() {
+        let ids_owned: Vec<String> = embedded_record_ids.iter().cloned().collect();
+        if let Err(e) = db.with_write_conn(move |conn| {
+            let refs: Vec<&str> = ids_owned.iter().map(String::as_str).collect();
+            crate::db::records::queries::mark_records_embedded(conn, &refs)
+        }) {
+            warn!(error = %e, "embed_poll: failed to mark records as embedded");
+        }
+    }
+
+    let count = embedded_record_ids.len();
+    info!(count, "embed_poll: records embedded");
+    count
+}
+
 // ── Self-heal ────────────────────────────────────────────────────────────────
 
 /// Check if LanceDB is accessible. If not, reset all `embedded_at` columns so
@@ -300,6 +443,10 @@ pub async fn self_heal_if_lance_missing(
 
     if let Err(e) = resetter.reset_chunks_embedded_at() {
         warn!(error = %e, "embed_poll: failed to reset chunks.embedded_at");
+    }
+
+    if let Err(e) = resetter.reset_records_embedded_at() {
+        warn!(error = %e, "embed_poll: failed to reset records.embedded_at");
     }
 
     true

@@ -372,6 +372,99 @@ pub fn count_payload_refs(
     Ok(count)
 }
 
+// -- Embedding poll queries --
+
+/// A record pending embedding into LanceDB.
+#[derive(Debug, Clone)]
+pub struct RecordPollRow {
+    pub record_id: String,
+    pub title: String,
+    pub kind: String,
+    pub description: Option<String>,
+}
+
+/// Find records whose capsule is stale (searchable=1, active, and
+/// `updated_at > embedded_at` or `embedded_at IS NULL`).
+///
+/// When `brain_id` is non-empty, only records for that brain are returned.
+/// When empty, all brains are included.
+pub fn find_stale_records_for_embedding(
+    conn: &Connection,
+    brain_id: &str,
+) -> Result<Vec<RecordPollRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT record_id, title, kind, description
+         FROM records
+         WHERE searchable = 1
+           AND status = 'active'
+           AND updated_at > COALESCE(embedded_at, 0)
+           AND (brain_id = ?1 OR ?1 = '')
+         LIMIT 256",
+    )?;
+    let rows = stmt.query_map([brain_id], |row| {
+        Ok(RecordPollRow {
+            record_id: row.get(0)?,
+            title: row.get(1)?,
+            kind: row.get(2)?,
+            description: row.get(3)?,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
+/// Set `embedded_at = now()` on a batch of records.
+pub fn mark_records_embedded(conn: &Connection, record_ids: &[&str]) -> Result<()> {
+    if record_ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders: Vec<String> = (1..=record_ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "UPDATE records SET embedded_at = strftime('%s','now') WHERE record_id IN ({})",
+        placeholders.join(", ")
+    );
+    let params: Vec<&dyn rusqlite::types::ToSql> = record_ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
+    conn.execute(&sql, params.as_slice())?;
+    Ok(())
+}
+
+/// Fetch tags for a batch of records, grouped by record_id.
+pub fn get_tags_for_records(
+    conn: &Connection,
+    record_ids: &[&str],
+) -> Result<HashMap<String, Vec<String>>> {
+    if record_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders: Vec<String> = (1..=record_ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT record_id, tag FROM record_tags WHERE record_id IN ({})",
+        placeholders.join(", ")
+    );
+    let params: Vec<&dyn rusqlite::types::ToSql> = record_ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let (record_id, tag) = row?;
+        map.entry(record_id).or_default().push(tag);
+    }
+    Ok(map)
+}
+
 // -- Internal helpers --
 
 /// Increment the last byte of a string for exclusive upper bounds in range scans.
@@ -895,5 +988,207 @@ mod tests {
         let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         let count = count_payload_refs(&conn, hash, "r1").unwrap();
         assert_eq!(count, 0);
+    }
+
+    // -- Embedding poll query tests --
+
+    fn create_record_with_desc(
+        conn: &Connection,
+        record_id: &str,
+        title: &str,
+        kind: &str,
+        description: Option<&str>,
+        brain_id: &str,
+    ) {
+        let ev = RecordEvent::from_payload(
+            record_id,
+            "test-agent",
+            RecordCreatedPayload {
+                title: title.to_string(),
+                kind: kind.to_string(),
+                content_ref: ContentRefPayload::new(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+                    42,
+                    None,
+                ),
+                description: description.map(|s| s.to_string()),
+                task_id: None,
+                tags: vec![],
+                scope_type: None,
+                scope_id: None,
+                retention_class: None,
+                producer: None,
+            },
+        );
+        apply_event(conn, &ev, brain_id).unwrap();
+    }
+
+    #[test]
+    fn test_find_stale_records_returns_searchable_active() {
+        let conn = setup();
+        create_record_with_desc(
+            &conn,
+            "r-analysis",
+            "Analysis",
+            "analysis",
+            Some("Desc"),
+            "",
+        );
+        create_record_with_desc(&conn, "r-plan", "Plan", "plan", None, "");
+
+        let rows = find_stale_records_for_embedding(&conn, "").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|r| r.record_id == "r-analysis"));
+        assert!(rows.iter().any(|r| r.record_id == "r-plan"));
+        // Verify description is populated
+        let analysis = rows.iter().find(|r| r.record_id == "r-analysis").unwrap();
+        assert_eq!(analysis.description.as_deref(), Some("Desc"));
+        let plan = rows.iter().find(|r| r.record_id == "r-plan").unwrap();
+        assert!(plan.description.is_none());
+    }
+
+    #[test]
+    fn test_find_stale_records_excludes_unsearchable() {
+        let conn = setup();
+        // Snapshot kind gets searchable=0 via projection CASE WHEN
+        create_record_with_desc(&conn, "r-snap", "Snap", "snapshot", None, "");
+        create_record_with_desc(&conn, "r-analysis", "Analysis", "analysis", None, "");
+
+        let rows = find_stale_records_for_embedding(&conn, "").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].record_id, "r-analysis");
+    }
+
+    #[test]
+    fn test_find_stale_records_excludes_archived() {
+        let conn = setup();
+        create_record_with_desc(&conn, "r1", "Active", "analysis", None, "");
+        create_record_with_desc(&conn, "r2", "To Archive", "plan", None, "");
+
+        // Archive r2
+        let archive_ev =
+            RecordEvent::from_payload("r2", "agent", RecordArchivedPayload { reason: None });
+        apply_event(&conn, &archive_ev, "").unwrap();
+
+        let rows = find_stale_records_for_embedding(&conn, "").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].record_id, "r1");
+    }
+
+    #[test]
+    fn test_find_stale_records_excludes_already_embedded() {
+        let conn = setup();
+        create_record_with_desc(&conn, "r1", "Fresh", "analysis", None, "");
+
+        // Mark as embedded
+        mark_records_embedded(&conn, &["r1"]).unwrap();
+
+        let rows = find_stale_records_for_embedding(&conn, "").unwrap();
+        assert!(rows.is_empty(), "already-embedded record should not appear");
+    }
+
+    #[test]
+    fn test_find_stale_records_respects_brain_id() {
+        let conn = setup();
+        // Register brains
+        conn.execute(
+            "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES ('b1', 'brain1', 1000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES ('b2', 'brain2', 1000)",
+            [],
+        )
+        .unwrap();
+
+        create_record_with_desc(&conn, "r1", "Brain1 Record", "analysis", None, "b1");
+        create_record_with_desc(&conn, "r2", "Brain2 Record", "plan", None, "b2");
+
+        // Filter by brain_id
+        let b1_rows = find_stale_records_for_embedding(&conn, "b1").unwrap();
+        assert_eq!(b1_rows.len(), 1);
+        assert_eq!(b1_rows[0].record_id, "r1");
+
+        let b2_rows = find_stale_records_for_embedding(&conn, "b2").unwrap();
+        assert_eq!(b2_rows.len(), 1);
+        assert_eq!(b2_rows[0].record_id, "r2");
+
+        // Empty brain_id returns all
+        let all_rows = find_stale_records_for_embedding(&conn, "").unwrap();
+        assert_eq!(all_rows.len(), 2);
+    }
+
+    #[test]
+    fn test_mark_records_embedded_sets_timestamp() {
+        let conn = setup();
+        create_record_with_desc(&conn, "r1", "Title", "analysis", None, "");
+
+        // Before marking: embedded_at is NULL
+        let before: Option<i64> = conn
+            .query_row(
+                "SELECT embedded_at FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(before.is_none());
+
+        mark_records_embedded(&conn, &["r1"]).unwrap();
+
+        let after: Option<i64> = conn
+            .query_row(
+                "SELECT embedded_at FROM records WHERE record_id = 'r1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(after.is_some());
+        assert!(after.unwrap() > 0);
+    }
+
+    #[test]
+    fn test_mark_records_embedded_empty_slice() {
+        let conn = setup();
+        // Should not error on empty input
+        mark_records_embedded(&conn, &[]).unwrap();
+    }
+
+    #[test]
+    fn test_get_tags_for_records_groups_correctly() {
+        let conn = setup();
+        create_record_with_tag(&conn, "r1", "R1", "analysis", "area:core");
+        // Add a second tag to r1
+        conn.execute(
+            "INSERT INTO record_tags (record_id, tag) VALUES ('r1', 'type:refactor')",
+            [],
+        )
+        .unwrap();
+        create_record_with_tag(&conn, "r2", "R2", "plan", "area:mcp");
+
+        let tags = get_tags_for_records(&conn, &["r1", "r2"]).unwrap();
+        assert_eq!(tags.get("r1").unwrap().len(), 2);
+        assert!(tags.get("r1").unwrap().contains(&"area:core".to_string()));
+        assert!(
+            tags.get("r1")
+                .unwrap()
+                .contains(&"type:refactor".to_string())
+        );
+        assert_eq!(tags.get("r2").unwrap(), &vec!["area:mcp".to_string()]);
+    }
+
+    #[test]
+    fn test_get_tags_for_records_empty_slice() {
+        let conn = setup();
+        let tags = get_tags_for_records(&conn, &[]).unwrap();
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_get_tags_for_records_no_tags() {
+        let conn = setup();
+        create_record(&conn, "r1", "No Tags", "analysis");
+        let tags = get_tags_for_records(&conn, &["r1"]).unwrap();
+        assert!(tags.get("r1").is_none());
     }
 }

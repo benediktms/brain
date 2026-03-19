@@ -30,9 +30,11 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
                     (record_id, brain_id, title, kind, status, description,
                      content_hash, content_size, media_type,
                      task_id, actor, created_at, updated_at,
-                     retention_class, pinned, payload_available, content_encoding, original_size)
+                     retention_class, pinned, payload_available, content_encoding, original_size,
+                     searchable)
                  VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                         ?13, 0, 1, ?14, ?15)",
+                         ?13, 0, 1, ?14, ?15,
+                         CASE WHEN ?4 IN ('snapshot', 'dispatch-brief') THEN 0 ELSE 1 END)",
                 rusqlite::params![
                     event.record_id,
                     brain_id,
@@ -432,5 +434,56 @@ mod tests {
             .unwrap();
         assert_eq!(title, "Updated");
         assert_eq!(status, "archived");
+    }
+
+    #[test]
+    fn test_searchable_default_by_kind() {
+        let conn = setup();
+
+        // Analysis → searchable = 1
+        let ev = make_created_event("r-analysis", "Analysis", "analysis");
+        apply_event(&conn, &ev, "").unwrap();
+
+        // Snapshot → searchable = 0
+        let ev = make_created_event("r-snap", "Snapshot", "snapshot");
+        apply_event(&conn, &ev, "").unwrap();
+
+        // dispatch-brief → searchable = 0
+        let ev = make_created_event("r-disp", "Dispatch", "dispatch-brief");
+        apply_event(&conn, &ev, "").unwrap();
+
+        // Custom kind → searchable = 1
+        let ev = make_created_event("r-custom", "Custom", "my-custom-kind");
+        apply_event(&conn, &ev, "").unwrap();
+
+        let get_searchable = |id: &str| -> i32 {
+            conn.query_row(
+                "SELECT searchable FROM records WHERE record_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            get_searchable("r-analysis"),
+            1,
+            "analysis should be searchable"
+        );
+        assert_eq!(
+            get_searchable("r-snap"),
+            0,
+            "snapshot should be unsearchable"
+        );
+        assert_eq!(
+            get_searchable("r-disp"),
+            0,
+            "dispatch-brief should be unsearchable"
+        );
+        assert_eq!(
+            get_searchable("r-custom"),
+            1,
+            "unknown kind should default to searchable"
+        );
     }
 }

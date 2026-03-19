@@ -200,6 +200,26 @@ pub(crate) enum TasksAction {
     /// Show ready tasks (no blockers)
     Ready,
 
+    /// Get the next highest-priority actionable tasks
+    #[command(
+        long_about = "Get the next highest-priority actionable tasks.\n\n\
+            Returns tasks with no unresolved dependencies, sorted by:\n  \
+            1. Status (in-progress tasks promoted to top)\n  \
+            2. Priority (0=critical first)\n  \
+            3. Due date (earliest first)\n\n\
+            Epics are excluded — only leaf tasks are shown. Results are \
+            grouped by parent epic when applicable.\n\n\
+            Use this for \"what should I work on next?\" queries.",
+        after_help = "EXAMPLES:\n  \
+            brain tasks next          # Top 5 actionable tasks\n  \
+            brain tasks next -k 10    # Top 10 actionable tasks"
+    )]
+    Next {
+        /// Maximum number of tasks to show
+        #[arg(short, long, default_value = "5")]
+        k: usize,
+    },
+
     /// Show blocked tasks
     Blocked,
 

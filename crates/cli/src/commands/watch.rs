@@ -203,8 +203,14 @@ pub async fn run(
                     pipeline.store(),
                     pipeline.embedder(),
                 ).await;
-                if n_tasks > 0 || n_chunks > 0 {
-                    debug!(tasks = n_tasks, chunks = n_chunks, "embed_poll cycle complete");
+                let n_records = embed_poll::poll_stale_records(
+                    pipeline.db(),
+                    pipeline.store(),
+                    pipeline.embedder(),
+                    "",
+                ).await;
+                if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
+                    debug!(tasks = n_tasks, chunks = n_chunks, records = n_records, "embed_poll cycle complete");
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -661,11 +667,18 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                         instance.pipeline.store(),
                         instance.pipeline.embedder(),
                     ).await;
-                    if n_tasks > 0 || n_chunks > 0 {
+                    let n_records = embed_poll::poll_stale_records(
+                        instance.pipeline.db(),
+                        instance.pipeline.store(),
+                        instance.pipeline.embedder(),
+                        brain_id,
+                    ).await;
+                    if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
                         debug!(
                             brain = %instance.name,
                             tasks = n_tasks,
                             chunks = n_chunks,
+                            records = n_records,
                             "embed_poll cycle complete"
                         );
                     }

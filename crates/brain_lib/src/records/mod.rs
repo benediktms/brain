@@ -1,3 +1,4 @@
+pub mod capsule;
 pub mod events;
 pub mod integrity;
 pub mod objects;

@@ -441,6 +441,9 @@ pub trait ChunkMetaWriter: Send + Sync {
 
     /// Upsert a task capsule chunk into SQLite (creates synthetic `files` row if needed).
     fn upsert_task_chunk(&self, task_file_id: &str, capsule_text: &str) -> Result<()>;
+
+    /// Upsert a record capsule chunk into SQLite (creates synthetic `files` row if needed).
+    fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()>;
 }
 
 // -- ChunkMetaWriter for Db ------------------------------------------------
@@ -479,6 +482,14 @@ impl ChunkMetaWriter for Db {
             crate::db::chunks::upsert_task_chunk(conn, &task_file_id, &capsule_text)
         })
     }
+
+    fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()> {
+        let record_file_id = record_file_id.to_string();
+        let capsule_text = capsule_text.to_string();
+        self.with_write_conn(move |conn| {
+            crate::db::chunks::upsert_record_chunk(conn, &record_file_id, &capsule_text)
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +505,9 @@ pub trait EmbeddingResetter: Send + Sync {
 
     /// Reset `embedded_at` to NULL on all chunks rows in this database.
     fn reset_chunks_embedded_at(&self) -> Result<()>;
+
+    /// Reset `embedded_at` to NULL on all records rows in this database.
+    fn reset_records_embedded_at(&self) -> Result<()>;
 }
 
 // -- EmbeddingResetter for Db ----------------------------------------------
@@ -509,6 +523,13 @@ impl EmbeddingResetter for Db {
     fn reset_chunks_embedded_at(&self) -> Result<()> {
         self.with_write_conn(|conn| {
             conn.execute_batch("UPDATE chunks SET embedded_at = NULL;")?;
+            Ok(())
+        })
+    }
+
+    fn reset_records_embedded_at(&self) -> Result<()> {
+        self.with_write_conn(|conn| {
+            conn.execute_batch("UPDATE records SET embedded_at = NULL;")?;
             Ok(())
         })
     }
