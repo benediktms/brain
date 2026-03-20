@@ -12,6 +12,7 @@ mod record_get;
 mod record_link;
 mod record_list;
 mod record_save_snapshot;
+mod record_search;
 mod record_tag;
 mod status;
 mod task_apply_event;
@@ -99,6 +100,7 @@ impl ToolRegistry {
                 Box::new(record_save_snapshot::RecordSaveSnapshot),
                 Box::new(record_get::RecordGet),
                 Box::new(record_list::RecordList),
+                Box::new(record_search::RecordSearch),
                 Box::new(record_fetch_content::RecordFetchContent),
                 Box::new(record_archive::RecordArchive),
                 Box::new(record_tag::RecordTagAdd),
@@ -137,7 +139,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 25);
+        assert_eq!(defs.len(), 26);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));

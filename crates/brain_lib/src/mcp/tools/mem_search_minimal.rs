@@ -27,6 +27,9 @@ struct Params {
     /// Vector search strategy: "exact", "ann_refined" (default), or "ann_fast".
     #[serde(default)]
     vector_search_mode: Option<String>,
+    /// When true, include per-result signal score breakdowns in the response.
+    #[serde(default)]
+    explain: bool,
 }
 
 fn default_intent() -> String {
@@ -562,5 +565,114 @@ mod tests {
         );
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["budget_tokens"], 1_000_000);
+    }
+
+    /// TDD: explain=true must be accepted without error and — once implemented —
+    /// must include per-result signal score breakdowns in the response.
+    ///
+    /// Phase 1 (red): verifies param acceptance; signal fields asserted below will
+    /// fail until W1-IMPL-EXPLAIN wires explain=true through the pipeline.
+    #[tokio::test]
+    async fn test_explain_true_returns_signal_scores() {
+        use std::sync::Arc;
+
+        use tempfile::TempDir;
+
+        use crate::db::Db;
+        use crate::embedder::{Embed, MockEmbedder};
+        use crate::mcp::McpContext;
+        use crate::pipeline::IndexPipeline;
+        use crate::store::Store;
+
+        // Build a fully-indexed context so we get actual results back.
+        let tmp = TempDir::new().unwrap();
+        let sqlite_path = tmp.path().join("brain.db");
+        let lance_path = tmp.path().join("brain_lancedb");
+        let notes_dir = tmp.path().join("notes");
+        std::fs::create_dir_all(&notes_dir).unwrap();
+
+        // Write a note and index it.
+        let note_path = notes_dir.join("signals.md");
+        std::fs::write(
+            &note_path,
+            "## Signal Scores\n\nThis chunk exists to produce ranked results with signal breakdown.",
+        )
+        .unwrap();
+
+        let db = Db::open(&sqlite_path).unwrap();
+        let store = Store::open_or_create(&lance_path).await.unwrap();
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let pipeline = IndexPipeline::with_embedder(db, store, embedder)
+            .await
+            .unwrap();
+        pipeline.full_scan(&[notes_dir]).await.unwrap();
+        drop(pipeline);
+
+        // Create a fresh McpContext over the indexed data.
+        let store2 = Store::open_or_create(&lance_path).await.unwrap();
+        let store2_reader = crate::store::StoreReader::from_store(&store2);
+        let ctx_db = Db::open(&sqlite_path).unwrap();
+        let stores2 =
+            crate::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path()).unwrap();
+        let ctx = McpContext {
+            stores: stores2,
+            search: Some(crate::search_service::SearchService {
+                store: store2_reader,
+                embedder: Arc::new(MockEmbedder),
+            }),
+            writable_store: Some(store2),
+            metrics: Arc::new(crate::metrics::Metrics::new()),
+        };
+
+        let registry = ToolRegistry::new();
+
+        // Step 1: explain=true must not be rejected as an invalid param.
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({
+                    "query": "Signal Scores chunk ranked results",
+                    "explain": true,
+                    "intent": "lookup",
+                    "k": 5
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "explain=true should be accepted without error; got: {}",
+            result.content[0].text
+        );
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+
+        // Step 2: verify we have at least one result.
+        let count = parsed["result_count"].as_u64().unwrap_or(0);
+        assert!(
+            count > 0,
+            "expected at least one ranked result for explain test; response: {}",
+            result.content[0].text
+        );
+
+        // Step 3 (TDD red): each result must expose a "signals" object with
+        // sim_vector and bm25 fields. This assertion fails until W1-IMPL-EXPLAIN
+        // populates signals from SignalScores when explain=true.
+        let results = parsed["results"].as_array().expect("results must be array");
+        for (i, r) in results.iter().enumerate() {
+            let signals = r.get("signals").unwrap_or_else(|| {
+                panic!(
+                    "result[{i}] missing 'signals' key (explain=true not yet wired through pipeline)"
+                )
+            });
+            assert!(
+                signals.get("sim_vector").is_some(),
+                "result[{i}].signals missing 'sim_vector'"
+            );
+            assert!(
+                signals.get("bm25").is_some(),
+                "result[{i}].signals missing 'bm25'"
+            );
+        }
     }
 }
