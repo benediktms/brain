@@ -28,6 +28,7 @@ pub mod stores;
 pub mod summarizer;
 pub mod tasks;
 pub mod tokens;
+pub mod uri;
 pub mod utils;
 pub mod watcher;
 pub mod work_queue;
