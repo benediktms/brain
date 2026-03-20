@@ -327,11 +327,11 @@ impl TaskDepsBatch {
 fn batch_response(mut succeeded: Vec<Value>, failed: Vec<Value>, brain_name: &str) -> ToolCallResult {
     // Add uri to each succeeded item that has a task_id
     for item in &mut succeeded {
-        if let Some(obj) = item.as_object_mut() {
-            if let Some(task_id) = obj.get("task_id").and_then(|v| v.as_str()).map(String::from) {
-                let uri = SynapseUri::for_task(brain_name, &task_id).to_string();
-                obj.insert("uri".into(), json!(uri));
-            }
+        if let Some(obj) = item.as_object_mut()
+            && let Some(task_id) = obj.get("task_id").and_then(|v| v.as_str()).map(String::from)
+        {
+            let uri = SynapseUri::for_task(brain_name, &task_id).to_string();
+            obj.insert("uri".into(), json!(uri));
         }
     }
     let response = json!({

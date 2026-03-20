@@ -3,7 +3,6 @@
 /// Produces a compact, semantically dense text from a record's metadata and
 /// content. This abstract is used as the embedding source instead of the full
 /// content, yielding more focused vector search results.
-
 const MAX_CONTENT_CHARS: usize = 500;
 
 /// Generate an extractive L0 abstract for a record.
@@ -49,7 +48,7 @@ fn extract_excerpt(content: &str) -> &str {
     let window = &content[..safe_end];
     // Find the last sentence boundary within the window.
     let boundary = window
-        .rfind(|c| c == '.' || c == '!' || c == '?')
+        .rfind(['.', '!', '?'])
         .map(|pos| pos + 1); // include the punctuation character
     match boundary {
         Some(pos) => &content[..pos],

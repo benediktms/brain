@@ -312,14 +312,14 @@ where
                 .map(|id| id["sum:".len()..].to_string())
                 .collect();
 
-            if !summary_ids.is_empty() {
-                if let Ok(kind_map) = self.db.get_summary_kinds(&summary_ids) {
-                    for (chunk_id, candidate) in candidates.iter_mut() {
-                        if let Some(raw_id) = chunk_id.strip_prefix("sum:") {
-                            if let Some(kind) = kind_map.get(raw_id) {
-                                candidate.summary_kind = Some(kind.clone());
-                            }
-                        }
+            if !summary_ids.is_empty()
+                && let Ok(kind_map) = self.db.get_summary_kinds(&summary_ids)
+            {
+                for (chunk_id, candidate) in candidates.iter_mut() {
+                    if let Some(raw_id) = chunk_id.strip_prefix("sum:")
+                        && let Some(kind) = kind_map.get(raw_id)
+                    {
+                        candidate.summary_kind = Some(kind.clone());
                     }
                 }
             }

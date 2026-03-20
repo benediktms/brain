@@ -59,12 +59,12 @@ pub fn consolidate_episodes(
     let mut current_cluster: Vec<SummaryRow> = Vec::new();
 
     for episode in sorted {
-        if let Some(last) = current_cluster.last() {
-            if episode.created_at - last.created_at > gap_seconds {
-                // Gap exceeded — push current cluster and start a new one.
-                raw_clusters.push(current_cluster);
-                current_cluster = Vec::new();
-            }
+        if let Some(last) = current_cluster.last()
+            && episode.created_at - last.created_at > gap_seconds
+        {
+            // Gap exceeded — push current cluster and start a new one.
+            raw_clusters.push(current_cluster);
+            current_cluster = Vec::new();
         }
         current_cluster.push(episode);
     }
@@ -134,7 +134,7 @@ fn days_to_ymd(days: u32) -> (u32, u32, u32) {
     // Algorithm from https://en.wikipedia.org/wiki/Julian_day#Julian_day_number_calculation
     let l = jdn + 68569;
     let n = (4 * l) / 146097;
-    let l = l - (146097 * n + 3) / 4;
+    let l = l - (146097 * n).div_ceil(4);
     let i = (4000 * (l + 1)) / 1461001;
     let l = l - (1461 * i) / 4 + 31;
     let j = (80 * l) / 2447;
