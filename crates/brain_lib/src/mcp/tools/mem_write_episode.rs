@@ -10,7 +10,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::ports::EpisodeWriter;
 
-use crate::uri::BrainUri;
+use crate::uri::SynapseUri;
 
 use super::{McpTool, json_response};
 
@@ -126,7 +126,7 @@ impl McpTool for MemWriteEpisode {
                 }
             }
 
-            let uri = BrainUri::for_episode(ctx.brain_name(), &summary_id).to_string();
+            let uri = SynapseUri::for_episode(ctx.brain_name(), &summary_id).to_string();
             let response = json!({
                 "status": "stored",
                 "summary_id": summary_id,

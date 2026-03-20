@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::queries::RecordFilter;
-use crate::uri::BrainUri;
+use crate::uri::SynapseUri;
 
 use super::{McpTool, json_response};
 
@@ -90,7 +90,7 @@ impl RecordList {
                     .get(&r.record_id)
                     .cloned()
                     .unwrap_or_else(|| r.record_id.clone());
-                let uri = BrainUri::for_record(list_brain_name, &compact_id).to_string();
+                let uri = SynapseUri::for_record(list_brain_name, &compact_id).to_string();
                 json!({
                     "record_id": compact_id,
                     "uri": uri,

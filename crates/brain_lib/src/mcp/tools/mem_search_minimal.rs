@@ -9,6 +9,8 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
 use crate::store::VectorSearchMode;
 
+use crate::uri::SynapseUri;
+
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -189,6 +191,16 @@ impl McpTool for MemSearchMinimal {
                         "heading_path": stub.heading_path,
                         "kind": stub.kind,
                     });
+                    let uri_brain = stub.brain_name.as_deref().unwrap_or(ctx.brain_name());
+                    let uri = match stub.kind.as_str() {
+                        "episode" => SynapseUri::for_episode(uri_brain, &stub.memory_id),
+                        "reflection" => SynapseUri::for_reflection(uri_brain, &stub.memory_id),
+                        "procedure" => SynapseUri::for_procedure(uri_brain, &stub.memory_id),
+                        "record" => SynapseUri::for_record(uri_brain, &stub.memory_id),
+                        "task" | "task-outcome" => SynapseUri::for_task(uri_brain, &stub.memory_id),
+                        _ => SynapseUri::for_memory(uri_brain, &stub.memory_id),
+                    };
+                    stub_json["uri"] = json!(uri.to_string());
                     if let Some(ref bn) = stub.brain_name {
                         stub_json["brain_name"] = json!(bn);
                     }

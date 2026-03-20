@@ -10,7 +10,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::enrich_task_summaries;
 use crate::tasks::events::TaskType;
-use crate::uri::BrainUri;
+use crate::uri::SynapseUri;
 
 use super::{McpTool, inject_warnings, json_response, store_or_warn};
 
@@ -87,7 +87,7 @@ impl TaskNext {
                         .tasks
                         .compact_id(&tid)
                         .unwrap_or_else(|_| tid.clone());
-                    let uri = BrainUri::for_task(ctx.brain_name(), &short).to_string();
+                    let uri = SynapseUri::for_task(ctx.brain_name(), &short).to_string();
                     obj.insert("task_id".into(), json!(short));
                     obj.insert("uri".into(), json!(uri));
                 }

@@ -11,6 +11,8 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::ports::{EpisodeReader, ReflectionWriter};
 use crate::query_pipeline::QueryPipeline;
 
+use crate::uri::SynapseUri;
+
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -207,10 +209,12 @@ impl MemReflect {
             }
         }
 
+        let uri = SynapseUri::for_reflection(ctx.brain_name(), &summary_id).to_string();
         let response = json!({
             "mode": "commit",
             "status": "stored",
             "summary_id": summary_id,
+            "uri": uri,
             "title": params.title,
             "source_count": source_ids.len(),
             "importance": importance,

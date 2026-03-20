@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{DependencyPayload, EventType, TaskEvent};
-use crate::uri::{BrainUri, resolve_id};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -329,7 +329,7 @@ fn batch_response(mut succeeded: Vec<Value>, failed: Vec<Value>, brain_name: &st
     for item in &mut succeeded {
         if let Some(obj) = item.as_object_mut() {
             if let Some(task_id) = obj.get("task_id").and_then(|v| v.as_str()).map(String::from) {
-                let uri = BrainUri::for_task(brain_name, &task_id).to_string();
+                let uri = SynapseUri::for_task(brain_name, &task_id).to_string();
                 obj.insert("uri".into(), json!(uri));
             }
         }

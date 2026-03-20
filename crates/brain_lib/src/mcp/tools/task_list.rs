@@ -13,7 +13,7 @@ use crate::tasks::TaskStore;
 use crate::tasks::enrichment::enrich_task_list;
 use crate::tasks::events::TaskType;
 use crate::tasks::queries::{TaskFilter, apply_filters};
-use crate::uri::BrainUri;
+use crate::uri::SynapseUri;
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
@@ -241,7 +241,7 @@ impl TaskList {
                     .map(String::from)
                 {
                     let short = store.compact_id(&tid).unwrap_or_else(|_| tid.clone());
-                    let uri = BrainUri::for_task(brain_name, &short).to_string();
+                    let uri = SynapseUri::for_task(brain_name, &short).to_string();
                     obj.insert("task_id".into(), json!(short));
                     obj.insert("uri".into(), json!(uri));
                 }

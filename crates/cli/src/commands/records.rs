@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
+use brain_lib::uri::SynapseUri;
 use brain_lib::records::integrity;
 use brain_lib::stores::BrainStores;
 
@@ -287,6 +288,8 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
                     "score": stub.hybrid_score,
                     "kind": stub.kind,
                 });
+                let uri_brain = stub.brain_name.as_deref().unwrap_or(&ctx.stores.brain_name);
+                result_json["uri"] = json!(SynapseUri::for_record(uri_brain, record_id).to_string());
                 if let Some(ref bn) = stub.brain_name {
                     result_json["brain_name"] = json!(bn);
                 }

@@ -1,14 +1,14 @@
-//! Integration tests — `brain://` URI contract for MCP tools.
+//! Integration tests — `synapse://` URI contract for MCP tools.
 //!
 //! These tests verify:
 //!
 //! 1. Output: `tasks.create` response includes a `uri` field of the form
-//!    `brain://<brain>/task/<id>`.
+//!    `synapse://<brain>/task/<id>`.
 //! 2. Output: `records.create_artifact` response includes a `uri` field of
-//!    the form `brain://<brain>/record/<id>`.
-//! 3. Input: `tasks.get` accepts a `brain://` URI as `task_id` and resolves
+//!    the form `synapse://<brain>/record/<id>`.
+//! 3. Input: `tasks.get` accepts a `synapse://` URI as `task_id` and resolves
 //!    the correct task.
-//! 4. Input: `records.get` accepts a `brain://` URI as `record_id` and
+//! 4. Input: `records.get` accepts a `synapse://` URI as `record_id` and
 //!    resolves the correct record.
 
 use std::sync::Arc;
@@ -43,7 +43,7 @@ fn parse_response(result: &brain_lib::mcp::protocol::ToolCallResult) -> Value {
 
 // ─── Output tests: uri field present in creation responses ───────────────────
 
-/// `tasks.create` must include a `uri` field shaped `brain://<brain>/task/<id>`.
+/// `tasks.create` must include a `uri` field shaped `synapse://<brain>/task/<id>`.
 #[tokio::test]
 async fn test_tasks_create_returns_uri_field() {
     let (_tmp, ctx) = make_ctx().await;
@@ -65,8 +65,8 @@ async fn test_tasks_create_returns_uri_field() {
     let brain_name = ctx.brain_name();
     let task_id = parsed["task_id"].as_str().expect("task_id must be present");
 
-    // URI must follow brain://<brain>/task/<id> format.
-    let expected = format!("brain://{brain_name}/task/{task_id}");
+    // URI must follow synapse://<brain>/task/<id> format.
+    let expected = format!("synapse://{brain_name}/task/{task_id}");
     assert_eq!(
         uri, expected,
         "uri field does not match expected format: got {uri:?}, want {expected:?}"
@@ -74,7 +74,7 @@ async fn test_tasks_create_returns_uri_field() {
 }
 
 /// `records.create_artifact` must include a `uri` field shaped
-/// `brain://<brain>/record/<id>`.
+/// `synapse://<brain>/record/<id>`.
 #[tokio::test]
 async fn test_records_create_artifact_returns_uri_field() {
     let (_tmp, ctx) = make_ctx().await;
@@ -103,16 +103,16 @@ async fn test_records_create_artifact_returns_uri_field() {
     let brain_name = ctx.brain_name();
     let record_id = parsed["record_id"].as_str().expect("record_id must be present");
 
-    let expected = format!("brain://{brain_name}/record/{record_id}");
+    let expected = format!("synapse://{brain_name}/record/{record_id}");
     assert_eq!(
         uri, expected,
         "uri field does not match expected format: got {uri:?}, want {expected:?}"
     );
 }
 
-// ─── Input tests: brain:// accepted as task_id / record_id ───────────────────
+// ─── Input tests: synapse:// accepted as task_id / record_id ───────────────────
 
-/// `tasks.get` must accept a `brain://` URI as the `task_id` parameter and
+/// `tasks.get` must accept a `synapse://` URI as the `task_id` parameter and
 /// return the correct task.
 #[tokio::test]
 async fn test_tasks_get_accepts_brain_uri_as_task_id() {
@@ -127,8 +127,8 @@ async fn test_tasks_get_accepts_brain_uri_as_task_id() {
     let task_id = created["task_id"].as_str().expect("task_id must be present");
     let brain_name = ctx.brain_name();
 
-    // Construct a brain:// URI for the task.
-    let uri = format!("brain://{brain_name}/task/{task_id}");
+    // Construct a synapse:// URI for the task.
+    let uri = format!("synapse://{brain_name}/task/{task_id}");
 
     // tasks.get should resolve the URI and return the task.
     let get_result = registry
@@ -138,11 +138,11 @@ async fn test_tasks_get_accepts_brain_uri_as_task_id() {
     let parsed = parse_response(&get_result);
     assert_eq!(
         parsed["task"]["title"], "URI input task",
-        "tasks.get via brain:// URI must return the correct task; got: {parsed}"
+        "tasks.get via synapse:// URI must return the correct task; got: {parsed}"
     );
 }
 
-/// `records.get` must accept a `brain://` URI as `record_id` and return the
+/// `records.get` must accept a `synapse://` URI as `record_id` and return the
 /// correct record.
 #[tokio::test]
 async fn test_records_get_accepts_brain_uri_as_record_id() {
@@ -167,8 +167,8 @@ async fn test_records_get_accepts_brain_uri_as_record_id() {
         .expect("record_id must be present");
     let brain_name = ctx.brain_name();
 
-    // Construct a brain:// URI for the record.
-    let uri = format!("brain://{brain_name}/record/{record_id}");
+    // Construct a synapse:// URI for the record.
+    let uri = format!("synapse://{brain_name}/record/{record_id}");
 
     // records.get should resolve the URI and return the record.
     let get_result = registry
@@ -178,6 +178,6 @@ async fn test_records_get_accepts_brain_uri_as_record_id() {
     let parsed = parse_response(&get_result);
     assert_eq!(
         parsed["record"]["title"], "URI input record",
-        "records.get via brain:// URI must return the correct record; got: {parsed}"
+        "records.get via synapse:// URI must return the correct record; got: {parsed}"
     );
 }

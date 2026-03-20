@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::events::{RecordArchivedPayload, RecordEvent};
-use crate::uri::{BrainUri, resolve_id};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -55,7 +55,7 @@ impl RecordArchive {
             .compact_record_id(&record_id)
             .unwrap_or_else(|_| record_id.clone());
 
-        let uri = BrainUri::for_record(ctx.brain_name(), &compact_id).to_string();
+        let uri = SynapseUri::for_record(ctx.brain_name(), &compact_id).to_string();
 
         let result = json!({
             "record_id": compact_id,

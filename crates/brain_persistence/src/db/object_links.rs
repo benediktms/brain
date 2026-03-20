@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
-/// A cross-domain object link between two brain:// URIs.
+/// A cross-domain object link between two synapse:// URIs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectLink {
     pub source_uri: String,
@@ -11,7 +11,7 @@ pub struct ObjectLink {
     pub created_at: i64,
 }
 
-/// Add a directional link between two brain:// URIs.
+/// Add a directional link between two synapse:// URIs.
 ///
 /// Inserts a row into `object_links`. Fails if the (source_uri, target_uri)
 /// pair already exists (PRIMARY KEY constraint).
@@ -29,7 +29,7 @@ pub fn add_object_link(
     Ok(())
 }
 
-/// Remove a directional link between two brain:// URIs.
+/// Remove a directional link between two synapse:// URIs.
 ///
 /// No-op if the link does not exist.
 pub fn remove_object_link(conn: &Connection, source_uri: &str, target_uri: &str) -> Result<()> {
@@ -81,16 +81,16 @@ mod tests {
 
         add_object_link(
             &conn,
-            "brain://b1/tasks/t1",
-            "brain://b1/records/r1",
+            "synapse://b1/tasks/t1",
+            "synapse://b1/records/r1",
             "related",
         )
         .unwrap();
 
-        let links = get_object_links(&conn, "brain://b1/tasks/t1").unwrap();
+        let links = get_object_links(&conn, "synapse://b1/tasks/t1").unwrap();
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].source_uri, "brain://b1/tasks/t1");
-        assert_eq!(links[0].target_uri, "brain://b1/records/r1");
+        assert_eq!(links[0].source_uri, "synapse://b1/tasks/t1");
+        assert_eq!(links[0].target_uri, "synapse://b1/records/r1");
         assert_eq!(links[0].link_type, "related");
     }
 
@@ -101,8 +101,8 @@ mod tests {
         // t1 → r1 (outgoing from t1)
         add_object_link(
             &conn,
-            "brain://b1/tasks/t1",
-            "brain://b1/records/r1",
+            "synapse://b1/tasks/t1",
+            "synapse://b1/records/r1",
             "related",
         )
         .unwrap();
@@ -110,18 +110,18 @@ mod tests {
         // r2 → t1 (incoming to t1)
         add_object_link(
             &conn,
-            "brain://b1/records/r2",
-            "brain://b1/tasks/t1",
+            "synapse://b1/records/r2",
+            "synapse://b1/tasks/t1",
             "derived_from",
         )
         .unwrap();
 
-        let links = get_object_links(&conn, "brain://b1/tasks/t1").unwrap();
+        let links = get_object_links(&conn, "synapse://b1/tasks/t1").unwrap();
         assert_eq!(links.len(), 2);
 
         let sources: Vec<&str> = links.iter().map(|l| l.source_uri.as_str()).collect();
-        assert!(sources.contains(&"brain://b1/tasks/t1"));
-        assert!(sources.contains(&"brain://b1/records/r2"));
+        assert!(sources.contains(&"synapse://b1/tasks/t1"));
+        assert!(sources.contains(&"synapse://b1/records/r2"));
     }
 
     #[test]
@@ -130,15 +130,15 @@ mod tests {
 
         add_object_link(
             &conn,
-            "brain://b1/tasks/t1",
-            "brain://b1/records/r1",
+            "synapse://b1/tasks/t1",
+            "synapse://b1/records/r1",
             "related",
         )
         .unwrap();
 
-        remove_object_link(&conn, "brain://b1/tasks/t1", "brain://b1/records/r1").unwrap();
+        remove_object_link(&conn, "synapse://b1/tasks/t1", "synapse://b1/records/r1").unwrap();
 
-        let links = get_object_links(&conn, "brain://b1/tasks/t1").unwrap();
+        let links = get_object_links(&conn, "synapse://b1/tasks/t1").unwrap();
         assert_eq!(links.len(), 0);
     }
 
@@ -147,7 +147,7 @@ mod tests {
         let conn = setup();
 
         // Should not error
-        remove_object_link(&conn, "brain://b1/tasks/t99", "brain://b1/records/r99").unwrap();
+        remove_object_link(&conn, "synapse://b1/tasks/t99", "synapse://b1/records/r99").unwrap();
     }
 
     #[test]
@@ -156,16 +156,16 @@ mod tests {
 
         add_object_link(
             &conn,
-            "brain://b1/tasks/t1",
-            "brain://b1/records/r1",
+            "synapse://b1/tasks/t1",
+            "synapse://b1/records/r1",
             "related",
         )
         .unwrap();
 
         let result = add_object_link(
             &conn,
-            "brain://b1/tasks/t1",
-            "brain://b1/records/r1",
+            "synapse://b1/tasks/t1",
+            "synapse://b1/records/r1",
             "supersedes",
         );
         assert!(result.is_err(), "duplicate link should fail");
@@ -175,7 +175,7 @@ mod tests {
     fn test_get_returns_empty_for_unknown_uri() {
         let conn = setup();
 
-        let links = get_object_links(&conn, "brain://b1/tasks/unknown").unwrap();
+        let links = get_object_links(&conn, "synapse://b1/tasks/unknown").unwrap();
         assert_eq!(links.len(), 0);
     }
 
@@ -185,27 +185,27 @@ mod tests {
 
         add_object_link(
             &conn,
-            "brain://b1/tasks/t1",
-            "brain://b1/records/r1",
+            "synapse://b1/tasks/t1",
+            "synapse://b1/records/r1",
             "related",
         )
         .unwrap();
         add_object_link(
             &conn,
-            "brain://b1/tasks/t1",
-            "brain://b1/records/r2",
+            "synapse://b1/tasks/t1",
+            "synapse://b1/records/r2",
             "derived_from",
         )
         .unwrap();
         add_object_link(
             &conn,
-            "brain://b1/tasks/t1",
-            "brain://b1/episodes/e1",
+            "synapse://b1/tasks/t1",
+            "synapse://b1/episodes/e1",
             "supersedes",
         )
         .unwrap();
 
-        let links = get_object_links(&conn, "brain://b1/tasks/t1").unwrap();
+        let links = get_object_links(&conn, "synapse://b1/tasks/t1").unwrap();
         assert_eq!(links.len(), 3);
 
         let types: Vec<&str> = links.iter().map(|l| l.link_type.as_str()).collect();

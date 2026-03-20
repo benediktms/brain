@@ -222,7 +222,7 @@ Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four d
 
 **What:** OpenViking uses `viking://{scope}/{path}` URIs to address all context objects — resources, memories, skills, sessions, temp objects. Every object has a canonical address.
 
-**Why it fits Brain:** Brain already has multiple ID namespaces (`chunk_id`, `file_id`, `task_id`, `record_id`, `summary_id`) but no unified addressing scheme. Cross-domain references (e.g. record → task, reflection → episode) use raw foreign keys. A `brain://{brain}/{domain}/{id}` URI would unify this.
+**Why it fits Brain:** Brain already has multiple ID namespaces (`chunk_id`, `file_id`, `task_id`, `record_id`, `summary_id`) but no unified addressing scheme. Cross-domain references (e.g. record → task, reflection → episode) use raw foreign keys. A `synapse://{brain}/{domain}/{id}` URI would unify this.
 
 **What NOT to copy:** OpenViking's filesystem metaphor (AGFS virtual filesystem with directories, tree traversal) is over-engineered for Brain's domain model. Brain's entities are typed, not hierarchical — a flat URI resolver is sufficient.
 
@@ -281,7 +281,7 @@ Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four d
 **Delivered:** Schema v25 (`brain_id` on summaries, `fts_summaries`), LanceDB embedding for episodes/reflections, `search_minimal` integration, `memory.reflect` commit mode, cross-brain prepare.
 **Plan:** See [`episodic-memory.md`](./episodic-memory.md) for full implementation details.
 
-### Phase 1 — Unified `brain://` URI / Object Addressing
+### Phase 1 — Unified `synapse://` URI / Object Addressing
 
 **Goal:** Every object in Brain has a canonical URI. Cross-domain references use URIs. MCP tools return URIs.
 **Why second:** Once episodes join the retrieval pool, there are 5 object types (chunks, tasks, records, episodes, reflections) with ad-hoc ID formats. URIs prevent a combinatorial explosion of ID-handling code.
@@ -333,17 +333,17 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 
 ---
 
-### Phase 1 — Unified `brain://` URI / Object Addressing
+### Phase 1 — Unified `synapse://` URI / Object Addressing
 
-#### Issue 1.1: Define `brain://` URI scheme and parser
+#### Issue 1.1: Define `synapse://` URI scheme and parser
 
 **Problem:** Five object types use different ID formats with no unified addressing. Cross-references require knowing the target domain.
 
 **Proposed change:**
-- Define URI format: `brain://{brain_name}/{domain}/{id}` where domain ∈ {`note`, `chunk`, `task`, `record`, `episode`, `reflection`}
-- Implement `BrainUri` type in a new `crates/brain_lib/src/uri.rs`:
+- Define URI format: `synapse://{brain_name}/{domain}/{id}` where domain ∈ {`note`, `chunk`, `task`, `record`, `episode`, `reflection`}
+- Implement `SynapseUri` type in a new `crates/brain_lib/src/uri.rs`:
   ```rust
-  pub struct BrainUri {
+  pub struct SynapseUri {
       pub brain: String,
       pub domain: UriDomain,
       pub id: String,
@@ -357,7 +357,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 - `crates/brain_lib/src/lib.rs` — module declaration
 
 **Dependencies:** None
-**Acceptance criteria:** `"brain://default/episode/01ABC123".parse::<BrainUri>()` works; resolve returns the correct row
+**Acceptance criteria:** `"synapse://default/episode/01ABC123".parse::<SynapseUri>()` works; resolve returns the correct row
 **Size:** M
 
 #### Issue 1.2: Return URIs from MCP tool responses
@@ -385,7 +385,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 **Problem:** Tools like `records.get`, `tasks.get`, `memory.expand` accept only domain-specific IDs.
 
 **Proposed change:**
-- Accept both raw IDs and `brain://` URIs in ID parameters
+- Accept both raw IDs and `synapse://` URIs in ID parameters
 - Parse URI, extract domain and ID, dispatch to correct handler
 - For cross-brain URIs, resolve against the target brain's database
 
@@ -394,7 +394,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 - `crates/brain_lib/src/uri.rs` — resolver
 
 **Dependencies:** Issue 1.1
-**Acceptance criteria:** `memory.expand(id="brain://default/episode/01ABC")` works identically to `memory.expand(id="sum:01ABC")`
+**Acceptance criteria:** `memory.expand(id="synapse://default/episode/01ABC")` works identically to `memory.expand(id="sum:01ABC")`
 **Size:** M
 
 #### Issue 1.4: URI-based cross-domain linking
@@ -746,7 +746,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 | `memory.search_minimal` | `explain` parameter | 3 | No — optional param |
 | `memory.expand` | Handles `sum:` and `ds:` prefixed IDs | 0, 2 | No — additive |
 | All tools returning IDs | Add `uri` field | 1 | No — additive field |
-| All tools accepting IDs | Accept `brain://` URIs | 1 | No — additive input format |
+| All tools accepting IDs | Accept `synapse://` URIs | 1 | No — additive input format |
 | `memory.reflect` | Add `mode` parameter (prepare/commit) | 0 | No — default is current behavior |
 
 ### Backward Compatibility

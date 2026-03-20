@@ -8,7 +8,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
 use crate::tasks::events::{EventType, LabelPayload, TaskEvent};
-use crate::uri::{BrainUri, resolve_id};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -119,7 +119,7 @@ impl TaskLabelsBatch {
             match result {
                 Ok(()) => {
                     let tid = &events[i].task_id;
-                    let uri = BrainUri::for_task(brain_name, tid).to_string();
+                    let uri = SynapseUri::for_task(brain_name, tid).to_string();
                     succeeded.push(json!({ "task_id": tid, "uri": uri }));
                 }
                 Err(e) => {
@@ -185,7 +185,7 @@ impl TaskLabelsBatch {
             let add_ok = results[add_idx].is_ok();
 
             if remove_ok && add_ok {
-                let uri = BrainUri::for_task(brain_name, tid).to_string();
+                let uri = SynapseUri::for_task(brain_name, tid).to_string();
                 succeeded.push(json!({ "task_id": tid, "uri": uri }));
             } else {
                 let mut errors = Vec::new();
@@ -242,7 +242,7 @@ impl TaskLabelsBatch {
             match result {
                 Ok(()) => {
                     let tid = &task_ids[i];
-                    let uri = BrainUri::for_task(brain_name, tid).to_string();
+                    let uri = SynapseUri::for_task(brain_name, tid).to_string();
                     succeeded.push(json!({ "task_id": tid, "uri": uri }));
                 }
                 Err(e) => {

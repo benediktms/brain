@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::uri::{BrainUri, resolve_id};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -129,7 +129,7 @@ impl RecordFetchContent {
         let fetch_brain_name = remote_brain_name
             .as_deref()
             .unwrap_or_else(|| ctx.brain_name());
-        let uri = BrainUri::for_record(fetch_brain_name, &compact_id).to_string();
+        let uri = SynapseUri::for_record(fetch_brain_name, &compact_id).to_string();
         result["uri"] = json!(uri);
 
         if let Some(name) = remote_brain_name {

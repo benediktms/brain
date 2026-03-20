@@ -11,6 +11,7 @@ use brain_lib::metrics::Metrics;
 use brain_lib::ports::{EpisodeReader, EpisodeWriter, ReflectionWriter};
 use brain_lib::prelude::*;
 use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
+use brain_lib::uri::SynapseUri;
 use brain_lib::search_service::SearchService;
 use brain_lib::store::StoreReader;
 use brain_lib::stores::BrainStores;
@@ -152,6 +153,16 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
                     "heading_path": stub.heading_path,
                     "kind": stub.kind,
                 });
+                let uri_brain = stub.brain_name.as_deref().unwrap_or(&ctx.stores.brain_name);
+                let uri = match stub.kind.as_str() {
+                    "episode" => SynapseUri::for_episode(uri_brain, &stub.memory_id),
+                    "reflection" => SynapseUri::for_reflection(uri_brain, &stub.memory_id),
+                    "procedure" => SynapseUri::for_procedure(uri_brain, &stub.memory_id),
+                    "record" => SynapseUri::for_record(uri_brain, &stub.memory_id),
+                    "task" | "task-outcome" => SynapseUri::for_task(uri_brain, &stub.memory_id),
+                    _ => SynapseUri::for_memory(uri_brain, &stub.memory_id),
+                };
+                v["uri"] = json!(uri.to_string());
                 if let Some(ref bn) = stub.brain_name {
                     v["brain_name"] = json!(bn);
                 }
@@ -351,10 +362,12 @@ pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Resul
         }
     }
 
+    let uri = SynapseUri::for_episode(&ctx.stores.brain_name, &summary_id).to_string();
     if ctx.json {
         let out = json!({
             "status": "stored",
             "summary_id": summary_id,
+            "uri": uri,
             "goal": params.goal,
             "tags": params.tags,
             "importance": params.importance,
@@ -362,6 +375,7 @@ pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Resul
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Episode stored: {summary_id}");
+        println!("  URI:        {uri}");
         println!("  Goal:       {}", params.goal);
         println!("  Importance: {}", params.importance);
         if !params.tags.is_empty() {
@@ -425,10 +439,12 @@ pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> R
         }
     }
 
+    let uri = SynapseUri::for_procedure(&ctx.stores.brain_name, &summary_id).to_string();
     if ctx.json {
         let out = json!({
             "status": "stored",
             "summary_id": summary_id,
+            "uri": uri,
             "title": params.title,
             "tags": params.tags,
             "importance": params.importance,
@@ -436,6 +452,7 @@ pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> R
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Procedure stored: {summary_id}");
+        println!("  URI:        {uri}");
         println!("  Title:      {}", params.title);
         println!("  Importance: {}", params.importance);
         if !params.tags.is_empty() {
@@ -759,11 +776,13 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
         }
     }
 
+    let uri = SynapseUri::for_reflection(&ctx.stores.brain_name, &summary_id).to_string();
     if ctx.json {
         let out = json!({
             "mode": "commit",
             "status": "stored",
             "summary_id": summary_id,
+            "uri": uri,
             "title": params.title,
             "source_count": params.source_ids.len(),
             "importance": importance,
@@ -771,6 +790,7 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Reflection stored: {summary_id}");
+        println!("  URI:        {uri}");
         println!("  Title:        {}", params.title);
         println!("  Sources:      {}", params.source_ids.len());
         println!("  Importance:   {importance}");

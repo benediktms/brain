@@ -8,6 +8,8 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
 
+use crate::uri::SynapseUri;
+
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -168,6 +170,9 @@ impl McpTool for RecordSearch {
                         "score": stub.hybrid_score,
                         "kind": stub.kind,
                     });
+                    let uri_brain = stub.brain_name.as_deref().unwrap_or(ctx.brain_name());
+                    let uri = SynapseUri::for_record(uri_brain, record_id).to_string();
+                    result_json["uri"] = json!(uri);
                     if let Some(ref bn) = stub.brain_name {
                         result_json["brain_name"] = json!(bn);
                     }

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
-use crate::uri::{BrainUri, resolve_id};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
@@ -102,7 +102,7 @@ impl TaskClose {
                 .compact_id(&resolved)
                 .unwrap_or_else(|_| resolved.clone());
 
-            let uri = BrainUri::for_task(ctx.brain_name(), &short_id).to_string();
+            let uri = SynapseUri::for_task(ctx.brain_name(), &short_id).to_string();
             total_unblocked += unblocked.len();
             closed.push(json!({
                 "task_id": short_id,

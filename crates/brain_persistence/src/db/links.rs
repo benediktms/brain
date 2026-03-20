@@ -155,18 +155,17 @@ pub fn get_outlinks(conn: &Connection, source_file_id: &str) -> Result<Vec<Strin
 
     let mut result: Vec<String> = Vec::new();
     for (target_file_id, target_path, link_type) in link_rows {
-        if let Some(fid) = target_file_id {
-            if !result.contains(&fid) {
-                result.push(fid);
-            }
+        let resolved_fid = if let Some(fid) = target_file_id {
+            Some(fid)
         } else {
             // Attempt runtime resolution via the files table.
             // Safe: the cursor from the SELECT above is fully consumed before this.
-            if let Some(fid) = resolve_target_file_id(conn, &target_path, &link_type) {
-                if !result.contains(&fid) {
-                    result.push(fid);
-                }
-            }
+            resolve_target_file_id(conn, &target_path, &link_type)
+        };
+        if let Some(fid) = resolved_fid
+            && !result.contains(&fid)
+        {
+            result.push(fid);
         }
     }
     Ok(result)

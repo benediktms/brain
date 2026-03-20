@@ -13,7 +13,7 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
 use crate::records::objects::COMPRESSION_THRESHOLD;
 
-use crate::uri::BrainUri;
+use crate::uri::SynapseUri;
 
 use super::{McpTool, json_response};
 
@@ -165,7 +165,7 @@ impl RecordSaveSnapshot {
             );
         }
 
-        let uri = BrainUri::for_record(ctx.brain_name(), &record_id).to_string();
+        let uri = SynapseUri::for_record(ctx.brain_name(), &record_id).to_string();
 
         let mut result = json!({
             "record_id": record_id,

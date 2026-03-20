@@ -5,14 +5,14 @@ use crate::error::Result;
 /// v28 → v29: Add `object_links` table for URI-based cross-domain linking.
 ///
 /// New table:
-/// - `object_links` — stores directional links between brain:// URIs.
+/// - `object_links` — stores directional links between synapse:// URIs.
 ///   Supports cross-domain linking (task ↔ record, procedure ↔ episode, etc.)
 ///
 /// Schema:
 /// ```sql
 /// CREATE TABLE object_links (
-///     source_uri TEXT NOT NULL,  -- brain://brain/domain/id
-///     target_uri TEXT NOT NULL,  -- brain://brain/domain/id
+///     source_uri TEXT NOT NULL,  -- synapse://brain/domain/id
+///     target_uri TEXT NOT NULL,  -- synapse://brain/domain/id
 ///     link_type  TEXT NOT NULL DEFAULT 'related',
 ///     created_at INTEGER NOT NULL,
 ///     PRIMARY KEY (source_uri, target_uri)
@@ -114,14 +114,14 @@ mod tests {
 
         conn.execute(
             "INSERT INTO object_links (source_uri, target_uri, link_type, created_at)
-             VALUES ('brain://b1/tasks/t1', 'brain://b1/records/r1', 'related', 1000)",
+             VALUES ('synapse://b1/tasks/t1', 'synapse://b1/records/r1', 'related', 1000)",
             [],
         )
         .unwrap();
 
         let link_type: String = conn
             .query_row(
-                "SELECT link_type FROM object_links WHERE source_uri = 'brain://b1/tasks/t1'",
+                "SELECT link_type FROM object_links WHERE source_uri = 'synapse://b1/tasks/t1'",
                 [],
                 |row| row.get(0),
             )
@@ -137,14 +137,14 @@ mod tests {
 
         conn.execute(
             "INSERT INTO object_links (source_uri, target_uri, link_type, created_at)
-             VALUES ('brain://b1/tasks/t1', 'brain://b1/records/r1', 'related', 1000)",
+             VALUES ('synapse://b1/tasks/t1', 'synapse://b1/records/r1', 'related', 1000)",
             [],
         )
         .unwrap();
 
         let result = conn.execute(
             "INSERT INTO object_links (source_uri, target_uri, link_type, created_at)
-             VALUES ('brain://b1/tasks/t1', 'brain://b1/records/r1', 'derived_from', 2000)",
+             VALUES ('synapse://b1/tasks/t1', 'synapse://b1/records/r1', 'derived_from', 2000)",
             [],
         );
         assert!(result.is_err(), "duplicate (source_uri, target_uri) should fail");

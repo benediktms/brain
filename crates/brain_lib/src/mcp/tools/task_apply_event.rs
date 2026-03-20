@@ -10,7 +10,7 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{
     EventType, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
 };
-use crate::uri::{BrainUri, resolve_id};
+use crate::uri::{SynapseUri, resolve_id};
 use crate::utils::{parse_timestamp, task_row_to_json};
 
 use super::McpTool;
@@ -219,7 +219,7 @@ impl TaskApplyEvent {
             }
         }
 
-        // Resolve task_id: strip brain:// URI if present, then auto-generate for task_created
+        // Resolve task_id: strip synapse:// URI if present, then auto-generate for task_created
         // or resolve prefix for other event types (I/O)
         let task_id = match validated.task_id_raw.as_deref() {
             Some(raw_id) => {
@@ -373,7 +373,7 @@ impl TaskApplyEvent {
             .compact_id(&task_id)
             .unwrap_or_else(|_| task_id.clone());
 
-        let uri = BrainUri::for_task(ctx.brain_name(), &short_id).to_string();
+        let uri = SynapseUri::for_task(ctx.brain_name(), &short_id).to_string();
 
         let mut response = json!({
             "task_id": short_id,

@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::uri::{BrainUri, resolve_id};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -100,7 +100,7 @@ impl RecordGet {
             result["brain"] = json!(name);
         }
 
-        let uri = BrainUri::for_record(ctx.brain_name(), &compact_id).to_string();
+        let uri = SynapseUri::for_record(ctx.brain_name(), &compact_id).to_string();
         let record_copy = result.clone();
         if let Some(obj) = result.as_object_mut() {
             obj.insert("record".into(), record_copy);
