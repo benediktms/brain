@@ -133,6 +133,8 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             embedder: &ctx.search.embedder,
             metrics: &ctx.metrics,
         };
+        // TODO(W1-IMPL-EXPLAIN): FederatedPipeline has no search_with_scores.
+        // explain=true is silently ignored for federated searches.
         federated.search(&search_params).await?
     };
 
@@ -386,7 +388,7 @@ pub struct WriteProcedureParams {
 pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> Result<()> {
     use brain_lib::ports::ProcedureWriter;
 
-    let embed_content = format!("{}\n{}", params.title, params.steps);
+    let embed_content = format!("{}\n\n{}", params.title, params.steps);
 
     let summary_id = ctx.stores.db().store_procedure(
         &params.title,
