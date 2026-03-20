@@ -627,23 +627,52 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Records { json, action } => {
             use commands::records::RecordsCtx;
-            let ctx = RecordsCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
 
             match action {
-                RecordsAction::Verify { verbose } => {
-                    commands::records::verify(&ctx, verbose)?;
+                RecordsAction::Search {
+                    query,
+                    k,
+                    budget,
+                    tags,
+                    brains,
+                } => {
+                    use commands::memory::run::MemoryCtx;
+                    use commands::records::{RecordsSearchParams, search};
+                    let ctx =
+                        MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                            .await?;
+                    search(
+                        &ctx,
+                        RecordsSearchParams {
+                            query,
+                            k,
+                            budget,
+                            tags,
+                            brains,
+                        },
+                    )
+                    .await?;
                 }
-                RecordsAction::Gc { dry_run } => {
-                    commands::records::gc(&ctx, dry_run)?;
-                }
-                RecordsAction::Evict { id, reason } => {
-                    commands::records::evict(&ctx, &id, reason)?;
-                }
-                RecordsAction::Pin { id } => {
-                    commands::records::pin(&ctx, &id)?;
-                }
-                RecordsAction::Unpin { id } => {
-                    commands::records::unpin(&ctx, &id)?;
+                action => {
+                    let ctx = RecordsCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+                    match action {
+                        RecordsAction::Verify { verbose } => {
+                            commands::records::verify(&ctx, verbose)?;
+                        }
+                        RecordsAction::Gc { dry_run } => {
+                            commands::records::gc(&ctx, dry_run)?;
+                        }
+                        RecordsAction::Evict { id, reason } => {
+                            commands::records::evict(&ctx, &id, reason)?;
+                        }
+                        RecordsAction::Pin { id } => {
+                            commands::records::pin(&ctx, &id)?;
+                        }
+                        RecordsAction::Unpin { id } => {
+                            commands::records::unpin(&ctx, &id)?;
+                        }
+                        RecordsAction::Search { .. } => unreachable!(),
+                    }
                 }
             }
         }
@@ -662,6 +691,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     budget,
                     tags,
                     brains,
+                    explain,
                 } => {
                     commands::memory::run::search(
                         &ctx,
@@ -672,6 +702,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             budget,
                             tags,
                             brains,
+                            explain,
                         },
                     )
                     .await?;

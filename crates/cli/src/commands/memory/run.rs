@@ -63,6 +63,7 @@ pub struct SearchParams2 {
     pub budget: usize,
     pub tags: Vec<String>,
     pub brains: Vec<String>,
+    pub explain: bool,
 }
 
 pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
@@ -81,7 +82,11 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             &ctx.search.embedder,
             &ctx.metrics,
         );
-        pipeline.search(&search_params).await?
+        if params.explain {
+            pipeline.search_with_scores(&search_params).await?
+        } else {
+            pipeline.search(&search_params).await?
+        }
     } else {
         use brain_lib::config::{list_brain_keys, open_remote_search_context};
         use brain_lib::query_pipeline::FederatedPipeline;
@@ -148,6 +153,16 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
                 if let Some(ref bn) = stub.brain_name {
                     v["brain_name"] = json!(bn);
                 }
+                if let Some(ref ss) = stub.signal_scores {
+                    v["signals"] = json!({
+                        "vector": ss.vector,
+                        "keyword": ss.keyword,
+                        "recency": ss.recency,
+                        "links": ss.links,
+                        "tag_match": ss.tag_match,
+                        "importance": ss.importance,
+                    });
+                }
                 v
             })
             .collect();
@@ -164,14 +179,35 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             println!("No results found.");
             return Ok(());
         }
-        let mut table = MarkdownTable::new(vec!["ID", "TITLE", "KIND", "SCORE"]);
+        let headers = if params.explain {
+            vec!["ID", "TITLE", "KIND", "SCORE", "VECTOR", "BM25"]
+        } else {
+            vec!["ID", "TITLE", "KIND", "SCORE"]
+        };
+        let mut table = MarkdownTable::new(headers);
         for stub in &result.results {
-            table.add_row(vec![
-                stub.memory_id.clone(),
-                stub.title.clone(),
-                stub.kind.clone(),
-                format!("{:.4}", stub.hybrid_score),
-            ]);
+            if params.explain {
+                let (vector, bm25) = stub
+                    .signal_scores
+                    .as_ref()
+                    .map(|ss| (format!("{:.4}", ss.vector), format!("{:.4}", ss.keyword)))
+                    .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
+                table.add_row(vec![
+                    stub.memory_id.clone(),
+                    stub.title.clone(),
+                    stub.kind.clone(),
+                    format!("{:.4}", stub.hybrid_score),
+                    vector,
+                    bm25,
+                ]);
+            } else {
+                table.add_row(vec![
+                    stub.memory_id.clone(),
+                    stub.title.clone(),
+                    stub.kind.clone(),
+                    format!("{:.4}", stub.hybrid_score),
+                ]);
+            }
         }
         print!("{table}");
         println!();

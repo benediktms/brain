@@ -37,4 +37,26 @@ pub(crate) enum RecordsAction {
         /// Record ID (full or prefix)
         id: String,
     },
+
+    /// Search records using semantic + keyword hybrid retrieval
+    Search {
+        /// Natural-language search query
+        query: String,
+
+        /// Maximum number of results
+        #[arg(short, long, default_value = "10")]
+        k: usize,
+
+        /// Token budget
+        #[arg(short, long, default_value = "800")]
+        budget: usize,
+
+        /// Tags to filter (comma-delimited)
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+
+        /// Search across specific brains (repeatable). Use 'all' for all registered brains.
+        #[arg(long = "brain", value_name = "NAME_OR_ID", num_args = 1)]
+        brains: Vec<String>,
+    },
 }

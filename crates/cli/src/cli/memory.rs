@@ -48,6 +48,10 @@ pub(crate) enum MemoryAction {
         /// Search across specific brains (repeatable). Use 'all' for all registered brains.
         #[arg(long = "brain", value_name = "NAME_OR_ID", num_args = 1)]
         brains: Vec<String>,
+
+        /// Show per-result signal score breakdowns
+        #[arg(long)]
+        explain: bool,
     },
 
     /// Expand memory stubs to full content
