@@ -1,13 +1,8 @@
-//! TDD integration tests for directory/tag hierarchy summaries.
+//! Integration tests for directory/tag hierarchy summaries.
 //!
-//! Red phase: stub functions exist and compile. Tests assert the intended
-//! contract so that implementing `generate_scope_summary`, `get_scope_summary`,
-//! `mark_scope_stale`, and `search_derived_summaries` in `hierarchy.rs` will
-//! make them pass without further test changes.
-//!
-//! The `derived_summaries` table does not yet exist in the main migration chain.
-//! Tests create it via `Db::with_write_conn` after opening an in-memory database,
-//! keeping the tests self-contained and independent of the migration schedule.
+//! Tests verify that `generate_scope_summary`, `get_scope_summary`,
+//! `mark_scope_stale`, and `search_derived_summaries` operate correctly
+//! against an in-memory database with the `derived_summaries` schema.
 
 use brain_lib::db::Db;
 use brain_lib::hierarchy::{
@@ -76,7 +71,7 @@ fn setup() -> Db {
     db
 }
 
-/// Insert a note chunk under the given directory path via `with_write_conn`.
+/// Insert a note chunk under the given directory path.
 fn insert_note(db: &Db, chunk_id: &str, path: &str, content: &str) {
     db.with_write_conn(|conn| {
         conn.execute(
@@ -97,8 +92,7 @@ fn insert_note(db: &Db, chunk_id: &str, path: &str, content: &str) {
     .expect("insert_note");
 }
 
-/// Directly insert a completed `derived_summaries` row (bypasses the stub).
-/// Used to pre-seed rows so that retrieval and staleness tests can operate.
+/// Directly insert a `derived_summaries` row for seeding tests.
 fn insert_derived_summary(
     db: &Db,
     id: &str,
@@ -127,26 +121,22 @@ fn insert_derived_summary(
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-/// The stub compiles and returns an error until real logic is wired in.
-/// This is the canonical TDD red-phase assertion for `generate_scope_summary`.
+/// generate_scope_summary collects chunk content under the directory and
+/// persists an extractive summary.
 #[test]
-fn test_generate_scope_summary_stub_returns_err() {
+fn test_generate_scope_summary_creates_summary() {
     let db = setup();
     insert_note(&db, "chunk:auth1", "src/auth/handler.rs", "JWT token validation logic");
     insert_note(&db, "chunk:auth2", "src/auth/middleware.rs", "Auth middleware for request pipeline");
 
     let result = generate_scope_summary(&db, &ScopeType::Directory, "src/auth/");
+    assert!(result.is_ok(), "generate_scope_summary must succeed: {:?}", result.err());
 
-    // Stub must return Err — not yet implemented.
-    assert!(
-        result.is_err(),
-        "generate_scope_summary stub must return Err until implemented"
-    );
+    let id = result.unwrap();
+    assert!(!id.is_empty(), "returned ID must be non-empty");
 }
 
-/// Once generation is implemented the summary row must be persisted and
-/// retrievable via `get_scope_summary`. This test operates in red-phase today:
-/// `get_scope_summary` returns `Ok(None)`. When implemented it returns `Some(_)`.
+/// After generation, the summary is retrievable via get_scope_summary.
 #[test]
 fn test_generated_summary_is_persisted_and_retrievable() {
     let db = setup();
@@ -166,22 +156,20 @@ fn test_generated_summary_is_persisted_and_retrievable() {
     let summary: Option<DerivedSummary> =
         get_scope_summary(&db, &ScopeType::Directory, "src/auth/").unwrap();
 
-    // Stub always returns None — this assertion drives the implementation.
-    // When get_scope_summary is wired up it will return Some(_).
     assert!(
-        summary.is_none(),
-        "stub returns None — real implementation must query derived_summaries and return Some"
+        summary.is_some(),
+        "get_scope_summary must return the persisted summary"
     );
+    let s = summary.unwrap();
+    assert_eq!(s.scope_value, "src/auth/");
+    assert!(s.content.contains("JWT validation"));
 }
 
-/// After re-indexing a file under `src/auth/`, the directory summary must be
-/// marked stale. `mark_scope_stale` returns 0 (stub); when implemented it
-/// must return 1 and UPDATE the row's `stale` column.
+/// mark_scope_stale sets stale=1 on the matching summary row.
 #[test]
 fn test_reindex_marks_directory_summary_stale() {
     let db = setup();
 
-    // Seed a fresh summary.
     insert_derived_summary(
         &db,
         "stale-test-id-0001",
@@ -204,23 +192,28 @@ fn test_reindex_marks_directory_summary_stale() {
         .unwrap();
     assert_eq!(fresh, 0, "summary must start as fresh (stale=0)");
 
-    // Stub returns 0 (no-op). Real implementation must UPDATE and return 1.
     let updated = mark_scope_stale(&db, &ScopeType::Directory, "src/auth/").unwrap();
-    assert_eq!(
-        updated, 0,
-        "stub returns 0 — real implementation must return 1 and set stale=1"
-    );
+    assert_eq!(updated, 1, "mark_scope_stale must update 1 row");
+
+    // Verify stale=1 in the DB.
+    let stale: i64 = db
+        .with_read_conn(|conn| {
+            conn.query_row(
+                "SELECT stale FROM derived_summaries WHERE scope_value = 'src/auth/'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
+        })
+        .unwrap();
+    assert_eq!(stale, 1, "summary must be marked stale after mark_scope_stale");
 }
 
-/// Derived summaries must appear in search results. This test seeds a row and
-/// asserts the stub returns an empty vec (red phase). When implemented,
-/// `search_derived_summaries` must query `fts_derived_summaries` and return
-/// the matching row.
+/// search_derived_summaries finds matching rows via FTS.
 #[test]
 fn test_derived_summary_appears_in_search_results() {
     let db = setup();
 
-    // Seed a directory summary containing auth-related content.
     insert_derived_summary(
         &db,
         "search-test-id-0001",
@@ -233,9 +226,9 @@ fn test_derived_summary_appears_in_search_results() {
     let results: Vec<DerivedSummary> =
         search_derived_summaries(&db, "authentication", 10).unwrap();
 
-    // Stub returns empty — drives the implementation to query fts_derived_summaries.
     assert!(
-        results.is_empty(),
-        "stub returns empty vec — real implementation must search fts_derived_summaries and return matching rows"
+        !results.is_empty(),
+        "search_derived_summaries must return matching rows"
     );
+    assert_eq!(results[0].scope_value, "src/auth/");
 }
