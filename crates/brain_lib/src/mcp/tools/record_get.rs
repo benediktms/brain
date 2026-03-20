@@ -96,11 +96,14 @@ impl RecordGet {
             "links": links_json,
         });
 
-        if let Some(name) = remote_brain_name {
+        let uri_brain = if let Some(ref name) = remote_brain_name {
             result["brain"] = json!(name);
-        }
+            name.as_str()
+        } else {
+            ctx.brain_name()
+        };
 
-        let uri = SynapseUri::for_record(ctx.brain_name(), &compact_id).to_string();
+        let uri = SynapseUri::for_record(uri_brain, &compact_id).to_string();
         if let Some(obj) = result.as_object_mut() {
             obj.insert("uri".into(), json!(uri));
         }
