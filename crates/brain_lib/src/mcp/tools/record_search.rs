@@ -6,8 +6,9 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
 
-use super::McpTool;
+use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct Params {
@@ -81,30 +82,151 @@ impl McpTool for RecordSearch {
     fn call<'a>(
         &'a self,
         params: Value,
-        _ctx: &'a McpContext,
+        ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            // Validate params first — if query is missing, return a validation error.
-            let _params: Params = match serde_json::from_value(params) {
+            let Some(store) = ctx.store() else {
+                return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
+            };
+            let Some(embedder) = ctx.embedder() else {
+                return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
+            };
+
+            let params: Params = match serde_json::from_value(params) {
                 Ok(p) => p,
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            ToolCallResult::error("records.search not yet implemented")
+            let k = params.k as usize;
+            // Over-request to account for post-filter attrition.
+            let over_k = k * 3;
+
+            let search_params = SearchParams::new(
+                &params.query,
+                "lookup",
+                params.budget_tokens as usize,
+                over_k,
+                &params.tags,
+            );
+
+            let search_result = if params.brains.is_empty() {
+                // Single-brain path.
+                let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
+                match pipeline.search(&search_params).await {
+                    Ok(r) => r,
+                    Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
+                }
+            } else {
+                // Federated path — open remote brain contexts.
+                let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
+                    match crate::config::list_brain_keys(ctx.brain_home()) {
+                        Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
+                        Err(e) => {
+                            return ToolCallResult::error(format!("Failed to list brains: {e}"));
+                        }
+                    }
+                } else {
+                    params.brains.clone()
+                };
+
+                let mut brains: Vec<(String, Option<crate::store::StoreReader>)> = Vec::new();
+                brains.push((ctx.brain_name().to_string(), Some(store.clone())));
+
+                for key in &brain_keys {
+                    if key == ctx.brain_name() {
+                        continue;
+                    }
+                    match crate::config::open_remote_search_context(
+                        ctx.brain_home(),
+                        key,
+                        std::path::Path::new(""),
+                        embedder,
+                    )
+                    .await
+                    {
+                        Ok(Some(remote)) => {
+                            brains.push((remote.brain_name, remote.store));
+                        }
+                        Ok(None) => {
+                            tracing::warn!(brain = %key, "brain not found in registry, skipping");
+                        }
+                        Err(e) => {
+                            tracing::warn!(brain = %key, error = %e, "failed to open remote brain, skipping");
+                        }
+                    }
+                }
+
+                let federated = FederatedPipeline {
+                    db: ctx.db(),
+                    brains,
+                    embedder,
+                    metrics: &ctx.metrics,
+                };
+
+                match federated.search(&search_params).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Federated search failed: {e}"));
+                    }
+                }
+            };
+
+            // Filter to record-kind only, then truncate to k.
+            let record_stubs: Vec<_> = search_result
+                .results
+                .iter()
+                .filter(|stub| stub.kind == "record")
+                .take(k)
+                .collect();
+
+            let used_tokens_est: usize = record_stubs.iter().map(|s| s.token_estimate).sum();
+            let num_results = record_stubs.len();
+
+            let results_json: Vec<Value> = record_stubs
+                .iter()
+                .map(|stub| {
+                    // Extract record_id from memory_id: "record:<ID>:<chunk>" → "<ID>"
+                    let record_id = stub
+                        .memory_id
+                        .strip_prefix("record:")
+                        .and_then(|s| s.rsplit_once(':').map(|(id, _)| id))
+                        .unwrap_or(&stub.memory_id);
+
+                    let mut result_json = json!({
+                        "record_id": record_id,
+                        "memory_id": stub.memory_id,
+                        "title": stub.title,
+                        "summary": stub.summary_2sent,
+                        "score": stub.hybrid_score,
+                        "kind": stub.kind,
+                    });
+                    if let Some(ref bn) = stub.brain_name {
+                        result_json["brain_name"] = json!(bn);
+                    }
+                    result_json
+                })
+                .collect();
+
+            let response = json!({
+                "budget_tokens": params.budget_tokens,
+                "used_tokens_est": used_tokens_est,
+                "result_count": num_results,
+                "total_available": search_result.total_available,
+                "results": results_json,
+            });
+
+            json_response(&response)
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use serde_json::json;
 
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
     use super::RecordSearch;
-    use crate::mcp::McpContext;
     use crate::mcp::protocol::ToolDefinition;
     use crate::mcp::tools::McpTool;
 

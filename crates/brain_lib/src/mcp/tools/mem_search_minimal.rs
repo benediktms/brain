@@ -133,11 +133,18 @@ impl McpTool for MemSearchMinimal {
             .with_mode(mode);
 
             let search_result = if params.brains.is_empty() {
-                // Single-brain path — unchanged behaviour.
+                // Single-brain path.
                 let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
-                match pipeline.search(&search_params).await {
-                    Ok(r) => r,
-                    Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
+                if params.explain {
+                    match pipeline.search_with_scores(&search_params).await {
+                        Ok(r) => r,
+                        Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
+                    }
+                } else {
+                    match pipeline.search(&search_params).await {
+                        Ok(r) => r,
+                        Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
+                    }
                 }
             } else {
                 // Federated path — open remote brain contexts.
@@ -189,6 +196,8 @@ impl McpTool for MemSearchMinimal {
                     metrics: &ctx.metrics,
                 };
 
+                // TODO(W1-IMPL-EXPLAIN): FederatedPipeline has no search_with_scores.
+                // explain=true is silently ignored for federated searches.
                 match federated.search(&search_params).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -215,6 +224,16 @@ impl McpTool for MemSearchMinimal {
                     });
                     if let Some(ref bn) = stub.brain_name {
                         stub_json["brain_name"] = json!(bn);
+                    }
+                    if let Some(ref scores) = stub.signal_scores {
+                        stub_json["signals"] = json!({
+                            "sim_vector": scores.vector,
+                            "bm25": scores.keyword,
+                            "recency": scores.recency,
+                            "links": scores.links,
+                            "tag_match": scores.tag_match,
+                            "importance": scores.importance,
+                        });
                     }
                     stub_json
                 })
