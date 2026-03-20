@@ -99,6 +99,43 @@ pub fn store_reflection(
     Ok(summary_id)
 }
 
+/// Store a procedure in the summaries table.
+///
+/// A procedure captures a reusable sequence of steps. The `steps` argument
+/// becomes the `content` column. Returns the `summary_id`.
+///
+/// NOTE: requires the v28 migration that adds `'procedure'` to the
+/// `kind` CHECK constraint. Tests should create an in-memory schema that
+/// already includes `'procedure'` in the allowed kinds.
+pub fn store_procedure(
+    conn: &Connection,
+    title: &str,
+    steps: &str,
+    tags: &[String],
+    importance: f64,
+    brain_id: &str,
+) -> Result<String> {
+    let summary_id = Ulid::new().to_string();
+    let now = crate::utils::now_ts();
+    let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
+
+    conn.execute(
+        "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, valid_from, created_at, updated_at)
+         VALUES (?1, 'procedure', ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
+        rusqlite::params![
+            summary_id,
+            title,
+            steps,
+            tags_json,
+            importance,
+            brain_id,
+            now,
+        ],
+    )?;
+
+    Ok(summary_id)
+}
+
 /// Map a rusqlite row to a `SummaryRow`.
 ///
 /// Expects 13 columns in this exact order:

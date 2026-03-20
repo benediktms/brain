@@ -464,6 +464,8 @@ mod tests {
         );
         assert_eq!(derive_kind("record:BRN-01ABC:0", None), "record");
         assert_eq!(derive_kind("sum:01JXYZ1234", None), "episode");
+        // TDD: procedure kind — will FAIL until derive_kind is updated to handle "procedure"
+        assert_eq!(derive_kind("sum:ABC123", Some("procedure")), "procedure");
     }
 
     #[test]

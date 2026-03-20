@@ -514,33 +514,42 @@ On critical events (compaction warning, build failure, sentinel rejection), hook
 - Not all terminals support audible bells; this is best-effort
 <!-- unimatrix:tone:end -->
 
-<!-- neural_link:start:55bef6bb -->
+<!-- neural_link:start:66ac518d -->
 ## neural_link — Multi-Agent Coordination
 
-neural_link provides coordination between agents working on related tasks.
-It is available as an MCP server — all tools below are MCP tool calls.
+neural_link provides real-time coordination between agents via an MCP server.
+All tools below are MCP tool calls prefixed with `neural_link` (e.g., `mcp__neural_link__room_open`).
 
 ### When to use neural_link
 
-Use neural_link when multiple agents are dispatched and their work is related or overlapping:
+**Always use neural_link when 2 or more subagents are dispatched.** No exceptions.
+The lead opens a room before dispatching, every subagent joins the room, and the lead participates alongside them.
 
-- **Partitioned work on shared files** — agents analyzing, reviewing, or modifying files that may affect each other
-- **Sequential handoffs** — one agent's output is another agent's input
-- **Parallel work with shared context** — agents need to share findings, flag blockers, or agree on decisions
-- **Review workflows** — an agent requests review from another agent
+### Roles
 
-Do NOT use neural_link for fully independent parallel tasks where agents have no interaction.
+| Role | Who | Responsibilities |
+|------|-----|------------------|
+| **Lead** | The session that dispatches subagents | Opens the room before dispatch. Joins the room after dispatch. Monitors messages, answers questions, asks questions, unblocks agents. Closes the room when all work is done. Persists the summary. |
+| **Subagent** | Each dispatched agent | Joins the room on activation. Communicates findings, blockers, and questions. Reads inbox periodically. Sends `handoff` before returning. |
 
 ### Coordination flow
 
-1. **Open a room** — one agent creates a room for the coordination concern (`room_open`)
-2. **Join** — each participating agent joins the room (`room_join`)
-3. **Communicate** — agents exchange typed messages (`message_send`)
-4. **Read and acknowledge** — agents read their inbox (`inbox_read`) and acknowledge messages (`message_ack`)
-5. **Wait when blocked** — if an agent needs another agent's output before continuing, it blocks with `wait_for`
-6. **Check status mid-flight** — use `thread_summarize` to see decisions, open questions, and blockers without closing the room
-7. **Close** — when coordination is complete, close the room with a resolution (`room_close`). If brains were declared on `room_open`, the server persists the full conversation as a brain artifact. Returns structured extraction data (decisions, open questions, blockers, participant list, message count, artifact record ID).
-8. **Present the summary** — the orchestrating agent uses the structured extraction from `room_close` (decisions, open questions, blockers, artifact record ID) to compose a narrative summary for the user.
+#### Lead (dispatcher)
+
+1. **Open a room** — call `room_open` with a descriptive `title` and `purpose` BEFORE dispatching any subagents. If working with brain-tracked projects, pass `brains` to enable artifact persistence on close.
+2. **Dispatch subagents** — include the `room_id` in every subagent's prompt along with the instruction to join the room and communicate.
+3. **Join the room** — after dispatching, the lead calls `room_join` to become a participant (use a stable identifier like `lead` or your session designation as `participant_id`).
+4. **Monitor and participate** — while subagents work, the lead periodically reads the room via `inbox_read`. Answer questions from subagents. Ask questions if something is unclear. Send `decision` messages to resolve ambiguities. Unblock agents that report `blocker` messages.
+5. **Close the room** — once all subagents have sent `handoff` and their work is complete, call `room_close` with a resolution. The server persists the full conversation as a brain artifact (if brains were declared) and returns structured extraction data: decisions, open questions, blockers, participant list, message count, and artifact record ID.
+6. **Persist and present** — use the structured extraction from `room_close` to compose a narrative summary for the user. The artifact record ID links to the full conversation for future reference.
+
+#### Subagent (participant)
+
+1. **Join** — on activation, if a `room_id` was provided in your prompt, call `room_join` with the room_id, your designation as `participant_id` and `display_name`, and role `member`.
+2. **Communicate** — send typed messages via `message_send` as you work. Share findings, flag blockers, ask questions. Use the appropriate message `kind` (see below).
+3. **Read inbox** — call `inbox_read` periodically (after completing logical units of work). Process and `message_ack` all messages promptly. If the lead or another subagent asks a question, answer it. If a blocker is raised that you can resolve, respond.
+4. **Wait when blocked** — if you cannot proceed until another agent provides something, use `wait_for` to block until the matching message arrives. Do not poll.
+5. **Handoff** — when your work is complete, send a `handoff` message summarizing what you accomplished and any open items. This is mandatory — silent completion causes deadlocks.
 
 ### Message kinds
 
@@ -549,10 +558,10 @@ Every message has a `kind` that signals its intent. Use the right kind — other
 | Kind | When to use |
 |------|-------------|
 | `finding` | You discovered something another agent needs to know |
-| `handoff` | Your part is done — another agent should take over |
+| `handoff` | Your part is done — summarize results and hand over |
 | `blocker` | You cannot proceed until something is resolved |
 | `decision` | Recording a choice that affects other agents |
-| `question` | Asking another agent for information |
+| `question` | Asking another agent (or the lead) for information |
 | `answer` | Responding to a question |
 | `review_request` | Asking another agent to review your work |
 | `review_result` | Delivering review feedback |
@@ -561,7 +570,7 @@ Every message has a `kind` that signals its intent. Use the right kind — other
 
 ### Waiting for other agents
 
-`wait_for` is a blocking call. When you call it, your tool call is held open on the server until a matching message arrives or the timeout expires (default: 30s, max: 120s). You are effectively paused.
+`wait_for` is a blocking call. Your tool call is held open on the server until a matching message arrives or the timeout expires (default: 30s, max: 120s). You are effectively paused.
 
 - **Use `wait_for` when you have nothing else to do** until a specific message arrives (e.g., waiting for a handoff, a review result, or an answer to your question)
 - **Do not use `wait_for` if you have other work to do** — use `inbox_read` periodically instead
@@ -581,14 +590,14 @@ Every message has a `kind` that signals its intent. Use the right kind — other
 
 ### Rules
 
-1. **Always acknowledge messages you have read.** Call `message_ack` after processing inbox messages. This prevents your inbox from growing unbounded and signals to the sender that you received the message.
+1. **Always acknowledge messages you have read.** Call `message_ack` after processing inbox messages. Unacknowledged messages reappear in your inbox.
 2. **One room per coordination concern.** Do not multiplex unrelated work into a single room.
 3. **Close rooms when done.** Always call `room_close` with a resolution (`completed`, `cancelled`, `superseded`, `failed`). Unclosed rooms leak state.
-4. **Send `handoff` before going idle.** If you are done with your part and another agent is waiting, send a handoff message. Silent completion causes deadlocks.
-5. **Never ignore a `blocker`.** If you receive a blocker message, respond to it or escalate. Dropping blockers stalls the coordination.
+4. **Send `handoff` before returning.** If you are a subagent and your work is done, send a handoff message. Silent completion causes deadlocks.
+5. **Never ignore a `blocker`.** If you receive a blocker message, respond to it or escalate. Dropping blockers stalls the entire coordination.
 6. **Use `thread_id` in multi-topic rooms.** If a room covers multiple sub-topics, tag messages with a thread ID to keep conversations separable.
-7. **Do not use neural_link as a logging system.** Rooms are for agent-to-agent communication. Use brain records for persisting artifacts and findings.
-8. **Do not send messages to yourself.** If you need to record something, use the appropriate persistence tool, not a self-addressed message.
+7. **Do not use neural_link as a logging system.** Rooms are for agent-to-agent communication. Use brain records for persistence.
+8. **Do not send messages to yourself.** Use the appropriate persistence tool instead.
 9. **Do not poll `inbox_read` in a loop.** Use `wait_for` to block until a message arrives. Polling wastes resources.
-10. **The orchestrator presents the summary.** `room_close` returns structured extraction data (decisions, open questions, blockers, artifact record ID). The lead agent composes a narrative summary for the user from this data. The server does not generate the summary text.
+10. **The lead persists the summary.** After `room_close`, the lead uses the structured extraction (decisions, open questions, blockers, artifact record ID) to compose and present a summary to the user.
 <!-- neural_link:end -->
