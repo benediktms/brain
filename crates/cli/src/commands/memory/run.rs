@@ -513,6 +513,61 @@ pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Res
 }
 
 // ---------------------------------------------------------------------------
+// summarize_scope
+// ---------------------------------------------------------------------------
+
+pub async fn summarize_scope(
+    ctx: &MemoryCtx,
+    scope_type: &str,
+    scope_value: &str,
+    regenerate: bool,
+) -> Result<()> {
+    use brain_lib::hierarchy::{DerivedSummary, ScopeType, generate_scope_summary, get_scope_summary};
+
+    let st = match scope_type {
+        "directory" => ScopeType::Directory,
+        "tag" => ScopeType::Tag,
+        other => bail!("Invalid scope_type '{other}'. Must be 'directory' or 'tag'."),
+    };
+
+    let summary: DerivedSummary = if regenerate {
+        let id = generate_scope_summary(ctx.stores.db(), &st, scope_value)?;
+        get_scope_summary(ctx.stores.db(), &st, scope_value)?
+            .ok_or_else(|| anyhow::anyhow!("Generated summary '{id}' not found after insert"))?
+    } else {
+        match get_scope_summary(ctx.stores.db(), &st, scope_value)? {
+            Some(s) => s,
+            None => {
+                let id = generate_scope_summary(ctx.stores.db(), &st, scope_value)?;
+                get_scope_summary(ctx.stores.db(), &st, scope_value)?
+                    .ok_or_else(|| anyhow::anyhow!("Generated summary '{id}' not found after insert"))?
+            }
+        }
+    };
+
+    if ctx.json {
+        let out = json!({
+            "scope_type": summary.scope_type,
+            "scope_value": summary.scope_value,
+            "content": summary.content,
+            "stale": summary.stale,
+            "generated_at": summary.generated_at,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Scope summary | {}:{}", summary.scope_type, summary.scope_value);
+        if summary.stale {
+            println!("  [stale — use --regenerate to refresh]");
+        }
+        println!("  Generated: {}", summary.generated_at);
+        println!();
+        println!("{}", summary.content);
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // reflect_prepare
 // ---------------------------------------------------------------------------
 

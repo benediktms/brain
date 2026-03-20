@@ -25,6 +25,7 @@ serde_json = { workspace = true }
 walkdir = "2"
 blake3 = { workspace = true }
 ulid = { workspace = true }
+rusqlite = { workspace = true }
 serde = { workspace = true }
 # File watching
 notify-debouncer-full = "0.7"

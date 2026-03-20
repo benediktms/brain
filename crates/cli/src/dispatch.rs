@@ -751,6 +751,14 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     )
                     .await?;
                 }
+                MemoryAction::SummarizeScope {
+                    scope_type,
+                    scope_value,
+                    regenerate,
+                } => {
+                    commands::memory::run::summarize_scope(&ctx, &scope_type, &scope_value, regenerate)
+                        .await?;
+                }
                 MemoryAction::Reflect {
                     commit,
                     topic,

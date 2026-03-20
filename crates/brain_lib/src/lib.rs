@@ -9,6 +9,7 @@ pub mod embedder;
 pub use brain_persistence::error;
 pub mod fs_permissions;
 pub mod hash_gate;
+pub mod hierarchy;
 pub mod ipc;
 pub use brain_persistence::links;
 pub mod mcp;

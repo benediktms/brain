@@ -172,6 +172,36 @@ pub(crate) enum MemoryAction {
         gap_seconds: i64,
     },
 
+    /// Generate or retrieve a scope summary for a directory or tag
+    #[command(
+        name = "summarize-scope",
+        visible_alias = "ss",
+        long_about = "Generate or retrieve a derived summary for a directory or tag scope.\n\n\
+            Collects all chunk content matching the scope and produces an extractive summary. \
+            Use --regenerate to force a fresh summary even if one already exists.\n\n\
+            Scope types:\n  \
+            - directory   Summarize all chunks under a directory path\n  \
+            - tag         Summarize all chunks with a given tag",
+        after_help = "EXAMPLES:\n  \
+            brain memory summarize-scope --scope-type directory --scope-value src/auth\n  \
+            brain memory summarize-scope --scope-type tag --scope-value rust\n  \
+            brain memory summarize-scope --scope-type directory --scope-value src/auth --regenerate\n  \
+            brain memory ss --scope-type tag --scope-value debugging --regenerate"
+    )]
+    SummarizeScope {
+        /// Scope type: "directory" or "tag"
+        #[arg(long, required = true)]
+        scope_type: String,
+
+        /// Scope value: directory path or tag name
+        #[arg(long, required = true)]
+        scope_value: String,
+
+        /// Force regeneration of the summary even if one exists
+        #[arg(long)]
+        regenerate: bool,
+    },
+
     /// Retrieve source material for reflection (prepare) or store a reflection (commit)
     #[command(
         long_about = "Two-phase episodic reflection.\n\n\

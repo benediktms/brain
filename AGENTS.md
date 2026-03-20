@@ -17,7 +17,7 @@ just check        # cargo check
 just install      # Build release binary and symlink to ~/bin/brain
 ```
 
-<!-- brain:start:d84b50ab -->
+<!-- brain:start:7e68612e -->
 ## Build & Test
 
 ```bash
@@ -57,8 +57,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
 **Records tools:**
-- `records.create_artifact` — Create a new artifact record with `text` (plain) or `data` (base64) content.
-- `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content.
+- `records.create_artifact` — Create a new artifact record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes. Records created cross-brain are stored immediately but may not appear in vector search until the target brain's daemon indexes them.
+- `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes.
 - `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution). Supports `brain` param for cross-brain access.
 - `records.list` — List records with optional filters (kind, status, tag, task_id). Supports `brain` param for cross-brain access.
 - `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata. Supports `brain` param for cross-brain access.
@@ -119,7 +119,11 @@ brain memory write-episode --goal "..." --actions "..." --outcome "..."
 brain memory reflect --topic "architecture"  # Prepare: get source material
 brain memory reflect --commit --title "..." --content "..." --source-ids ep1,ep2
 
-# Records
+# Records (cross-brain writes supported via --brain)
+brain artifacts create --title "Report" --file report.md
+brain artifacts create --title "Report" --brain other-brain --stdin
+brain snapshots save --title "State" --file state.json
+brain snapshots save --title "State" --brain other-brain --stdin
 brain artifacts restore <id>          # Print artifact content to stdout
 brain artifacts restore <id> -o file  # Write artifact content to file
 brain snapshots restore <id>          # Print snapshot content to stdout
