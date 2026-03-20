@@ -599,7 +599,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 25);
+        assert_eq!(tools.len(), 26);
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"memory.search_minimal"));
