@@ -1,9 +1,12 @@
 //! Hierarchy summaries: directory and tag scope aggregation.
 //!
+//! **STATUS: WIP** — summary generation uses naive extractive concatenation
+//! (first 200 chars per chunk). Quality summarization requires an external LLM
+//! via the planned job queue (see task BRN-01KM5Z5TMJV0ANN0H6QCHVB9KW).
+//!
 //! This module provides types and functions for generating and querying
 //! derived summaries scoped to a directory path or tag. Summaries are
-//! extractive aggregations of chunk content for a given scope, stored in the
-//! `derived_summaries` table and indexed for full-text search.
+//! stored in the `derived_summaries` table and indexed for full-text search.
 //!
 //! All database operations are performed through the [`DerivedSummaryStore`]
 //! port trait so that callers are not coupled to the concrete `Db` type.

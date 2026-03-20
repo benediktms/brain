@@ -1,6 +1,10 @@
 //! Memory consolidation: groups recent episodes by temporal proximity and
 //! produces consolidation candidates for agent review.
 //!
+//! **STATUS: WIP** — cluster summaries use naive extractive concatenation
+//! (first 200 chars per episode). Quality synthesis requires an external LLM
+//! via the planned job queue (see task BRN-01KM5Z5TMJV0ANN0H6QCHVB9KW).
+//!
 //! This module defines the types and the `consolidate_episodes` function that
 //! implements the `memory.consolidate` MCP tool.
 
