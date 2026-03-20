@@ -1,8 +1,6 @@
 //! `brain://` URI scheme — parser, Display, and convenience constructors.
 //!
 //! URI format: `brain://<brain-name>/<domain>/<id>`
-//!
-//! TDD red phase: parse/Display stubs exist; tests drive implementation.
 
 use std::fmt;
 use std::str::FromStr;
@@ -77,8 +75,6 @@ pub struct BrainUri {
 
 impl BrainUri {
     /// Parse a `brain://` URI string.
-    ///
-    /// Stub: always returns an error until implemented.
     pub fn parse(s: &str) -> Result<Self, BrainCoreError> {
         s.parse()
     }
@@ -138,7 +134,6 @@ impl BrainUri {
 
 impl fmt::Display for BrainUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Stub: returns placeholder until implemented.
         write!(f, "brain://{}/{}/{}", self.brain, self.domain, self.id)
     }
 }

@@ -50,8 +50,7 @@ pub struct SearchParams<'a> {
     pub mode: VectorSearchMode,
     /// When true, follow 1-hop outgoing links from top-K vector results and
     /// add the linked chunks to the candidate pool before ranking.
-    /// Defaults to `false`. Feature is not yet implemented — this field exists
-    /// to allow TDD test compilation before the expansion logic is wired in.
+    /// Defaults to `false`.
     pub graph_expand: bool,
 }
 

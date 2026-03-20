@@ -87,9 +87,10 @@ impl McpTool for MemConsolidate {
                 .as_deref()
                 .unwrap_or_else(|| ctx.brain_id());
 
+            let limit = params.limit.min(500);
             let episodes = ctx
                 .db()
-                .list_episodes(params.limit, effective_brain_id)
+                .list_episodes(limit, effective_brain_id)
                 .unwrap_or_default();
 
             let result = consolidate_episodes(episodes, params.gap_seconds);

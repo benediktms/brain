@@ -1,16 +1,8 @@
-//! TDD integration tests for `memory.consolidate`.
+//! Integration tests for `memory.consolidate`.
 //!
 //! These tests verify the behaviour of [`brain_lib::consolidation::consolidate_episodes`]
-//! (and, transitively, the future `memory.consolidate` MCP tool) against an
+//! (and, transitively, the `memory.consolidate` MCP tool) against an
 //! in-memory SQLite database seeded with known episode timestamps.
-//!
-//! Red-phase expectations:
-//! - Types compile and the stub function is callable.
-//! - When fed 5 episodes split into two temporal groups the stub currently
-//!   returns an empty cluster list (TDD red).  The tests that assert cluster
-//!   structure are marked `#[should_panic]` so the suite remains green while
-//!   the implementation is absent.  When the real algorithm is wired in, remove
-//!   `#[should_panic]` from those tests.
 
 use rusqlite::Connection;
 
@@ -75,13 +67,13 @@ fn insert_episode_at(conn: &Connection, title: &str, brain_id: &str, created_at:
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 /// Verifies that `ConsolidateResult` and `consolidate_episodes` are reachable
-/// and that the stub compiles and returns the expected default (empty clusters).
+/// and that an empty input produces empty clusters.
 #[test]
 fn test_stub_returns_empty_clusters() {
     let result: ConsolidateResult = consolidate_episodes(vec![], 3600);
     assert!(
         result.clusters.is_empty(),
-        "stub must return empty clusters until the algorithm is wired in"
+        "empty input must return empty clusters"
     );
 }
 
@@ -98,9 +90,7 @@ fn test_empty_episodes_empty_result() {
 ///   - Group B (older):   t=900_000,   t=900_120,   t=900_180  (2 min window)
 /// Gap between groups: ~100_000 seconds >> gap_seconds=3600.
 ///
-/// TDD RED: The stub returns 0 clusters. This test asserts the future
-/// behavior (2 clusters) and is marked `#[should_panic]` until the real
-/// algorithm is implemented.
+/// Asserts that the clustering algorithm produces exactly 2 clusters.
 #[test]
 fn test_two_temporal_groups_produce_two_clusters() {
     let conn = setup_schema();
@@ -123,8 +113,6 @@ fn test_two_temporal_groups_produce_two_clusters() {
 }
 
 /// Each cluster must expose the episode IDs of its members.
-///
-/// TDD RED: marked `#[should_panic]` until clustering is implemented.
 #[test]
 fn test_clusters_contain_episode_ids() {
     let conn = setup_schema();
@@ -154,8 +142,6 @@ fn test_clusters_contain_episode_ids() {
 
 /// Each cluster must carry the full `SummaryRow` objects so callers can
 /// display episode content without additional DB lookups.
-///
-/// TDD RED: marked `#[should_panic]` until clustering is implemented.
 #[test]
 fn test_clusters_contain_episode_rows() {
     let conn = setup_schema();
@@ -176,8 +162,6 @@ fn test_clusters_contain_episode_rows() {
 }
 
 /// Each cluster must provide a non-empty `suggested_title`.
-///
-/// TDD RED: marked `#[should_panic]` until clustering is implemented.
 #[test]
 fn test_clusters_have_suggested_title() {
     let conn = setup_schema();
@@ -200,8 +184,6 @@ fn test_clusters_have_suggested_title() {
 
 /// Recent episodes (within `gap_seconds` of each other) must end up in the
 /// same cluster, not split across multiple clusters.
-///
-/// TDD RED: marked `#[should_panic]` until clustering is implemented.
 #[test]
 fn test_recent_episodes_colocated_in_same_cluster() {
     let conn = setup_schema();

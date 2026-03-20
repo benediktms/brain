@@ -1,7 +1,6 @@
-//! TDD integration tests — `brain://` URI contract for MCP tools.
+//! Integration tests — `brain://` URI contract for MCP tools.
 //!
-//! RED PHASE: These tests document expected behavior that is not yet
-//! implemented. They verify:
+//! These tests verify:
 //!
 //! 1. Output: `tasks.create` response includes a `uri` field of the form
 //!    `brain://<brain>/task/<id>`.

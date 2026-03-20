@@ -97,7 +97,7 @@ impl McpTool for RecordSearch {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            let k = params.k as usize;
+            let k = (params.k as usize).min(100);
             // Over-request to account for post-filter attrition.
             let over_k = k * 3;
 

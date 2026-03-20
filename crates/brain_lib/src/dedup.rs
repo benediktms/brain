@@ -4,13 +4,6 @@
 //! detect whether a semantically identical entry already exists in the store.
 //! The check is purely vector-based: it embeds the candidate content and
 //! computes cosine similarity against a set of pre-computed embeddings.
-//!
-//! # TDD status
-//!
-//! `check_duplicate` is currently a **stub** that always returns `None`.
-//! The integration tests in `tests/dedup_tests.rs` exercise the full
-//! duplicate-detection path and will fail (red) until the implementation is
-//! wired to a real vector comparison.
 
 use crate::embedder::Embed;
 use crate::error::Result;
@@ -42,26 +35,6 @@ pub struct DuplicateCandidate {
 ///
 /// `Ok(Some(candidate))` if a near-duplicate is found, `Ok(None)` otherwise.
 ///
-/// # Implementation note (stub)
-///
-/// **STUB — always returns `None`.**  This is intentionally incomplete so that
-/// integration tests fail (TDD red).  Replace the body with actual
-/// cosine-similarity logic:
-///
-/// ```rust,ignore
-/// let vectors = embedder.embed_batch(&[content])?;
-/// let candidate_vec = &vectors[0];
-/// for (summary_id, existing_vec) in existing {
-///     let sim = cosine_similarity(candidate_vec, existing_vec);
-///     if sim >= threshold {
-///         return Ok(Some(DuplicateCandidate {
-///             summary_id: summary_id.clone(),
-///             similarity: sim,
-///         }));
-///     }
-/// }
-/// Ok(None)
-/// ```
 pub fn check_duplicate(
     content: &str,
     embedder: &dyn Embed,

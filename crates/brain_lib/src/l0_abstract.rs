@@ -39,7 +39,14 @@ fn extract_excerpt(content: &str) -> &str {
     if content.len() <= MAX_CONTENT_CHARS {
         return content;
     }
-    let window = &content[..MAX_CONTENT_CHARS];
+    // Find a valid UTF-8 char boundary at or before MAX_CONTENT_CHARS.
+    let safe_end = content
+        .char_indices()
+        .take_while(|(i, _)| *i < MAX_CONTENT_CHARS)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    let window = &content[..safe_end];
     // Find the last sentence boundary within the window.
     let boundary = window
         .rfind(|c| c == '.' || c == '!' || c == '?')
