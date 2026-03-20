@@ -868,6 +868,39 @@ impl SummaryStoreWriter for Store {
 }
 
 // ---------------------------------------------------------------------------
+// SQLite read path — graph link traversal
+// ---------------------------------------------------------------------------
+
+/// 1-hop graph link traversal required by the query pipeline's graph expansion.
+///
+/// Consumers: `QueryPipeline::search_ranked` (when `graph_expand` is true).
+pub trait GraphLinkReader: Send + Sync {
+    /// Return all `target_file_id` values for outgoing links from `source_file_id`.
+    ///
+    /// Excludes unresolved links (target_file_id IS NULL) and external links.
+    fn get_outlinks(&self, source_file_id: &str) -> Result<Vec<String>>;
+
+    /// Return all chunks for a set of `file_id`s, joining with the files table.
+    ///
+    /// Used to fetch chunks for graph-expansion neighbour files.
+    fn get_chunks_by_file_ids(&self, file_ids: &[String]) -> Result<Vec<ChunkRow>>;
+}
+
+// -- GraphLinkReader for Db ------------------------------------------------
+
+impl GraphLinkReader for Db {
+    fn get_outlinks(&self, source_file_id: &str) -> Result<Vec<String>> {
+        let source_file_id = source_file_id.to_string();
+        self.with_read_conn(move |conn| crate::db::links::get_outlinks(conn, &source_file_id))
+    }
+
+    fn get_chunks_by_file_ids(&self, file_ids: &[String]) -> Result<Vec<ChunkRow>> {
+        let file_ids = file_ids.to_vec();
+        self.with_read_conn(move |conn| crate::db::chunks::get_chunks_by_file_ids(conn, &file_ids))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock implementations for testing
 // ---------------------------------------------------------------------------
 

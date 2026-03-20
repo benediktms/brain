@@ -111,6 +111,50 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
     super::collect_rows(rows)
 }
 
+/// Look up all chunks for a set of file IDs, joining with the files table.
+///
+/// Used by graph expansion to fetch linked-file chunks after 1-hop link traversal.
+pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<Vec<ChunkRow>> {
+    if file_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders: Vec<String> = (1..=file_ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT c.chunk_id, c.file_id, f.path, c.content, c.heading_path,
+                c.byte_start, c.byte_end, c.token_estimate, f.last_indexed_at,
+                COALESCE(f.pagerank_score, 0.0) as pagerank_score
+         FROM chunks c
+         JOIN files f ON f.file_id = c.file_id
+         WHERE c.file_id IN ({})
+         AND f.deleted_at IS NULL",
+        placeholders.join(", ")
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn ToSql> = file_ids
+        .iter()
+        .map(|id| id as &dyn ToSql)
+        .collect();
+
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        Ok(ChunkRow {
+            chunk_id: row.get(0)?,
+            file_id: row.get(1)?,
+            file_path: row.get(2)?,
+            content: row.get(3)?,
+            heading_path: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            byte_start: row.get::<_, i64>(5)? as usize,
+            byte_end: row.get::<_, i64>(6)? as usize,
+            token_estimate: row.get::<_, i64>(7)? as usize,
+            last_indexed_at: row.get(8)?,
+            pagerank_score: row.get::<_, f64>(9).unwrap_or(0.0),
+        })
+    })?;
+
+    super::collect_rows(rows)
+}
+
 /// Upsert a task capsule chunk into SQLite.
 ///
 /// Creates a synthetic `files` row if needed (with path = file_id),

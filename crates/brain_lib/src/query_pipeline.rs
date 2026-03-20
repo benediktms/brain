@@ -16,7 +16,7 @@ use crate::db::summaries::SummaryRow;
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
-use crate::ports::{ChunkMetaReader, ChunkSearcher, EpisodeReader, FtsSearcher};
+use crate::ports::{ChunkMetaReader, ChunkSearcher, EpisodeReader, FtsSearcher, GraphLinkReader};
 use crate::ranking::{
     CandidateSignals, FusionConfidence, RerankCandidate, Reranker, RerankerPolicy, Weights,
     compute_fusion_confidence, rank_candidates, resolve_intent,
@@ -95,7 +95,7 @@ impl<'a> SearchParams<'a> {
 pub struct QueryPipeline<'a, S = StoreReader, D = Db>
 where
     S: ChunkSearcher + Send + Sync,
-    D: ChunkMetaReader + FtsSearcher + EpisodeReader + Send + Sync,
+    D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
 {
     /// SQLite database — abstracted via port traits.
     db: &'a D,
@@ -110,7 +110,7 @@ where
 impl<'a, S, D> QueryPipeline<'a, S, D>
 where
     S: ChunkSearcher + Send + Sync,
-    D: ChunkMetaReader + FtsSearcher + EpisodeReader + Send + Sync,
+    D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
 {
     pub fn new(
         db: &'a D,
@@ -146,7 +146,7 @@ where
     #[instrument(skip_all)]
     pub async fn search(&self, params: &SearchParams<'_>) -> Result<SearchResult> {
         let (ranked, confidence) = self
-            .search_ranked(params.query, params.intent, params.query_tags, params.mode)
+            .search_ranked(params.query, params.intent, params.query_tags, params.mode, params.graph_expand)
             .await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
         let mut result = pack_minimal(
@@ -164,7 +164,7 @@ where
     #[instrument(skip_all)]
     pub async fn search_with_scores(&self, params: &SearchParams<'_>) -> Result<SearchResult> {
         let (ranked, confidence) = self
-            .search_ranked(params.query, params.intent, params.query_tags, params.mode)
+            .search_ranked(params.query, params.intent, params.query_tags, params.mode, params.graph_expand)
             .await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
         let mut result = pack_minimal(&ranked, params.budget_tokens, params.k, true, &ml_summaries);
@@ -188,6 +188,7 @@ where
         intent: &str,
         query_tags: &[String],
         mode: VectorSearchMode,
+        graph_expand: bool,
     ) -> Result<(Vec<crate::ranking::RankedResult>, FusionConfidence)> {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
@@ -303,10 +304,98 @@ where
         }
 
         // Remove FTS-only candidates that weren't found in SQLite
-        let candidate_vec: Vec<CandidateSignals> = candidates
+        let mut candidate_vec: Vec<CandidateSignals> = candidates
             .into_values()
             .filter(|c| !c.content.is_empty())
             .collect();
+
+        // 5b. 1-hop graph expansion: follow outgoing links from top-K candidates
+        //     and inject (or boost) linked chunks in the candidate pool before ranking.
+        if graph_expand && !candidate_vec.is_empty() {
+            // Sort by composite signal to pick top-10 seed candidates
+            let mut seeds = candidate_vec.clone();
+            seeds.sort_by(|a, b| {
+                let sa = a.sim_vector + a.bm25 + a.pagerank_score;
+                let sb = b.sim_vector + b.bm25 + b.pagerank_score;
+                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            // For each seed, get 1-hop outlink file_ids, carrying the parent's vector score.
+            // Expansion candidates receive sim_vector = parent_score * 0.5 (graph penalty).
+            let mut expansion_entries: Vec<(String, f64)> = Vec::new(); // (target_file_id, parent_sim)
+            for seed in seeds.iter().take(10) {
+                // Derive file_id from chunk_id (format: "file_id:chunk_ord")
+                let file_id = seed.chunk_id.rsplit_once(':')
+                    .map(|(prefix, _)| prefix.to_string())
+                    .unwrap_or_else(|| seed.chunk_id.clone());
+
+                // Use the composite signal (vector + keyword) as the parent score
+                // so that FTS-strong seeds also produce meaningful expansion boosts.
+                let parent_sim = (seed.sim_vector + seed.bm25).min(1.0);
+                if let Ok(outlinks) = self.db.get_outlinks(&file_id) {
+                    for target_file_id in outlinks {
+                        if !expansion_entries.iter().any(|(fid, _)| fid == &target_file_id) {
+                            expansion_entries.push((target_file_id, parent_sim));
+                        }
+                    }
+                }
+            }
+
+            // Cap at 20 expansion file_ids
+            expansion_entries.truncate(20);
+
+            if !expansion_entries.is_empty() {
+                let expansion_file_ids: Vec<String> =
+                    expansion_entries.iter().map(|(fid, _)| fid.clone()).collect();
+                let parent_sim_map: std::collections::HashMap<String, f64> =
+                    expansion_entries.into_iter().collect();
+
+                if let Ok(expansion_chunks) = self.db.get_chunks_by_file_ids(&expansion_file_ids) {
+                    let now = crate::utils::now_ts();
+                    for chunk in expansion_chunks {
+                        let graph_sim = parent_sim_map
+                            .get(&chunk.file_id)
+                            .copied()
+                            .unwrap_or(0.0) * 0.5;
+
+                        // If this chunk is already in the candidate pool, boost its sim_vector
+                        // if the graph signal is higher than its current vector score.
+                        if let Some(existing) = candidate_vec
+                            .iter_mut()
+                            .find(|c| c.chunk_id == chunk.chunk_id)
+                        {
+                            if graph_sim > existing.sim_vector {
+                                existing.sim_vector = graph_sim;
+                            }
+                            continue;
+                        }
+
+                        // Not in pool yet — add as a new expansion candidate.
+                        let age_seconds = if let Some(indexed_at) = chunk.last_indexed_at {
+                            (now - indexed_at).max(0) as f64
+                        } else {
+                            0.0
+                        };
+                        candidate_vec.push(CandidateSignals {
+                            chunk_id: chunk.chunk_id,
+                            sim_vector: graph_sim,
+                            bm25: 0.0,
+                            age_seconds,
+                            pagerank_score: chunk.pagerank_score,
+                            tags: vec![],
+                            importance: 1.0,
+                            file_path: chunk.file_path,
+                            heading_path: chunk.heading_path,
+                            content: chunk.content.clone(),
+                            token_estimate: estimate_tokens(&chunk.content),
+                            byte_start: chunk.byte_start,
+                            byte_end: chunk.byte_end,
+                            summary_kind: None,
+                        });
+                    }
+                }
+            }
+        }
 
         // 6. Rank
         let mut ranked = rank_candidates(&candidate_vec, &weights, query_tags);
@@ -471,7 +560,7 @@ where
 pub struct FederatedPipeline<'a, S = StoreReader, D = Db>
 where
     S: ChunkSearcher + Send + Sync,
-    D: ChunkMetaReader + FtsSearcher + EpisodeReader + Send + Sync,
+    D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
 {
     /// Shared unified SQLite database — abstracted via port traits.
     pub db: &'a D,
@@ -489,7 +578,7 @@ where
 impl<'a, S, D> FederatedPipeline<'a, S, D>
 where
     S: ChunkSearcher + Send + Sync,
-    D: ChunkMetaReader + FtsSearcher + EpisodeReader + Send + Sync,
+    D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
 {
     /// Search across all configured brains.
     ///
@@ -533,7 +622,7 @@ where
             let query_tags = params.query_tags.to_vec();
             futs.push(Box::pin(async move {
                 match pipeline
-                    .search_ranked(&query, &intent, &query_tags, mode)
+                    .search_ranked(&query, &intent, &query_tags, mode, false)
                     .await
                 {
                     Ok((ranked, _confidence)) => (brain_name, ranked),
