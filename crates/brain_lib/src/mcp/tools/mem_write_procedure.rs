@@ -9,6 +9,8 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::ports::ProcedureWriter;
 
+use crate::uri::BrainUri;
+
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -119,9 +121,11 @@ impl McpTool for MemWriteProcedure {
                 }
             }
 
+            let uri = BrainUri::for_procedure(ctx.brain_name(), &summary_id).to_string();
             let response = json!({
                 "status": "stored",
                 "summary_id": summary_id,
+                "uri": uri,
                 "title": params.title,
                 "tags": params.tags,
                 "importance": params.importance

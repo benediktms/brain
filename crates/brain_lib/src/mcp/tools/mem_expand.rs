@@ -8,6 +8,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::QueryPipeline;
+use crate::uri::resolve_id;
 
 use super::{McpTool, json_response};
 
@@ -72,9 +73,14 @@ impl McpTool for MemExpand {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
+            let memory_ids: Vec<String> = params
+                .memory_ids
+                .iter()
+                .map(|id| resolve_id(id))
+                .collect();
             let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
             let expand_result = match pipeline
-                .expand(&params.memory_ids, params.budget_tokens as usize)
+                .expand(&memory_ids, params.budget_tokens as usize)
                 .await
             {
                 Ok(r) => r,

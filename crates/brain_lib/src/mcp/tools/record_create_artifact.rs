@@ -11,6 +11,8 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
 use crate::records::objects::COMPRESSION_THRESHOLD;
 
+use crate::uri::BrainUri;
+
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -150,8 +152,11 @@ impl RecordCreateArtifact {
             return ToolCallResult::error(format!("Failed to save record: {e}"));
         }
 
+        let uri = BrainUri::for_record(ctx.brain_name(), &record_id).to_string();
+
         let mut result = json!({
             "record_id": record_id,
+            "uri": uri,
             "content_hash": content_ref.hash,
             "size": content_ref.size,
         });

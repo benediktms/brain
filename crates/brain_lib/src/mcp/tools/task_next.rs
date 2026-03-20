@@ -10,6 +10,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::enrich_task_summaries;
 use crate::tasks::events::TaskType;
+use crate::uri::BrainUri;
 
 use super::{McpTool, inject_warnings, json_response, store_or_warn};
 
@@ -73,7 +74,7 @@ impl TaskNext {
         // Build enriched task JSON with batch label fetching
         let mut results_json = enrich_task_summaries(&ctx.stores.tasks, &selected);
 
-        // Replace task_id with short form and strip description from each task
+        // Replace task_id with short form, add uri, strip description from each task
         for task_val in &mut results_json {
             if let Some(obj) = task_val.as_object_mut() {
                 if let Some(tid) = obj
@@ -86,7 +87,9 @@ impl TaskNext {
                         .tasks
                         .compact_id(&tid)
                         .unwrap_or_else(|_| tid.clone());
+                    let uri = BrainUri::for_task(ctx.brain_name(), &short).to_string();
                     obj.insert("task_id".into(), json!(short));
+                    obj.insert("uri".into(), json!(uri));
                 }
                 obj.remove("description");
             }

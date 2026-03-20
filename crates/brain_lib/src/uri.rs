@@ -183,6 +183,32 @@ impl FromStr for BrainUri {
 }
 
 // ---------------------------------------------------------------------------
+// resolve_id helper
+// ---------------------------------------------------------------------------
+
+/// If the input is a `brain://` URI, extract the ID segment. Otherwise return as-is.
+///
+/// This is transparent: non-URI strings pass through unchanged, making it safe
+/// to call on any ID parameter without breaking existing callers.
+///
+/// # Examples
+///
+/// ```
+/// use brain_lib::uri::resolve_id;
+///
+/// assert_eq!(resolve_id("brain://my-proj/task/BRN-01ABC"), "BRN-01ABC");
+/// assert_eq!(resolve_id("BRN-01ABC"), "BRN-01ABC");
+/// assert_eq!(resolve_id("BRN-01"), "BRN-01"); // prefix — passed through
+/// ```
+pub fn resolve_id(input: &str) -> String {
+    if let Ok(uri) = input.parse::<BrainUri>() {
+        uri.id
+    } else {
+        input.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

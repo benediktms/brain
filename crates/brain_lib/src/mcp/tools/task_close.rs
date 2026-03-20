@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
+use crate::uri::{BrainUri, resolve_id};
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
@@ -54,7 +55,8 @@ impl TaskClose {
         let mut warnings: Vec<Warning> = Vec::new();
 
         for raw_id in &ids {
-            let resolved = match ctx.stores.tasks.resolve_task_id(raw_id) {
+            let resolved_input = resolve_id(raw_id);
+            let resolved = match ctx.stores.tasks.resolve_task_id(&resolved_input) {
                 Ok(r) => r,
                 Err(e) => {
                     failed.push(json!({
@@ -100,9 +102,11 @@ impl TaskClose {
                 .compact_id(&resolved)
                 .unwrap_or_else(|_| resolved.clone());
 
+            let uri = BrainUri::for_task(ctx.brain_name(), &short_id).to_string();
             total_unblocked += unblocked.len();
             closed.push(json!({
                 "task_id": short_id,
+                "uri": uri,
                 "unblocked_task_ids": unblocked,
             }));
         }

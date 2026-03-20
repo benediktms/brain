@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::events::{LinkPayload, RecordEvent, RecordEventType};
+use crate::uri::resolve_id;
 
 use super::{McpTool, json_response};
 
@@ -34,7 +35,8 @@ impl RecordLinkAdd {
             );
         }
 
-        let record_id = match ctx.stores.records.resolve_record_id(&params.record_id) {
+        let record_id_input = resolve_id(&params.record_id);
+        let record_id = match ctx.stores.records.resolve_record_id(&record_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };
@@ -130,7 +132,8 @@ impl RecordLinkRemove {
             );
         }
 
-        let record_id = match ctx.stores.records.resolve_record_id(&params.record_id) {
+        let record_id_input = resolve_id(&params.record_id);
+        let record_id = match ctx.stores.records.resolve_record_id(&record_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };

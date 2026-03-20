@@ -10,6 +10,7 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{
     EventType, ExternalIdPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
 };
+use crate::uri::BrainUri;
 use crate::utils::{parse_timestamp, task_row_to_json};
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
@@ -374,8 +375,11 @@ impl TaskCreate {
                 .compact_id(&task_id)
                 .unwrap_or_else(|_| task_id.clone());
 
+            let uri = BrainUri::for_task(ctx.brain_name(), &short_id).to_string();
+
             let mut response = json!({
                 "task_id": short_id,
+                "uri": uri,
                 "task": task_json,
                 "unblocked_task_ids": [],
             });

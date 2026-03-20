@@ -11,6 +11,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
 use crate::tasks::queries::TaskRow;
+use crate::uri::{BrainUri, resolve_id};
 use crate::utils::task_row_to_json;
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
@@ -69,8 +70,9 @@ impl TaskGet {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        // 1. Resolve task_id
-        let task_id = match ctx.stores.tasks.resolve_task_id(&params.task_id) {
+        // 1. Resolve task_id (strip brain:// URI if present, then resolve prefix)
+        let task_id_input = resolve_id(&params.task_id);
+        let task_id = match ctx.stores.tasks.resolve_task_id(&task_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve task_id: {e}")),
         };
@@ -286,6 +288,13 @@ impl TaskGet {
                 "dependency_summary".into(),
                 dep_summary_to_json(&dep_summary),
             );
+        }
+
+        let uri = BrainUri::for_task(ctx.brain_name(), &short_id).to_string();
+        let task_copy = task_json.clone();
+        if let Some(obj) = task_json.as_object_mut() {
+            obj.insert("task".into(), task_copy);
+            obj.insert("uri".into(), json!(uri));
         }
 
         inject_warnings(&mut task_json, warnings);

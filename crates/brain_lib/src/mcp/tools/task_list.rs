@@ -13,6 +13,7 @@ use crate::tasks::TaskStore;
 use crate::tasks::enrichment::enrich_task_list;
 use crate::tasks::events::TaskType;
 use crate::tasks::queries::{TaskFilter, apply_filters};
+use crate::uri::BrainUri;
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
@@ -91,7 +92,7 @@ impl TaskList {
                     return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
                 }
             };
-            let mut result = Self::execute_with_store(params, &remote_tasks);
+            let mut result = Self::execute_with_store(params, &remote_tasks, &remote_brain_name);
             // Inject brain name into response
             if let Ok(ref mut val) =
                 serde_json::from_str::<serde_json::Value>(&result.content[0].text)
@@ -104,16 +105,16 @@ impl TaskList {
             return result;
         }
 
-        Self::execute_with_store(params, &ctx.stores.tasks)
+        Self::execute_with_store(params, &ctx.stores.tasks, ctx.brain_name())
     }
 
-    fn execute_with_store(params: Params, store: &TaskStore) -> ToolCallResult {
+    fn execute_with_store(params: Params, store: &TaskStore, brain_name: &str) -> ToolCallResult {
         let limit = params.limit as usize;
 
         // If task_ids provided, fetch those specifically
         if let Some(ref ids) = params.task_ids {
             let task_ids: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-            return Self::handle_batch(&task_ids, params.include_description, limit, store);
+            return Self::handle_batch(&task_ids, params.include_description, limit, store, brain_name);
         }
 
         // Parse per-field filters
@@ -178,7 +179,7 @@ impl TaskList {
             tasks
         };
 
-        Self::build_response(&tasks, params.include_description, limit, store)
+        Self::build_response(&tasks, params.include_description, limit, store, brain_name)
     }
 
     fn handle_batch(
@@ -186,6 +187,7 @@ impl TaskList {
         include_description: bool,
         limit: usize,
         store: &TaskStore,
+        brain_name: &str,
     ) -> ToolCallResult {
         let mut tasks = Vec::new();
         for id in task_ids {
@@ -202,7 +204,7 @@ impl TaskList {
                 }
             }
         }
-        Self::build_response(&tasks, include_description, limit, store)
+        Self::build_response(&tasks, include_description, limit, store, brain_name)
     }
 
     fn build_response(
@@ -210,6 +212,7 @@ impl TaskList {
         include_description: bool,
         limit: usize,
         store: &TaskStore,
+        brain_name: &str,
     ) -> ToolCallResult {
         let mut warnings: Vec<Warning> = Vec::new();
         let total = tasks.len();
@@ -229,7 +232,7 @@ impl TaskList {
         let (mut tasks_json, ready_count, blocked_count) =
             enrich_task_list(store, capped, &labels_map);
 
-        // Replace task_id with shortest unique prefix for compact display
+        // Replace task_id with shortest unique prefix for compact display and add uri
         for task_val in &mut tasks_json {
             if let Some(obj) = task_val.as_object_mut() {
                 if let Some(tid) = obj
@@ -238,7 +241,9 @@ impl TaskList {
                     .map(String::from)
                 {
                     let short = store.compact_id(&tid).unwrap_or_else(|_| tid.clone());
+                    let uri = BrainUri::for_task(brain_name, &short).to_string();
                     obj.insert("task_id".into(), json!(short));
+                    obj.insert("uri".into(), json!(uri));
                 }
                 if !include_description {
                     obj.remove("description");
