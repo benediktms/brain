@@ -11,6 +11,7 @@ pub mod fs_permissions;
 pub mod hash_gate;
 pub mod hierarchy;
 pub mod ipc;
+pub mod l0_abstract;
 pub use brain_persistence::links;
 pub mod mcp;
 pub mod metrics;
