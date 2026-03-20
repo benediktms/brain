@@ -5,6 +5,7 @@ mod mem_expand;
 mod mem_reflect;
 mod mem_search_minimal;
 mod mem_write_episode;
+mod mem_write_procedure;
 mod record_archive;
 mod record_create_artifact;
 mod record_fetch_content;
@@ -85,6 +86,7 @@ impl ToolRegistry {
                 Box::new(mem_search_minimal::MemSearchMinimal),
                 Box::new(mem_expand::MemExpand),
                 Box::new(mem_write_episode::MemWriteEpisode),
+                Box::new(mem_write_procedure::MemWriteProcedure),
                 Box::new(mem_reflect::MemReflect),
                 Box::new(task_apply_event::TaskApplyEvent),
                 Box::new(task_close::TaskClose),
@@ -139,7 +141,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 26);
+        assert_eq!(defs.len(), 27);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));

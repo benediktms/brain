@@ -170,6 +170,8 @@ pub struct MockChunkMetaReader {
     pub rows: Mutex<Vec<ChunkRow>>,
     /// ML summaries: `chunk_id → summary_text`
     pub summaries: Mutex<HashMap<String, String>>,
+    /// Summary kinds: `summary_id → kind`
+    pub summary_kinds: Mutex<HashMap<String, String>>,
 }
 
 impl ChunkMetaReader for MockChunkMetaReader {
@@ -188,6 +190,14 @@ impl ChunkMetaReader for MockChunkMetaReader {
         Ok(chunk_ids
             .iter()
             .filter_map(|id| map.get(*id).map(|v| ((*id).to_string(), v.clone())))
+            .collect())
+    }
+
+    fn get_summary_kinds(&self, summary_ids: &[String]) -> Result<HashMap<String, String>> {
+        let map = self.summary_kinds.lock().unwrap();
+        Ok(summary_ids
+            .iter()
+            .filter_map(|id| map.get(id).map(|k| (id.clone(), k.clone())))
             .collect())
     }
 }

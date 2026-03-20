@@ -282,6 +282,33 @@ pub fn get_ml_summaries_for_chunks(
     Ok(map)
 }
 
+/// Batch-load (summary_id, kind) pairs for a list of summary IDs.
+/// Returns a map from summary_id to kind. IDs not found are absent from the map.
+pub fn get_summary_kinds(conn: &Connection, ids: &[String]) -> Result<HashMap<String, String>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT summary_id, kind FROM summaries WHERE summary_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (id, kind) = row?;
+        map.insert(id, kind);
+    }
+    Ok(map)
+}
+
 /// Batch-load summaries by a list of summary IDs.
 /// Returns rows in unspecified order; caller is responsible for reordering if needed.
 pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<SummaryRow>> {

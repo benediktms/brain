@@ -303,6 +303,29 @@ where
             }
         }
 
+        // 5b. Enrich summary_kind for sum:-prefixed candidates
+        //     Batch-query the summaries table to populate summary_kind so that
+        //     derive_kind can emit "procedure" (or other non-episode kinds).
+        {
+            let summary_ids: Vec<String> = candidates
+                .keys()
+                .filter(|id| id.starts_with("sum:"))
+                .map(|id| id["sum:".len()..].to_string())
+                .collect();
+
+            if !summary_ids.is_empty() {
+                if let Ok(kind_map) = self.db.get_summary_kinds(&summary_ids) {
+                    for (chunk_id, candidate) in candidates.iter_mut() {
+                        if let Some(raw_id) = chunk_id.strip_prefix("sum:") {
+                            if let Some(kind) = kind_map.get(raw_id) {
+                                candidate.summary_kind = Some(kind.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Remove FTS-only candidates that weren't found in SQLite
         let mut candidate_vec: Vec<CandidateSignals> = candidates
             .into_values()

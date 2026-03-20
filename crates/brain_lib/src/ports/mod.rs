@@ -138,6 +138,13 @@ pub trait ChunkMetaReader: Send + Sync {
     /// Returns a map from `chunk_id` to summary text. Prefers the most recent
     /// summary when multiple exist.
     fn get_ml_summaries_for_chunks(&self, chunk_ids: &[&str]) -> Result<HashMap<String, String>>;
+
+    /// Batch-load (summary_id → kind) for a list of summary IDs.
+    ///
+    /// Used by the query pipeline to populate `summary_kind` on `sum:` prefixed
+    /// candidates, enabling `derive_kind` to emit `"procedure"` instead of
+    /// the default `"episode"`.
+    fn get_summary_kinds(&self, summary_ids: &[String]) -> Result<HashMap<String, String>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,6 +295,11 @@ impl ChunkMetaReader for Db {
         self.with_read_conn(|conn| {
             crate::db::summaries::get_ml_summaries_for_chunks(conn, chunk_ids)
         })
+    }
+
+    fn get_summary_kinds(&self, summary_ids: &[String]) -> Result<HashMap<String, String>> {
+        let ids = summary_ids.to_vec();
+        self.with_read_conn(move |conn| crate::db::summaries::get_summary_kinds(conn, &ids))
     }
 }
 
@@ -828,6 +840,53 @@ impl ReflectionWriter for Db {
                 &title,
                 &content,
                 &source_ids,
+                &tags,
+                importance,
+                &brain_id,
+            )
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQLite write path — procedures
+// ---------------------------------------------------------------------------
+
+/// SQLite procedure write operations required by the MCP `memory.write_procedure` tool.
+///
+/// Consumers: `mcp::tools::mem_write_procedure`.
+pub trait ProcedureWriter: Send + Sync {
+    /// Store a procedure in the summaries table. Returns the `summary_id`.
+    fn store_procedure(
+        &self,
+        title: &str,
+        steps: &str,
+        tags: &[String],
+        importance: f64,
+        brain_id: &str,
+    ) -> Result<String>;
+}
+
+// -- ProcedureWriter for Db ------------------------------------------------
+
+impl ProcedureWriter for Db {
+    fn store_procedure(
+        &self,
+        title: &str,
+        steps: &str,
+        tags: &[String],
+        importance: f64,
+        brain_id: &str,
+    ) -> Result<String> {
+        let title = title.to_string();
+        let steps = steps.to_string();
+        let tags = tags.to_vec();
+        let brain_id = brain_id.to_string();
+        self.with_write_conn(move |conn| {
+            crate::db::summaries::store_procedure(
+                conn,
+                &title,
+                &steps,
                 &tags,
                 importance,
                 &brain_id,
