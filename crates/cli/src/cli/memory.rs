@@ -149,6 +149,29 @@ pub(crate) enum MemoryAction {
         importance: f64,
     },
 
+    /// Group recent episodes by temporal proximity into consolidation clusters
+    #[command(
+        name = "consolidate",
+        visible_alias = "co",
+        long_about = "Group recent episodes by temporal proximity into consolidation clusters.\n\n\
+            Returns clusters of temporally proximate episodes with suggested titles and summaries, \
+            ordered newest-first. Use the output to decide which episodes to synthesize into a \
+            reflection via `brain memory reflect --commit`.",
+        after_help = "EXAMPLES:\n  \
+            brain memory consolidate\n  \
+            brain memory consolidate --limit 100 --gap-seconds 7200\n  \
+            brain memory co"
+    )]
+    Consolidate {
+        /// Maximum number of recent episodes to consider
+        #[arg(long, default_value = "50")]
+        limit: usize,
+
+        /// Gap in seconds between episodes that triggers a cluster boundary
+        #[arg(long, default_value = "3600")]
+        gap_seconds: i64,
+    },
+
     /// Retrieve source material for reflection (prepare) or store a reflection (commit)
     #[command(
         long_about = "Two-phase episodic reflection.\n\n\

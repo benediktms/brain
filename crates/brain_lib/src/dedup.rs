@@ -63,17 +63,44 @@ pub struct DuplicateCandidate {
 /// Ok(None)
 /// ```
 pub fn check_duplicate(
-    _content: &str,
-    _embedder: &dyn Embed,
-    _existing: &[(String, Vec<f32>)],
-    _threshold: f32,
+    content: &str,
+    embedder: &dyn Embed,
+    existing: &[(String, Vec<f32>)],
+    threshold: f32,
 ) -> Result<Option<DuplicateCandidate>> {
-    // STUB: unconditional None — tests are RED until this is implemented.
-    Ok(None)
+    if existing.is_empty() {
+        return Ok(None);
+    }
+
+    let vectors = embedder.embed_batch(&[content])?;
+    let candidate_vec = &vectors[0];
+
+    let mut best: Option<DuplicateCandidate> = None;
+    for (summary_id, existing_vec) in existing {
+        let sim = cosine_similarity(candidate_vec, existing_vec);
+        if sim >= threshold {
+            match &best {
+                None => {
+                    best = Some(DuplicateCandidate {
+                        summary_id: summary_id.clone(),
+                        similarity: sim,
+                    });
+                }
+                Some(prev) if sim > prev.similarity => {
+                    best = Some(DuplicateCandidate {
+                        summary_id: summary_id.clone(),
+                        similarity: sim,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(best)
 }
 
 /// Compute cosine similarity between two L2-normalised vectors.
-#[allow(dead_code)] // used by the implementation once the stub is replaced
 ///
 /// Both inputs are expected to be unit-length (as produced by the embedding
 /// pipeline). The result is the dot product, clamped to `[-1.0, 1.0]`.
@@ -102,10 +129,8 @@ mod unit_tests {
     }
 
     #[test]
-    fn check_duplicate_stub_compiles_and_returns_none() {
-        // Unit test: verifies the stub compiles and returns Ok(None).
-        // The integration tests in tests/dedup_tests.rs are intentionally RED
-        // and assert Some(..) — they will pass once the stub is implemented.
+    fn check_duplicate_identical_content_returns_some() {
+        // Verifies the implemented check_duplicate detects identical content.
         let embedder = MockEmbedder;
         let content = "Rust ownership rules prevent data races";
         let vecs = embedder.embed_batch(&[content]).unwrap();
@@ -113,6 +138,7 @@ mod unit_tests {
 
         let result =
             check_duplicate(content, &embedder, &existing, DEFAULT_DEDUP_THRESHOLD).unwrap();
-        assert!(result.is_none(), "stub must return None");
+        assert!(result.is_some(), "identical content must be detected as duplicate");
+        assert_eq!(result.unwrap().summary_id, "sum-001");
     }
 }

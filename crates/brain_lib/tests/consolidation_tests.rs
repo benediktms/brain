@@ -102,7 +102,6 @@ fn test_empty_episodes_empty_result() {
 /// behavior (2 clusters) and is marked `#[should_panic]` until the real
 /// algorithm is implemented.
 #[test]
-#[should_panic(expected = "expected 2 clusters")]
 fn test_two_temporal_groups_produce_two_clusters() {
     let conn = setup_schema();
     let brain = "test-brain";
@@ -127,7 +126,6 @@ fn test_two_temporal_groups_produce_two_clusters() {
 ///
 /// TDD RED: marked `#[should_panic]` until clustering is implemented.
 #[test]
-#[should_panic(expected = "cluster 0 must contain episode IDs")]
 fn test_clusters_contain_episode_ids() {
     let conn = setup_schema();
     let brain = "test-brain-ids";
@@ -159,7 +157,6 @@ fn test_clusters_contain_episode_ids() {
 ///
 /// TDD RED: marked `#[should_panic]` until clustering is implemented.
 #[test]
-#[should_panic(expected = "episodes vec must be non-empty")]
 fn test_clusters_contain_episode_rows() {
     let conn = setup_schema();
     let brain = "test-brain-rows";
@@ -182,7 +179,6 @@ fn test_clusters_contain_episode_rows() {
 ///
 /// TDD RED: marked `#[should_panic]` until clustering is implemented.
 #[test]
-#[should_panic(expected = "suggested_title must be non-empty")]
 fn test_clusters_have_suggested_title() {
     let conn = setup_schema();
     let brain = "test-brain-title";
@@ -207,7 +203,6 @@ fn test_clusters_have_suggested_title() {
 ///
 /// TDD RED: marked `#[should_panic]` until clustering is implemented.
 #[test]
-#[should_panic(expected = "recent episodes must share one cluster")]
 fn test_recent_episodes_colocated_in_same_cluster() {
     let conn = setup_schema();
     let brain = "test-brain-coloc";

@@ -1,6 +1,7 @@
 mod brains_list;
 mod helpers;
 /// MCP tool definitions and handlers.
+mod mem_consolidate;
 mod mem_expand;
 mod mem_reflect;
 mod mem_search_minimal;
@@ -88,6 +89,7 @@ impl ToolRegistry {
                 Box::new(mem_write_episode::MemWriteEpisode),
                 Box::new(mem_write_procedure::MemWriteProcedure),
                 Box::new(mem_reflect::MemReflect),
+                Box::new(mem_consolidate::MemConsolidate),
                 Box::new(task_apply_event::TaskApplyEvent),
                 Box::new(task_close::TaskClose),
                 Box::new(task_create::TaskCreate),
@@ -141,7 +143,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 27);
+        assert_eq!(defs.len(), 28);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));

@@ -445,6 +445,74 @@ pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> R
 }
 
 // ---------------------------------------------------------------------------
+// consolidate
+// ---------------------------------------------------------------------------
+
+pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Result<()> {
+    use brain_lib::consolidation::consolidate_episodes;
+    use brain_lib::ports::EpisodeReader;
+
+    let episodes = ctx
+        .stores
+        .db()
+        .list_episodes(limit, &ctx.stores.brain_id)
+        .unwrap_or_default();
+
+    let result = consolidate_episodes(episodes, gap_seconds);
+
+    if ctx.json {
+        let clusters_json: Vec<serde_json::Value> = result
+            .clusters
+            .iter()
+            .map(|c| {
+                json!({
+                    "episode_ids": c.episode_ids,
+                    "episode_count": c.episodes.len(),
+                    "suggested_title": c.suggested_title,
+                    "summary": c.summary,
+                    "oldest_ts": c.episodes.iter().map(|e| e.created_at).min(),
+                    "newest_ts": c.episodes.iter().map(|e| e.created_at).max(),
+                })
+            })
+            .collect();
+        let out = json!({
+            "cluster_count": clusters_json.len(),
+            "clusters": clusters_json,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        if result.clusters.is_empty() {
+            println!("No clusters found. No episodes to consolidate.");
+            return Ok(());
+        }
+        println!("{} cluster(s) found:", result.clusters.len());
+        println!();
+        for (i, cluster) in result.clusters.iter().enumerate() {
+            println!(
+                "Cluster {} — {} episode(s)",
+                i + 1,
+                cluster.episodes.len()
+            );
+            println!("  Title:    {}", cluster.suggested_title);
+            println!("  Summary:  {}", cluster.summary);
+            println!("  IDs:      {}", cluster.episode_ids.join(", "));
+            if let (Some(oldest), Some(newest)) = (
+                cluster.episodes.iter().map(|e| e.created_at).min(),
+                cluster.episodes.iter().map(|e| e.created_at).max(),
+            ) {
+                println!("  Range:    {oldest} → {newest}");
+            }
+            println!();
+        }
+        println!(
+            "Use `brain memory reflect --commit` to synthesize a cluster into a reflection."
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // reflect_prepare
 // ---------------------------------------------------------------------------
 

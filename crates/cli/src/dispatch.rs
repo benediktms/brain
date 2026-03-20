@@ -684,6 +684,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             let ctx = MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
 
             match action {
+                MemoryAction::Consolidate { limit, gap_seconds } => {
+                    commands::memory::run::consolidate(&ctx, limit, gap_seconds).await?;
+                }
                 MemoryAction::Search {
                     query,
                     k,
