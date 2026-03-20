@@ -1,6 +1,8 @@
 pub mod capsule;
 pub mod chunker;
 pub mod config;
+pub mod dedup;
+pub mod consolidation;
 pub use brain_persistence::db;
 pub mod doctor;
 pub mod embedder;
