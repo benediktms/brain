@@ -89,7 +89,7 @@ pub fn consolidate_episodes(
                 .iter()
                 .map(|e| {
                     let s = e.content.as_str();
-                    if s.len() > 200 { &s[..200] } else { s }
+                    s.get(..200).unwrap_or(s)
                 })
                 .collect::<Vec<_>>()
                 .join("\n---\n");
