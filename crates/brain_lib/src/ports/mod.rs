@@ -960,6 +960,233 @@ impl GraphLinkReader for Db {
 }
 
 // ---------------------------------------------------------------------------
+// SQLite read/write path — derived summaries (hierarchy module)
+// ---------------------------------------------------------------------------
+//
+// The `DerivedSummaryStore` trait is defined in `crate::hierarchy` alongside
+// its types. The concrete `Db` implementation lives here to follow the
+// established pattern: traits defined in brain_lib, impls for brain_persistence
+// types also in brain_lib (in this file).
+
+use crate::hierarchy::{DerivedSummary, DerivedSummaryStore, ScopeType};
+
+// -- DerivedSummaryStore for Db --------------------------------------------
+
+impl DerivedSummaryStore for Db {
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<String> {
+        use rusqlite::params;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        use ulid::Ulid;
+        use brain_persistence::error::BrainCoreError;
+
+        let scope_type_str = scope_type.as_str();
+        let scope_value_owned = scope_value.to_string();
+        let scope_type_clone = scope_type.clone();
+
+        let contents: Vec<String> = self.with_read_conn(|conn| {
+            let rows: Vec<String> = match scope_type_clone {
+                ScopeType::Directory => {
+                    let pattern = format!("{}%", scope_value_owned);
+                    let mut stmt = conn.prepare(
+                        "SELECT c.content
+                         FROM chunks c
+                         JOIN files f ON c.file_id = f.file_id
+                         WHERE f.path LIKE ?1
+                         ORDER BY f.path, c.chunk_ord",
+                    )?;
+                    stmt.query_map(params![pattern], |row| row.get(0))
+                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                        .collect::<std::result::Result<Vec<String>, _>>()
+                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                }
+                ScopeType::Tag => {
+                    let pattern = format!("%{}%", scope_value_owned);
+                    let mut stmt = conn.prepare(
+                        "SELECT content
+                         FROM summaries
+                         WHERE tags LIKE ?1
+                         ORDER BY created_at",
+                    )?;
+                    stmt.query_map(params![pattern], |row| row.get(0))
+                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                        .collect::<std::result::Result<Vec<String>, _>>()
+                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                }
+            };
+            Ok(rows)
+        })?;
+
+        let summary_content: String = contents
+            .iter()
+            .map(|c| if c.len() > 200 { &c[..200] } else { c.as_str() })
+            .collect::<Vec<&str>>()
+            .join("\n");
+
+        let id = Ulid::new().to_string();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let id_clone = id.clone();
+        let content_clone = summary_content.clone();
+        let scope_value_clone = scope_value.to_string();
+
+        self.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO derived_summaries
+                     (id, scope_type, scope_value, content, stale, generated_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+                params![id_clone, scope_type_str, scope_value_clone, content_clone, now],
+            )
+            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            Ok(())
+        })?;
+
+        Ok(id)
+    }
+
+    fn get_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<Option<DerivedSummary>> {
+        use rusqlite::params;
+        use brain_persistence::error::BrainCoreError;
+
+        let scope_type_str = scope_type.as_str().to_string();
+        let scope_value_owned = scope_value.to_string();
+
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, scope_type, scope_value, content, stale, generated_at
+                 FROM derived_summaries
+                 WHERE scope_type = ?1 AND scope_value = ?2",
+            )?;
+
+            let mut rows = stmt
+                .query_map(params![scope_type_str, scope_value_owned], |row| {
+                    Ok(DerivedSummary {
+                        id: row.get(0)?,
+                        scope_type: row.get(1)?,
+                        scope_value: row.get(2)?,
+                        content: row.get(3)?,
+                        stale: row.get::<_, i64>(4)? != 0,
+                        generated_at: row.get(5)?,
+                    })
+                })
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+
+            match rows.next() {
+                Some(Ok(summary)) => Ok(Some(summary)),
+                Some(Err(e)) => Err(BrainCoreError::Database(e.to_string())),
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn mark_scope_stale(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<usize> {
+        use rusqlite::params;
+        use brain_persistence::error::BrainCoreError;
+
+        let scope_type_str = scope_type.as_str().to_string();
+        let scope_value_owned = scope_value.to_string();
+
+        self.with_write_conn(|conn| {
+            let n = conn
+                .execute(
+                    "UPDATE derived_summaries SET stale = 1
+                     WHERE scope_type = ?1 AND scope_value = ?2",
+                    params![scope_type_str, scope_value_owned],
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            Ok(n)
+        })
+    }
+
+    fn search_derived_summaries(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<DerivedSummary>> {
+        use rusqlite::params;
+        use brain_persistence::error::BrainCoreError;
+
+        let query_owned = query.to_string();
+        let limit_i64 = limit as i64;
+
+        self.with_read_conn(|conn| {
+            let fts_exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type='table' AND name='fts_derived_summaries'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false);
+
+            if fts_exists {
+                let mut stmt = conn.prepare(
+                    "SELECT ds.id, ds.scope_type, ds.scope_value, ds.content,
+                            ds.stale, ds.generated_at
+                     FROM fts_derived_summaries fts
+                     JOIN derived_summaries ds ON ds.rowid = fts.rowid
+                     WHERE fts_derived_summaries MATCH ?1
+                     LIMIT ?2",
+                )?;
+                let summaries = stmt
+                    .query_map(params![query_owned, limit_i64], |row| {
+                        Ok(DerivedSummary {
+                            id: row.get(0)?,
+                            scope_type: row.get(1)?,
+                            scope_value: row.get(2)?,
+                            content: row.get(3)?,
+                            stale: row.get::<_, i64>(4)? != 0,
+                            generated_at: row.get(5)?,
+                        })
+                    })
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    .collect::<std::result::Result<Vec<DerivedSummary>, _>>()
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                Ok(summaries)
+            } else {
+                let pattern = format!("%{}%", query_owned);
+                let mut stmt = conn.prepare(
+                    "SELECT id, scope_type, scope_value, content, stale, generated_at
+                     FROM derived_summaries
+                     WHERE content LIKE ?1
+                     LIMIT ?2",
+                )?;
+                let summaries = stmt
+                    .query_map(params![pattern, limit_i64], |row| {
+                        Ok(DerivedSummary {
+                            id: row.get(0)?,
+                            scope_type: row.get(1)?,
+                            scope_value: row.get(2)?,
+                            content: row.get(3)?,
+                            stale: row.get::<_, i64>(4)? != 0,
+                            generated_at: row.get(5)?,
+                        })
+                    })
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    .collect::<std::result::Result<Vec<DerivedSummary>, _>>()
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                Ok(summaries)
+            }
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock implementations for testing
 // ---------------------------------------------------------------------------
 

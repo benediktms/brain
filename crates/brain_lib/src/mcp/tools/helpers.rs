@@ -1,8 +1,13 @@
+use std::sync::Arc;
+
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::db::Db;
+use crate::embedder::Embed;
+use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
+use crate::store::StoreReader;
 
 /// Return `true` if the brain with `brain_id` has been archived.
 ///
@@ -71,6 +76,63 @@ pub fn inject_warnings(response: &mut Value, warnings: Vec<Warning>) {
     {
         map.insert("warnings".to_string(), warnings_value);
     }
+}
+
+/// Resolve brain keys and open remote store contexts for a federated search.
+///
+/// Handles:
+/// - Expanding `["all"]` to all registered brain names via the brain home config.
+/// - Skipping the local brain (already present in the callerʼs pipeline).
+/// - Opening each remote brain's search context; unresolvable brains are warned and skipped.
+///
+/// Returns a `Vec<(brain_name, Option<StoreReader>)>` suitable for `FederatedPipeline::brains`.
+/// The local brain is always prepended as the first entry.
+///
+/// Callers must have already resolved `store` and `embedder` from the `McpContext` before
+/// entering the federated path.
+pub async fn build_federated_brains(
+    ctx: &McpContext,
+    store: StoreReader,
+    embedder: &Arc<dyn Embed>,
+    brain_keys_input: &[String],
+) -> Result<Vec<(String, Option<StoreReader>)>, String> {
+    let brain_keys: Vec<String> = if brain_keys_input.iter().any(|b| b == "all") {
+        match crate::config::list_brain_keys(ctx.brain_home()) {
+            Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
+            Err(e) => return Err(format!("Failed to list brains: {e}")),
+        }
+    } else {
+        brain_keys_input.to_vec()
+    };
+
+    let mut brains: Vec<(String, Option<StoreReader>)> = Vec::new();
+    brains.push((ctx.brain_name().to_string(), Some(store)));
+
+    for key in &brain_keys {
+        if key == ctx.brain_name() {
+            continue;
+        }
+        match crate::config::open_remote_search_context(
+            ctx.brain_home(),
+            key,
+            std::path::Path::new(""),
+            embedder,
+        )
+        .await
+        {
+            Ok(Some(remote)) => {
+                brains.push((remote.brain_name, remote.store));
+            }
+            Ok(None) => {
+                tracing::warn!(brain = %key, "brain not found in registry, skipping");
+            }
+            Err(e) => {
+                tracing::warn!(brain = %key, error = %e, "failed to open remote brain, skipping");
+            }
+        }
+    }
+
+    Ok(brains)
 }
 
 #[cfg(test)]

@@ -117,44 +117,12 @@ impl McpTool for RecordSearch {
                     Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
                 }
             } else {
-                // Federated path — open remote brain contexts.
-                let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-                    match crate::config::list_brain_keys(ctx.brain_home()) {
-                        Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
-                        Err(e) => {
-                            return ToolCallResult::error(format!("Failed to list brains: {e}"));
-                        }
-                    }
-                } else {
-                    params.brains.clone()
+                // Federated path — delegate setup to shared helper.
+                let brains = match super::build_federated_brains(ctx, store.clone(), embedder, &params.brains).await
+                {
+                    Ok(b) => b,
+                    Err(e) => return ToolCallResult::error(e),
                 };
-
-                let mut brains: Vec<(String, Option<crate::store::StoreReader>)> = Vec::new();
-                brains.push((ctx.brain_name().to_string(), Some(store.clone())));
-
-                for key in &brain_keys {
-                    if key == ctx.brain_name() {
-                        continue;
-                    }
-                    match crate::config::open_remote_search_context(
-                        ctx.brain_home(),
-                        key,
-                        std::path::Path::new(""),
-                        embedder,
-                    )
-                    .await
-                    {
-                        Ok(Some(remote)) => {
-                            brains.push((remote.brain_name, remote.store));
-                        }
-                        Ok(None) => {
-                            tracing::warn!(brain = %key, "brain not found in registry, skipping");
-                        }
-                        Err(e) => {
-                            tracing::warn!(brain = %key, error = %e, "failed to open remote brain, skipping");
-                        }
-                    }
-                }
 
                 let federated = FederatedPipeline {
                     db: ctx.db(),
