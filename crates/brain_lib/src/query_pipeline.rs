@@ -48,6 +48,11 @@ pub struct SearchParams<'a> {
     /// tradeoff. Defaults to `AnnRefined`. See [`VectorSearchMode`] for
     /// details on each variant.
     pub mode: VectorSearchMode,
+    /// When true, follow 1-hop outgoing links from top-K vector results and
+    /// add the linked chunks to the candidate pool before ranking.
+    /// Defaults to `false`. Feature is not yet implemented — this field exists
+    /// to allow TDD test compilation before the expansion logic is wired in.
+    pub graph_expand: bool,
 }
 
 impl<'a> SearchParams<'a> {
@@ -66,6 +71,7 @@ impl<'a> SearchParams<'a> {
             k,
             query_tags,
             mode: VectorSearchMode::default(),
+            graph_expand: false,
         }
     }
 

@@ -175,6 +175,9 @@ impl McpContext {
         // Perform schema version check (same logic as IndexPipeline::new).
         crate::pipeline::ensure_schema_version(db, &mut store).await?;
 
+        // Attach the SQLite DB so PageRank is recomputed after each optimize cycle.
+        store.set_db(Arc::new(db.clone()));
+
         let embedder: Arc<dyn Embed> = {
             let model_dir = model_dir.to_path_buf();
             let e = tokio::task::spawn_blocking(move || Embedder::load(&model_dir))
