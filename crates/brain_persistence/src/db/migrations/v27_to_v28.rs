@@ -14,12 +14,26 @@ use crate::error::Result;
 ///
 /// New CHECK: `kind IN ('episode','reflection','summary','procedure')`
 pub fn migrate_v27_to_v28(conn: &Connection) -> Result<()> {
+    // FTS5 content tables create internal references that block ALTER TABLE RENAME.
+    // Drop triggers and FTS5 virtual table individually before the batch.
+    // (ensure_fts5 recreates them post-migration.)
+    conn.execute("DROP TRIGGER IF EXISTS summaries_fts_insert", [])?;
+    conn.execute("DROP TRIGGER IF EXISTS summaries_fts_delete", [])?;
+    conn.execute("DROP TRIGGER IF EXISTS summaries_fts_update", [])?;
+    conn.execute("DROP TABLE IF EXISTS fts_summaries", [])?;
+
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
+
+    // Save reflection_sources data before dropping (FK to summaries gets rebind on rename)
     conn.execute_batch(
-        "PRAGMA foreign_keys = OFF;
+        "CREATE TABLE reflection_sources_backup AS SELECT * FROM reflection_sources;
+         DROP TABLE reflection_sources;",
+    )?;
 
-         ALTER TABLE summaries RENAME TO summaries_v27;
+    conn.execute("ALTER TABLE summaries RENAME TO summaries_v27", [])?;
 
-         CREATE TABLE summaries (
+    conn.execute_batch(
+        "CREATE TABLE summaries (
              summary_id  TEXT PRIMARY KEY,
              file_id     TEXT REFERENCES files(file_id) ON DELETE SET NULL,
              kind        TEXT NOT NULL CHECK(kind IN ('episode','reflection','summary','procedure')),
@@ -47,14 +61,22 @@ pub fn migrate_v27_to_v28(conn: &Connection) -> Result<()> {
 
          DROP TABLE summaries_v27;
 
+         CREATE TABLE reflection_sources (
+             reflection_id TEXT NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
+             source_id     TEXT NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
+             PRIMARY KEY (reflection_id, source_id)
+         );
+
+         INSERT INTO reflection_sources SELECT * FROM reflection_sources_backup;
+         DROP TABLE reflection_sources_backup;
+
          CREATE INDEX IF NOT EXISTS idx_summaries_kind ON summaries(kind);
          CREATE INDEX IF NOT EXISTS idx_summaries_brain_id ON summaries(brain_id);
-         CREATE INDEX IF NOT EXISTS idx_summaries_kind_brain_created ON summaries(kind, brain_id, created_at DESC);
-
-         PRAGMA user_version = 28;
-
-         PRAGMA foreign_keys = ON;",
+         CREATE INDEX IF NOT EXISTS idx_summaries_kind_brain_created ON summaries(kind, brain_id, created_at DESC);",
     )?;
+
+    conn.execute("PRAGMA user_version = 28", [])?;
+    conn.execute("PRAGMA foreign_keys = ON", [])?;
     Ok(())
 }
 

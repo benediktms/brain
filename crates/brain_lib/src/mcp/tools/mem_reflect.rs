@@ -388,7 +388,7 @@ mod tests {
             "importance": 2.5
         });
         let result = registry.dispatch("memory.reflect", params, &ctx).await;
-        assert!(result.is_error.is_none());
+        assert!(result.is_error.is_none(), "reflect commit failed: {}", result.content[0].text);
         let text = &result.content[0].text;
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["mode"], "commit");
