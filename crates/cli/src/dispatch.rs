@@ -679,7 +679,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Memory { json, action } => {
             use commands::memory::run::{
                 MemoryCtx, ReflectCommitParams, ReflectPrepareParams, SearchParams2,
-                WriteEpisodeParams,
+                WriteEpisodeParams, WriteProcedureParams,
             };
             let ctx = MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
 
@@ -723,6 +723,24 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             goal,
                             actions,
                             outcome,
+                            tags,
+                            importance,
+                            lance_db: Some(cli.lance_db.clone()),
+                        },
+                    )
+                    .await?;
+                }
+                MemoryAction::WriteProcedure {
+                    title,
+                    steps,
+                    tags,
+                    importance,
+                } => {
+                    commands::memory::run::write_procedure(
+                        &ctx,
+                        WriteProcedureParams {
+                            title,
+                            steps,
                             tags,
                             importance,
                             lance_db: Some(cli.lance_db.clone()),

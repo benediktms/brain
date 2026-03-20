@@ -115,6 +115,40 @@ pub(crate) enum MemoryAction {
         importance: f64,
     },
 
+    /// Store a step-by-step procedure to the knowledge base
+    #[command(
+        name = "write-procedure",
+        visible_alias = "wp",
+        long_about = "Store a procedure (title + steps) to the knowledge base.\n\n\
+            Procedures are stored in SQLite and best-effort embedded into the vector store \
+            for semantic retrieval. Use for repeatable processes, runbooks, and how-tos.",
+        after_help = "EXAMPLES:\n  \
+            brain memory write-procedure \\\n    \
+                --title \"Deploy to production\" \\\n    \
+                --steps \"1. Run tests\\n2. Build image\\n3. Push to registry\\n4. Update manifests\"\n  \
+            brain memory wp \\\n    \
+                --title \"Debug auth failures\" \\\n    \
+                --steps \"1. Check JWT expiry\\n2. Verify signing key\" \\\n    \
+                --tags auth,debugging --importance 0.8"
+    )]
+    WriteProcedure {
+        /// Title of the procedure
+        #[arg(long, required = true)]
+        title: String,
+
+        /// Step-by-step content of the procedure
+        #[arg(long, required = true)]
+        steps: String,
+
+        /// Tags for categorization (comma-delimited, e.g. ops,deployment)
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+
+        /// Importance score (0.0 to 1.0)
+        #[arg(long, default_value = "0.9")]
+        importance: f64,
+    },
+
     /// Retrieve source material for reflection (prepare) or store a reflection (commit)
     #[command(
         long_about = "Two-phase episodic reflection.\n\n\

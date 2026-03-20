@@ -371,6 +371,80 @@ pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// write_procedure
+// ---------------------------------------------------------------------------
+
+pub struct WriteProcedureParams {
+    pub title: String,
+    pub steps: String,
+    pub tags: Vec<String>,
+    pub importance: f64,
+    /// Optional writable LanceDB store for best-effort embedding.
+    pub lance_db: Option<std::path::PathBuf>,
+}
+
+pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> Result<()> {
+    use brain_lib::ports::ProcedureWriter;
+
+    let embed_content = format!("{}\n{}", params.title, params.steps);
+
+    let summary_id = ctx.stores.db().store_procedure(
+        &params.title,
+        &params.steps,
+        &params.tags,
+        params.importance,
+        &ctx.stores.brain_id,
+    )?;
+
+    // Best-effort embedding.
+    if let Some(ref lance_path) = params.lance_db {
+        match Store::open_or_create(lance_path).await {
+            Ok(store) => {
+                match embed_batch_async(&ctx.search.embedder, vec![embed_content.clone()]).await {
+                    Ok(vecs) => {
+                        if let Some(vec) = vecs.into_iter().next()
+                            && let Err(e) = store
+                                .upsert_summary(&summary_id, &embed_content, &vec)
+                                .await
+                        {
+                            eprintln!("warning: failed to embed procedure (best-effort): {e}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: failed to generate embedding for procedure (best-effort): {e}"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: failed to open LanceDB for embedding (best-effort): {e}");
+            }
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "status": "stored",
+            "summary_id": summary_id,
+            "title": params.title,
+            "tags": params.tags,
+            "importance": params.importance,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Procedure stored: {summary_id}");
+        println!("  Title:      {}", params.title);
+        println!("  Importance: {}", params.importance);
+        if !params.tags.is_empty() {
+            println!("  Tags:       {}", params.tags.join(", "));
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // reflect_prepare
 // ---------------------------------------------------------------------------
 
