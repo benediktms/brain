@@ -155,8 +155,8 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
                 }
                 if let Some(ref ss) = stub.signal_scores {
                     v["signals"] = json!({
-                        "vector": ss.vector,
-                        "keyword": ss.keyword,
+                        "sim_vector": ss.vector,
+                        "bm25": ss.keyword,
                         "recency": ss.recency,
                         "links": ss.links,
                         "tag_match": ss.tag_match,
