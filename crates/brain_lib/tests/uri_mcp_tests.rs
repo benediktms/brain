@@ -137,7 +137,7 @@ async fn test_tasks_get_accepts_brain_uri_as_task_id() {
 
     let parsed = parse_response(&get_result);
     assert_eq!(
-        parsed["task"]["title"], "URI input task",
+        parsed["title"], "URI input task",
         "tasks.get via synapse:// URI must return the correct task; got: {parsed}"
     );
 }
@@ -177,7 +177,7 @@ async fn test_records_get_accepts_brain_uri_as_record_id() {
 
     let parsed = parse_response(&get_result);
     assert_eq!(
-        parsed["record"]["title"], "URI input record",
+        parsed["title"], "URI input record",
         "records.get via synapse:// URI must return the correct record; got: {parsed}"
     );
 }

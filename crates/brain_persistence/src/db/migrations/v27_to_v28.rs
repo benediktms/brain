@@ -72,7 +72,9 @@ pub fn migrate_v27_to_v28(conn: &Connection) -> Result<()> {
 
          CREATE INDEX IF NOT EXISTS idx_summaries_kind ON summaries(kind);
          CREATE INDEX IF NOT EXISTS idx_summaries_brain_id ON summaries(brain_id);
-         CREATE INDEX IF NOT EXISTS idx_summaries_kind_brain_created ON summaries(kind, brain_id, created_at DESC);",
+         CREATE INDEX IF NOT EXISTS idx_summaries_kind_brain_created ON summaries(kind, brain_id, created_at DESC);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_chunk_summarizer
+             ON summaries(chunk_id, summarizer) WHERE kind = 'summary';",
     )?;
 
     conn.execute("PRAGMA user_version = 28", [])?;
