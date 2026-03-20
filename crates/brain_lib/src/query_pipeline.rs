@@ -332,11 +332,16 @@ where
                 // Use the composite signal (vector + keyword) as the parent score
                 // so that FTS-strong seeds also produce meaningful expansion boosts.
                 let parent_sim = (seed.sim_vector + seed.bm25).min(1.0);
-                if let Ok(outlinks) = self.db.get_outlinks(&file_id) {
-                    for target_file_id in outlinks {
-                        if !expansion_entries.iter().any(|(fid, _)| fid == &target_file_id) {
-                            expansion_entries.push((target_file_id, parent_sim));
+                match self.db.get_outlinks(&file_id) {
+                    Ok(outlinks) => {
+                        for target_file_id in outlinks {
+                            if !expansion_entries.iter().any(|(fid, _)| fid == &target_file_id) {
+                                expansion_entries.push((target_file_id, parent_sim));
+                            }
                         }
+                    }
+                    Err(e) => {
+                        warn!(file_id = %file_id, error = %e, "graph expansion: get_outlinks failed");
                     }
                 }
             }
@@ -350,48 +355,50 @@ where
                 let parent_sim_map: std::collections::HashMap<String, f64> =
                     expansion_entries.into_iter().collect();
 
-                if let Ok(expansion_chunks) = self.db.get_chunks_by_file_ids(&expansion_file_ids) {
-                    let now = crate::utils::now_ts();
-                    for chunk in expansion_chunks {
-                        let graph_sim = parent_sim_map
-                            .get(&chunk.file_id)
-                            .copied()
-                            .unwrap_or(0.0) * 0.5;
+                match self.db.get_chunks_by_file_ids(&expansion_file_ids) {
+                    Ok(expansion_chunks) => {
+                        let now = crate::utils::now_ts();
+                        for chunk in expansion_chunks {
+                            let graph_sim = parent_sim_map
+                                .get(&chunk.file_id)
+                                .copied()
+                                .unwrap_or(0.0) * 0.5;
 
-                        // If this chunk is already in the candidate pool, boost its sim_vector
-                        // if the graph signal is higher than its current vector score.
-                        if let Some(existing) = candidate_vec
-                            .iter_mut()
-                            .find(|c| c.chunk_id == chunk.chunk_id)
-                        {
-                            if graph_sim > existing.sim_vector {
-                                existing.sim_vector = graph_sim;
+                            if let Some(existing) = candidate_vec
+                                .iter_mut()
+                                .find(|c| c.chunk_id == chunk.chunk_id)
+                            {
+                                if graph_sim > existing.sim_vector {
+                                    existing.sim_vector = graph_sim;
+                                }
+                                continue;
                             }
-                            continue;
-                        }
 
-                        // Not in pool yet — add as a new expansion candidate.
-                        let age_seconds = if let Some(indexed_at) = chunk.last_indexed_at {
-                            (now - indexed_at).max(0) as f64
-                        } else {
-                            0.0
-                        };
-                        candidate_vec.push(CandidateSignals {
-                            chunk_id: chunk.chunk_id,
-                            sim_vector: graph_sim,
-                            bm25: 0.0,
-                            age_seconds,
-                            pagerank_score: chunk.pagerank_score,
-                            tags: vec![],
-                            importance: 1.0,
-                            file_path: chunk.file_path,
-                            heading_path: chunk.heading_path,
-                            content: chunk.content.clone(),
-                            token_estimate: estimate_tokens(&chunk.content),
-                            byte_start: chunk.byte_start,
-                            byte_end: chunk.byte_end,
-                            summary_kind: None,
-                        });
+                            let age_seconds = if let Some(indexed_at) = chunk.last_indexed_at {
+                                (now - indexed_at).max(0) as f64
+                            } else {
+                                0.0
+                            };
+                            candidate_vec.push(CandidateSignals {
+                                chunk_id: chunk.chunk_id,
+                                sim_vector: graph_sim,
+                                bm25: 0.0,
+                                age_seconds,
+                                pagerank_score: chunk.pagerank_score,
+                                tags: vec![],
+                                importance: 1.0,
+                                file_path: chunk.file_path,
+                                heading_path: chunk.heading_path,
+                                content: chunk.content.clone(),
+                                token_estimate: estimate_tokens(&chunk.content),
+                                byte_start: chunk.byte_start,
+                                byte_end: chunk.byte_end,
+                                summary_kind: None,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "graph expansion: get_chunks_by_file_ids failed");
                     }
                 }
             }
