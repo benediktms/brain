@@ -291,9 +291,7 @@ impl TaskGet {
         }
 
         let uri = SynapseUri::for_task(ctx.brain_name(), &short_id).to_string();
-        let task_copy = task_json.clone();
         if let Some(obj) = task_json.as_object_mut() {
-            obj.insert("task".into(), task_copy);
             obj.insert("uri".into(), json!(uri));
         }
 

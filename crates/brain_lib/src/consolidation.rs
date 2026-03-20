@@ -122,7 +122,8 @@ fn format_date(ts: i64) -> String {
     }
     let days_since_epoch = ts / 86400;
     // Use a simple Julian-day algorithm to convert to year-month-day.
-    let (y, m, d) = days_to_ymd(days_since_epoch as u32);
+    // Clamp to valid u32 range (negative timestamps handled by ts <= 0 guard above).
+    let (y, m, d) = days_to_ymd(days_since_epoch.clamp(0, u32::MAX as i64) as u32);
     format!("{y:04}-{m:02}-{d:02}")
 }
 

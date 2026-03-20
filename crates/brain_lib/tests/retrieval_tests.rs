@@ -784,11 +784,8 @@ fn test_episode_store_and_list() {
 
 // ─── 10. Procedure kind surfaces in search_minimal ──────────────
 
-/// TDD: verify that a procedure stored in summaries (kind='procedure') is
+/// Verify that a procedure stored in summaries (kind='procedure') is
 /// returned with kind="procedure" by memory.search_minimal.
-///
-/// This test is in the RED phase — it will FAIL until derive_kind is updated
-/// to propagate summary_kind="procedure" through the query pipeline.
 #[tokio::test]
 async fn test_procedure_surfaces_in_search_minimal_with_kind_procedure() {
     use brain_lib::embedder::embed_batch_async;

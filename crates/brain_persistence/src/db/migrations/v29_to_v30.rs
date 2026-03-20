@@ -23,7 +23,7 @@ use crate::error::Result;
 /// ```
 pub fn migrate_v29_to_v30(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "CREATE TABLE derived_summaries (
+        "CREATE TABLE IF NOT EXISTS derived_summaries (
              id           TEXT    PRIMARY KEY,
              scope_type   TEXT    NOT NULL
                                   CHECK(scope_type IN ('directory', 'tag')),
@@ -33,7 +33,7 @@ pub fn migrate_v29_to_v30(conn: &Connection) -> Result<()> {
              generated_at INTEGER NOT NULL DEFAULT 0,
              UNIQUE(scope_type, scope_value)
          );
-         CREATE INDEX idx_derived_scope ON derived_summaries(scope_type, scope_value);
+         CREATE INDEX IF NOT EXISTS idx_derived_scope ON derived_summaries(scope_type, scope_value);
          PRAGMA user_version = 30;",
     )?;
     Ok(())

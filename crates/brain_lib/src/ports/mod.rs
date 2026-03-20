@@ -1022,7 +1022,7 @@ impl DerivedSummaryStore for Db {
 
         let summary_content: String = contents
             .iter()
-            .map(|c| if c.len() > 200 { &c[..200] } else { c.as_str() })
+            .map(|c| c.get(..200).unwrap_or(c.as_str()))
             .collect::<Vec<&str>>()
             .join("\n");
 

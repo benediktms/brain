@@ -92,6 +92,11 @@ impl McpTool for MemSearchMinimal {
                         "type": "string",
                         "enum": ["exact", "ann_refined", "ann_fast"],
                         "description": "Vector search strategy controlling the ANN (Approximate Nearest Neighbor) tradeoff. exact: brute-force scan against all vectors — fully deterministic, slowest. ann_refined (default): ANN index finds candidates, then rescores against full uncompressed vectors for accurate ordering. ann_fast: pure ANN with compressed vectors only — fastest, but distances are approximate."
+                    },
+                    "explain": {
+                        "type": "boolean",
+                        "description": "When true, return per-signal scores (vector, bm25, recency, links, tag_match, importance) for each result. Default: false",
+                        "default": false
                     }
                 },
                 "required": ["query"]

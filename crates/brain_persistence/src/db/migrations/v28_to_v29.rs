@@ -21,14 +21,14 @@ use crate::error::Result;
 /// ```
 pub fn migrate_v28_to_v29(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "CREATE TABLE object_links (
+        "CREATE TABLE IF NOT EXISTS object_links (
              source_uri TEXT NOT NULL,
              target_uri TEXT NOT NULL,
              link_type  TEXT NOT NULL DEFAULT 'related',
              created_at INTEGER NOT NULL,
              PRIMARY KEY (source_uri, target_uri)
          );
-         CREATE INDEX idx_object_links_target ON object_links(target_uri);
+         CREATE INDEX IF NOT EXISTS idx_object_links_target ON object_links(target_uri);
          PRAGMA user_version = 29;",
     )?;
     Ok(())

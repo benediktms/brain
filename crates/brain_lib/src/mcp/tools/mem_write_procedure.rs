@@ -79,6 +79,7 @@ impl McpTool for MemWriteProcedure {
 
             // Construct the embed text: title + steps.
             let embed_content = format!("{}\n\n{}", params.title, params.steps);
+            let importance = params.importance.clamp(0.0, 1.0);
 
             let summary_id = match ctx
                 .db()
@@ -86,7 +87,7 @@ impl McpTool for MemWriteProcedure {
                     &params.title,
                     &params.steps,
                     &params.tags,
-                    params.importance,
+                    importance,
                     ctx.brain_id(),
                 ) {
                 Ok(id) => id,

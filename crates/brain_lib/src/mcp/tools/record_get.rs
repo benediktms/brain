@@ -101,9 +101,7 @@ impl RecordGet {
         }
 
         let uri = SynapseUri::for_record(ctx.brain_name(), &compact_id).to_string();
-        let record_copy = result.clone();
         if let Some(obj) = result.as_object_mut() {
-            obj.insert("record".into(), record_copy);
             obj.insert("uri".into(), json!(uri));
         }
 

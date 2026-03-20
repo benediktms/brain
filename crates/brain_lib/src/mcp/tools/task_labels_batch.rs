@@ -85,7 +85,7 @@ impl TaskLabelsBatch {
         };
 
         if task_ids.is_empty() {
-            return batch_response(vec![], vec![], brain_name);
+            return batch_response(vec![], vec![]);
         }
 
         let mut events = Vec::new();
@@ -131,7 +131,7 @@ impl TaskLabelsBatch {
             }
         }
 
-        batch_response(succeeded, failed, brain_name)
+        batch_response(succeeded, failed)
     }
 
     fn label_rename(&self, store: &TaskStore, params: &Params, brain_name: &str) -> ToolCallResult {
@@ -150,7 +150,7 @@ impl TaskLabelsBatch {
         };
 
         if task_ids.is_empty() {
-            return batch_response(vec![], vec![], brain_name);
+            return batch_response(vec![], vec![]);
         }
 
         let mut events = Vec::new();
@@ -202,7 +202,7 @@ impl TaskLabelsBatch {
             }
         }
 
-        batch_response(succeeded, failed, brain_name)
+        batch_response(succeeded, failed)
     }
 
     fn label_purge(&self, store: &TaskStore, params: &Params, brain_name: &str) -> ToolCallResult {
@@ -217,7 +217,7 @@ impl TaskLabelsBatch {
         };
 
         if task_ids.is_empty() {
-            return batch_response(vec![], vec![], brain_name);
+            return batch_response(vec![], vec![]);
         }
 
         let events: Vec<TaskEvent> = task_ids
@@ -254,11 +254,11 @@ impl TaskLabelsBatch {
             }
         }
 
-        batch_response(succeeded, failed, brain_name)
+        batch_response(succeeded, failed)
     }
 }
 
-fn batch_response(succeeded: Vec<Value>, failed: Vec<Value>, _brain_name: &str) -> ToolCallResult {
+fn batch_response(succeeded: Vec<Value>, failed: Vec<Value>) -> ToolCallResult {
     let response = json!({
         "succeeded": succeeded,
         "failed": failed,
