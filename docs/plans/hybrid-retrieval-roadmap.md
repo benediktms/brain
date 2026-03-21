@@ -5,7 +5,9 @@ effort: ~3 months
 priority: high
 ---
 
-# OpenViking-Inspired Development Roadmap for Brain
+# Hybrid Retrieval & Knowledge Architecture Roadmap
+
+> Heavily inspired by [OpenViking](https://github.com/openviking) — particularly its unified URI addressing, tiered content representations (L0/L1/L2), and retrieval observability patterns.
 
 **Scope:** 6-phase roadmap, blocked on [Episodic Memory Foundation](./episodic-memory.md).
 
