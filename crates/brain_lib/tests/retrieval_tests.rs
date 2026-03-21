@@ -782,6 +782,110 @@ fn test_episode_store_and_list() {
     assert_eq!(ep.tags, vec!["indexing"]);
 }
 
+// ─── 10. Procedure kind surfaces in search_minimal ──────────────
+
+/// Verify that a procedure stored in summaries (kind='procedure') is
+/// returned with kind="procedure" by memory.search_minimal.
+#[tokio::test]
+async fn test_procedure_surfaces_in_search_minimal_with_kind_procedure() {
+    use brain_lib::embedder::embed_batch_async;
+
+    let tmp = TempDir::new().unwrap();
+    let sqlite_path = tmp.path().join("brain.db");
+    let lance_path = tmp.path().join("brain_lancedb");
+
+    // 1. Open DB and store
+    let db = Db::open(&sqlite_path).unwrap();
+    let store = Store::open_or_create(&lance_path).await.unwrap();
+
+    // 2. Insert a procedure row directly into summaries
+    let procedure_content = "Step 1: do this. Step 2: do that. Procedure for quarterly review.";
+    let summary_id: String = db
+        .with_write_conn(|conn| {
+            let id = ulid::Ulid::new().to_string();
+            let now = brain_lib::utils::now_ts();
+            conn.execute(
+                "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, valid_from, created_at, updated_at)
+                 VALUES (?1, 'procedure', ?2, ?3, '[]', 1.0, '', ?4, ?4, ?4)",
+                rusqlite::params![id, "Quarterly Review Procedure", procedure_content, now],
+            )?;
+            Ok(id)
+        })
+        .unwrap();
+
+    // 3. Embed it into LanceDB using MockEmbedder
+    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(brain_lib::embedder::MockEmbedder);
+    let embedder_arc = Arc::clone(&embedder);
+    let vecs = embed_batch_async(&embedder_arc, vec![procedure_content.to_string()])
+        .await
+        .unwrap();
+    let vec = vecs.into_iter().next().unwrap();
+    store
+        .upsert_summary(&summary_id, procedure_content, &vec)
+        .await
+        .unwrap();
+
+    drop(store);
+
+    // 4. Build McpContext over the same DBs
+    let store2 = Store::open_or_create(&lance_path).await.unwrap();
+    let store2_reader = brain_lib::store::StoreReader::from_store(&store2);
+    let ctx_db = Db::open(&sqlite_path).unwrap();
+    let stores2 =
+        brain_lib::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path()).unwrap();
+    let ctx = brain_lib::mcp::McpContext {
+        stores: stores2,
+        search: Some(brain_lib::search_service::SearchService {
+            store: store2_reader,
+            embedder: Arc::new(brain_lib::embedder::MockEmbedder),
+        }),
+        writable_store: Some(store2),
+        metrics: Arc::new(brain_lib::metrics::Metrics::new()),
+    };
+
+    // 5. Search — use the procedure's exact content so MockEmbedder yields a
+    //    near-perfect vector match (same hash-based embedding).
+    let params = serde_json::json!({
+        "query": procedure_content,
+        "intent": "lookup",
+        "budget_tokens": 500,
+        "k": 5
+    });
+
+    let registry = brain_lib::mcp::tools::ToolRegistry::new();
+    let result = registry
+        .dispatch("memory.search_minimal", params, &ctx)
+        .await;
+    assert!(
+        result.is_error.is_none(),
+        "search should not error: {:?}",
+        result.content
+    );
+
+    let text = &result.content[0].text;
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+
+    // 6. Assert at least one result has kind="procedure"
+    let results = parsed["results"].as_array().expect("results array present");
+    assert!(
+        !results.is_empty(),
+        "expected at least one search result, got: {text}"
+    );
+
+    let procedure_result = results
+        .iter()
+        .find(|r| r["kind"].as_str() == Some("procedure"));
+
+    assert!(
+        procedure_result.is_some(),
+        "expected a result with kind='procedure', got kinds: {:?}",
+        results
+            .iter()
+            .map(|r| r["kind"].as_str().unwrap_or("?"))
+            .collect::<Vec<_>>()
+    );
+}
+
 // ─── 9. Full pipeline with fixtures ──────────────────────────────
 
 #[tokio::test]

@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{DependencyPayload, EventType, TaskEvent};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -64,7 +65,7 @@ impl TaskDepsBatch {
         };
 
         if pairs.is_empty() {
-            return batch_response(vec![], vec![]);
+            return batch_response(vec![], vec![], ctx.brain_name());
         }
 
         let mut succeeded = Vec::new();
@@ -72,7 +73,8 @@ impl TaskDepsBatch {
 
         // Process sequentially so cycle detection sees accumulated state
         for pair in pairs {
-            let task_id = match ctx.stores.tasks.resolve_task_id(&pair.task_id) {
+            let task_id_input = resolve_id(&pair.task_id);
+            let task_id = match ctx.stores.tasks.resolve_task_id(&task_id_input) {
                 Ok(id) => id,
                 Err(e) => {
                     failed.push(json!({
@@ -83,7 +85,8 @@ impl TaskDepsBatch {
                     continue;
                 }
             };
-            let depends_on = match ctx.stores.tasks.resolve_task_id(&pair.depends_on_task_id) {
+            let depends_on_input = resolve_id(&pair.depends_on_task_id);
+            let depends_on = match ctx.stores.tasks.resolve_task_id(&depends_on_input) {
                 Ok(id) => id,
                 Err(e) => {
                     failed.push(json!({
@@ -121,7 +124,7 @@ impl TaskDepsBatch {
             }
         }
 
-        batch_response(succeeded, failed)
+        batch_response(succeeded, failed, ctx.brain_name())
     }
 
     fn dep_chain(&self, ctx: &McpContext, params: &Params) -> ToolCallResult {
@@ -138,7 +141,8 @@ impl TaskDepsBatch {
         let mut resolved = Vec::new();
         let mut failed = Vec::new();
         for raw_id in task_ids {
-            match ctx.stores.tasks.resolve_task_id(raw_id) {
+            let resolved_input = resolve_id(raw_id);
+            match ctx.stores.tasks.resolve_task_id(&resolved_input) {
                 Ok(id) => resolved.push(id),
                 Err(e) => {
                     failed.push(json!({
@@ -151,7 +155,7 @@ impl TaskDepsBatch {
 
         if !failed.is_empty() {
             // Can't build a chain with missing tasks — report all as failed
-            return batch_response(vec![], failed);
+            return batch_response(vec![], failed, ctx.brain_name());
         }
 
         // Create edges: B→A, C→B, etc. (each task depends on the previous)
@@ -186,7 +190,7 @@ impl TaskDepsBatch {
             }
         }
 
-        batch_response(succeeded, failed)
+        batch_response(succeeded, failed, ctx.brain_name())
     }
 
     fn dep_fan(&self, ctx: &McpContext, params: &Params) -> ToolCallResult {
@@ -200,10 +204,11 @@ impl TaskDepsBatch {
         };
 
         if dependents.is_empty() {
-            return batch_response(vec![], vec![]);
+            return batch_response(vec![], vec![], ctx.brain_name());
         }
 
-        let source_resolved = match ctx.stores.tasks.resolve_task_id(source) {
+        let source_input = resolve_id(source);
+        let source_resolved = match ctx.stores.tasks.resolve_task_id(&source_input) {
             Ok(id) => id,
             Err(e) => {
                 return ToolCallResult::error(format!("Failed to resolve source_task_id: {e}"));
@@ -214,7 +219,8 @@ impl TaskDepsBatch {
         let mut failed = Vec::new();
 
         for raw_id in dependents {
-            let dep_id = match ctx.stores.tasks.resolve_task_id(raw_id) {
+            let dep_input = resolve_id(raw_id);
+            let dep_id = match ctx.stores.tasks.resolve_task_id(&dep_input) {
                 Ok(id) => id,
                 Err(e) => {
                     failed.push(json!({
@@ -252,7 +258,7 @@ impl TaskDepsBatch {
             }
         }
 
-        batch_response(succeeded, failed)
+        batch_response(succeeded, failed, ctx.brain_name())
     }
 
     fn dep_clear(&self, ctx: &McpContext, params: &Params) -> ToolCallResult {
@@ -261,7 +267,8 @@ impl TaskDepsBatch {
             _ => return ToolCallResult::error("Missing required parameter: task_id"),
         };
 
-        let resolved = match ctx.stores.tasks.resolve_task_id(task_id) {
+        let task_id_input = resolve_id(task_id);
+        let resolved = match ctx.stores.tasks.resolve_task_id(&task_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve task_id: {e}")),
         };
@@ -274,7 +281,7 @@ impl TaskDepsBatch {
         };
 
         if deps.is_empty() {
-            return batch_response(vec![], vec![]);
+            return batch_response(vec![], vec![], ctx.brain_name());
         }
 
         let events: Vec<TaskEvent> = deps
@@ -313,11 +320,20 @@ impl TaskDepsBatch {
             }
         }
 
-        batch_response(succeeded, failed)
+        batch_response(succeeded, failed, ctx.brain_name())
     }
 }
 
-fn batch_response(succeeded: Vec<Value>, failed: Vec<Value>) -> ToolCallResult {
+fn batch_response(mut succeeded: Vec<Value>, failed: Vec<Value>, brain_name: &str) -> ToolCallResult {
+    // Add uri to each succeeded item that has a task_id
+    for item in &mut succeeded {
+        if let Some(obj) = item.as_object_mut()
+            && let Some(task_id) = obj.get("task_id").and_then(|v| v.as_str()).map(String::from)
+        {
+            let uri = SynapseUri::for_task(brain_name, &task_id).to_string();
+            obj.insert("uri".into(), json!(uri));
+        }
+    }
     let response = json!({
         "succeeded": succeeded,
         "failed": failed,

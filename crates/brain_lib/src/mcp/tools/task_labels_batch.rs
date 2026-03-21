@@ -8,6 +8,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
 use crate::tasks::events::{EventType, LabelPayload, TaskEvent};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -49,18 +50,18 @@ impl TaskLabelsBatch {
                         return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
                     }
                 };
-            return self.execute_with_store(params, &remote_tasks);
+            return self.execute_with_store(params, &remote_tasks, &brain_name);
         }
 
-        self.execute_with_store(params, &ctx.stores.tasks)
+        self.execute_with_store(params, &ctx.stores.tasks, ctx.brain_name())
     }
 
-    fn execute_with_store(&self, params: Params, store: &TaskStore) -> ToolCallResult {
+    fn execute_with_store(&self, params: Params, store: &TaskStore, brain_name: &str) -> ToolCallResult {
         match params.action.as_str() {
-            "add" => self.label_add_remove(store, &params, EventType::LabelAdded),
-            "remove" => self.label_add_remove(store, &params, EventType::LabelRemoved),
-            "rename" => self.label_rename(store, &params),
-            "purge" => self.label_purge(store, &params),
+            "add" => self.label_add_remove(store, &params, EventType::LabelAdded, brain_name),
+            "remove" => self.label_add_remove(store, &params, EventType::LabelRemoved, brain_name),
+            "rename" => self.label_rename(store, &params, brain_name),
+            "purge" => self.label_purge(store, &params, brain_name),
             other => ToolCallResult::error(format!(
                 "Invalid action: '{other}'. Must be one of: add, remove, rename, purge"
             )),
@@ -72,6 +73,7 @@ impl TaskLabelsBatch {
         store: &TaskStore,
         params: &Params,
         event_type: EventType,
+        brain_name: &str,
     ) -> ToolCallResult {
         let label = match &params.label {
             Some(l) if !l.is_empty() => l,
@@ -90,7 +92,8 @@ impl TaskLabelsBatch {
         let mut failed = Vec::new();
 
         for raw_id in task_ids {
-            match store.resolve_task_id(raw_id) {
+            let resolved_input = resolve_id(raw_id);
+            match store.resolve_task_id(&resolved_input) {
                 Ok(resolved) => {
                     events.push(TaskEvent::new(
                         &resolved,
@@ -114,7 +117,11 @@ impl TaskLabelsBatch {
         let mut succeeded = Vec::new();
         for (i, result) in results.into_iter().enumerate() {
             match result {
-                Ok(()) => succeeded.push(json!(events[i].task_id)),
+                Ok(()) => {
+                    let tid = &events[i].task_id;
+                    let uri = SynapseUri::for_task(brain_name, tid).to_string();
+                    succeeded.push(json!({ "task_id": tid, "uri": uri }));
+                }
                 Err(e) => {
                     failed.push(json!({
                         "task_id": events[i].task_id,
@@ -127,7 +134,7 @@ impl TaskLabelsBatch {
         batch_response(succeeded, failed)
     }
 
-    fn label_rename(&self, store: &TaskStore, params: &Params) -> ToolCallResult {
+    fn label_rename(&self, store: &TaskStore, params: &Params, brain_name: &str) -> ToolCallResult {
         let old_label = match &params.old_label {
             Some(l) if !l.is_empty() => l,
             _ => return ToolCallResult::error("Missing required parameter: old_label"),
@@ -178,7 +185,8 @@ impl TaskLabelsBatch {
             let add_ok = results[add_idx].is_ok();
 
             if remove_ok && add_ok {
-                succeeded.push(json!(tid));
+                let uri = SynapseUri::for_task(brain_name, tid).to_string();
+                succeeded.push(json!({ "task_id": tid, "uri": uri }));
             } else {
                 let mut errors = Vec::new();
                 if let Err(e) = &results[remove_idx] {
@@ -197,7 +205,7 @@ impl TaskLabelsBatch {
         batch_response(succeeded, failed)
     }
 
-    fn label_purge(&self, store: &TaskStore, params: &Params) -> ToolCallResult {
+    fn label_purge(&self, store: &TaskStore, params: &Params, brain_name: &str) -> ToolCallResult {
         let label = match &params.label {
             Some(l) if !l.is_empty() => l,
             _ => return ToolCallResult::error("Missing required parameter: label"),
@@ -232,7 +240,11 @@ impl TaskLabelsBatch {
 
         for (i, result) in results.into_iter().enumerate() {
             match result {
-                Ok(()) => succeeded.push(json!(task_ids[i])),
+                Ok(()) => {
+                    let tid = &task_ids[i];
+                    let uri = SynapseUri::for_task(brain_name, tid).to_string();
+                    succeeded.push(json!({ "task_id": tid, "uri": uri }));
+                }
                 Err(e) => {
                     failed.push(json!({
                         "task_id": task_ids[i],

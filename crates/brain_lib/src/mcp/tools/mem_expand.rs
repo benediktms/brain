@@ -8,6 +8,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::QueryPipeline;
+use crate::uri::resolve_id;
 
 use super::{McpTool, json_response};
 
@@ -72,9 +73,14 @@ impl McpTool for MemExpand {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
+            let memory_ids: Vec<String> = params
+                .memory_ids
+                .iter()
+                .map(|id| resolve_id(id))
+                .collect();
             let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
             let expand_result = match pipeline
-                .expand(&params.memory_ids, params.budget_tokens as usize)
+                .expand(&memory_ids, params.budget_tokens as usize)
                 .await
             {
                 Ok(r) => r,
@@ -120,6 +126,7 @@ mod tests {
 
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
+    use crate::ports::ChunkMetaWriter;
 
     #[tokio::test]
     async fn test_missing_ids() {
@@ -140,5 +147,45 @@ mod tests {
         let text = &result.content[0].text;
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["memories"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_expand_record_chunk_id() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // Insert a record chunk using the record:* file_id convention.
+        // Chunk ID will be "record:BRN-TEST01:0" (chunk_ord 0).
+        let record_file_id = "record:BRN-TEST01";
+        let capsule_text = "This is the record capsule content for expand test.";
+        ctx.db()
+            .upsert_record_chunk(record_file_id, capsule_text)
+            .expect("upsert_record_chunk must succeed");
+
+        let chunk_id = format!("{record_file_id}:0");
+        let params = json!({
+            "memory_ids": [chunk_id],
+            "budget_tokens": 1000
+        });
+        let result = registry.dispatch("memory.expand", params, &ctx).await;
+
+        assert!(
+            result.is_error.is_none(),
+            "expand must not return an error for a valid record:* chunk ID"
+        );
+
+        let text = &result.content[0].text;
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+
+        let memories = parsed["memories"].as_array().expect("memories must be an array");
+        assert_eq!(memories.len(), 1, "exactly one memory must be returned");
+
+        let content = memories[0]["content"]
+            .as_str()
+            .expect("memory must have a content field");
+        assert!(
+            content.contains(capsule_text),
+            "returned content must contain the inserted capsule text"
+        );
     }
 }

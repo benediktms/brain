@@ -175,6 +175,9 @@ impl McpContext {
         // Perform schema version check (same logic as IndexPipeline::new).
         crate::pipeline::ensure_schema_version(db, &mut store).await?;
 
+        // Attach the SQLite DB so PageRank is recomputed after each optimize cycle.
+        store.set_db(Arc::new(db.clone()));
+
         let embedder: Arc<dyn Embed> = {
             let model_dir = model_dir.to_path_buf();
             let e = tokio::task::spawn_blocking(move || Embedder::load(&model_dir))
@@ -599,7 +602,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 25);
+        assert_eq!(tools.len(), 29);
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"memory.search_minimal"));

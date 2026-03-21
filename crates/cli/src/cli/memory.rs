@@ -48,6 +48,10 @@ pub(crate) enum MemoryAction {
         /// Search across specific brains (repeatable). Use 'all' for all registered brains.
         #[arg(long = "brain", value_name = "NAME_OR_ID", num_args = 1)]
         brains: Vec<String>,
+
+        /// Show per-result signal score breakdowns
+        #[arg(long)]
+        explain: bool,
     },
 
     /// Expand memory stubs to full content
@@ -109,6 +113,93 @@ pub(crate) enum MemoryAction {
         /// Importance score (0.0 to 1.0)
         #[arg(long, default_value = "1.0")]
         importance: f64,
+    },
+
+    /// Store a step-by-step procedure to the knowledge base
+    #[command(
+        name = "write-procedure",
+        visible_alias = "wp",
+        long_about = "Store a procedure (title + steps) to the knowledge base.\n\n\
+            Procedures are stored in SQLite and best-effort embedded into the vector store \
+            for semantic retrieval. Use for repeatable processes, runbooks, and how-tos.",
+        after_help = "EXAMPLES:\n  \
+            brain memory write-procedure \\\n    \
+                --title \"Deploy to production\" \\\n    \
+                --steps \"1. Run tests\\n2. Build image\\n3. Push to registry\\n4. Update manifests\"\n  \
+            brain memory wp \\\n    \
+                --title \"Debug auth failures\" \\\n    \
+                --steps \"1. Check JWT expiry\\n2. Verify signing key\" \\\n    \
+                --tags auth,debugging --importance 0.8"
+    )]
+    WriteProcedure {
+        /// Title of the procedure
+        #[arg(long, required = true)]
+        title: String,
+
+        /// Step-by-step content of the procedure
+        #[arg(long, required = true)]
+        steps: String,
+
+        /// Tags for categorization (comma-delimited, e.g. ops,deployment)
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+
+        /// Importance score (0.0 to 1.0)
+        #[arg(long, default_value = "0.9")]
+        importance: f64,
+    },
+
+    /// Group recent episodes by temporal proximity into consolidation clusters
+    #[command(
+        name = "consolidate",
+        visible_alias = "co",
+        long_about = "Group recent episodes by temporal proximity into consolidation clusters.\n\n\
+            Returns clusters of temporally proximate episodes with suggested titles and summaries, \
+            ordered newest-first. Use the output to decide which episodes to synthesize into a \
+            reflection via `brain memory reflect --commit`.",
+        after_help = "EXAMPLES:\n  \
+            brain memory consolidate\n  \
+            brain memory consolidate --limit 100 --gap-seconds 7200\n  \
+            brain memory co"
+    )]
+    Consolidate {
+        /// Maximum number of recent episodes to consider
+        #[arg(long, default_value = "50")]
+        limit: usize,
+
+        /// Gap in seconds between episodes that triggers a cluster boundary
+        #[arg(long, default_value = "3600")]
+        gap_seconds: i64,
+    },
+
+    /// Generate or retrieve a scope summary for a directory or tag
+    #[command(
+        name = "summarize-scope",
+        visible_alias = "ss",
+        long_about = "Generate or retrieve a derived summary for a directory or tag scope.\n\n\
+            Collects all chunk content matching the scope and produces an extractive summary. \
+            Use --regenerate to force a fresh summary even if one already exists.\n\n\
+            Scope types:\n  \
+            - directory   Summarize all chunks under a directory path\n  \
+            - tag         Summarize all chunks with a given tag",
+        after_help = "EXAMPLES:\n  \
+            brain memory summarize-scope --scope-type directory --scope-value src/auth\n  \
+            brain memory summarize-scope --scope-type tag --scope-value rust\n  \
+            brain memory summarize-scope --scope-type directory --scope-value src/auth --regenerate\n  \
+            brain memory ss --scope-type tag --scope-value debugging --regenerate"
+    )]
+    SummarizeScope {
+        /// Scope type: "directory" or "tag"
+        #[arg(long, required = true)]
+        scope_type: String,
+
+        /// Scope value: directory path or tag name
+        #[arg(long, required = true)]
+        scope_value: String,
+
+        /// Force regeneration of the summary even if one exists
+        #[arg(long)]
+        regenerate: bool,
     },
 
     /// Retrieve source material for reflection (prepare) or store a reflection (commit)

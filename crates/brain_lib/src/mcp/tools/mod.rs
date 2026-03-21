@@ -1,10 +1,13 @@
 mod brains_list;
 mod helpers;
 /// MCP tool definitions and handlers.
+mod mem_consolidate;
 mod mem_expand;
 mod mem_reflect;
 mod mem_search_minimal;
+mod mem_summarize_scope;
 mod mem_write_episode;
+mod mem_write_procedure;
 mod record_archive;
 mod record_create_artifact;
 mod record_fetch_content;
@@ -12,6 +15,7 @@ mod record_get;
 mod record_link;
 mod record_list;
 mod record_save_snapshot;
+mod record_search;
 mod record_tag;
 mod status;
 mod task_apply_event;
@@ -84,7 +88,10 @@ impl ToolRegistry {
                 Box::new(mem_search_minimal::MemSearchMinimal),
                 Box::new(mem_expand::MemExpand),
                 Box::new(mem_write_episode::MemWriteEpisode),
+                Box::new(mem_write_procedure::MemWriteProcedure),
                 Box::new(mem_reflect::MemReflect),
+                Box::new(mem_consolidate::MemConsolidate),
+                Box::new(mem_summarize_scope::MemSummarizeScope),
                 Box::new(task_apply_event::TaskApplyEvent),
                 Box::new(task_close::TaskClose),
                 Box::new(task_create::TaskCreate),
@@ -99,6 +106,7 @@ impl ToolRegistry {
                 Box::new(record_save_snapshot::RecordSaveSnapshot),
                 Box::new(record_get::RecordGet),
                 Box::new(record_list::RecordList),
+                Box::new(record_search::RecordSearch),
                 Box::new(record_fetch_content::RecordFetchContent),
                 Box::new(record_archive::RecordArchive),
                 Box::new(record_tag::RecordTagAdd),
@@ -137,7 +145,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 25);
+        assert_eq!(defs.len(), 29);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));

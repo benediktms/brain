@@ -6,10 +6,14 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::l0_abstract::generate_l0_abstract;
 use crate::mcp::McpContext;
+use crate::ports::ChunkMetaWriter as _;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
 use crate::records::objects::COMPRESSION_THRESHOLD;
+
+use crate::uri::SynapseUri;
 
 use super::{McpTool, json_response};
 
@@ -125,6 +129,10 @@ impl RecordCreateArtifact {
         };
         let record_id = new_record_id(&prefix);
 
+        // Capture values needed for L0 abstract before moving into payload.
+        let title_for_abstract = params.title.clone();
+        let tags_for_abstract = params.tags.clone();
+
         let payload = RecordCreatedPayload {
             title: params.title,
             kind: params.kind,
@@ -150,8 +158,25 @@ impl RecordCreateArtifact {
             return ToolCallResult::error(format!("Failed to save record: {e}"));
         }
 
+        // Eagerly write the L0 abstract as the FTS capsule so it is available
+        // before the async embed pipeline runs.
+        let content_text = String::from_utf8_lossy(&raw_bytes);
+        let tag_refs: Vec<&str> = tags_for_abstract.iter().map(String::as_str).collect();
+        let capsule = generate_l0_abstract(&title_for_abstract, &content_text, &tag_refs);
+        let record_file_id = format!("record:{record_id}");
+        if let Err(e) = ctx.db().upsert_record_chunk(&record_file_id, &capsule) {
+            tracing::warn!(
+                record_id = %record_id,
+                error = %e,
+                "record_create_artifact: failed to write L0 capsule to FTS"
+            );
+        }
+
+        let uri = SynapseUri::for_record(ctx.brain_name(), &record_id).to_string();
+
         let mut result = json!({
             "record_id": record_id,
+            "uri": uri,
             "content_hash": content_ref.hash,
             "size": content_ref.size,
         });

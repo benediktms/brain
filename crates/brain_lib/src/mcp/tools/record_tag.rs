@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::events::{RecordEvent, RecordEventType, TagPayload};
+use crate::uri::resolve_id;
 
 use super::{McpTool, json_response};
 
@@ -27,7 +28,8 @@ impl RecordTagAdd {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let record_id = match ctx.stores.records.resolve_record_id(&params.record_id) {
+        let record_id_input = resolve_id(&params.record_id);
+        let record_id = match ctx.stores.records.resolve_record_id(&record_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };
@@ -111,7 +113,8 @@ impl RecordTagRemove {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let record_id = match ctx.stores.records.resolve_record_id(&params.record_id) {
+        let record_id_input = resolve_id(&params.record_id);
+        let record_id = match ctx.stores.records.resolve_record_id(&record_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };

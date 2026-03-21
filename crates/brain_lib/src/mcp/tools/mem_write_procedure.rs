@@ -5,10 +5,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{error, warn};
 
-use crate::db::summaries::Episode;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::EpisodeWriter;
+use crate::ports::ProcedureWriter;
 
 use crate::uri::SynapseUri;
 
@@ -16,9 +15,8 @@ use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct Params {
-    goal: String,
-    actions: String,
-    outcome: String,
+    title: String,
+    steps: String,
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default = "default_importance")]
@@ -26,47 +24,44 @@ struct Params {
 }
 
 fn default_importance() -> f64 {
-    1.0
+    0.9
 }
 
-pub(super) struct MemWriteEpisode;
+pub(super) struct MemWriteProcedure;
 
-impl McpTool for MemWriteEpisode {
+impl McpTool for MemWriteProcedure {
     fn name(&self) -> &'static str {
-        "memory.write_episode"
+        "memory.write_procedure"
     }
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Record an episode (goal, actions, outcome) to the knowledge base.".into(),
+            description: "Record a reusable procedure (title + steps) to the knowledge base."
+                .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "goal": {
+                    "title": {
                         "type": "string",
-                        "description": "What was the goal"
+                        "description": "Procedure title"
                     },
-                    "actions": {
+                    "steps": {
                         "type": "string",
-                        "description": "What actions were taken"
-                    },
-                    "outcome": {
-                        "type": "string",
-                        "description": "What was the outcome"
+                        "description": "Procedure steps as markdown"
                     },
                     "tags": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Tags for categorization. Pass as a JSON array, e.g. [\"debugging\", \"auth\"]"
+                        "description": "Tags for categorization. Pass as a JSON array, e.g. [\"ci\", \"workflow\"]"
                     },
                     "importance": {
                         "type": "number",
-                        "description": "Importance score (0.0 to 1.0). Default: 1.0",
-                        "default": 1.0
+                        "description": "Importance score (0.0 to 1.0). Default: 0.9",
+                        "default": 0.9
                     }
                 },
-                "required": ["goal", "actions", "outcome"]
+                "required": ["title", "steps"]
             }),
         }
     }
@@ -82,31 +77,28 @@ impl McpTool for MemWriteEpisode {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            // Build the content string that SQLite will store (mirrors store_episode impl).
-            let embed_content = format!(
-                "Goal: {}\nActions: {}\nOutcome: {}",
-                params.goal, params.actions, params.outcome
-            );
+            // Construct the embed text: title + steps.
+            let embed_content = format!("{}\n\n{}", params.title, params.steps);
+            let importance = params.importance.clamp(0.0, 1.0);
 
-            let episode = Episode {
-                brain_id: ctx.brain_id().to_string(),
-                goal: params.goal.clone(),
-                actions: params.actions,
-                outcome: params.outcome,
-                tags: params.tags.clone(),
-                importance: params.importance,
-            };
-
-            let summary_id = match ctx.db().store_episode(&episode) {
+            let summary_id = match ctx
+                .db()
+                .store_procedure(
+                    &params.title,
+                    &params.steps,
+                    &params.tags,
+                    importance,
+                    ctx.brain_id(),
+                ) {
                 Ok(id) => id,
                 Err(e) => {
-                    error!(error = %e, "failed to store episode");
-                    return ToolCallResult::error(format!("Failed to store episode: {e}"));
+                    error!(error = %e, "failed to store procedure");
+                    return ToolCallResult::error(format!("Failed to store procedure: {e}"));
                 }
             };
 
-            // Best-effort: embed the episode into LanceDB for semantic search.
-            // Failure is non-fatal — the episode is still stored in SQLite.
+            // Best-effort: embed the procedure into LanceDB for semantic search.
+            // Failure is non-fatal — the procedure is still stored in SQLite.
             if let (Some(embedder), Some(store)) = (ctx.embedder(), ctx.writable_store.as_ref()) {
                 match crate::embedder::embed_batch_async(embedder, vec![embed_content.clone()])
                     .await
@@ -117,21 +109,25 @@ impl McpTool for MemWriteEpisode {
                                 .upsert_summary(&summary_id, &embed_content, &vec)
                                 .await
                         {
-                            warn!(error = %e, summary_id, "failed to embed episode (best-effort)");
+                            warn!(error = %e, summary_id, "failed to embed procedure (best-effort)");
                         }
                     }
                     Err(e) => {
-                        warn!(error = %e, summary_id, "failed to generate embedding for episode (best-effort)");
+                        warn!(
+                            error = %e,
+                            summary_id,
+                            "failed to generate embedding for procedure (best-effort)"
+                        );
                     }
                 }
             }
 
-            let uri = SynapseUri::for_episode(ctx.brain_name(), &summary_id).to_string();
+            let uri = SynapseUri::for_procedure(ctx.brain_name(), &summary_id).to_string();
             let response = json!({
                 "status": "stored",
                 "summary_id": summary_id,
                 "uri": uri,
-                "goal": params.goal,
+                "title": params.title,
                 "tags": params.tags,
                 "importance": params.importance
             });
@@ -148,20 +144,19 @@ mod tests {
     use super::super::tests::create_test_context;
 
     #[tokio::test]
-    async fn test_write_episode() {
+    async fn test_write_procedure() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
 
         let params = json!({
-            "goal": "Fix the bug",
-            "actions": "Debugged and patched",
-            "outcome": "Bug fixed",
-            "tags": ["debugging"],
-            "importance": 0.8
+            "title": "Standard Deploy Procedure",
+            "steps": "Step 1: Build.\nStep 2: Test.\nStep 3: Deploy.",
+            "tags": ["deploy", "ci"],
+            "importance": 0.9
         });
 
         let result = registry
-            .dispatch("memory.write_episode", params, &ctx)
+            .dispatch("memory.write_procedure", params, &ctx)
             .await;
         assert!(result.is_error.is_none());
 
@@ -169,5 +164,6 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["status"], "stored");
         assert!(parsed["summary_id"].is_string());
+        assert_eq!(parsed["title"], "Standard Deploy Procedure");
     }
 }

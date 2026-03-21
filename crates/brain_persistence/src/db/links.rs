@@ -124,6 +124,53 @@ pub fn get_backlinks(conn: &Connection, target_path: &str) -> Result<Vec<(String
     super::collect_rows(rows)
 }
 
+/// Get all file_ids that `source_file_id` links to (outgoing 1-hop neighbours).
+///
+/// Returns resolved `target_file_id` values. When `target_file_id` is already
+/// set on the link row, it is used directly. For wiki/markdown links where
+/// `target_file_id` is NULL (e.g. because the target file was indexed after
+/// the source file), the `target_path` is resolved against the `files` table
+/// using Obsidian-style nearest-match logic.
+///
+/// External links and links whose target cannot be resolved are excluded.
+pub fn get_outlinks(conn: &Connection, source_file_id: &str) -> Result<Vec<String>> {
+    // Collect all outgoing links for this source file. We first gather all rows
+    // into memory, then resolve target_file_id for unresolved entries afterwards.
+    // This avoids re-entering the connection while a cursor is still open.
+    let link_rows: Vec<(Option<String>, String, String)> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT l.target_file_id, l.target_path, l.link_type
+             FROM links l
+             WHERE l.source_file_id = ?1 AND l.link_type != 'external'",
+        )?;
+        let rows = stmt.query_map([source_file_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        super::collect_rows(rows)?
+    };
+
+    let mut result: Vec<String> = Vec::new();
+    for (target_file_id, target_path, link_type) in link_rows {
+        let resolved_fid = if let Some(fid) = target_file_id {
+            Some(fid)
+        } else {
+            // Attempt runtime resolution via the files table.
+            // Safe: the cursor from the SELECT above is fully consumed before this.
+            resolve_target_file_id(conn, &target_path, &link_type)
+        };
+        if let Some(fid) = resolved_fid
+            && !result.contains(&fid)
+        {
+            result.push(fid);
+        }
+    }
+    Ok(result)
+}
+
 /// Count backlinks for a given target path.
 pub fn count_backlinks(conn: &Connection, target_path: &str) -> Result<usize> {
     let count: i64 = conn.query_row(

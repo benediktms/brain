@@ -9,6 +9,8 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
 use crate::store::VectorSearchMode;
 
+use crate::uri::SynapseUri;
+
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -27,6 +29,9 @@ struct Params {
     /// Vector search strategy: "exact", "ann_refined" (default), or "ann_fast".
     #[serde(default)]
     vector_search_mode: Option<String>,
+    /// When true, include per-result signal score breakdowns in the response.
+    #[serde(default)]
+    explain: bool,
 }
 
 fn default_intent() -> String {
@@ -87,6 +92,11 @@ impl McpTool for MemSearchMinimal {
                         "type": "string",
                         "enum": ["exact", "ann_refined", "ann_fast"],
                         "description": "Vector search strategy controlling the ANN (Approximate Nearest Neighbor) tradeoff. exact: brute-force scan against all vectors — fully deterministic, slowest. ann_refined (default): ANN index finds candidates, then rescores against full uncompressed vectors for accurate ordering. ann_fast: pure ANN with compressed vectors only — fastest, but distances are approximate."
+                    },
+                    "explain": {
+                        "type": "boolean",
+                        "description": "When true, return per-signal scores (vector, bm25, recency, links, tag_match, importance) for each result. Default: false",
+                        "default": false
                     }
                 },
                 "required": ["query"]
@@ -130,54 +140,28 @@ impl McpTool for MemSearchMinimal {
             .with_mode(mode);
 
             let search_result = if params.brains.is_empty() {
-                // Single-brain path — unchanged behaviour.
+                // Single-brain path.
                 let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
-                match pipeline.search(&search_params).await {
-                    Ok(r) => r,
-                    Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
-                }
-            } else {
-                // Federated path — open remote brain contexts.
-                let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-                    match crate::config::list_brain_keys(ctx.brain_home()) {
-                        Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
-                        Err(e) => {
-                            return ToolCallResult::error(format!("Failed to list brains: {e}"));
-                        }
+                if params.explain {
+                    match pipeline.search_with_scores(&search_params).await {
+                        Ok(r) => r,
+                        Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
                     }
                 } else {
-                    params.brains.clone()
-                };
-
-                // Build the brain list: local brain first, then each remote.
-                // All share the same unified `ctx.db` — no separate Db per brain.
-                let mut brains: Vec<(String, Option<crate::store::StoreReader>)> = Vec::new();
-                brains.push((ctx.brain_name().to_string(), Some(store.clone())));
-
-                for key in &brain_keys {
-                    if key == ctx.brain_name() {
-                        // Local brain already added above.
-                        continue;
-                    }
-                    match crate::config::open_remote_search_context(
-                        ctx.brain_home(),
-                        key,
-                        std::path::Path::new(""),
-                        embedder,
-                    )
-                    .await
-                    {
-                        Ok(Some(remote)) => {
-                            brains.push((remote.brain_name, remote.store));
-                        }
-                        Ok(None) => {
-                            tracing::warn!(brain = %key, "brain not found in registry, skipping");
-                        }
-                        Err(e) => {
-                            tracing::warn!(brain = %key, error = %e, "failed to open remote brain, skipping");
-                        }
+                    match pipeline.search(&search_params).await {
+                        Ok(r) => r,
+                        Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
                     }
                 }
+            } else {
+                // Federated path — delegate setup to shared helper.
+                // Build the brain list: local brain first, then each remote.
+                // All share the same unified `ctx.db` — no separate Db per brain.
+                let brains = match super::build_federated_brains(ctx, store.clone(), embedder, &params.brains).await
+                {
+                    Ok(b) => b,
+                    Err(e) => return ToolCallResult::error(e),
+                };
 
                 let federated = FederatedPipeline {
                     db: ctx.db(),
@@ -186,6 +170,8 @@ impl McpTool for MemSearchMinimal {
                     metrics: &ctx.metrics,
                 };
 
+                // TODO(W1-IMPL-EXPLAIN): FederatedPipeline has no search_with_scores.
+                // explain=true is silently ignored for federated searches.
                 match federated.search(&search_params).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -210,8 +196,28 @@ impl McpTool for MemSearchMinimal {
                         "heading_path": stub.heading_path,
                         "kind": stub.kind,
                     });
+                    let uri_brain = stub.brain_name.as_deref().unwrap_or(ctx.brain_name());
+                    let uri = match stub.kind.as_str() {
+                        "episode" => SynapseUri::for_episode(uri_brain, &stub.memory_id),
+                        "reflection" => SynapseUri::for_reflection(uri_brain, &stub.memory_id),
+                        "procedure" => SynapseUri::for_procedure(uri_brain, &stub.memory_id),
+                        "record" => SynapseUri::for_record(uri_brain, &stub.memory_id),
+                        "task" | "task-outcome" => SynapseUri::for_task(uri_brain, &stub.memory_id),
+                        _ => SynapseUri::for_memory(uri_brain, &stub.memory_id),
+                    };
+                    stub_json["uri"] = json!(uri.to_string());
                     if let Some(ref bn) = stub.brain_name {
                         stub_json["brain_name"] = json!(bn);
+                    }
+                    if let Some(ref scores) = stub.signal_scores {
+                        stub_json["signals"] = json!({
+                            "sim_vector": scores.vector,
+                            "bm25": scores.keyword,
+                            "recency": scores.recency,
+                            "links": scores.links,
+                            "tag_match": scores.tag_match,
+                            "importance": scores.importance,
+                        });
                     }
                     stub_json
                 })
@@ -562,5 +568,114 @@ mod tests {
         );
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["budget_tokens"], 1_000_000);
+    }
+
+    /// TDD: explain=true must be accepted without error and — once implemented —
+    /// must include per-result signal score breakdowns in the response.
+    ///
+    /// Phase 1 (red): verifies param acceptance; signal fields asserted below will
+    /// fail until W1-IMPL-EXPLAIN wires explain=true through the pipeline.
+    #[tokio::test]
+    async fn test_explain_true_returns_signal_scores() {
+        use std::sync::Arc;
+
+        use tempfile::TempDir;
+
+        use crate::db::Db;
+        use crate::embedder::{Embed, MockEmbedder};
+        use crate::mcp::McpContext;
+        use crate::pipeline::IndexPipeline;
+        use crate::store::Store;
+
+        // Build a fully-indexed context so we get actual results back.
+        let tmp = TempDir::new().unwrap();
+        let sqlite_path = tmp.path().join("brain.db");
+        let lance_path = tmp.path().join("brain_lancedb");
+        let notes_dir = tmp.path().join("notes");
+        std::fs::create_dir_all(&notes_dir).unwrap();
+
+        // Write a note and index it.
+        let note_path = notes_dir.join("signals.md");
+        std::fs::write(
+            &note_path,
+            "## Signal Scores\n\nThis chunk exists to produce ranked results with signal breakdown.",
+        )
+        .unwrap();
+
+        let db = Db::open(&sqlite_path).unwrap();
+        let store = Store::open_or_create(&lance_path).await.unwrap();
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let pipeline = IndexPipeline::with_embedder(db, store, embedder)
+            .await
+            .unwrap();
+        pipeline.full_scan(&[notes_dir]).await.unwrap();
+        drop(pipeline);
+
+        // Create a fresh McpContext over the indexed data.
+        let store2 = Store::open_or_create(&lance_path).await.unwrap();
+        let store2_reader = crate::store::StoreReader::from_store(&store2);
+        let ctx_db = Db::open(&sqlite_path).unwrap();
+        let stores2 =
+            crate::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path()).unwrap();
+        let ctx = McpContext {
+            stores: stores2,
+            search: Some(crate::search_service::SearchService {
+                store: store2_reader,
+                embedder: Arc::new(MockEmbedder),
+            }),
+            writable_store: Some(store2),
+            metrics: Arc::new(crate::metrics::Metrics::new()),
+        };
+
+        let registry = ToolRegistry::new();
+
+        // Step 1: explain=true must not be rejected as an invalid param.
+        let result = registry
+            .dispatch(
+                "memory.search_minimal",
+                json!({
+                    "query": "Signal Scores chunk ranked results",
+                    "explain": true,
+                    "intent": "lookup",
+                    "k": 5
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "explain=true should be accepted without error; got: {}",
+            result.content[0].text
+        );
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+
+        // Step 2: verify we have at least one result.
+        let count = parsed["result_count"].as_u64().unwrap_or(0);
+        assert!(
+            count > 0,
+            "expected at least one ranked result for explain test; response: {}",
+            result.content[0].text
+        );
+
+        // Step 3 (TDD red): each result must expose a "signals" object with
+        // sim_vector and bm25 fields. This assertion fails until W1-IMPL-EXPLAIN
+        // populates signals from SignalScores when explain=true.
+        let results = parsed["results"].as_array().expect("results must be array");
+        for (i, r) in results.iter().enumerate() {
+            let signals = r.get("signals").unwrap_or_else(|| {
+                panic!(
+                    "result[{i}] missing 'signals' key (explain=true not yet wired through pipeline)"
+                )
+            });
+            assert!(
+                signals.get("sim_vector").is_some(),
+                "result[{i}].signals missing 'sim_vector'"
+            );
+            assert!(
+                signals.get("bm25").is_some(),
+                "result[{i}].signals missing 'bm25'"
+            );
+        }
     }
 }

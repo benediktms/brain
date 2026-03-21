@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -48,7 +49,8 @@ impl RecordGet {
                 None => (&ctx.stores.records, None),
             };
 
-        let record_id = match records.resolve_record_id(&params.record_id) {
+        let record_id_input = resolve_id(&params.record_id);
+        let record_id = match records.resolve_record_id(&record_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };
@@ -94,8 +96,16 @@ impl RecordGet {
             "links": links_json,
         });
 
-        if let Some(name) = remote_brain_name {
+        let uri_brain = if let Some(ref name) = remote_brain_name {
             result["brain"] = json!(name);
+            name.as_str()
+        } else {
+            ctx.brain_name()
+        };
+
+        let uri = SynapseUri::for_record(uri_brain, &compact_id).to_string();
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("uri".into(), json!(uri));
         }
 
         json_response(&result)

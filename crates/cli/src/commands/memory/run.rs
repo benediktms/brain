@@ -11,6 +11,7 @@ use brain_lib::metrics::Metrics;
 use brain_lib::ports::{EpisodeReader, EpisodeWriter, ReflectionWriter};
 use brain_lib::prelude::*;
 use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
+use brain_lib::uri::SynapseUri;
 use brain_lib::search_service::SearchService;
 use brain_lib::store::StoreReader;
 use brain_lib::stores::BrainStores;
@@ -63,6 +64,7 @@ pub struct SearchParams2 {
     pub budget: usize,
     pub tags: Vec<String>,
     pub brains: Vec<String>,
+    pub explain: bool,
 }
 
 pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
@@ -81,7 +83,11 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             &ctx.search.embedder,
             &ctx.metrics,
         );
-        pipeline.search(&search_params).await?
+        if params.explain {
+            pipeline.search_with_scores(&search_params).await?
+        } else {
+            pipeline.search(&search_params).await?
+        }
     } else {
         use brain_lib::config::{list_brain_keys, open_remote_search_context};
         use brain_lib::query_pipeline::FederatedPipeline;
@@ -128,6 +134,8 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             embedder: &ctx.search.embedder,
             metrics: &ctx.metrics,
         };
+        // TODO(W1-IMPL-EXPLAIN): FederatedPipeline has no search_with_scores.
+        // explain=true is silently ignored for federated searches.
         federated.search(&search_params).await?
     };
 
@@ -145,8 +153,28 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
                     "heading_path": stub.heading_path,
                     "kind": stub.kind,
                 });
+                let uri_brain = stub.brain_name.as_deref().unwrap_or(&ctx.stores.brain_name);
+                let uri = match stub.kind.as_str() {
+                    "episode" => SynapseUri::for_episode(uri_brain, &stub.memory_id),
+                    "reflection" => SynapseUri::for_reflection(uri_brain, &stub.memory_id),
+                    "procedure" => SynapseUri::for_procedure(uri_brain, &stub.memory_id),
+                    "record" => SynapseUri::for_record(uri_brain, &stub.memory_id),
+                    "task" | "task-outcome" => SynapseUri::for_task(uri_brain, &stub.memory_id),
+                    _ => SynapseUri::for_memory(uri_brain, &stub.memory_id),
+                };
+                v["uri"] = json!(uri.to_string());
                 if let Some(ref bn) = stub.brain_name {
                     v["brain_name"] = json!(bn);
+                }
+                if let Some(ref ss) = stub.signal_scores {
+                    v["signals"] = json!({
+                        "sim_vector": ss.vector,
+                        "bm25": ss.keyword,
+                        "recency": ss.recency,
+                        "links": ss.links,
+                        "tag_match": ss.tag_match,
+                        "importance": ss.importance,
+                    });
                 }
                 v
             })
@@ -164,14 +192,35 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             println!("No results found.");
             return Ok(());
         }
-        let mut table = MarkdownTable::new(vec!["ID", "TITLE", "KIND", "SCORE"]);
+        let headers = if params.explain {
+            vec!["ID", "TITLE", "KIND", "SCORE", "VECTOR", "BM25"]
+        } else {
+            vec!["ID", "TITLE", "KIND", "SCORE"]
+        };
+        let mut table = MarkdownTable::new(headers);
         for stub in &result.results {
-            table.add_row(vec![
-                stub.memory_id.clone(),
-                stub.title.clone(),
-                stub.kind.clone(),
-                format!("{:.4}", stub.hybrid_score),
-            ]);
+            if params.explain {
+                let (vector, bm25) = stub
+                    .signal_scores
+                    .as_ref()
+                    .map(|ss| (format!("{:.4}", ss.vector), format!("{:.4}", ss.keyword)))
+                    .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
+                table.add_row(vec![
+                    stub.memory_id.clone(),
+                    stub.title.clone(),
+                    stub.kind.clone(),
+                    format!("{:.4}", stub.hybrid_score),
+                    vector,
+                    bm25,
+                ]);
+            } else {
+                table.add_row(vec![
+                    stub.memory_id.clone(),
+                    stub.title.clone(),
+                    stub.kind.clone(),
+                    format!("{:.4}", stub.hybrid_score),
+                ]);
+            }
         }
         print!("{table}");
         println!();
@@ -313,10 +362,12 @@ pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Resul
         }
     }
 
+    let uri = SynapseUri::for_episode(&ctx.stores.brain_name, &summary_id).to_string();
     if ctx.json {
         let out = json!({
             "status": "stored",
             "summary_id": summary_id,
+            "uri": uri,
             "goal": params.goal,
             "tags": params.tags,
             "importance": params.importance,
@@ -324,11 +375,212 @@ pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Resul
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Episode stored: {summary_id}");
+        println!("  URI:        {uri}");
         println!("  Goal:       {}", params.goal);
         println!("  Importance: {}", params.importance);
         if !params.tags.is_empty() {
             println!("  Tags:       {}", params.tags.join(", "));
         }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// write_procedure
+// ---------------------------------------------------------------------------
+
+pub struct WriteProcedureParams {
+    pub title: String,
+    pub steps: String,
+    pub tags: Vec<String>,
+    pub importance: f64,
+    /// Optional writable LanceDB store for best-effort embedding.
+    pub lance_db: Option<std::path::PathBuf>,
+}
+
+pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> Result<()> {
+    use brain_lib::ports::ProcedureWriter;
+
+    let embed_content = format!("{}\n\n{}", params.title, params.steps);
+
+    let summary_id = ctx.stores.db().store_procedure(
+        &params.title,
+        &params.steps,
+        &params.tags,
+        params.importance,
+        &ctx.stores.brain_id,
+    )?;
+
+    // Best-effort embedding.
+    if let Some(ref lance_path) = params.lance_db {
+        match Store::open_or_create(lance_path).await {
+            Ok(store) => {
+                match embed_batch_async(&ctx.search.embedder, vec![embed_content.clone()]).await {
+                    Ok(vecs) => {
+                        if let Some(vec) = vecs.into_iter().next()
+                            && let Err(e) = store
+                                .upsert_summary(&summary_id, &embed_content, &vec)
+                                .await
+                        {
+                            eprintln!("warning: failed to embed procedure (best-effort): {e}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: failed to generate embedding for procedure (best-effort): {e}"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: failed to open LanceDB for embedding (best-effort): {e}");
+            }
+        }
+    }
+
+    let uri = SynapseUri::for_procedure(&ctx.stores.brain_name, &summary_id).to_string();
+    if ctx.json {
+        let out = json!({
+            "status": "stored",
+            "summary_id": summary_id,
+            "uri": uri,
+            "title": params.title,
+            "tags": params.tags,
+            "importance": params.importance,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Procedure stored: {summary_id}");
+        println!("  URI:        {uri}");
+        println!("  Title:      {}", params.title);
+        println!("  Importance: {}", params.importance);
+        if !params.tags.is_empty() {
+            println!("  Tags:       {}", params.tags.join(", "));
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// consolidate
+// ---------------------------------------------------------------------------
+
+pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Result<()> {
+    use brain_lib::consolidation::consolidate_episodes;
+    use brain_lib::ports::EpisodeReader;
+
+    let episodes = ctx
+        .stores
+        .db()
+        .list_episodes(limit, &ctx.stores.brain_id)
+        .unwrap_or_default();
+
+    let result = consolidate_episodes(episodes, gap_seconds);
+
+    if ctx.json {
+        let clusters_json: Vec<serde_json::Value> = result
+            .clusters
+            .iter()
+            .map(|c| {
+                json!({
+                    "episode_ids": c.episode_ids,
+                    "episode_count": c.episodes.len(),
+                    "suggested_title": c.suggested_title,
+                    "summary": c.summary,
+                    "oldest_ts": c.episodes.iter().map(|e| e.created_at).min(),
+                    "newest_ts": c.episodes.iter().map(|e| e.created_at).max(),
+                })
+            })
+            .collect();
+        let out = json!({
+            "cluster_count": clusters_json.len(),
+            "clusters": clusters_json,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        if result.clusters.is_empty() {
+            println!("No clusters found. No episodes to consolidate.");
+            return Ok(());
+        }
+        println!("{} cluster(s) found:", result.clusters.len());
+        println!();
+        for (i, cluster) in result.clusters.iter().enumerate() {
+            println!(
+                "Cluster {} — {} episode(s)",
+                i + 1,
+                cluster.episodes.len()
+            );
+            println!("  Title:    {}", cluster.suggested_title);
+            println!("  Summary:  {}", cluster.summary);
+            println!("  IDs:      {}", cluster.episode_ids.join(", "));
+            if let (Some(oldest), Some(newest)) = (
+                cluster.episodes.iter().map(|e| e.created_at).min(),
+                cluster.episodes.iter().map(|e| e.created_at).max(),
+            ) {
+                println!("  Range:    {oldest} → {newest}");
+            }
+            println!();
+        }
+        println!(
+            "Use `brain memory reflect --commit` to synthesize a cluster into a reflection."
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// summarize_scope
+// ---------------------------------------------------------------------------
+
+pub async fn summarize_scope(
+    ctx: &MemoryCtx,
+    scope_type: &str,
+    scope_value: &str,
+    regenerate: bool,
+) -> Result<()> {
+    use brain_lib::hierarchy::{DerivedSummary, ScopeType, generate_scope_summary, get_scope_summary};
+
+    let st = match scope_type {
+        "directory" => ScopeType::Directory,
+        "tag" => ScopeType::Tag,
+        other => bail!("Invalid scope_type '{other}'. Must be 'directory' or 'tag'."),
+    };
+
+    let summary: DerivedSummary = if regenerate {
+        let id = generate_scope_summary(ctx.stores.db(), &st, scope_value)?;
+        get_scope_summary(ctx.stores.db(), &st, scope_value)?
+            .ok_or_else(|| anyhow::anyhow!("Generated summary '{id}' not found after insert"))?
+    } else {
+        match get_scope_summary(ctx.stores.db(), &st, scope_value)? {
+            Some(s) => s,
+            None => {
+                let id = generate_scope_summary(ctx.stores.db(), &st, scope_value)?;
+                get_scope_summary(ctx.stores.db(), &st, scope_value)?
+                    .ok_or_else(|| anyhow::anyhow!("Generated summary '{id}' not found after insert"))?
+            }
+        }
+    };
+
+    if ctx.json {
+        let out = json!({
+            "scope_type": summary.scope_type,
+            "scope_value": summary.scope_value,
+            "content": summary.content,
+            "stale": summary.stale,
+            "generated_at": summary.generated_at,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Scope summary | {}:{}", summary.scope_type, summary.scope_value);
+        if summary.stale {
+            println!("  [stale — use --regenerate to refresh]");
+        }
+        println!("  Generated: {}", summary.generated_at);
+        println!();
+        println!("{}", summary.content);
     }
 
     Ok(())
@@ -524,11 +776,13 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
         }
     }
 
+    let uri = SynapseUri::for_reflection(&ctx.stores.brain_name, &summary_id).to_string();
     if ctx.json {
         let out = json!({
             "mode": "commit",
             "status": "stored",
             "summary_id": summary_id,
+            "uri": uri,
             "title": params.title,
             "source_count": params.source_ids.len(),
             "importance": importance,
@@ -536,6 +790,7 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Reflection stored: {summary_id}");
+        println!("  URI:        {uri}");
         println!("  Title:        {}", params.title);
         println!("  Sources:      {}", params.source_ids.len());
         println!("  Importance:   {importance}");

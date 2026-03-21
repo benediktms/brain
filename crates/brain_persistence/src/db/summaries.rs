@@ -99,6 +99,43 @@ pub fn store_reflection(
     Ok(summary_id)
 }
 
+/// Store a procedure in the summaries table.
+///
+/// A procedure captures a reusable sequence of steps. The `steps` argument
+/// becomes the `content` column. Returns the `summary_id`.
+///
+/// NOTE: requires the v28 migration that adds `'procedure'` to the
+/// `kind` CHECK constraint. Tests should create an in-memory schema that
+/// already includes `'procedure'` in the allowed kinds.
+pub fn store_procedure(
+    conn: &Connection,
+    title: &str,
+    steps: &str,
+    tags: &[String],
+    importance: f64,
+    brain_id: &str,
+) -> Result<String> {
+    let summary_id = Ulid::new().to_string();
+    let now = crate::utils::now_ts();
+    let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
+
+    conn.execute(
+        "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, valid_from, created_at, updated_at)
+         VALUES (?1, 'procedure', ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
+        rusqlite::params![
+            summary_id,
+            title,
+            steps,
+            tags_json,
+            importance,
+            brain_id,
+            now,
+        ],
+    )?;
+
+    Ok(summary_id)
+}
+
 /// Map a rusqlite row to a `SummaryRow`.
 ///
 /// Expects 13 columns in this exact order:
@@ -241,6 +278,33 @@ pub fn get_ml_summaries_for_chunks(
     for row in rows {
         let (chunk_id, content) = row?;
         map.entry(chunk_id).or_insert(content);
+    }
+    Ok(map)
+}
+
+/// Batch-load (summary_id, kind) pairs for a list of summary IDs.
+/// Returns a map from summary_id to kind. IDs not found are absent from the map.
+pub fn get_summary_kinds(conn: &Connection, ids: &[String]) -> Result<HashMap<String, String>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT summary_id, kind FROM summaries WHERE summary_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (id, kind) = row?;
+        map.insert(id, kind);
     }
     Ok(map)
 }

@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::events::{RecordArchivedPayload, RecordEvent};
+use crate::uri::{SynapseUri, resolve_id};
 
 use super::{McpTool, json_response};
 
@@ -25,7 +26,8 @@ impl RecordArchive {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let record_id = match ctx.stores.records.resolve_record_id(&params.record_id) {
+        let record_id_input = resolve_id(&params.record_id);
+        let record_id = match ctx.stores.records.resolve_record_id(&record_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve record_id: {e}")),
         };
@@ -53,8 +55,11 @@ impl RecordArchive {
             .compact_record_id(&record_id)
             .unwrap_or_else(|_| record_id.clone());
 
+        let uri = SynapseUri::for_record(ctx.brain_name(), &compact_id).to_string();
+
         let result = json!({
             "record_id": compact_id,
+            "uri": uri,
             "status": "archived",
         });
 

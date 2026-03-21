@@ -23,8 +23,8 @@ use crate::store::{QueryResult, VectorSearchMode};
 
 use super::{
     ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, EmbeddingResetter,
-    EpisodeReader, EpisodeWriter, FileMetaReader, FileMetaWriter, FtsSearcher, SchemaMeta,
-    SummaryReader, SummaryWriter,
+    EpisodeReader, EpisodeWriter, FileMetaReader, FileMetaWriter, FtsSearcher, GraphLinkReader,
+    SchemaMeta, SummaryReader, SummaryWriter,
 };
 
 // ---------------------------------------------------------------------------
@@ -170,6 +170,8 @@ pub struct MockChunkMetaReader {
     pub rows: Mutex<Vec<ChunkRow>>,
     /// ML summaries: `chunk_id → summary_text`
     pub summaries: Mutex<HashMap<String, String>>,
+    /// Summary kinds: `summary_id → kind`
+    pub summary_kinds: Mutex<HashMap<String, String>>,
 }
 
 impl ChunkMetaReader for MockChunkMetaReader {
@@ -188,6 +190,14 @@ impl ChunkMetaReader for MockChunkMetaReader {
         Ok(chunk_ids
             .iter()
             .filter_map(|id| map.get(*id).map(|v| ((*id).to_string(), v.clone())))
+            .collect())
+    }
+
+    fn get_summary_kinds(&self, summary_ids: &[String]) -> Result<HashMap<String, String>> {
+        let map = self.summary_kinds.lock().unwrap();
+        Ok(summary_ids
+            .iter()
+            .filter_map(|id| map.get(id).map(|k| (id.clone(), k.clone())))
             .collect())
     }
 }
@@ -776,6 +786,44 @@ impl EpisodeReader for MockEpisodeReader {
 }
 
 // ---------------------------------------------------------------------------
+// MockGraphLinkReader
+// ---------------------------------------------------------------------------
+
+/// In-memory mock for `GraphLinkReader`.
+///
+/// Returns pre-configured outlinks per `source_file_id` and chunks per `file_id`.
+#[derive(Default)]
+pub struct MockGraphLinkReader {
+    /// Outlinks: `source_file_id → Vec<target_file_id>`
+    pub outlinks: Mutex<HashMap<String, Vec<String>>>,
+    /// Chunks per file_id: `file_id → Vec<ChunkRow>`
+    pub file_chunks: Mutex<HashMap<String, Vec<ChunkRow>>>,
+}
+
+impl GraphLinkReader for MockGraphLinkReader {
+    fn get_outlinks(&self, source_file_id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .outlinks
+            .lock()
+            .unwrap()
+            .get(source_file_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn get_chunks_by_file_ids(&self, file_ids: &[String]) -> Result<Vec<ChunkRow>> {
+        let map = self.file_chunks.lock().unwrap();
+        let mut result = Vec::new();
+        for fid in file_ids {
+            if let Some(chunks) = map.get(fid) {
+                result.extend(chunks.iter().cloned());
+            }
+        }
+        Ok(result)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -970,7 +1018,7 @@ mod tests {
 
         // search_ranked embeds the query and calls store.query — both are mocked.
         let (ranked, _confidence) = pipeline
-            .search_ranked("fox", "semantic", &[], VectorSearchMode::default())
+            .search_ranked("fox", "semantic", &[], VectorSearchMode::default(), false)
             .await
             .unwrap();
 
