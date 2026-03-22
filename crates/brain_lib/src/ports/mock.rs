@@ -1164,10 +1164,10 @@ mod tests {
     fn mock_summary_writer_stores_summaries() {
         let writer = MockSummaryWriter::default();
         writer
-            .store_ml_summary("chunk:1", "summary text", "flan-t5-small")
+            .store_ml_summary("chunk:1", "summary text", "mock")
             .unwrap();
 
-        let key = ("chunk:1".to_string(), "flan-t5-small".to_string());
+        let key = ("chunk:1".to_string(), "mock".to_string());
         let summaries = writer.summaries.lock().unwrap();
         assert_eq!(summaries[&key], "summary text");
     }

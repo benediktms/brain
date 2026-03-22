@@ -608,7 +608,7 @@ mod tests {
         let conn = setup();
         insert_chunk(&conn, "chunk:1", "file:1", "chunk content one");
 
-        let id = store_ml_summary(&conn, "chunk:1", "ML summary text", "flan-t5-small").unwrap();
+        let id = store_ml_summary(&conn, "chunk:1", "ML summary text", "mock").unwrap();
         assert!(!id.is_empty());
 
         let map = get_ml_summaries_for_chunks(&conn, &["chunk:1"]).unwrap();
@@ -623,8 +623,8 @@ mod tests {
         let conn = setup();
         insert_chunk(&conn, "chunk:1", "file:1", "chunk content");
 
-        store_ml_summary(&conn, "chunk:1", "first summary", "flan-t5-small").unwrap();
-        store_ml_summary(&conn, "chunk:1", "updated summary", "flan-t5-small").unwrap();
+        store_ml_summary(&conn, "chunk:1", "first summary", "mock").unwrap();
+        store_ml_summary(&conn, "chunk:1", "updated summary", "mock").unwrap();
 
         let map = get_ml_summaries_for_chunks(&conn, &["chunk:1"]).unwrap();
         assert_eq!(
@@ -636,7 +636,7 @@ mod tests {
         // Only one row in summaries for this chunk+summarizer
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM summaries WHERE chunk_id = 'chunk:1' AND kind = 'summary' AND summarizer = 'flan-t5-small'",
+                "SELECT COUNT(*) FROM summaries WHERE chunk_id = 'chunk:1' AND kind = 'summary' AND summarizer = 'mock'",
                 [],
                 |row| row.get(0),
             )
@@ -649,7 +649,7 @@ mod tests {
         let conn = setup();
         insert_chunk(&conn, "chunk:1", "file:1", "chunk content");
 
-        store_ml_summary(&conn, "chunk:1", "flan summary", "flan-t5-small").unwrap();
+        store_ml_summary(&conn, "chunk:1", "flan summary", "mock").unwrap();
         store_ml_summary(&conn, "chunk:1", "remote summary", "remote-llm").unwrap();
 
         let count: i64 = conn
@@ -670,9 +670,9 @@ mod tests {
         insert_chunk(&conn, "chunk:3", "file:1", "content three");
 
         // Summarize chunk:1 only
-        store_ml_summary(&conn, "chunk:1", "summary for one", "flan-t5-small").unwrap();
+        store_ml_summary(&conn, "chunk:1", "summary for one", "mock").unwrap();
 
-        let lacking = find_chunks_lacking_summary(&conn, "flan-t5-small", 10).unwrap();
+        let lacking = find_chunks_lacking_summary(&conn, "mock", 10).unwrap();
         let ids: Vec<&str> = lacking.iter().map(|(id, _)| id.as_str()).collect();
 
         assert!(ids.contains(&"chunk:2"), "chunk:2 should be returned");
@@ -692,7 +692,7 @@ mod tests {
             );
         }
 
-        let lacking = find_chunks_lacking_summary(&conn, "flan-t5-small", 3).unwrap();
+        let lacking = find_chunks_lacking_summary(&conn, "mock", 3).unwrap();
         assert_eq!(lacking.len(), 3);
     }
 
@@ -701,9 +701,9 @@ mod tests {
         let conn = setup();
         insert_chunk(&conn, "chunk:1", "file:1", "content one");
 
-        store_ml_summary(&conn, "chunk:1", "summary", "flan-t5-small").unwrap();
+        store_ml_summary(&conn, "chunk:1", "summary", "mock").unwrap();
 
-        let lacking = find_chunks_lacking_summary(&conn, "flan-t5-small", 10).unwrap();
+        let lacking = find_chunks_lacking_summary(&conn, "mock", 10).unwrap();
         assert!(lacking.is_empty(), "all chunks are summarized");
     }
 
@@ -720,8 +720,8 @@ mod tests {
         insert_chunk(&conn, "chunk:1", "file:1", "content one");
         insert_chunk(&conn, "chunk:2", "file:1", "content two");
 
-        store_ml_summary(&conn, "chunk:1", "summary one", "flan-t5-small").unwrap();
-        store_ml_summary(&conn, "chunk:2", "summary two", "flan-t5-small").unwrap();
+        store_ml_summary(&conn, "chunk:1", "summary one", "mock").unwrap();
+        store_ml_summary(&conn, "chunk:2", "summary two", "mock").unwrap();
 
         let map = get_ml_summaries_for_chunks(&conn, &["chunk:1", "chunk:2"]).unwrap();
         assert_eq!(map.get("chunk:1").map(String::as_str), Some("summary one"));
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_fts_summaries_search_finds_episode() {
-        use crate::db::fts::{FtsSummaryResult, search_summaries_fts};
+        use crate::db::fts::{search_summaries_fts, FtsSummaryResult};
 
         let conn = setup();
 
@@ -1123,7 +1123,7 @@ mod tests {
         );
         // source_hash defaults to NULL (not computed at write time for episodes)
         let _ = row.source_hash; // accessible — type: Option<String>
-        // confidence defaults to 1.0
+                                 // confidence defaults to 1.0
         assert!(
             (row.confidence - 1.0).abs() < 1e-9,
             "default confidence should be 1.0"

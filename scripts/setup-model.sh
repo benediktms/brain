@@ -5,10 +5,10 @@ BRAIN_HOME="${BRAIN_HOME:-$HOME/.brain}"
 
 # ── Model definitions ─────────────────────────────────────────────────────
 # Parallel arrays (Bash 3 compatible)
-MODEL_NAMES=(   bge-small                    flan-t5-small          )
-MODEL_REPOS=(   "BAAI/bge-small-en-v1.5"     "google/flan-t5-small" )
-MODEL_ENVS=(    "BRAIN_MODEL_DIR"            "BRAIN_SUMMARIZER_MODEL_DIR" )
-MODEL_DEFAULTS=("$BRAIN_HOME/models/bge-small-en-v1.5" "$BRAIN_HOME/models/flan-t5-small")
+MODEL_NAMES=(   bge-small                    )
+MODEL_REPOS=(   "BAAI/bge-small-en-v1.5"     )
+MODEL_ENVS=(    "BRAIN_MODEL_DIR"            )
+MODEL_DEFAULTS=("$BRAIN_HOME/models/bge-small-en-v1.5")
 
 MODEL_FILES="config.json tokenizer.json model.safetensors"
 
