@@ -24,9 +24,7 @@ fn long_content_abstract_shorter_than_source() {
     let tags = &["integration", "embedding"];
     let abstract_text = generate_l0_abstract("Embedding Record", LONG_CONTENT, tags);
     // The abstract must be shorter than: title + full content + tags.
-    let naive_full = format!(
-        "Embedding Record\n\n{LONG_CONTENT}\n\nTags: integration, embedding"
-    );
+    let naive_full = format!("Embedding Record\n\n{LONG_CONTENT}\n\nTags: integration, embedding");
     assert!(
         abstract_text.len() < naive_full.len(),
         "abstract ({} chars) must be shorter than naive full ({} chars)",

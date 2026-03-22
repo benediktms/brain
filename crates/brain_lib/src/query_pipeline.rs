@@ -145,7 +145,13 @@ where
     #[instrument(skip_all)]
     pub async fn search(&self, params: &SearchParams<'_>) -> Result<SearchResult> {
         let (ranked, confidence) = self
-            .search_ranked(params.query, params.intent, params.query_tags, params.mode, params.graph_expand)
+            .search_ranked(
+                params.query,
+                params.intent,
+                params.query_tags,
+                params.mode,
+                params.graph_expand,
+            )
             .await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
         let mut result = pack_minimal(
@@ -163,7 +169,13 @@ where
     #[instrument(skip_all)]
     pub async fn search_with_scores(&self, params: &SearchParams<'_>) -> Result<SearchResult> {
         let (ranked, confidence) = self
-            .search_ranked(params.query, params.intent, params.query_tags, params.mode, params.graph_expand)
+            .search_ranked(
+                params.query,
+                params.intent,
+                params.query_tags,
+                params.mode,
+                params.graph_expand,
+            )
             .await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
         let mut result = pack_minimal(&ranked, params.budget_tokens, params.k, true, &ml_summaries);
@@ -407,7 +419,9 @@ where
         let mut expansion_entries: Vec<(String, f64)> = Vec::new(); // (target_file_id, parent_sim)
         for seed in seeds.iter().take(seed_count) {
             // Derive file_id from chunk_id (format: "file_id:chunk_ord")
-            let file_id = seed.chunk_id.rsplit_once(':')
+            let file_id = seed
+                .chunk_id
+                .rsplit_once(':')
                 .map(|(prefix, _)| prefix.to_string())
                 .unwrap_or_else(|| seed.chunk_id.clone());
 
@@ -417,7 +431,10 @@ where
             match self.db.get_outlinks(&file_id) {
                 Ok(outlinks) => {
                     for target_file_id in outlinks {
-                        if !expansion_entries.iter().any(|(fid, _)| fid == &target_file_id) {
+                        if !expansion_entries
+                            .iter()
+                            .any(|(fid, _)| fid == &target_file_id)
+                        {
                             expansion_entries.push((target_file_id, parent_sim));
                         }
                     }
@@ -435,8 +452,10 @@ where
             return;
         }
 
-        let expansion_file_ids: Vec<String> =
-            expansion_entries.iter().map(|(fid, _)| fid.clone()).collect();
+        let expansion_file_ids: Vec<String> = expansion_entries
+            .iter()
+            .map(|(fid, _)| fid.clone())
+            .collect();
         let parent_sim_map: std::collections::HashMap<String, f64> =
             expansion_entries.into_iter().collect();
 
@@ -444,10 +463,8 @@ where
             Ok(expansion_chunks) => {
                 let now = crate::utils::now_ts();
                 for chunk in expansion_chunks {
-                    let graph_sim = parent_sim_map
-                        .get(&chunk.file_id)
-                        .copied()
-                        .unwrap_or(0.0) * 0.5;
+                    let graph_sim =
+                        parent_sim_map.get(&chunk.file_id).copied().unwrap_or(0.0) * 0.5;
 
                     if let Some(existing) = candidate_vec
                         .iter_mut()

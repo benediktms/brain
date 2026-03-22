@@ -639,8 +639,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     use commands::memory::run::MemoryCtx;
                     use commands::records::{RecordsSearchParams, search};
                     let ctx =
-                        MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
-                            .await?;
+                        MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
                     search(
                         &ctx,
                         RecordsSearchParams {
@@ -756,8 +755,13 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     scope_value,
                     regenerate,
                 } => {
-                    commands::memory::run::summarize_scope(&ctx, &scope_type, &scope_value, regenerate)
-                        .await?;
+                    commands::memory::run::summarize_scope(
+                        &ctx,
+                        &scope_type,
+                        &scope_value,
+                        regenerate,
+                    )
+                    .await?;
                 }
                 MemoryAction::Reflect {
                     commit,

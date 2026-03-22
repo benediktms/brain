@@ -11,10 +11,10 @@ use brain_lib::metrics::Metrics;
 use brain_lib::ports::{EpisodeReader, EpisodeWriter, ReflectionWriter};
 use brain_lib::prelude::*;
 use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
-use brain_lib::uri::SynapseUri;
 use brain_lib::search_service::SearchService;
 use brain_lib::store::StoreReader;
 use brain_lib::stores::BrainStores;
+use brain_lib::uri::SynapseUri;
 
 use crate::markdown_table::MarkdownTable;
 
@@ -507,11 +507,7 @@ pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Res
         println!("{} cluster(s) found:", result.clusters.len());
         println!();
         for (i, cluster) in result.clusters.iter().enumerate() {
-            println!(
-                "Cluster {} — {} episode(s)",
-                i + 1,
-                cluster.episodes.len()
-            );
+            println!("Cluster {} — {} episode(s)", i + 1, cluster.episodes.len());
             println!("  Title:    {}", cluster.suggested_title);
             println!("  Summary:  {}", cluster.summary);
             println!("  IDs:      {}", cluster.episode_ids.join(", "));
@@ -523,9 +519,7 @@ pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Res
             }
             println!();
         }
-        println!(
-            "Use `brain memory reflect --commit` to synthesize a cluster into a reflection."
-        );
+        println!("Use `brain memory reflect --commit` to synthesize a cluster into a reflection.");
     }
 
     Ok(())
@@ -541,7 +535,9 @@ pub async fn summarize_scope(
     scope_value: &str,
     regenerate: bool,
 ) -> Result<()> {
-    use brain_lib::hierarchy::{DerivedSummary, ScopeType, generate_scope_summary, get_scope_summary};
+    use brain_lib::hierarchy::{
+        DerivedSummary, ScopeType, generate_scope_summary, get_scope_summary,
+    };
 
     let st = match scope_type {
         "directory" => ScopeType::Directory,
@@ -558,8 +554,9 @@ pub async fn summarize_scope(
             Some(s) => s,
             None => {
                 let id = generate_scope_summary(ctx.stores.db(), &st, scope_value)?;
-                get_scope_summary(ctx.stores.db(), &st, scope_value)?
-                    .ok_or_else(|| anyhow::anyhow!("Generated summary '{id}' not found after insert"))?
+                get_scope_summary(ctx.stores.db(), &st, scope_value)?.ok_or_else(|| {
+                    anyhow::anyhow!("Generated summary '{id}' not found after insert")
+                })?
             }
         }
     };
@@ -574,7 +571,10 @@ pub async fn summarize_scope(
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Scope summary | {}:{}", summary.scope_type, summary.scope_value);
+        println!(
+            "Scope summary | {}:{}",
+            summary.scope_type, summary.scope_value
+        );
         if summary.stale {
             println!("  [stale — use --regenerate to refresh]");
         }

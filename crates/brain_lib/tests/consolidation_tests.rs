@@ -126,7 +126,10 @@ fn test_clusters_contain_episode_ids() {
     let result = consolidate_episodes(episodes, 3600);
 
     // After implementation there should be 2 clusters.
-    assert!(!result.clusters.is_empty(), "cluster 0 must contain episode IDs");
+    assert!(
+        !result.clusters.is_empty(),
+        "cluster 0 must contain episode IDs"
+    );
 
     // The recent cluster must contain id1 and id2.
     let recent = result
@@ -153,7 +156,10 @@ fn test_clusters_contain_episode_rows() {
     let episodes = list_episodes(&conn, 20, brain).unwrap();
     let result = consolidate_episodes(episodes, 3600);
 
-    assert!(!result.clusters.is_empty(), "episodes vec must be non-empty");
+    assert!(
+        !result.clusters.is_empty(),
+        "episodes vec must be non-empty"
+    );
     let cluster = &result.clusters[0];
     assert!(
         !cluster.episodes.is_empty(),
@@ -173,7 +179,10 @@ fn test_clusters_have_suggested_title() {
     let episodes = list_episodes(&conn, 20, brain).unwrap();
     let result = consolidate_episodes(episodes, 3600);
 
-    assert!(!result.clusters.is_empty(), "suggested_title must be non-empty");
+    assert!(
+        !result.clusters.is_empty(),
+        "suggested_title must be non-empty"
+    );
     for cluster in &result.clusters {
         assert!(
             !cluster.suggested_title.is_empty(),
@@ -200,12 +209,13 @@ fn test_recent_episodes_colocated_in_same_cluster() {
     let episodes = list_episodes(&conn, 20, brain).unwrap();
     let result = consolidate_episodes(episodes, 3600);
 
-    assert!(!result.clusters.is_empty(), "recent episodes must share one cluster");
+    assert!(
+        !result.clusters.is_empty(),
+        "recent episodes must share one cluster"
+    );
 
     let has_shared_cluster = result.clusters.iter().any(|c| {
-        c.episode_ids.contains(&id1)
-            && c.episode_ids.contains(&id2)
-            && c.episode_ids.contains(&id3)
+        c.episode_ids.contains(&id1) && c.episode_ids.contains(&id2) && c.episode_ids.contains(&id3)
     });
     assert!(has_shared_cluster, "recent episodes must share one cluster");
 }

@@ -4,9 +4,9 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
-use brain_lib::uri::SynapseUri;
 use brain_lib::records::integrity;
 use brain_lib::stores::BrainStores;
+use brain_lib::uri::SynapseUri;
 
 use crate::commands::memory::run::MemoryCtx;
 use crate::markdown_table::MarkdownTable;
@@ -192,13 +192,8 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
     // Over-request to account for post-filter attrition.
     let over_k = params.k * 3;
 
-    let search_params = SearchParams::new(
-        &params.query,
-        "lookup",
-        params.budget,
-        over_k,
-        &params.tags,
-    );
+    let search_params =
+        SearchParams::new(&params.query, "lookup", params.budget, over_k, &params.tags);
 
     let search_result = if params.brains.is_empty() {
         let pipeline = QueryPipeline::new(
@@ -289,7 +284,8 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
                     "kind": stub.kind,
                 });
                 let uri_brain = stub.brain_name.as_deref().unwrap_or(&ctx.stores.brain_name);
-                result_json["uri"] = json!(SynapseUri::for_record(uri_brain, record_id).to_string());
+                result_json["uri"] =
+                    json!(SynapseUri::for_record(uri_brain, record_id).to_string());
                 if let Some(ref bn) = stub.brain_name {
                     result_json["brain_name"] = json!(bn);
                 }

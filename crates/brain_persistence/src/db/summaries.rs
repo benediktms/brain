@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_fts_summaries_search_finds_episode() {
-        use crate::db::fts::{search_summaries_fts, FtsSummaryResult};
+        use crate::db::fts::{FtsSummaryResult, search_summaries_fts};
 
         let conn = setup();
 
@@ -1123,7 +1123,7 @@ mod tests {
         );
         // source_hash defaults to NULL (not computed at write time for episodes)
         let _ = row.source_hash; // accessible — type: Option<String>
-                                 // confidence defaults to 1.0
+        // confidence defaults to 1.0
         assert!(
             (row.confidence - 1.0).abs() < 1e-9,
             "default confidence should be 1.0"

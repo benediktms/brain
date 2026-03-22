@@ -47,9 +47,7 @@ fn extract_excerpt(content: &str) -> &str {
         .unwrap_or(0);
     let window = &content[..safe_end];
     // Find the last sentence boundary within the window.
-    let boundary = window
-        .rfind(['.', '!', '?'])
-        .map(|pos| pos + 1); // include the punctuation character
+    let boundary = window.rfind(['.', '!', '?']).map(|pos| pos + 1); // include the punctuation character
     match boundary {
         Some(pos) => &content[..pos],
         None => window,
@@ -64,7 +62,10 @@ mod tests {
     fn short_content_passes_through_verbatim() {
         let content = "A brief record.";
         let result = generate_l0_abstract("My Title", content, &["rust", "test"]);
-        assert!(result.contains(content), "full content must appear unchanged");
+        assert!(
+            result.contains(content),
+            "full content must appear unchanged"
+        );
         assert!(result.starts_with("My Title"), "title must be first");
         assert!(result.contains("Tags: rust, test"), "tags must be present");
     }
@@ -91,8 +92,7 @@ mod tests {
 
     #[test]
     fn abstract_contains_title_and_first_sentences() {
-        let content = "First sentence here. Second sentence here. Third sentence here. "
-            .repeat(30);
+        let content = "First sentence here. Second sentence here. Third sentence here. ".repeat(30);
         let result = generate_l0_abstract("Important Record", &content, &["search", "embed"]);
         assert!(result.starts_with("Important Record\n\n"), "title prefix");
         assert!(
@@ -106,6 +106,9 @@ mod tests {
     fn no_tags_omits_tags_line() {
         let content = "Short content.";
         let result = generate_l0_abstract("Tagless", content, &[]);
-        assert!(!result.contains("Tags:"), "tags line must be absent when no tags provided");
+        assert!(
+            !result.contains("Tags:"),
+            "tags line must be absent when no tags provided"
+        );
     }
 }
