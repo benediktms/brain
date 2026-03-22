@@ -8,12 +8,13 @@ use super::migrations::{
     migrate_v18_to_v19, migrate_v19_to_v20, migrate_v20_to_v21, migrate_v21_to_v22,
     migrate_v22_to_v23, migrate_v23_to_v24, migrate_v24_to_v25, migrate_v25_to_v26,
     migrate_v26_to_v27, migrate_v27_to_v28, migrate_v28_to_v29, migrate_v29_to_v30,
+    migrate_v30_to_v31,
 };
 use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-pub const SCHEMA_VERSION: i32 = 30;
+pub const SCHEMA_VERSION: i32 = 31;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -79,6 +80,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
             27 => migrate_v27_to_v28(conn)?,
             28 => migrate_v28_to_v29(conn)?,
             29 => migrate_v29_to_v30(conn)?,
+            30 => migrate_v30_to_v31(conn)?,
             other => {
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",
