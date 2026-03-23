@@ -12,6 +12,16 @@ const MIN_ULID_PREFIX_LEN: usize = 4;
 /// Minimum display prefix: "BRN-" (4) + 4 ULID chars = 8.
 pub(crate) const MIN_DISPLAY_PREFIX_LEN: usize = 8;
 
+/// Minimum length for the hex portion of a hash-based short ID.
+pub const MIN_SHORT_HASH_LEN: usize = 3;
+
+/// BLAKE3 hash of a task_id → full 64-char lowercase hex string.
+///
+/// Pure function, no DB access. Used by migration backfill and projection.
+pub fn blake3_short_hex(task_id: &str) -> String {
+    blake3::hash(task_id.as_bytes()).to_hex().to_string()
+}
+
 /// Get the next child_seq for a parent task (max existing + 1, or 1 if no children).
 pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> Result<i64> {
     let max: Option<i64> = conn
@@ -48,6 +58,60 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
                 if let Some(child_id) = child {
                     return Ok(child_id);
                 }
+            }
+        }
+    }
+
+    // Try hash-based short ID resolution before ULID prefix matching.
+    // Strip prefix if present (e.g., "brn-a3f" → "a3f"), then query id column.
+    // TODO: consider dot-suffix stripping for robustness if display IDs are
+    // accidentally passed where root IDs are expected.
+    {
+        let hex_part = match input.find('-') {
+            Some(dash_pos) if dash_pos <= 4 => &input[dash_pos + 1..],
+            _ => input,
+        };
+        // Only attempt if it looks like hex (lowercase, 0-9a-f)
+        if !hex_part.is_empty()
+            && hex_part.len() >= MIN_SHORT_HASH_LEN
+            && hex_part.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        {
+            // Exact match on id column
+            let exact: Option<String> = conn
+                .query_row(
+                    "SELECT task_id FROM tasks WHERE id = ?1",
+                    [hex_part],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(tid) = exact {
+                return Ok(tid);
+            }
+
+            // Prefix match on id column (range scan)
+            let upper = increment_string(hex_part);
+            let mut stmt = conn.prepare(
+                "SELECT task_id, title FROM tasks WHERE id >= ?1 AND id < ?2",
+            )?;
+            let matches: Vec<(String, String)> = stmt
+                .query_map(rusqlite::params![hex_part, upper], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+
+            match matches.len() {
+                1 => return Ok(matches.into_iter().next().unwrap().0),
+                n if n > 1 => {
+                    let candidates: Vec<String> = matches
+                        .iter()
+                        .map(|(id, title)| format!("  {id} — {title}"))
+                        .collect();
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "ambiguous short hash '{input}': matches {n} tasks:\n{}",
+                        candidates.join("\n")
+                    )));
+                }
+                _ => {} // 0 matches — fall through to ULID path
             }
         }
     }
@@ -150,10 +214,10 @@ fn compact_id_ulid(conn: &Connection, task_id: &str) -> Result<String> {
 
 /// Compute a compact display ID for a single task.
 ///
-/// For tasks with a parent and `child_seq`, always returns dot notation
-/// (e.g. "BRN-01KK7NY.3"). Recurses through the parent chain so
-/// grandchildren get "BRN-XXX.1.2". For root tasks, uses the shortest
-/// unique ULID prefix via O(log n) index seeks.
+/// Uses hash-based short IDs when available: `{prefix_lower}-{id}` (e.g., `brn-a3f`).
+/// For children with `parent_task_id` + `child_seq`, returns dot notation
+/// (e.g., `brn-a3f.1`). Recurses through the parent chain so grandchildren
+/// get `brn-a3f.1.2`. Falls back to ULID prefix for pre-migration tasks.
 pub fn compact_id(conn: &Connection, task_id: &str) -> Result<String> {
     // Dot notation for any child with parent + child_seq
     if let Some(task) = get_task(conn, task_id)?
@@ -163,48 +227,88 @@ pub fn compact_id(conn: &Connection, task_id: &str) -> Result<String> {
         return Ok(format!("{parent_compact}.{seq}"));
     }
 
+    // Try hash-based short ID
+    if let Some(display) = short_id_display(conn, task_id)? {
+        return Ok(display);
+    }
+
+    // Fallback: ULID prefix computation (pre-migration tasks)
     compact_id_ulid(conn, task_id)
+}
+
+/// Build display ID from `id` column + brain prefix: `{prefix_lower}-{id}`.
+/// Returns `None` if the task has no `id` value (pre-migration).
+fn short_id_display(conn: &Connection, task_id: &str) -> Result<Option<String>> {
+    let row: Option<(Option<String>, String)> = conn
+        .query_row(
+            "SELECT t.id, COALESCE(LOWER(b.prefix), 'brx')
+             FROM tasks t
+             LEFT JOIN brains b ON b.brain_id = t.brain_id
+             WHERE t.task_id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+
+    match row {
+        Some((Some(id), prefix)) => Ok(Some(format!("{prefix}-{id}"))),
+        _ => Ok(None),
+    }
 }
 
 /// Compute compact display IDs for all tasks (batch, for list display).
 ///
-/// Loads all IDs sorted, compares neighbors for ULID prefixes. Then applies
-/// dot notation for every child with `parent_task_id` + `child_seq`,
-/// processing parents before children so grandchild IDs resolve correctly.
+/// Uses hash-based short IDs (`{prefix_lower}-{id}`) when available.
+/// Falls back to ULID prefix computation for pre-migration tasks.
+/// Applies dot notation for children with `parent_task_id` + `child_seq`.
 pub fn compact_ids(conn: &Connection) -> Result<HashMap<String, String>> {
-    let mut stmt = conn.prepare("SELECT task_id FROM tasks ORDER BY task_id")?;
-    let ids: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
+    // Load all tasks with their id and brain prefix
+    let mut stmt = conn.prepare(
+        "SELECT t.task_id, t.id, COALESCE(LOWER(b.prefix), 'brx')
+         FROM tasks t
+         LEFT JOIN brains b ON b.brain_id = t.brain_id
+         ORDER BY t.task_id",
+    )?;
+    let rows: Vec<(String, Option<String>, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut result = HashMap::new();
-    let n = ids.len();
 
-    for i in 0..n {
-        let id = &ids[i];
-        let prev = if i > 0 {
-            Some(ids[i - 1].as_str())
+    // First pass: hash-based IDs for tasks that have them
+    let mut ulid_fallback_ids: Vec<String> = Vec::new();
+    for (task_id, id, prefix) in &rows {
+        if let Some(hash_id) = id {
+            result.insert(task_id.clone(), format!("{prefix}-{hash_id}"));
         } else {
-            None
-        };
-        let next = if i + 1 < n {
-            Some(ids[i + 1].as_str())
-        } else {
-            None
-        };
+            ulid_fallback_ids.push(task_id.clone());
+        }
+    }
 
-        // Find the minimum length to distinguish from both neighbors
-        let min_len_prev = prev.map(|p| common_prefix_len(id, p) + 1).unwrap_or(1);
-        let min_len_next = next.map(|nx| common_prefix_len(id, nx) + 1).unwrap_or(1);
-
-        let min_len = min_len_prev.max(min_len_next).max(MIN_DISPLAY_PREFIX_LEN);
-        let prefix_len = min_len.min(id.len());
-
-        result.insert(id.clone(), id[..prefix_len].to_string());
+    // ULID prefix fallback for pre-migration tasks
+    if !ulid_fallback_ids.is_empty() {
+        let all_ids: Vec<&str> = rows.iter().map(|(tid, _, _)| tid.as_str()).collect();
+        let n = all_ids.len();
+        for i in 0..n {
+            let id = all_ids[i];
+            if result.contains_key(id) {
+                continue; // already has hash-based ID
+            }
+            let prev = if i > 0 { Some(all_ids[i - 1]) } else { None };
+            let next = if i + 1 < n {
+                Some(all_ids[i + 1])
+            } else {
+                None
+            };
+            let min_len_prev = prev.map(|p| common_prefix_len(id, p) + 1).unwrap_or(1);
+            let min_len_next = next.map(|nx| common_prefix_len(id, nx) + 1).unwrap_or(1);
+            let min_len = min_len_prev.max(min_len_next).max(MIN_DISPLAY_PREFIX_LEN);
+            let prefix_len = min_len.min(id.len());
+            result.insert(id.to_string(), id[..prefix_len].to_string());
+        }
     }
 
     // Apply dot notation for all children with parent + child_seq.
-    // Process in parent-first order so transitive chains resolve correctly.
     let mut child_stmt = conn.prepare(
         "SELECT task_id, parent_task_id, child_seq
          FROM tasks
@@ -215,8 +319,7 @@ pub fn compact_ids(conn: &Connection) -> Result<HashMap<String, String>> {
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    // Multiple passes to handle transitive chains (parent → child → grandchild).
-    // Each pass resolves one level of nesting; stop when no changes occur.
+    // Multiple passes for transitive chains (parent → child → grandchild).
     let mut changed = true;
     while changed {
         changed = false;

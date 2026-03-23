@@ -167,6 +167,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
+                id: None,
             },
         );
         assert_eq!(ev.event_type, EventType::TaskCreated);

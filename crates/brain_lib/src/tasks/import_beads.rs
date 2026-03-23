@@ -215,6 +215,7 @@ pub fn generate_events_from_beads(jsonl_path: &Path) -> Result<(Vec<TaskEvent>, 
                 assignee: issue.owner.clone(),
                 defer_until: None,
                 parent_task_id: None, // Set in pass 2
+                id: None,
             },
         )
         .with_timestamp(created_ts);
@@ -731,6 +732,7 @@ pub fn import_beads_issues(
                         assignee: issue.owner.clone(),
                         defer_until: None,
                         parent_task_id: None,
+                        id: None,
                     },
                 )
                 .with_timestamp(created_ts),

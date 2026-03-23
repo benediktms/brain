@@ -49,6 +49,7 @@ fn create_task(store: &TaskStore, task_id: &str, title: &str) {
             assignee: None,
             defer_until: None,
             parent_task_id: None,
+            id: None,
         },
     );
     store.append(&ev).unwrap();

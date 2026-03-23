@@ -29,10 +29,12 @@ pub struct TaskRow {
     pub child_seq: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Stable hash-based short ID (hex only). `None` for pre-migration tasks.
+    pub id: Option<String>,
 }
 
 pub(super) const TASK_COLUMNS: &str = "task_id, title, description, status, priority, blocked_reason, due_ts, \
-     task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at";
+     task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at, id";
 
 /// Reusable `WITH RECURSIVE` CTE that produces `has_blocked_ancestor(tid)` — the set
 /// of task IDs whose parent chain contains at least one blocked ancestor.
@@ -90,6 +92,7 @@ pub(super) fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
         child_seq: row.get(11)?,
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
+        id: row.get(14)?,
     })
 }
 
@@ -121,6 +124,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
+                id: None,
             },
         );
         apply_event(conn, &ev, "").unwrap();
@@ -295,6 +299,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
+                id: None,
             },
         );
         let ev2 = TaskEvent::from_payload(
@@ -310,6 +315,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
+                id: None,
             },
         );
         let ev3 = TaskEvent::from_payload(
@@ -325,6 +331,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
+                id: None,
             },
         );
 
@@ -515,8 +522,9 @@ mod tests {
         create_task(&conn, "BRN-01JPHZS7VXQK4R3BGTHNED2P8M", "Only task", 2);
         let prefixes = compact_ids(&conn).unwrap();
         let short = &prefixes["BRN-01JPHZS7VXQK4R3BGTHNED2P8M"];
-        assert_eq!(short.len(), resolve::MIN_DISPLAY_PREFIX_LEN);
-        assert_eq!(short, "BRN-01JP");
+        // Hash-based: {prefix_lower}-{hex[:3+]}
+        assert!(short.contains('-'), "should have prefix-hash format: {short}");
+        assert!(short.len() >= 4 + resolve::MIN_SHORT_HASH_LEN); // "xxx-" + 3+ hex
     }
 
     #[test]
@@ -525,9 +533,8 @@ mod tests {
         create_task(&conn, "BRN-01JPHZAAAA", "Task A", 2);
         create_task(&conn, "BRN-01JPHZAAAB", "Task B", 2);
         let prefixes = compact_ids(&conn).unwrap();
-        // Must distinguish the last char
-        assert_eq!(prefixes["BRN-01JPHZAAAA"], "BRN-01JPHZAAAA");
-        assert_eq!(prefixes["BRN-01JPHZAAAB"], "BRN-01JPHZAAAB");
+        // Different tasks should get different display IDs
+        assert_ne!(prefixes["BRN-01JPHZAAAA"], prefixes["BRN-01JPHZAAAB"]);
     }
 
     #[test]
@@ -537,9 +544,9 @@ mod tests {
         create_task(&conn, "t1", "Simple ID", 2);
         let prefixes = compact_ids(&conn).unwrap();
         assert_eq!(prefixes.len(), 2);
-        // Both should be present; "t1" is too short for MIN_DISPLAY_PREFIX_LEN
-        // so it stays as "t1"
-        assert_eq!(prefixes["t1"], "t1");
+        // Both should have hash-based IDs
+        assert!(prefixes["BRN-01JPHZ0001"].contains('-'));
+        assert!(prefixes["t1"].contains('-'));
     }
 
     #[test]
@@ -580,6 +587,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: Some(parent_id.to_string()),
+                id: None,
             },
         );
         apply_event(conn, &ev, "").unwrap();
@@ -599,6 +607,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
+                id: None,
             },
         );
         apply_event(conn, &ev, "").unwrap();
