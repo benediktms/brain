@@ -56,7 +56,12 @@ impl TaskLabelsBatch {
         self.execute_with_store(params, &ctx.stores.tasks, ctx.brain_name())
     }
 
-    fn execute_with_store(&self, params: Params, store: &TaskStore, brain_name: &str) -> ToolCallResult {
+    fn execute_with_store(
+        &self,
+        params: Params,
+        store: &TaskStore,
+        brain_name: &str,
+    ) -> ToolCallResult {
         match params.action.as_str() {
             "add" => self.label_add_remove(store, &params, EventType::LabelAdded, brain_name),
             "remove" => self.label_add_remove(store, &params, EventType::LabelRemoved, brain_name),

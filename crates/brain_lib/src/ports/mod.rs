@@ -884,12 +884,7 @@ impl ProcedureWriter for Db {
         let brain_id = brain_id.to_string();
         self.with_write_conn(move |conn| {
             crate::db::summaries::store_procedure(
-                conn,
-                &title,
-                &steps,
-                &tags,
-                importance,
-                &brain_id,
+                conn, &title, &steps, &tags, importance, &brain_id,
             )
         })
     }
@@ -973,15 +968,11 @@ use crate::hierarchy::{DerivedSummary, DerivedSummaryStore, ScopeType};
 // -- DerivedSummaryStore for Db --------------------------------------------
 
 impl DerivedSummaryStore for Db {
-    fn generate_scope_summary(
-        &self,
-        scope_type: &ScopeType,
-        scope_value: &str,
-    ) -> Result<String> {
+    fn generate_scope_summary(&self, scope_type: &ScopeType, scope_value: &str) -> Result<String> {
+        use brain_persistence::error::BrainCoreError;
         use rusqlite::params;
         use std::time::{SystemTime, UNIX_EPOCH};
         use ulid::Ulid;
-        use brain_persistence::error::BrainCoreError;
 
         let scope_type_str = scope_type.as_str();
         let scope_value_owned = scope_value.to_string();
@@ -1041,7 +1032,13 @@ impl DerivedSummaryStore for Db {
                 "INSERT OR REPLACE INTO derived_summaries
                      (id, scope_type, scope_value, content, stale, generated_at)
                  VALUES (?1, ?2, ?3, ?4, 0, ?5)",
-                params![id_clone, scope_type_str, scope_value_clone, content_clone, now],
+                params![
+                    id_clone,
+                    scope_type_str,
+                    scope_value_clone,
+                    content_clone,
+                    now
+                ],
             )
             .map_err(|e| BrainCoreError::Database(e.to_string()))?;
             Ok(())
@@ -1055,8 +1052,8 @@ impl DerivedSummaryStore for Db {
         scope_type: &ScopeType,
         scope_value: &str,
     ) -> Result<Option<DerivedSummary>> {
-        use rusqlite::params;
         use brain_persistence::error::BrainCoreError;
+        use rusqlite::params;
 
         let scope_type_str = scope_type.as_str().to_string();
         let scope_value_owned = scope_value.to_string();
@@ -1089,13 +1086,9 @@ impl DerivedSummaryStore for Db {
         })
     }
 
-    fn mark_scope_stale(
-        &self,
-        scope_type: &ScopeType,
-        scope_value: &str,
-    ) -> Result<usize> {
-        use rusqlite::params;
+    fn mark_scope_stale(&self, scope_type: &ScopeType, scope_value: &str) -> Result<usize> {
         use brain_persistence::error::BrainCoreError;
+        use rusqlite::params;
 
         let scope_type_str = scope_type.as_str().to_string();
         let scope_value_owned = scope_value.to_string();
@@ -1112,13 +1105,9 @@ impl DerivedSummaryStore for Db {
         })
     }
 
-    fn search_derived_summaries(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<DerivedSummary>> {
-        use rusqlite::params;
+    fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>> {
         use brain_persistence::error::BrainCoreError;
+        use rusqlite::params;
 
         let query_owned = query.to_string();
         let limit_i64 = limit as i64;
@@ -1191,4 +1180,5 @@ impl DerivedSummaryStore for Db {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::manual_async_fn, clippy::type_complexity)]
 pub mod mock;

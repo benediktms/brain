@@ -111,7 +111,10 @@ mod unit_tests {
 
         let result =
             check_duplicate(content, &embedder, &existing, DEFAULT_DEDUP_THRESHOLD).unwrap();
-        assert!(result.is_some(), "identical content must be detected as duplicate");
+        assert!(
+            result.is_some(),
+            "identical content must be detected as duplicate"
+        );
         assert_eq!(result.unwrap().summary_id, "sum-001");
     }
 }

@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use crate::l0_abstract::generate_l0_abstract;
 use crate::mcp::McpContext;
-use crate::ports::ChunkMetaWriter as _;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::ports::ChunkMetaWriter as _;
 use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
 use crate::records::objects::COMPRESSION_THRESHOLD;
 

@@ -73,11 +73,8 @@ impl McpTool for MemExpand {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            let memory_ids: Vec<String> = params
-                .memory_ids
-                .iter()
-                .map(|id| resolve_id(id))
-                .collect();
+            let memory_ids: Vec<String> =
+                params.memory_ids.iter().map(|id| resolve_id(id)).collect();
             let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
             let expand_result = match pipeline
                 .expand(&memory_ids, params.budget_tokens as usize)
@@ -177,7 +174,9 @@ mod tests {
         let text = &result.content[0].text;
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
 
-        let memories = parsed["memories"].as_array().expect("memories must be an array");
+        let memories = parsed["memories"]
+            .as_array()
+            .expect("memories must be an array");
         assert_eq!(memories.len(), 1, "exactly one memory must be returned");
 
         let content = memories[0]["content"]

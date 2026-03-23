@@ -346,6 +346,15 @@ mod tests {
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
+    /// Compute the expected compact ID for a task created via in_memory stores.
+    /// In-memory stores use brain_id = "" which maps to the "(unscoped)" sentinel
+    /// brain inserted by migration v21→v22. That brain's prefix is "NSX" (derived
+    /// from generate_prefix("(unscoped)")), so compact IDs are "nsx-{hash}".
+    fn compact_id_for(task_id: &str) -> String {
+        let hex = blake3::hash(task_id.as_bytes()).to_hex().to_string();
+        format!("nsx-{}", &hex[..3])
+    }
+
     async fn apply(registry: &ToolRegistry, ctx: &crate::mcp::McpContext, params: Value) {
         registry.dispatch("tasks.apply_event", params, ctx).await;
     }
@@ -383,11 +392,11 @@ mod tests {
         assert!(result.is_error.is_none());
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        assert_eq!(parsed["task_id"], "parent");
+        assert_eq!(parsed["task_id"], compact_id_for("parent"));
         assert_eq!(parsed["title"], "Parent");
         // parent field is null (no parent)
         assert!(parsed["parent"].is_null());
-        // children as stubs
+        // children as stubs — stubs use raw task_id, not compact ID
         let children = parsed["children"].as_array().unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0]["task_id"], "child");

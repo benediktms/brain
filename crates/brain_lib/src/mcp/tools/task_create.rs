@@ -10,6 +10,7 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{
     EventType, ExternalIdPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
 };
+use crate::tasks::queries::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 use crate::uri::SynapseUri;
 use crate::utils::{parse_timestamp, task_row_to_json};
 
@@ -42,7 +43,7 @@ fn create_schema() -> Value {
             },
             "parent": {
                 "type": "string",
-                "description": "Parent task ID (resolved via prefix)"
+                "description": "Parent task ID (full ID, short hash, or prefix). Prefer setting parent at creation time to avoid ambiguous prefix errors from post-hoc parent_set calls."
             },
             "due_ts": {
                 "type": "string",
@@ -211,6 +212,7 @@ impl TaskCreate {
                 assignee: params.assignee,
                 defer_until,
                 parent_task_id,
+                id: Some(blake3_short_hex(&task_id)[..MIN_SHORT_HASH_LEN].to_string()),
             };
 
             let event = TaskEvent::from_payload(&task_id, &params.actor, payload);
@@ -344,6 +346,7 @@ impl TaskCreate {
                 assignee: params.assignee,
                 defer_until,
                 parent_task_id,
+                id: None,
             };
 
             let event = TaskEvent::from_payload(&task_id, &params.actor, payload);

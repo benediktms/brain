@@ -101,7 +101,9 @@ async fn test_records_create_artifact_returns_uri_field() {
 
     let uri = parsed["uri"].as_str().unwrap();
     let brain_name = ctx.brain_name();
-    let record_id = parsed["record_id"].as_str().expect("record_id must be present");
+    let record_id = parsed["record_id"]
+        .as_str()
+        .expect("record_id must be present");
 
     let expected = format!("synapse://{brain_name}/record/{record_id}");
     assert_eq!(
@@ -124,7 +126,9 @@ async fn test_tasks_get_accepts_brain_uri_as_task_id() {
         .dispatch("tasks.create", json!({ "title": "URI input task" }), &ctx)
         .await;
     let created = parse_response(&create_result);
-    let task_id = created["task_id"].as_str().expect("task_id must be present");
+    let task_id = created["task_id"]
+        .as_str()
+        .expect("task_id must be present");
     let brain_name = ctx.brain_name();
 
     // Construct a synapse:// URI for the task.

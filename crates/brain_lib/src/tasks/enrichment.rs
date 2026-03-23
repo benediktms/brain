@@ -25,6 +25,7 @@ pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
         "defer_until": ts_to_json(row.defer_until),
         "parent_task_id": row.parent_task_id,
         "child_seq": row.child_seq,
+        "id": row.id,
         "labels": labels,
         "created_at": ts_to_json(Some(row.created_at)),
         "updated_at": ts_to_json(Some(row.updated_at)),
@@ -325,6 +326,7 @@ mod tests {
             child_seq: None,
             created_at: 0,
             updated_at: 0,
+            id: None,
         };
         let result = children_stubs_to_json(&[child]);
         assert_eq!(result.len(), 1);
@@ -354,6 +356,7 @@ mod tests {
             child_seq: None,
             created_at: 0,
             updated_at: 0,
+            id: None,
         };
         let dep = make_dep_summary(2, 1, vec!["blocker".to_string()]);
         let links = vec![make_note_link("c1", "/file.md")];

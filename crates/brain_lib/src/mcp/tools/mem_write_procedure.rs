@@ -81,15 +81,13 @@ impl McpTool for MemWriteProcedure {
             let embed_content = format!("{}\n\n{}", params.title, params.steps);
             let importance = params.importance.clamp(0.0, 1.0);
 
-            let summary_id = match ctx
-                .db()
-                .store_procedure(
-                    &params.title,
-                    &params.steps,
-                    &params.tags,
-                    importance,
-                    ctx.brain_id(),
-                ) {
+            let summary_id = match ctx.db().store_procedure(
+                &params.title,
+                &params.steps,
+                &params.tags,
+                importance,
+                ctx.brain_id(),
+            ) {
                 Ok(id) => id,
                 Err(e) => {
                     error!(error = %e, "failed to store procedure");

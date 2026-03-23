@@ -120,7 +120,13 @@ impl McpTool for RecordSearch {
                 }
             } else {
                 // Federated path — delegate setup to shared helper.
-                let brains = match super::build_federated_brains(ctx, store.clone(), embedder, &params.brains).await
+                let brains = match super::build_federated_brains(
+                    ctx,
+                    store.clone(),
+                    embedder,
+                    &params.brains,
+                )
+                .await
                 {
                     Ok(b) => b,
                     Err(e) => return ToolCallResult::error(e),
@@ -225,9 +231,7 @@ mod tests {
     async fn test_records_search_missing_query() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
-        let result = registry
-            .dispatch("records.search", json!({}), &ctx)
-            .await;
+        let result = registry.dispatch("records.search", json!({}), &ctx).await;
 
         assert_eq!(
             result.is_error,
@@ -259,14 +263,23 @@ mod tests {
         );
 
         let props = def.input_schema.get("properties").unwrap();
-        assert!(props.get("query").is_some(), "schema must include 'query' property");
+        assert!(
+            props.get("query").is_some(),
+            "schema must include 'query' property"
+        );
         assert!(props.get("k").is_some(), "schema must include 'k' property");
         assert!(
             props.get("budget_tokens").is_some(),
             "schema must include 'budget_tokens' property"
         );
-        assert!(props.get("tags").is_some(), "schema must include 'tags' property");
-        assert!(props.get("brains").is_some(), "schema must include 'brains' property");
+        assert!(
+            props.get("tags").is_some(),
+            "schema must include 'tags' property"
+        );
+        assert!(
+            props.get("brains").is_some(),
+            "schema must include 'brains' property"
+        );
     }
 
     /// Underscore alias must also dispatch correctly.

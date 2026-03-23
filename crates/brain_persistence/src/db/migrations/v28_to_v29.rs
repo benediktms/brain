@@ -147,7 +147,10 @@ mod tests {
              VALUES ('synapse://b1/tasks/t1', 'synapse://b1/records/r1', 'derived_from', 2000)",
             [],
         );
-        assert!(result.is_err(), "duplicate (source_uri, target_uri) should fail");
+        assert!(
+            result.is_err(),
+            "duplicate (source_uri, target_uri) should fail"
+        );
     }
 
     #[test]

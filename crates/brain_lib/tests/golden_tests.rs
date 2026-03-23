@@ -141,6 +141,7 @@ fn make_task_events() -> Vec<TaskEvent> {
             assignee: None,
             defer_until: None,
             parent_task_id: None,
+            id: None,
         })
         .unwrap(),
     ));
@@ -158,6 +159,7 @@ fn make_task_events() -> Vec<TaskEvent> {
             assignee: None,
             defer_until: None,
             parent_task_id: None,
+            id: None,
         })
         .unwrap(),
     ));
@@ -175,6 +177,7 @@ fn make_task_events() -> Vec<TaskEvent> {
             assignee: None,
             defer_until: None,
             parent_task_id: None,
+            id: None,
         })
         .unwrap(),
     ));

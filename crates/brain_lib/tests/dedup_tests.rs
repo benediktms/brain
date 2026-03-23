@@ -81,10 +81,7 @@ fn returns_correct_summary_id_among_multiple_existing() {
     let result = check_duplicate(content, &embedder, &existing, DEFAULT_DEDUP_THRESHOLD)
         .expect("check_duplicate must not error");
 
-    assert!(
-        result.is_some(),
-        "expected a duplicate candidate, got None"
-    );
+    assert!(result.is_some(), "expected a duplicate candidate, got None");
     assert_eq!(
         result.unwrap().summary_id,
         "sum-exact",

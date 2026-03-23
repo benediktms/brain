@@ -166,6 +166,15 @@ mod tests {
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
+    /// Compute the expected compact ID for a task created via in_memory stores.
+    /// In-memory stores use brain_id = "" which maps to the "(unscoped)" sentinel
+    /// brain inserted by migration v21→v22. That brain's prefix is "NSX" (derived
+    /// from generate_prefix("(unscoped)")), so compact IDs are "nsx-{hash}".
+    fn compact_id_for(task_id: &str) -> String {
+        let hex = blake3::hash(task_id.as_bytes()).to_hex().to_string();
+        format!("nsx-{}", &hex[..3])
+    }
+
     async fn dispatch(
         registry: &ToolRegistry,
         name: &str,
@@ -198,7 +207,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["summary"]["closed"], 1);
         assert_eq!(parsed["summary"]["failed"], 0);
-        assert_eq!(parsed["closed"][0]["task_id"], "t1");
+        assert_eq!(parsed["closed"][0]["task_id"], compact_id_for("t1"));
 
         // Verify task is actually done
         let task = ctx.stores.tasks.get_task("t1").unwrap().unwrap();
@@ -250,7 +259,7 @@ mod tests {
             parsed["closed"][0]["unblocked_task_ids"]
                 .as_array()
                 .unwrap()
-                .contains(&json!("t2"))
+                .contains(&json!(compact_id_for("t2")))
         );
     }
 

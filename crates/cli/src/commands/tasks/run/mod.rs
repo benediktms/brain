@@ -147,6 +147,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
                 assignee: params.assignee.clone(),
                 defer_until: None,
                 parent_task_id: parent.clone(),
+                id: None,
             },
         );
 
@@ -202,6 +203,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
             assignee: params.assignee.clone(),
             defer_until: None,
             parent_task_id: parent.clone(),
+            id: None,
         },
     );
 

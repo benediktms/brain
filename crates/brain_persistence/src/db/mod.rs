@@ -3,10 +3,10 @@ pub mod files;
 pub mod fts;
 pub mod links;
 pub mod meta;
-pub mod object_links;
 #[cfg(test)]
 mod migration_harness;
 mod migrations;
+pub mod object_links;
 pub mod records;
 pub mod schema;
 pub mod summaries;

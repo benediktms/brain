@@ -44,7 +44,9 @@ fn get_pagerank_scores(db: &Db) -> Vec<(String, Option<f64>)> {
             .prepare("SELECT path, pagerank_score FROM files ORDER BY path")
             .unwrap();
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<f64>>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<f64>>(1)?))
+            })
             .unwrap()
             .filter_map(|r| r.ok())
             .collect::<Vec<_>>();
@@ -66,7 +68,11 @@ async fn test_pagerank_scores_populated_after_set_db_and_optimize() {
     std::fs::create_dir_all(&notes_dir).unwrap();
 
     // hub.md: linked-to by both leaves — will accumulate PageRank mass
-    write_md(&notes_dir, "hub.md", "# Hub\n\nThis is the central hub note.");
+    write_md(
+        &notes_dir,
+        "hub.md",
+        "# Hub\n\nThis is the central hub note.",
+    );
     // leaf1 and leaf2 both link to hub via wiki-link
     write_md(
         &notes_dir,
@@ -94,7 +100,10 @@ async fn test_pagerank_scores_populated_after_set_db_and_optimize() {
             .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
         .unwrap();
-    assert_eq!(backlinks, 2, "hub.md should have 2 incoming links from leaf1 and leaf2");
+    assert_eq!(
+        backlinks, 2,
+        "hub.md should have 2 incoming links from leaf1 and leaf2"
+    );
 
     // Before optimize: scores should be NULL (never computed yet)
     let scores_before = get_pagerank_scores(pipeline.db());
@@ -168,11 +177,7 @@ async fn test_pagerank_scores_remain_null_without_set_db() {
     std::fs::create_dir_all(&notes_dir).unwrap();
 
     write_md(&notes_dir, "hub.md", "# Hub\n\nCentral hub note.");
-    write_md(
-        &notes_dir,
-        "leaf.md",
-        "# Leaf\n\nLinks to [[hub]].",
-    );
+    write_md(&notes_dir, "leaf.md", "# Leaf\n\nLinks to [[hub]].");
 
     pipeline.full_scan(&[notes_dir]).await.unwrap();
 
@@ -220,7 +225,11 @@ async fn test_mcp_bootstrap_path_pagerank_via_manual_store_construction() {
         .unwrap();
 
     write_md(&notes_dir, "alpha.md", "# Alpha\n\nCore concept.");
-    write_md(&notes_dir, "beta.md", "# Beta\n\nSee [[alpha]] for foundation.");
+    write_md(
+        &notes_dir,
+        "beta.md",
+        "# Beta\n\nSee [[alpha]] for foundation.",
+    );
     write_md(&notes_dir, "gamma.md", "# Gamma\n\nAlso see [[alpha]].");
 
     pipeline.full_scan(&[notes_dir]).await.unwrap();

@@ -157,7 +157,13 @@ impl McpTool for MemSearchMinimal {
                 // Federated path — delegate setup to shared helper.
                 // Build the brain list: local brain first, then each remote.
                 // All share the same unified `ctx.db` — no separate Db per brain.
-                let brains = match super::build_federated_brains(ctx, store.clone(), embedder, &params.brains).await
+                let brains = match super::build_federated_brains(
+                    ctx,
+                    store.clone(),
+                    embedder,
+                    &params.brains,
+                )
+                .await
                 {
                     Ok(b) => b,
                     Err(e) => return ToolCallResult::error(e),

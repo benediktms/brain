@@ -422,6 +422,15 @@ mod tests {
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
+    /// Compute the expected compact ID for a task created via in_memory stores.
+    /// In-memory stores use brain_id = "" which maps to the "(unscoped)" sentinel
+    /// brain inserted by migration v21→v22. That brain's prefix is "NSX" (derived
+    /// from generate_prefix("(unscoped)")), so compact IDs are "nsx-{hash}".
+    fn compact_id_for(task_id: &str) -> String {
+        let hex = blake3::hash(task_id.as_bytes()).to_hex().to_string();
+        format!("nsx-{}", &hex[..3])
+    }
+
     async fn dispatch(
         registry: &super::super::ToolRegistry,
         name: &str,
@@ -446,7 +455,7 @@ mod tests {
 
         let text = &result.content[0].text;
         let parsed: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(parsed["task_id"], "test-1");
+        assert_eq!(parsed["task_id"], compact_id_for("test-1"));
 
         assert_eq!(parsed["task"]["title"], "My first task");
         assert_eq!(parsed["task"]["status"], "open");
@@ -534,7 +543,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let unblocked = parsed["unblocked_task_ids"].as_array().unwrap();
         assert_eq!(unblocked.len(), 1);
-        assert_eq!(unblocked[0], "t2");
+        assert_eq!(unblocked[0], compact_id_for("t2"));
     }
 
     #[tokio::test]
@@ -1095,7 +1104,7 @@ mod tests {
 
         // Verify the task was created
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        assert_eq!(parsed["task_id"], "cap-5");
+        assert_eq!(parsed["task_id"], compact_id_for("cap-5"));
         assert_eq!(parsed["task"]["title"], "Tasks-only mode task");
     }
 }

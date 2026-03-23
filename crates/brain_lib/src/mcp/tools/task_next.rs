@@ -224,6 +224,15 @@ mod tests {
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
+    /// Compute the expected compact ID for a task created via in_memory stores.
+    /// In-memory stores use brain_id = "" which maps to the "(unscoped)" sentinel
+    /// brain inserted by migration v21→v22. That brain's prefix is "NSX" (derived
+    /// from generate_prefix("(unscoped)")), so compact IDs are "nsx-{hash}".
+    fn compact_id_for(task_id: &str) -> String {
+        let hex = blake3::hash(task_id.as_bytes()).to_hex().to_string();
+        format!("nsx-{}", &hex[..3])
+    }
+
     /// Helper: collect all tasks from the grouped results structure.
     fn collect_tasks(parsed: &Value) -> Vec<&Value> {
         parsed["results"]
@@ -258,7 +267,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0]["task_id"], "t2");
+        assert_eq!(tasks[0]["task_id"], compact_id_for("t2"));
         assert_eq!(tasks[0]["priority"], 1);
         assert_eq!(parsed["ready_count"], 3);
         assert_eq!(parsed["blocked_count"], 0);
@@ -277,7 +286,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0]["task_id"], "t1");
+        assert_eq!(tasks[0]["task_id"], compact_id_for("t1"));
         assert_eq!(parsed["ready_count"], 1);
         assert_eq!(parsed["blocked_count"], 1);
     }
@@ -324,7 +333,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let tasks = collect_tasks(&parsed);
         let task = &tasks[0];
-        assert_eq!(task["task_id"], "t2");
+        assert_eq!(task["task_id"], compact_id_for("t2"));
         assert_eq!(task["dependency_summary"]["total_deps"], 1);
         assert_eq!(task["dependency_summary"]["done_deps"], 1);
         assert_eq!(
@@ -373,7 +382,7 @@ mod tests {
         let tasks = collect_tasks(&parsed);
         // Only the regular task, not the epic
         assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0]["task_id"], "t1");
+        assert_eq!(tasks[0]["task_id"], compact_id_for("t1"));
     }
 
     #[tokio::test]
@@ -403,7 +412,7 @@ mod tests {
         // Find the null-epic group
         let null_group = groups.iter().find(|g| g["epic"].is_null()).unwrap();
         assert_eq!(null_group["tasks"].as_array().unwrap().len(), 1);
-        assert_eq!(null_group["tasks"][0]["task_id"], "o1");
+        assert_eq!(null_group["tasks"][0]["task_id"], compact_id_for("o1"));
     }
 
     #[tokio::test]
@@ -425,10 +434,11 @@ mod tests {
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 2);
         assert_eq!(
-            tasks[0]["task_id"], "t2",
+            tasks[0]["task_id"],
+            compact_id_for("t2"),
             "in_progress task must appear before open task at the same priority"
         );
-        assert_eq!(tasks[1]["task_id"], "t1");
+        assert_eq!(tasks[1]["task_id"], compact_id_for("t1"));
     }
 
     #[tokio::test]
@@ -451,10 +461,11 @@ mod tests {
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 2);
         assert_eq!(
-            tasks[0]["task_id"], "t1",
+            tasks[0]["task_id"],
+            compact_id_for("t1"),
             "in_progress task (P3) must appear before open task (P1) — status dominates priority"
         );
-        assert_eq!(tasks[1]["task_id"], "t2");
+        assert_eq!(tasks[1]["task_id"], compact_id_for("t2"));
     }
 
     #[tokio::test]

@@ -1189,6 +1189,6 @@ mod tests {
         let conn = setup();
         create_record(&conn, "r1", "No Tags", "analysis");
         let tags = get_tags_for_records(&conn, &["r1"]).unwrap();
-        assert!(tags.get("r1").is_none());
+        assert!(!tags.contains_key("r1"));
     }
 }
