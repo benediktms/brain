@@ -166,7 +166,10 @@ async fn test_1hop_graph_expansion_adds_linked_neighbour_to_results() {
         "# Network Protocols\n\nTCP/IP and UDP govern packet transmission across distributed systems.",
     );
 
-    pipeline.full_scan(std::slice::from_ref(&notes_dir)).await.unwrap();
+    pipeline
+        .full_scan(std::slice::from_ref(&notes_dir))
+        .await
+        .unwrap();
 
     let store_reader = StoreReader::from_store(pipeline.store());
     let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
@@ -253,7 +256,10 @@ async fn test_1hop_expansion_does_not_follow_2hop_links() {
         );
     }
 
-    pipeline.full_scan(std::slice::from_ref(&notes_dir)).await.unwrap();
+    pipeline
+        .full_scan(std::slice::from_ref(&notes_dir))
+        .await
+        .unwrap();
 
     let store_reader = StoreReader::from_store(pipeline.store());
     let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
