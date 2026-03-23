@@ -86,8 +86,9 @@ fn test_empty_episodes_empty_result() {
 }
 
 /// Seed 5 episodes split into two temporal groups:
-///   - Group A (recent):  t=1_000_000, t=1_000_060  (1 minute apart)
-///   - Group B (older):   t=900_000,   t=900_120,   t=900_180  (2 min window)
+/// - Group A (recent):  t=1_000_000, t=1_000_060  (1 minute apart)
+/// - Group B (older):   t=900_000,   t=900_120,   t=900_180  (2 min window)
+///
 /// Gap between groups: ~100_000 seconds >> gap_seconds=3600.
 ///
 /// Asserts that the clustering algorithm produces exactly 2 clusters.

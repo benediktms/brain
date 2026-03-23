@@ -1180,4 +1180,5 @@ impl DerivedSummaryStore for Db {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::manual_async_fn, clippy::type_complexity)]
 pub mod mock;

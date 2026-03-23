@@ -44,7 +44,7 @@ pub fn migrate_v30_to_v31(conn: &Connection) -> Result<()> {
 
         let mut update_stmt = conn.prepare("UPDATE tasks SET id = ?1 WHERE task_id = ?2")?;
 
-        for (_brain_id, task_ids) in &by_brain {
+        for task_ids in by_brain.values() {
             let mut used: HashSet<String> = HashSet::new();
 
             for task_id in task_ids {

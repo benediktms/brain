@@ -187,6 +187,45 @@ pub fn get_files_with_hashes(conn: &Connection) -> Result<Vec<(String, String, O
     super::collect_rows(rows)
 }
 
+// ---------------------------------------------------------------------------
+// Additional helpers used by ports layer
+// ---------------------------------------------------------------------------
+
+/// Count files stuck in `indexing_started` state.
+pub fn count_stuck_indexing(conn: &Connection) -> Result<u64> {
+    let count: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    Ok(count)
+}
+
+/// Look up a file by path, rename it, and return its file_id.
+pub fn rename_by_path(conn: &Connection, from_path: &str, to_path: &str) -> Result<Option<String>> {
+    let file_id: Option<String> = conn
+        .query_row(
+            "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",
+            [from_path],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    if let Some(ref fid) = file_id {
+        handle_rename(conn, fid, to_path)?;
+    }
+    Ok(file_id)
+}
+
+/// Run SQLite VACUUM.
+pub fn vacuum(conn: &Connection) -> Result<()> {
+    conn.execute_batch("VACUUM")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,43 +535,4 @@ mod tests {
         mark_indexed(&conn, &fid3, "h3", 2).unwrap();
         assert_eq!(count_stale_chunker_version(&conn, 2).unwrap(), 1); // fid2 still stale
     }
-}
-
-// ---------------------------------------------------------------------------
-// Additional helpers used by ports layer
-// ---------------------------------------------------------------------------
-
-/// Count files stuck in `indexing_started` state.
-pub fn count_stuck_indexing(conn: &Connection) -> Result<u64> {
-    let count: u64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?
-        .unwrap_or(0);
-    Ok(count)
-}
-
-/// Look up a file by path, rename it, and return its file_id.
-pub fn rename_by_path(conn: &Connection, from_path: &str, to_path: &str) -> Result<Option<String>> {
-    let file_id: Option<String> = conn
-        .query_row(
-            "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",
-            [from_path],
-            |row| row.get(0),
-        )
-        .optional()?;
-
-    if let Some(ref fid) = file_id {
-        handle_rename(conn, fid, to_path)?;
-    }
-    Ok(file_id)
-}
-
-/// Run SQLite VACUUM.
-pub fn vacuum(conn: &Connection) -> Result<()> {
-    conn.execute_batch("VACUUM")?;
-    Ok(())
 }
