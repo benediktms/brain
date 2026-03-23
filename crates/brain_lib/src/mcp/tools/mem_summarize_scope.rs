@@ -93,7 +93,9 @@ impl McpTool for MemSummarizeScope {
             if params.regenerate {
                 // Force-generate a fresh summary.
                 match generate_scope_summary(db, &scope_type, &params.scope_value) {
-                    Err(e) => return ToolCallResult::error(format!("Failed to generate summary: {e}")),
+                    Err(e) => {
+                        return ToolCallResult::error(format!("Failed to generate summary: {e}"));
+                    }
                     Ok(_id) => {}
                 }
             }
@@ -105,22 +107,24 @@ impl McpTool for MemSummarizeScope {
                     // No existing summary — generate one now.
                     match generate_scope_summary(db, &scope_type, &params.scope_value) {
                         Err(e) => ToolCallResult::error(format!("Failed to generate summary: {e}")),
-                        Ok(_id) => {
-                            match get_scope_summary(db, &scope_type, &params.scope_value) {
-                                Err(e) => ToolCallResult::error(format!("Failed to retrieve summary after generation: {e}")),
-                                Ok(None) => ToolCallResult::error("Summary generation produced no result"),
-                                Ok(Some(summary)) => {
-                                    let response = json!({
-                                        "scope_type": summary.scope_type,
-                                        "scope_value": summary.scope_value,
-                                        "content": summary.content,
-                                        "stale": summary.stale,
-                                        "generated_at": summary.generated_at,
-                                    });
-                                    json_response(&response)
-                                }
+                        Ok(_id) => match get_scope_summary(db, &scope_type, &params.scope_value) {
+                            Err(e) => ToolCallResult::error(format!(
+                                "Failed to retrieve summary after generation: {e}"
+                            )),
+                            Ok(None) => {
+                                ToolCallResult::error("Summary generation produced no result")
                             }
-                        }
+                            Ok(Some(summary)) => {
+                                let response = json!({
+                                    "scope_type": summary.scope_type,
+                                    "scope_value": summary.scope_value,
+                                    "content": summary.content,
+                                    "stale": summary.stale,
+                                    "generated_at": summary.generated_at,
+                                });
+                                json_response(&response)
+                            }
+                        },
                     }
                 }
                 Ok(Some(summary)) => {
@@ -181,7 +185,11 @@ mod tests {
             )
             .await;
         // Empty scope still produces a valid (empty-content) response.
-        assert!(result.is_error.is_none(), "unexpected error: {:?}", result.content);
+        assert!(
+            result.is_error.is_none(),
+            "unexpected error: {:?}",
+            result.content
+        );
         let text = &result.content[0].text;
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["scope_type"], "directory");
@@ -199,6 +207,10 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(result.is_error.is_none(), "unexpected error: {:?}", result.content);
+        assert!(
+            result.is_error.is_none(),
+            "unexpected error: {:?}",
+            result.content
+        );
     }
 }

@@ -42,10 +42,7 @@ pub struct ConsolidateResult {
 /// # Parameters
 /// - `episodes`: pre-fetched episode rows, any order.
 /// - `gap_seconds`: minimum gap (in seconds) that separates two clusters.
-pub fn consolidate_episodes(
-    episodes: Vec<SummaryRow>,
-    gap_seconds: i64,
-) -> ConsolidateResult {
+pub fn consolidate_episodes(episodes: Vec<SummaryRow>, gap_seconds: i64) -> ConsolidateResult {
     if episodes.is_empty() {
         return ConsolidateResult::default();
     }
@@ -76,17 +73,17 @@ pub fn consolidate_episodes(
     let mut clusters: Vec<ConsolidationCluster> = raw_clusters
         .into_iter()
         .map(|group| {
-            let episode_ids: Vec<String> =
-                group.iter().map(|e| e.summary_id.clone()).collect();
+            let episode_ids: Vec<String> = group.iter().map(|e| e.summary_id.clone()).collect();
 
             // suggested_title: first episode's title, or "Episodes from {date}".
-            let suggested_title = group
-                .first()
-                .and_then(|e| e.title.clone())
-                .unwrap_or_else(|| {
-                    let ts = group.first().map(|e| e.created_at).unwrap_or(0);
-                    format!("Episodes from {}", format_date(ts))
-                });
+            let suggested_title =
+                group
+                    .first()
+                    .and_then(|e| e.title.clone())
+                    .unwrap_or_else(|| {
+                        let ts = group.first().map(|e| e.created_at).unwrap_or(0);
+                        format!("Episodes from {}", format_date(ts))
+                    });
 
             // summary: first 200 chars of each episode's content, joined.
             let summary = group

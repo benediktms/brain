@@ -434,7 +434,8 @@ mod tests {
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 2);
         assert_eq!(
-            tasks[0]["task_id"], compact_id_for("t2"),
+            tasks[0]["task_id"],
+            compact_id_for("t2"),
             "in_progress task must appear before open task at the same priority"
         );
         assert_eq!(tasks[1]["task_id"], compact_id_for("t1"));
@@ -460,7 +461,8 @@ mod tests {
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 2);
         assert_eq!(
-            tasks[0]["task_id"], compact_id_for("t1"),
+            tasks[0]["task_id"],
+            compact_id_for("t1"),
             "in_progress task (P3) must appear before open task (P1) — status dominates priority"
         );
         assert_eq!(tasks[1]["task_id"], compact_id_for("t2"));

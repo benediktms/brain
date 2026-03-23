@@ -150,6 +150,9 @@ mod tests {
              VALUES ('id-002', 'directory', 'src/auth/', 'second', 0, 2000)",
             [],
         );
-        assert!(result.is_err(), "duplicate (scope_type, scope_value) should fail");
+        assert!(
+            result.is_err(),
+            "duplicate (scope_type, scope_value) should fail"
+        );
     }
 }

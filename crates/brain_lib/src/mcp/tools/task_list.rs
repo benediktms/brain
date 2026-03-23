@@ -114,7 +114,13 @@ impl TaskList {
         // If task_ids provided, fetch those specifically
         if let Some(ref ids) = params.task_ids {
             let task_ids: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-            return Self::handle_batch(&task_ids, params.include_description, limit, store, brain_name);
+            return Self::handle_batch(
+                &task_ids,
+                params.include_description,
+                limit,
+                store,
+                brain_name,
+            );
         }
 
         // Parse per-field filters

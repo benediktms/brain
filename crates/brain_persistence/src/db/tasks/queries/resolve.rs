@@ -74,7 +74,9 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
         // Only attempt if it looks like hex (lowercase, 0-9a-f)
         if !hex_part.is_empty()
             && hex_part.len() >= MIN_SHORT_HASH_LEN
-            && hex_part.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            && hex_part
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         {
             // Exact match on id column
             let exact: Option<String> = conn
@@ -90,9 +92,8 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
 
             // Prefix match on id column (range scan)
             let upper = increment_string(hex_part);
-            let mut stmt = conn.prepare(
-                "SELECT task_id, title FROM tasks WHERE id >= ?1 AND id < ?2",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT task_id, title FROM tasks WHERE id >= ?1 AND id < ?2")?;
             let matches: Vec<(String, String)> = stmt
                 .query_map(rusqlite::params![hex_part, upper], |row| {
                     Ok((row.get(0)?, row.get(1)?))

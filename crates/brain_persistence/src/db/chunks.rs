@@ -132,10 +132,7 @@ pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<&dyn ToSql> = file_ids
-        .iter()
-        .map(|id| id as &dyn ToSql)
-        .collect();
+    let params: Vec<&dyn ToSql> = file_ids.iter().map(|id| id as &dyn ToSql).collect();
 
     let rows = stmt.query_map(params.as_slice(), |row| {
         Ok(ChunkRow {

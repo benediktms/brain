@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::db::tasks::queries::{blake3_short_hex, MIN_SHORT_HASH_LEN};
+use crate::db::tasks::queries::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 use crate::error::Result;
 
 /// v30 → v31: Add `id` column to tasks for stable, hash-based display IDs.
@@ -26,7 +26,8 @@ pub fn migrate_v30_to_v31(conn: &Connection) -> Result<()> {
     )?;
 
     // Backfill: group by brain_id, compute shortest unique hash per brain
-    let mut stmt = conn.prepare("SELECT task_id, brain_id FROM tasks ORDER BY brain_id, task_id")?;
+    let mut stmt =
+        conn.prepare("SELECT task_id, brain_id FROM tasks ORDER BY brain_id, task_id")?;
     let rows: Vec<(String, String)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -200,12 +201,14 @@ mod tests {
             "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at)
              VALUES ('AAA-01XYZABC', 'brain-a', 'Task A', 'open', 1, 1000, 1000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at)
              VALUES ('BBB-01XYZDEF', 'brain-b', 'Task B', 'open', 1, 1000, 1000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         migrate_v30_to_v31(&conn).unwrap();
 

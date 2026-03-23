@@ -523,7 +523,10 @@ mod tests {
         let prefixes = compact_ids(&conn).unwrap();
         let short = &prefixes["BRN-01JPHZS7VXQK4R3BGTHNED2P8M"];
         // Hash-based: {prefix_lower}-{hex[:3+]}
-        assert!(short.contains('-'), "should have prefix-hash format: {short}");
+        assert!(
+            short.contains('-'),
+            "should have prefix-hash format: {short}"
+        );
         assert!(short.len() >= 4 + resolve::MIN_SHORT_HASH_LEN); // "xxx-" + 3+ hex
     }
 

@@ -29,11 +29,10 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
             // Retry is needed even for payload-provided IDs during rebuild,
             // where brain_id="" collapses cross-brain hash namespaces.
             let full_hex = super::queries::blake3_short_hex(&event.task_id);
-            let base_len = p
-                .id
-                .as_deref()
-                .map(|id| id.len())
-                .unwrap_or(super::queries::MIN_SHORT_HASH_LEN);
+            let base_len =
+                p.id.as_deref()
+                    .map(|id| id.len())
+                    .unwrap_or(super::queries::MIN_SHORT_HASH_LEN);
             let mut hash_len = base_len;
 
             loop {

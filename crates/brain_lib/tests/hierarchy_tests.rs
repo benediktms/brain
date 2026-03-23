@@ -126,11 +126,25 @@ fn insert_derived_summary(
 #[test]
 fn test_generate_scope_summary_creates_summary() {
     let db = setup();
-    insert_note(&db, "chunk:auth1", "src/auth/handler.rs", "JWT token validation logic");
-    insert_note(&db, "chunk:auth2", "src/auth/middleware.rs", "Auth middleware for request pipeline");
+    insert_note(
+        &db,
+        "chunk:auth1",
+        "src/auth/handler.rs",
+        "JWT token validation logic",
+    );
+    insert_note(
+        &db,
+        "chunk:auth2",
+        "src/auth/middleware.rs",
+        "Auth middleware for request pipeline",
+    );
 
     let result = generate_scope_summary(&db, &ScopeType::Directory, "src/auth/");
-    assert!(result.is_ok(), "generate_scope_summary must succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "generate_scope_summary must succeed: {:?}",
+        result.err()
+    );
 
     let id = result.unwrap();
     assert!(!id.is_empty(), "returned ID must be non-empty");
@@ -140,8 +154,18 @@ fn test_generate_scope_summary_creates_summary() {
 #[test]
 fn test_generated_summary_is_persisted_and_retrievable() {
     let db = setup();
-    insert_note(&db, "chunk:auth1", "src/auth/handler.rs", "JWT token validation logic");
-    insert_note(&db, "chunk:auth2", "src/auth/middleware.rs", "Auth middleware security layer");
+    insert_note(
+        &db,
+        "chunk:auth1",
+        "src/auth/handler.rs",
+        "JWT token validation logic",
+    );
+    insert_note(
+        &db,
+        "chunk:auth2",
+        "src/auth/middleware.rs",
+        "Auth middleware security layer",
+    );
 
     // Pre-seed a row as the real implementation would produce.
     insert_derived_summary(
@@ -206,7 +230,10 @@ fn test_reindex_marks_directory_summary_stale() {
             .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
         .unwrap();
-    assert_eq!(stale, 1, "summary must be marked stale after mark_scope_stale");
+    assert_eq!(
+        stale, 1,
+        "summary must be marked stale after mark_scope_stale"
+    );
 }
 
 /// search_derived_summaries finds matching rows via FTS.
@@ -223,8 +250,7 @@ fn test_derived_summary_appears_in_search_results() {
         false,
     );
 
-    let results: Vec<DerivedSummary> =
-        search_derived_summaries(&db, "authentication", 10).unwrap();
+    let results: Vec<DerivedSummary> = search_derived_summaries(&db, "authentication", 10).unwrap();
 
     assert!(
         !results.is_empty(),

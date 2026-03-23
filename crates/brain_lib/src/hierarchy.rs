@@ -60,11 +60,7 @@ pub struct DerivedSummary {
 pub trait DerivedSummaryStore: Send + Sync {
     /// Generate and persist a derived summary for the given scope.
     /// Returns the newly assigned summary id.
-    fn generate_scope_summary(
-        &self,
-        scope_type: &ScopeType,
-        scope_value: &str,
-    ) -> Result<String>;
+    fn generate_scope_summary(&self, scope_type: &ScopeType, scope_value: &str) -> Result<String>;
 
     /// Retrieve an existing derived summary for the given scope.
     /// Returns `Ok(None)` if no row exists.
@@ -76,18 +72,10 @@ pub trait DerivedSummaryStore: Send + Sync {
 
     /// Mark any existing derived summary for the given scope as stale.
     /// Returns the number of rows updated (0 or 1).
-    fn mark_scope_stale(
-        &self,
-        scope_type: &ScopeType,
-        scope_value: &str,
-    ) -> Result<usize>;
+    fn mark_scope_stale(&self, scope_type: &ScopeType, scope_value: &str) -> Result<usize>;
 
     /// Search derived summaries by keyword across all scopes.
-    fn search_derived_summaries(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<DerivedSummary>>;
+    fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>>;
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────

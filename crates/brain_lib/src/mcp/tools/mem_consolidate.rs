@@ -82,10 +82,7 @@ impl McpTool for MemConsolidate {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            let effective_brain_id = params
-                .brain_id
-                .as_deref()
-                .unwrap_or_else(|| ctx.brain_id());
+            let effective_brain_id = params.brain_id.as_deref().unwrap_or_else(|| ctx.brain_id());
 
             let limit = params.limit.min(500);
             let episodes = ctx
@@ -131,8 +128,14 @@ mod tests {
     async fn test_consolidate_empty_returns_ok() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
-        let result = registry.dispatch("memory.consolidate", json!({}), &ctx).await;
-        assert!(result.is_error.is_none(), "unexpected error: {:?}", result.content);
+        let result = registry
+            .dispatch("memory.consolidate", json!({}), &ctx)
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "unexpected error: {:?}",
+            result.content
+        );
         let text = &result.content[0].text;
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["cluster_count"], 0);

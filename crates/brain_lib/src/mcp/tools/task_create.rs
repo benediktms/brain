@@ -10,7 +10,7 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::events::{
     EventType, ExternalIdPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
 };
-use crate::tasks::queries::{blake3_short_hex, MIN_SHORT_HASH_LEN};
+use crate::tasks::queries::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 use crate::uri::SynapseUri;
 use crate::utils::{parse_timestamp, task_row_to_json};
 
