@@ -344,6 +344,15 @@ mod tests {
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
 
+    /// Compute the expected compact ID for a task created via in_memory stores.
+    /// In-memory stores use brain_id = "" which maps to the "(unscoped)" sentinel
+    /// brain inserted by migration v21→v22. That brain's prefix is "NSX" (derived
+    /// from generate_prefix("(unscoped)")), so compact IDs are "nsx-{hash}".
+    fn compact_id_for(task_id: &str) -> String {
+        let hex = blake3::hash(task_id.as_bytes()).to_hex().to_string();
+        format!("nsx-{}", &hex[..3])
+    }
+
     async fn apply(registry: &ToolRegistry, ctx: &crate::mcp::McpContext, params: Value) {
         registry.dispatch("tasks.apply_event", params, ctx).await;
     }
@@ -392,7 +401,7 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
-        assert_eq!(parsed["tasks"][0]["task_id"], "t1");
+        assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t1"));
     }
 
     #[tokio::test]
@@ -499,7 +508,7 @@ mod tests {
             .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
-        assert_eq!(parsed["tasks"][0]["task_id"], "t1");
+        assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t1"));
     }
 
     #[tokio::test]
@@ -543,7 +552,7 @@ mod tests {
             .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
-        assert_eq!(parsed["tasks"][0]["task_id"], "t2");
+        assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
     }
 
     #[tokio::test]
@@ -574,14 +583,14 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         // Only t1 and t3 found; nonexistent skipped
         assert_eq!(parsed["count"], 2);
-        let ids: Vec<&str> = parsed["tasks"]
+        let ids: Vec<String> = parsed["tasks"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|t| t["task_id"].as_str().unwrap())
+            .map(|t| t["task_id"].as_str().unwrap().to_string())
             .collect();
-        assert!(ids.contains(&"t1"));
-        assert!(ids.contains(&"t3"));
+        assert!(ids.contains(&compact_id_for("t1")));
+        assert!(ids.contains(&compact_id_for("t3")));
     }
 
     #[tokio::test]
@@ -849,14 +858,14 @@ mod tests {
             .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 2); // t1 (title) + t3 (description)
-        let ids: Vec<&str> = parsed["tasks"]
+        let ids: Vec<String> = parsed["tasks"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|t| t["task_id"].as_str().unwrap())
+            .map(|t| t["task_id"].as_str().unwrap().to_string())
             .collect();
-        assert!(ids.contains(&"t1"));
-        assert!(ids.contains(&"t3"));
+        assert!(ids.contains(&compact_id_for("t1")));
+        assert!(ids.contains(&compact_id_for("t3")));
     }
 
     #[tokio::test]
@@ -879,7 +888,7 @@ mod tests {
             .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
-        assert_eq!(parsed["tasks"][0]["task_id"], "t2");
+        assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
 
         // Search "permissions" in done tasks
         let result = registry
@@ -891,7 +900,7 @@ mod tests {
             .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
-        assert_eq!(parsed["tasks"][0]["task_id"], "t1");
+        assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t1"));
     }
 
     #[tokio::test]
@@ -986,7 +995,7 @@ mod tests {
         assert!(result.is_error.is_none());
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
-        assert_eq!(parsed["tasks"][0]["task_id"], "t2");
+        assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
     }
 
     #[tokio::test]
@@ -1032,6 +1041,6 @@ mod tests {
         assert!(result.is_error.is_none());
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
-        assert_eq!(parsed["tasks"][0]["task_id"], "t2");
+        assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
     }
 }
