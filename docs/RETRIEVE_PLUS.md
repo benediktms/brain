@@ -1,15 +1,68 @@
-# Retrieve+ Architecture Specification
+---
+layout: ADR
+number: 001
+title: Retrieve+ — Unified Memory Retrieval Surface
+status: proposed
+date: 2026-03-22
+authors: brain-collective
+deciders: []
+technical-reviewers: []
+related: BRN-01KM5Z5 (LLM job queue), BRN-01KM99PC (Retrieve+ epic)
+supersedes: []
+superseeded-by: []
+challenged-date: 2026-06-22
+challenged-by: []
+tags: [area:memory, type:feature, phase:design]
+---
 
-> **Status:** Draft — v1.0  
-> **Task:** BRN-01KM99PC.4  
-> **Author:** Drone Protocol (Drone adjunct)  
-> **Depends on:** Jobs table (BRN-01KM5Z5.2, schema v31), LOD storage (BRN-01KM99PC.5.1)
+## Table of Contents
+
+- [Context](#context)
+  - [Problem Statement](#problem-statement)
+  - [Design Goals](#design-goals)
+  - [Non-Goals](#non-goals)
+- [Decision](#decision)
+- [Consequences](#consequences)
+  - [What Becomes Easier](#what-becomes-easier)
+  - [What Becomes Harder](#what-becomes-harder)
+  - [Risks](#risks)
+- [Detailed Specification](#detailed-specification)
+  - [1. Retrieval Modes](#1-retrieval-modes)
+    - [1.1 Query Mode](#11-query-mode)
+    - [1.2 URI Mode](#12-uri-mode)
+  - [2. LOD System](#2-lod-system)
+    - [2.1 Level Definitions](#21-level-definitions)
+    - [2.2 Storage Schema](#22-storage-schema)
+    - [2.3 Generation Strategy](#23-generation-strategy)
+    - [2.4 TTL and Refresh Policy](#24-ttl-and-refresh-policy)
+  - [3. Explainability](#3-explainability)
+    - [3.1 Per-Result Explainability Fields](#31-per-result-explainability-fields)
+    - [3.2 Response-Level Diagnostics](#32-response-level-diagnostics)
+    - [3.3 Annotated Example Response](#33-annotated-example-response)
+  - [4. Embedding Strategy](#4-embedding-strategy)
+    - [4.1 Current: BGE-small (384d)](#41-current-bge-small-384d)
+    - [4.2 Proposal: Dual Encoder Profiles](#42-proposal-dual-encoder-profiles)
+    - [4.3 Time-Based Recency Filtering](#43-time-based-recency-filtering)
+  - [5. Metadata & Labeling](#5-metadata--labeling)
+    - [5.1 Canonical Facets](#51-canonical-facets)
+    - [5.2 Soft Label System](#52-soft-label-system)
+    - [5.3 Synonym Clustering](#53-synonym-clustering)
+    - [5.4 Metadata Filters in `retrieve`](#54-metadata-filters-in-retrieve)
+  - [6. Job Queue Integration](#6-job-queue-integration)
+    - [6.1 Job Table Reference](#61-job-table-reference)
+    - [6.2 Summarization Job Flow](#62-summarization-job-flow)
+    - [6.3 Consolidation Job Flow](#63-consolidation-job-flow)
+    - [6.4 Error Handling and Retry](#64-error-handling-and-retry)
+  - [7. Tool Schema](#7-tool-schema)
+  - [8. Dependency Graph](#8-dependency-graph)
+- [Alternatives Considered](#alternatives-considered)
+- [Open Questions](#open-questions)
 
 ---
 
-## 1. Overview
+## Context
 
-### 1.1 Problem Statement
+### Problem Statement
 
 Brain's current retrieval surface is split across two MCP tools:
 
@@ -26,7 +79,7 @@ This split creates compounding problems for agents:
 4. **No URI-addressed direct access.** There is no way to fetch a specific object by its canonical identifier without knowing which domain-specific tool handles that type.
 5. **Ephemeral-only responses.** The system generates nothing; it retrieves raw stored content. Higher-quality representations (summaries, abstractions) require the agent to build them manually and store them elsewhere.
 
-### 1.2 Design Goals
+### Design Goals
 
 | ID | Goal |
 |----|------|
@@ -40,7 +93,7 @@ This split creates compounding problems for agents:
 | G8 | **Time-scope filtering.** Metadata-based recency filters without re-embedding. |
 | G9 | **Backward compatibility.** `search_minimal` and `expand` continue to function. `retrieve` is an additive surface. |
 
-### 1.3 Non-Goals
+### Non-Goals
 
 | Non-Goal | Rationale |
 |----------|-----------|
@@ -53,17 +106,59 @@ This split creates compounding problems for agents:
 
 ---
 
-## 2. Retrieval Modes
+## Decision
+
+We introduce **Retrieve+**: a new `retrieve` MCP tool that unifies all memory retrieval into a single surface with three capabilities not present in the existing `search_minimal`/`expand` pair:
+
+1. **Level-of-Detail (LOD) control** — callers specify L0 (compact abstract), L1 (async LLM-generated summary), or L2 (full passthrough). The system returns the best available representation and enqueues generation for missing levels.
+2. **Canonical URI addressing** — every retrievable object is addressable via a `synapse://{brain}/{domain}/{id}` URI, decoupling caller code from domain-specific ID routing.
+3. **Inline explainability** — every result carries provenance fields (`lod_fresh`, `strategy_used`, `generated_at`, per-signal `explain` block) so agents can evaluate result quality without inspecting source code.
+
+LOD generation is decoupled from the retrieval hot path via the jobs table (schema v31, BRN-01KM5Z5). The `retrieve` tool never waits on LLM inference — it returns the best available representation immediately and signals freshness via `lod_fresh`. Persistent LOD representations are stored in a new `lod_chunks` table keyed on `(object_uri, lod_level)`.
+
+The existing `search_minimal` and `expand` tools are not removed. They are soft-deprecated: their descriptions are annotated with `deprecated: true` and `retrieve` is the documented preference for new code.
+
+---
+
+## Consequences
+
+### What Becomes Easier
+
+- **Agent context loading.** A single `retrieve` call with `lod="L1"` and `count=5` replaces a two-step search-then-expand fan-out. Agents compose richer context in fewer round-trips.
+- **Retrieval debugging.** The `explain` block and `diagnostics` object expose the full scoring signal, making retrieval quality visible without source code access.
+- **Direct object access.** Any object addressable by a `synapse://` URI can be fetched at any LOD level without knowing which domain table holds it.
+- **LOD-aware caching.** L0 and L1 representations are stored durably in `lod_chunks`. Repeated retrieval of the same object at the same LOD level is a cache hit after the first miss.
+- **Vocabulary normalization.** Synonym clustering in `tag_clusters` means agents do not need to know all variant spellings of a concept to retrieve related content.
+
+### What Becomes Harder
+
+- **Schema complexity increases.** The new `lod_chunks` and `tag_clusters` tables add surface area to the database schema. Migrations must be sequenced correctly relative to dependent tasks.
+- **LOD staleness is implicit.** Callers must inspect `lod_fresh` to determine whether content is current. Agents that ignore `lod_fresh` may silently operate on stale summaries.
+- **First-retrieval quality degradation.** For L1 requests on objects that have never been summarized, the first response is always an L0 fallback. Agents sensitive to this must either check `lod_fresh` and re-query, or use a future `wait_ms` extension (see OQ-2).
+- **Job queue dependency.** All L1 generation depends on the jobs table (BRN-01KM5Z5). Retrieve+ cannot proceed to L1 capability without that infrastructure being available.
+
+### Risks
+
+- **Model selection unresolved (OQ-1).** flan-t5 was removed and no L1 generation model has been selected. If no suitable local model is chosen, L1 quality degrades to extractive fallback permanently — diminishing the value of the LOD system.
+- **`lod_chunks` scope ambiguity (OQ-3).** The schema uses `object_uri` as the key, which implies support for all object types. Records store payloads in the object store (BLAKE3-keyed), not in SQLite, making source hash computation structurally different. If scope is not decided before BRN-01KM99PC.5.1, the schema may need a breaking revision.
+- **Agent migration friction.** Agents (Drone Protocol, Sentinel, Probe) have hardcoded calls to `search_minimal`. Soft deprecation reduces urgency but does not eliminate the migration cost. If `search_minimal` is eventually removed without migration, deployed agents break silently.
+- **Synonym clustering at scale.** Embedding all unique tags and clustering them is fast for small brains but potentially expensive for large ones. Without a decided trigger policy (OQ-4), the background job may either run too infrequently (stale clusters) or too aggressively (resource contention).
+
+---
+
+## Detailed Specification
+
+### 1. Retrieval Modes
 
 `retrieve` supports two primary modes, selected by the shape of the input.
 
-### 2.1 Query Mode
+#### 1.1 Query Mode
 
 **Purpose:** Natural language semantic retrieval with LOD control and strategy hints.
 
 **Trigger:** Input contains a non-empty `query` string.
 
-#### Input Schema
+##### Input Schema
 
 ```json
 {
@@ -87,9 +182,9 @@ This split creates compounding problems for agents:
 | `count` | integer | No | `10` | Maximum number of results |
 | `strategy` | string | No | `"auto"` | Ranking weight profile: `lookup`, `planning`, `reflection`, `synthesis`, `auto` |
 | `brain` | string | No | current brain | Target brain name or ID |
-| `metadata_filters` | object | No | `{}` | Structured filters; see §6 |
+| `metadata_filters` | object | No | `{}` | Structured filters; see §5.4 |
 
-#### Output Schema
+##### Output Schema
 
 ```json
 {
@@ -141,7 +236,7 @@ This split creates compounding problems for agents:
 3. Enqueues an async `summarize` job for the missing level.
 4. Includes the job in `diagnostics.lod_generation_enqueued`.
 
-#### Query Mode Examples
+##### Query Mode Examples
 
 **Example 1: Default L0 lookup**
 ```json
@@ -175,13 +270,13 @@ Returns only episode objects from the last 7 days.
 
 ---
 
-### 2.2 URI Mode
+#### 1.2 URI Mode
 
 **Purpose:** Direct object access by canonical `synapse://` URI. No semantic ranking — fetch the object at the specified address and return it at the requested LOD level.
 
 **Trigger:** Input contains a non-empty `uri` string and no `query` string.
 
-#### URI Format
+##### URI Format
 
 ```
 synapse://{brain_name}/{domain}/{id}
@@ -201,7 +296,7 @@ synapse://_/task/BRN-01KMXXX
 synapse://work/record/01MNOPQR
 ```
 
-#### Routing Logic
+##### Routing Logic
 
 ```
 retrieve(uri="synapse://brain/domain/id", lod="L1")
@@ -216,7 +311,7 @@ retrieve(uri="synapse://brain/domain/id", lod="L1")
 
 For `domain=task` or `domain=record`, the system fetches from the respective SQLite tables (tasks, records) — no LanceDB lookup. For `chunk`, `episode`, `reflection`, and `derived_summary`, the system can return LOD representations from `lod_chunks`.
 
-#### Input Schema
+##### Input Schema
 
 ```json
 {
@@ -230,15 +325,15 @@ For `domain=task` or `domain=record`, the system fetches from the respective SQL
 | `uri` | string | Yes (URI mode) | — | Canonical `synapse://` URI |
 | `lod` | enum | No | `"L0"` | Requested LOD level |
 
-#### Output Schema
+##### Output Schema
 
 Same structure as query mode result, but `results` always contains exactly one object (or an error if the URI is invalid or the object does not exist).
 
 ---
 
-## 3. LOD System
+### 2. LOD System
 
-### 3.1 Level Definitions
+#### 2.1 Level Definitions
 
 | Level | Token Budget | Description | Generation Method | Use Case |
 |-------|-------------|-------------|-------------------|----------|
@@ -248,11 +343,11 @@ Same structure as query mode result, but `results` always contains exactly one o
 
 **Key invariant:** L0 ⊆ L1 ⊆ L2 in information density, but they are stored and served independently. The system does not derive L0 from L1 or L1 from L2 — each level is generated from the source object directly.
 
-### 3.2 Storage Schema
+#### 2.2 Storage Schema
 
 **TODO for BRN-01KM99PC.5.1:** Implement the `lod_chunks` table and migration.
 
-#### Proposed `lod_chunks` Table
+##### Proposed `lod_chunks` Table
 
 ```sql
 CREATE TABLE lod_chunks (
@@ -283,9 +378,9 @@ CREATE INDEX idx_lod_chunks_exp   ON lod_chunks (expires_at) WHERE expires_at IS
 - `lod_level='L2'` rows are never written to this table; L2 is served directly from the source table.
 - `job_id` links to the `jobs` table (schema v31) for traceability of async generation.
 
-### 3.3 Generation Strategy
+#### 2.3 Generation Strategy
 
-#### L0 — Deterministic Extractive
+##### L0 — Deterministic Extractive
 
 Generated synchronously at index time (or lazily on first retrieve if missing). No LLM dependency.
 
@@ -297,7 +392,7 @@ Generated synchronously at index time (or lazily on first retrieve if missing). 
 
 **Trigger:** Every chunk write (index pipeline) generates an L0 representation in the same transaction.
 
-#### L1 — Async LLM-Generated
+##### L1 — Async LLM-Generated
 
 Generated asynchronously via the jobs queue. Never blocks the retrieval hot path.
 
@@ -319,11 +414,11 @@ The job worker generates the L1 summary and writes it to `lod_chunks`. On the ne
 
 **Model:** The summary model is configurable per-brain in `brain.toml` under `[summarizer]`. If no model is configured, an extractive fallback (concatenation of the first 3 sentences plus key entities) is used.
 
-#### L2 — Passthrough
+##### L2 — Passthrough
 
 No generation. The source content is returned directly from the `chunks` table (for note chunks) or `summaries` table (for episodes/reflections). `lod_chunks` is not written for L2.
 
-### 3.4 TTL and Refresh Policy
+#### 2.4 TTL and Refresh Policy
 
 | LOD Level | Default TTL | Staleness Check |
 |-----------|------------|-----------------|
@@ -337,11 +432,11 @@ No generation. The source content is returned directly from the `chunks` table (
 
 ---
 
-## 4. Explainability
+### 3. Explainability
 
 Every `retrieve` response carries provenance metadata. Agents receive enough context to understand why a result was returned, evaluate its freshness, and decide whether to request a different LOD level.
 
-### 4.1 Per-Result Explainability Fields
+#### 3.1 Per-Result Explainability Fields
 
 | Field | Type | Always Present | Description |
 |-------|------|----------------|-------------|
@@ -367,7 +462,7 @@ Every `retrieve` response carries provenance metadata. Agents receive enough con
 | `explain.weights` | string | Profile name used for signal weighting |
 | `explain.fusion_confidence` | float | Agreement between vector and BM25 rankings (0.0–1.0). Values < 0.3 trigger cross-encoder reranking |
 
-### 4.2 Response-Level Diagnostics
+#### 3.2 Response-Level Diagnostics
 
 Returned in the `diagnostics` block on every query mode response:
 
@@ -397,7 +492,7 @@ Returned in the `diagnostics` block on every query mode response:
 | `lod_misses` | Results where requested LOD was unavailable; fallback applied |
 | `lod_generation_enqueued` | Count of `summarize` jobs enqueued during this call |
 
-### 4.3 Annotated Example Response
+#### 3.3 Annotated Example Response
 
 ```json
 {
@@ -453,9 +548,9 @@ Returned in the `diagnostics` block on every query mode response:
 
 ---
 
-## 5. Embedding Strategy
+### 4. Embedding Strategy
 
-### 5.1 Current: BGE-small (384d)
+#### 4.1 Current: BGE-small (384d)
 
 Brain's production embedding model is **BAAI/bge-small-en-v1.5**:
 
@@ -476,7 +571,7 @@ All object types (chunks, episodes, reflections, derived summaries, records) sha
 - BGE-small is general-purpose prose; code-heavy content (function names, error messages) has lower recall.
 - 384 dimensions limits representational capacity relative to larger encoders.
 
-### 5.2 Proposal: Dual Encoder Profiles
+#### 4.2 Proposal: Dual Encoder Profiles
 
 **Spike:** BRN-01KM99PC.9 evaluates a richer encoder profile as a parallel embedding provider.
 
@@ -501,7 +596,7 @@ LanceDB per-brain:
 
 **Decision authority:** BRN-01KM99PC.9 (dual embedding spike) produces a benchmark report before dual profiles are implemented in production. BRN-01KM99PC.10 (parallel embedding profiles) handles the implementation if the spike recommends proceeding.
 
-### 5.3 Time-Based Recency Filtering
+#### 4.3 Time-Based Recency Filtering
 
 Recency filtering is **metadata-based** — it does not require re-embedding. It operates as a pre-filter on the candidate pool.
 
@@ -518,9 +613,9 @@ Recency filtering is **metadata-based** — it does not require re-embedding. It
 
 ---
 
-## 6. Metadata & Labeling
+### 5. Metadata & Labeling
 
-### 6.1 Canonical Facets
+#### 5.1 Canonical Facets
 
 Brain's metadata system uses typed facets rather than a flat tag namespace. Facets partition tag vocabulary into orthogonal axes:
 
@@ -533,9 +628,9 @@ Brain's metadata system uses typed facets rather than a flat tag namespace. Face
 | Status | `status:` | `status:pending`, `status:done` | Tasks |
 | Domain | `domain:` | `domain:rust`, `domain:sql` | Chunks, Records |
 
-Agents may also apply arbitrary tags (no prefix). Unprefixed tags participate in synonym clustering (§6.3) but are not facet-typed.
+Agents may also apply arbitrary tags (no prefix). Unprefixed tags participate in synonym clustering (§5.3) but are not facet-typed.
 
-### 6.2 Soft Label System
+#### 5.2 Soft Label System
 
 **Soft labels** are user-applied tags that the server normalizes without requiring exact vocabulary compliance. The system accepts any tag string and clusters near-synonymous tags into canonical forms via periodic background processing.
 
@@ -552,7 +647,7 @@ Canonical cluster: { canonical: "auth", variants: ["authentication", "auth-flow"
 Query for "authentication" → expands to ["auth", "authentication", "auth-flow", "token-auth"]
 ```
 
-### 6.3 Synonym Clustering
+#### 5.3 Synonym Clustering
 
 **Spike:** BRN-01KM99PC.7.2 evaluates the embedding-based clustering approach.
 
@@ -579,7 +674,7 @@ CREATE TABLE tag_clusters (
 CREATE INDEX idx_tag_clusters_variant ON tag_clusters (variant, brain_id);
 ```
 
-### 6.4 Metadata Filters in `retrieve`
+#### 5.4 Metadata Filters in `retrieve`
 
 The `metadata_filters` object in `retrieve` input:
 
@@ -603,11 +698,11 @@ The `metadata_filters` object in `retrieve` input:
 
 ---
 
-## 7. Job Queue Integration
+### 6. Job Queue Integration
 
 Retrieve+ uses the jobs table (schema v31, migration `v30_to_v31.rs`) for all async LOD generation work. The job queue is the infrastructure provided by BRN-01KM5Z5.
 
-### 7.1 Job Table Reference
+#### 6.1 Job Table Reference
 
 ```
 jobs table (v31)
@@ -631,7 +726,7 @@ Key indexes:
 - `idx_jobs_status_priority (status, priority DESC, created_at ASC)` — poll queue
 - `idx_jobs_chunk_id (chunk_id) WHERE chunk_id IS NOT NULL` — dedup lookup
 
-### 7.2 Summarization Job Flow
+#### 6.2 Summarization Job Flow
 
 ```
 retrieve(query="...", lod="L1")
@@ -659,7 +754,7 @@ Enqueue logic:
 4. Worker writes result to `lod_chunks`.
 5. Worker closes job: `UPDATE jobs SET status='done', result=json('{"summary":"..."}'), completed_at=now() WHERE id=...`
 
-### 7.3 Consolidation Job Flow
+#### 6.3 Consolidation Job Flow
 
 Consolidation jobs sweep `lod_chunks` for expired or stale entries and trigger regeneration.
 
@@ -681,7 +776,7 @@ Worker:
 
 **Invariant:** Stale LOD representations are never deleted before their replacement is ready. The `lod_chunks` table always has a servable representation for any object that has been retrieved at least once.
 
-### 7.4 Error Handling and Retry
+#### 6.4 Error Handling and Retry
 
 | Scenario | Behavior |
 |----------|----------|
@@ -694,7 +789,7 @@ Worker:
 
 ---
 
-## 8. Tool Schema
+### 7. Tool Schema
 
 Full MCP tool definition for `retrieve`:
 
@@ -828,7 +923,7 @@ Full MCP tool definition for `retrieve`:
 
 ---
 
-## 9. Dependency Graph
+### 8. Dependency Graph
 
 ```
 BRN-01KM5Z5.1  Remove flan-t5 dependency          [DONE]
@@ -871,9 +966,59 @@ BRN-01KM99PC.4  Retrieve+ architecture spec         [THIS TASK]               �
 
 ---
 
-## 10. Open Questions
+## Alternatives Considered
 
-The following questions require team resolution before implementation begins. They are ordered by blocking impact.
+### A. Extend `search_minimal` with LOD parameters
+
+**Approach:** Add `lod` and `explain` fields to the existing `search_minimal` tool rather than introducing a new tool.
+
+**Rejected because:** `search_minimal` was designed as a lightweight stub-return tool. Embedding LOD generation, URI routing, and async job dispatch into its semantics would violate its contract and break existing callers relying on its current response shape. A new surface avoids backward-compatibility hazards.
+
+---
+
+### B. Remove `search_minimal` and `expand` immediately
+
+**Approach:** Deprecate and remove the existing tools once `retrieve` is implemented.
+
+**Rejected because:** Agents (Drone Protocol, Sentinel, Probe) have hardcoded calls to `search_minimal`. Forced removal without a migration window would break deployed agents. Soft deprecation is the minimum viable compatibility strategy.
+
+---
+
+### C. Synchronous L1 generation on the retrieval hot path
+
+**Approach:** Generate L1 summaries inline during retrieval, blocking the response until generation completes.
+
+**Rejected because:** Local LLM inference takes 2–10 seconds per chunk depending on model size. Blocking the retrieval hot path on model inference is unacceptable for interactive agent workflows. The async-enqueue + L0-fallback pattern ensures the tool always responds in under 100ms.
+
+---
+
+### D. Always generate L0 and L1 at index time
+
+**Approach:** Pre-compute both L0 and L1 representations for every chunk at indexing time, eliminating on-demand generation entirely.
+
+**Rejected because:** L1 generation requires an LLM and is expensive per-chunk at scale. Pre-generating L1 for every indexed chunk — including low-priority or rarely-retrieved content — wastes compute. The lazy on-first-miss pattern generates L1 only for content agents actually retrieve, concentrating cost where value exists.
+
+---
+
+### E. Use remote embedding APIs
+
+**Approach:** Replace BGE-small with a cloud-hosted embedding API (e.g., OpenAI `text-embedding-3-small`).
+
+**Rejected because:** Brain is explicitly local-first (Non-Goal in §1.3). Remote APIs introduce latency, cost, and privacy concerns incompatible with the design constraints. The dual encoder spike (BRN-01KM99PC.9) evaluates richer local models only.
+
+---
+
+### F. Flat tag namespace without synonym clustering
+
+**Approach:** Require agents to use exact tag strings; no normalization or clustering.
+
+**Rejected because:** Agents and humans naturally use synonyms (`auth`, `authentication`, `token-auth`). Without clustering, retrieval precision degrades as vocabulary drifts. The soft label system normalizes this without requiring strict vocabulary enforcement.
+
+---
+
+## Open Questions
+
+The following questions require resolution before implementation begins. They are ordered by blocking impact.
 
 ### OQ-1: L1 Summary Model Selection
 
@@ -929,7 +1074,7 @@ The following questions require team resolution before implementation begins. Th
 
 **Question:** What is the deprecation timeline for `search_minimal` and `expand`?
 
-**Context:** This spec positions `retrieve` as the replacement surface. However, agents (Drone Protocol, Sentinel, Probe) have hardcoded calls to `search_minimal`. Removing `search_minimal` without notice breaks deployed agents. The options are:
+**Context:** This ADR positions `retrieve` as the replacement surface. However, agents (Drone Protocol, Sentinel, Probe) have hardcoded calls to `search_minimal`. Removing `search_minimal` without notice breaks deployed agents. The options are:
 - Parallel forever (both tools remain, `search_minimal` never deprecated).
 - Soft deprecation: `search_minimal` remains but `retrieve` is documented as preferred; agents migrate at their own pace.
 - Hard deprecation: `search_minimal` removed in a major version bump after `retrieve` reaches parity.
@@ -940,4 +1085,4 @@ The following questions require team resolution before implementation begins. Th
 
 ---
 
-*Specification complete. Blocks: BRN-01KM99PC.5.1, BRN-01KM99PC.6.1, BRN-01KM99PC.7.1, BRN-01KM99PC.7.2, BRN-01KM99PC.9, BRN-01KM99PC.11.*
+*Blocks: BRN-01KM99PC.5.1, BRN-01KM99PC.6.1, BRN-01KM99PC.7.1, BRN-01KM99PC.7.2, BRN-01KM99PC.9, BRN-01KM99PC.11.*
