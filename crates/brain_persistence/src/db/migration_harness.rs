@@ -18,9 +18,9 @@ use super::migrations::{
     migrate_v17_to_v18, migrate_v18_to_v19, migrate_v19_to_v20, migrate_v1_to_v2,
     migrate_v20_to_v21, migrate_v21_to_v22, migrate_v22_to_v23, migrate_v23_to_v24,
     migrate_v24_to_v25, migrate_v25_to_v26, migrate_v26_to_v27, migrate_v27_to_v28,
-    migrate_v28_to_v29, migrate_v29_to_v30, migrate_v2_to_v3, migrate_v30_to_v31, migrate_v3_to_v4,
-    migrate_v4_to_v5, migrate_v5_to_v6, migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9,
-    migrate_v9_to_v10,
+    migrate_v28_to_v29, migrate_v29_to_v30, migrate_v2_to_v3, migrate_v30_to_v31,
+    migrate_v31_to_v32, migrate_v3_to_v4, migrate_v4_to_v5, migrate_v5_to_v6, migrate_v6_to_v7,
+    migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
 };
 use super::schema::{init_schema, SCHEMA_VERSION};
 
@@ -68,6 +68,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             28 => migrate_v28_to_v29(&conn).unwrap(),
             29 => migrate_v29_to_v30(&conn).unwrap(),
             30 => migrate_v30_to_v31(&conn).unwrap(),
+            31 => migrate_v31_to_v32(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -194,8 +195,8 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_records_brain",
     "idx_records_brain_status",
     "idx_summaries_brain_id",
-    "idx_jobs_status_priority",
-    "idx_jobs_brain_id",
+    "idx_jobs_poll",
+    "idx_jobs_brain",
     "idx_jobs_chunk_id",
 ];
 
