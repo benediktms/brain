@@ -7,6 +7,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
@@ -18,12 +19,55 @@ pub mod priority {
     pub const BACKGROUND: i32 = 200;
 }
 
+/// Valid job statuses. Stored as lowercase strings in SQLite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Dead,
+}
+
+impl std::fmt::Display for JobStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl AsRef<str> for JobStatus {
+    fn as_ref(&self) -> &str {
+        match self {
+            JobStatus::Pending => "pending",
+            JobStatus::Running => "running",
+            JobStatus::Completed => "completed",
+            JobStatus::Failed => "failed",
+            JobStatus::Dead => "dead",
+        }
+    }
+}
+
+impl std::str::FromStr for JobStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(JobStatus::Pending),
+            "running" => Ok(JobStatus::Running),
+            "completed" => Ok(JobStatus::Completed),
+            "failed" => Ok(JobStatus::Failed),
+            "dead" => Ok(JobStatus::Dead),
+            _ => Err(format!("invalid job status: '{s}'")),
+        }
+    }
+}
+
 /// A row from the `jobs` table.
 #[derive(Debug, Clone)]
 pub struct JobRow {
     pub job_id: String,
     pub kind: String,
-    pub status: String,
+    pub status: JobStatus,
     pub brain_id: String,
     pub ref_id: Option<String>,
     pub ref_kind: Option<String>,
@@ -45,10 +89,12 @@ const JOB_COLUMNS: &str = "job_id, kind, status, brain_id, ref_id, ref_kind, pri
      created_at, scheduled_at, started_at, completed_at, updated_at";
 
 fn row_to_job(row: &rusqlite::Row) -> rusqlite::Result<JobRow> {
+    let status_str: String = row.get(2)?;
+    let status = status_str.parse().unwrap_or(JobStatus::Pending);
     Ok(JobRow {
         job_id: row.get(0)?,
         kind: row.get(1)?,
-        status: row.get(2)?,
+        status,
         brain_id: row.get(3)?,
         ref_id: row.get(4)?,
         ref_kind: row.get(5)?,
@@ -241,12 +287,12 @@ pub fn reap_stuck_jobs(conn: &Connection, threshold_secs: i64) -> Result<usize> 
     Ok(count)
 }
 
-/// Delete completed and dead jobs older than `age_secs`.
+/// Delete completed, failed, and dead jobs older than `age_secs`.
 /// Returns the number of deleted jobs.
 pub fn gc_completed_jobs(conn: &Connection, age_secs: i64) -> Result<usize> {
     let cutoff = now_secs() - age_secs;
     let count = conn.execute(
-        "DELETE FROM jobs WHERE status IN ('completed', 'dead') AND completed_at < ?1",
+        "DELETE FROM jobs WHERE status IN ('completed', 'failed', 'dead') AND completed_at < ?1",
         [cutoff],
     )?;
     Ok(count)
@@ -267,7 +313,7 @@ pub fn get_job(conn: &Connection, job_id: &str) -> Result<Option<JobRow>> {
 /// List jobs with optional filters. Returns up to `limit` rows.
 pub fn list_jobs(
     conn: &Connection,
-    status_filter: Option<&str>,
+    status_filter: Option<&JobStatus>,
     brain_id_filter: Option<&str>,
     limit: i32,
 ) -> Result<Vec<JobRow>> {
@@ -372,7 +418,7 @@ mod tests {
         .unwrap();
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
-        assert_eq!(job.status, "pending");
+        assert_eq!(job.status, JobStatus::Pending);
         assert_eq!(job.kind, "summarize_scope");
         assert_eq!(job.brain_id, "brain-1");
         assert_eq!(job.ref_id.as_deref(), Some("scope-1"));
@@ -389,7 +435,7 @@ mod tests {
         let claimed = claim_jobs(&conn, "test_kind", 10).unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].job_id, job_id);
-        assert_eq!(claimed[0].status, "running");
+        assert_eq!(claimed[0].status, JobStatus::Running);
         assert_eq!(claimed[0].attempts, 1);
         assert!(claimed[0].started_at.is_some());
     }
@@ -438,7 +484,7 @@ mod tests {
         complete_job(&conn, &job_id, Some("{\"summary\":\"done\"}")).unwrap();
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
-        assert_eq!(job.status, "completed");
+        assert_eq!(job.status, JobStatus::Completed);
         assert_eq!(job.result.as_deref(), Some("{\"summary\":\"done\"}"));
         assert!(job.completed_at.is_some());
     }
@@ -453,7 +499,7 @@ mod tests {
         fail_job(&conn, &job_id, "timeout").unwrap();
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
-        assert_eq!(job.status, "pending");
+        assert_eq!(job.status, JobStatus::Pending);
         assert_eq!(job.last_error.as_deref(), Some("timeout"));
         assert!(job.started_at.is_none());
         assert!(job.scheduled_at >= before + 30);
@@ -468,7 +514,7 @@ mod tests {
         fail_job(&conn, &job_id, "fatal error").unwrap();
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
-        assert_eq!(job.status, "failed");
+        assert_eq!(job.status, JobStatus::Failed);
         assert_eq!(job.last_error.as_deref(), Some("fatal error"));
         assert!(job.completed_at.is_some());
     }
@@ -503,7 +549,7 @@ mod tests {
         assert_eq!(reaped, 1);
 
         let job = get_job(&conn, "J-STUCK").unwrap().unwrap();
-        assert_eq!(job.status, "pending");
+        assert_eq!(job.status, JobStatus::Pending);
         assert!(job.started_at.is_none());
     }
 
@@ -566,10 +612,36 @@ mod tests {
         assert_eq!(b1.len(), 1);
         assert_eq!(b1[0].brain_id, "brain-1");
 
-        let pending = list_jobs(&conn, Some("pending"), None, 50).unwrap();
+        let pending = list_jobs(&conn, Some(&JobStatus::Pending), None, 50).unwrap();
         assert_eq!(pending.len(), 2);
 
-        let running = list_jobs(&conn, Some("running"), None, 50).unwrap();
+        let running = list_jobs(&conn, Some(&JobStatus::Running), None, 50).unwrap();
         assert!(running.is_empty());
+    }
+
+    #[test]
+    fn test_null_ref_id_does_not_dedup() {
+        let conn = setup_db();
+
+        // Two jobs with ref_id=None — dedup does NOT apply (SQLite NULL uniqueness)
+        let id1 = enq(&conn, "test", None, 100, 3);
+        let id2 = enq(&conn, "test", None, 100, 3);
+
+        assert_ne!(id1, id2);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "NULL ref_id should not trigger dedup");
+    }
+
+    #[test]
+    fn test_list_jobs_respects_limit() {
+        let conn = setup_db();
+        enq(&conn, "a", Some("r1"), 100, 3);
+        enq(&conn, "b", Some("r2"), 100, 3);
+        enq(&conn, "c", Some("r3"), 100, 3);
+
+        let limited = list_jobs(&conn, None, None, 1).unwrap();
+        assert_eq!(limited.len(), 1);
     }
 }

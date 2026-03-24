@@ -644,6 +644,7 @@ dependencies = [
 name = "brain-lib"
 version = "0.3.2"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "blake3",
  "brain-persistence",
@@ -659,6 +660,7 @@ dependencies = [
  "proptest",
  "pulldown-cmark",
  "regex",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1023,13 +1025,12 @@ dependencies = [
 
 [[package]]
 name = "console"
-version = "0.16.2"
+version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03e45a4a8926227e4197636ba97a9fc9b00477e9f4bd711395687c5f0734bec4"
+checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
 dependencies = [
  "encode_unicode",
  "libc",
- "once_cell",
  "unicode-width",
  "windows-sys 0.61.2",
 ]

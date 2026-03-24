@@ -20,7 +20,6 @@ use brain_lib::pipeline::consolidation::ConsolidationScheduler;
 use brain_lib::pipeline::embed_poll;
 use brain_lib::prelude::*;
 use brain_lib::store::Store;
-use brain_lib::summarizer::FlanT5Summarizer;
 use tracing::{debug, info, warn};
 
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
@@ -60,20 +59,9 @@ pub async fn run(
 
     let mut pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
 
-    // Try to load the summarizer if the model directory exists alongside the embedder
-    let summarizer_dir = model_dir.parent().map(|p| p.join("flan-t5-small"));
-    if let Some(ref dir) = summarizer_dir
-        && dir.is_dir()
-    {
-        match FlanT5Summarizer::load(dir) {
-            Ok(s) => {
-                info!(model_dir = %dir.display(), "loaded Flan-T5 summarizer");
-                pipeline.set_summarizer(Arc::new(s));
-            }
-            Err(e) => {
-                warn!(error = %e, "failed to load summarizer, consolidation disabled");
-            }
-        }
+    // Resolve LLM provider from env vars (ANTHROPIC_API_KEY or OPENAI_API_KEY).
+    if let Some(provider) = brain_lib::llm::resolve_provider() {
+        pipeline.set_summarizer(Arc::from(provider));
     }
 
     // Full scan on startup to catch offline changes
@@ -871,17 +859,9 @@ async fn init_brain_instance(
     // Create the pipeline with the shared embedder
     let mut pipeline = IndexPipeline::with_embedder(db, store, embedder).await?;
 
-    // Load summarizer if model is available
-    if let Some(ref dir) = paths.summarizer_model_dir {
-        match FlanT5Summarizer::load(dir) {
-            Ok(s) => {
-                info!(brain = %name, model_dir = %dir.display(), "loaded Flan-T5 summarizer");
-                pipeline.set_summarizer(Arc::new(s));
-            }
-            Err(e) => {
-                warn!(brain = %name, error = %e, "failed to load summarizer, consolidation disabled");
-            }
-        }
+    // Resolve LLM provider from env vars (ANTHROPIC_API_KEY or OPENAI_API_KEY).
+    if let Some(provider) = brain_lib::llm::resolve_provider() {
+        pipeline.set_summarizer(Arc::from(provider));
     }
 
     // Run initial full scan with self-healing on failure

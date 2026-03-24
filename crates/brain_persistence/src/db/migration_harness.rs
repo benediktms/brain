@@ -174,6 +174,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "record_links",
     "record_events",
     "brains",
+    "jobs",
 ];
 
 /// All named indexes that must exist at the current schema version.
