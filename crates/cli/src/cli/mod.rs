@@ -72,7 +72,7 @@ impl Intent {
 #[derive(Parser)]
 #[command(
     name = "brain",
-    version,
+    version = super::VERSION,
     disable_version_flag = true,
     about = "A personal knowledge base with semantic search and task management",
     long_about = "A personal knowledge base with semantic search and task management.\n\n\

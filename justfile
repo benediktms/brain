@@ -21,7 +21,7 @@ setup: install setup-models install-hooks
 # Build release binary, symlink to ~/bin, install daemon service
 [group('setup')]
 install:
-    cargo build --release
+    BRAIN_FROM_SOURCE=true cargo build --release
     @mkdir -p ~/bin
     @ln -sf "{{justfile_directory()}}/target/release/brain" ~/bin/brain
     {{bin}} daemon install

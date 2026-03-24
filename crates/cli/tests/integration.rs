@@ -83,12 +83,67 @@ fn subcommand_help_shows_usage() {
         .stdout(predicate::str::contains("Usage"));
 }
 
+/// Verify `brain -v` output is a valid short git SHA (7 hex chars).
+///
+/// This only applies to local-install builds (`just install`). Crates.io releases
+/// report semver instead — the test is skipped in that case.
 #[test]
-fn version_flag_shows_version() {
-    brain_cmd()
-        .arg("-v")
-        .assert()
-        .stdout(predicate::str::contains("brain"));
+fn version_flag_shows_valid_sha() {
+    let output = brain_cmd().arg("-v").output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let trimmed = stdout.trim();
+
+    // If the version looks like semver (contains '.'), this is a crates.io release.
+    // Skip the SHA validation — semver does not match the 7-char hex pattern.
+    if trimmed.contains('.') {
+        // crates.io release: version is semver, nothing to validate here.
+        return;
+    }
+
+    // Local install: version should be a 7-char lowercase hex SHA.
+    assert!(
+        trimmed.starts_with("brain ") && trimmed.len() == 6 + 7,
+        "expected 'brain <7-hex-sha>', got: {trimmed}"
+    );
+    let sha = &trimmed[6..];
+    assert!(
+        sha.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "version SHA should be lowercase hex, got: {sha}"
+    );
+}
+
+/// Verify `brain -v` reports the same SHA as `git rev-parse --short HEAD`
+/// when built as a local install. Crates.io releases report semver instead —
+/// this test is skipped in that case.
+#[test]
+fn version_flag_matches_git_head() {
+    let output = brain_cmd().arg("-v").output().unwrap();
+    assert!(output.status.success());
+    let brain_version = String::from_utf8(output.stdout)
+        .unwrap()
+        .trim()
+        .strip_prefix("brain ")
+        .unwrap_or("")
+        .to_string();
+
+    // If the version is semver, this is a crates.io release — skip.
+    if brain_version.contains('.') {
+        return;
+    }
+
+    // Local install: version must match git HEAD.
+    let git_sha = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    assert_eq!(
+        brain_version, git_sha,
+        "brain --version ({brain_version}) should match git rev-parse --short HEAD ({git_sha})"
+    );
 }
 
 // ---------------------------------------------------------------------------

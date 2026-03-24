@@ -11,6 +11,10 @@ mod commands;
 mod dispatch;
 pub mod markdown_table;
 
+// Generated at build time by build.rs — contains git SHA when
+// BRAIN_VERSION env var is set (i.e. via `just install`).
+include!(concat!(env!("OUT_DIR"), "/version.rs"));
+
 // ── config resolution ───────────────────────────────────────
 
 /// If the user didn't pass explicit `--model-dir` / `--lance-db` / `--sqlite-db`
