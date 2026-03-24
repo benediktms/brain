@@ -505,7 +505,7 @@ mod tests {
                 due_ts: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
         brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
@@ -604,7 +604,7 @@ mod tests {
                 due_ts: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
         brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
@@ -670,7 +670,7 @@ mod tests {
                 due_ts: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
         brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();

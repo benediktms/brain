@@ -212,7 +212,7 @@ impl TaskCreate {
                 assignee: params.assignee,
                 defer_until,
                 parent_task_id,
-                id: Some(blake3_short_hex(&task_id)[..MIN_SHORT_HASH_LEN].to_string()),
+                display_id: Some(blake3_short_hex(&task_id)[..MIN_SHORT_HASH_LEN].to_string()),
             };
 
             let event = TaskEvent::from_payload(&task_id, &params.actor, payload);
@@ -346,7 +346,7 @@ impl TaskCreate {
                 assignee: params.assignee,
                 defer_until,
                 parent_task_id,
-                id: None,
+                display_id: None,
             };
 
             let event = TaskEvent::from_payload(&task_id, &params.actor, payload);

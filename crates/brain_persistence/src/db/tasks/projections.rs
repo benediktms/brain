@@ -23,23 +23,24 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                 .map(|pid| next_child_seq(conn, pid))
                 .transpose()?;
 
-            // Use id from event payload if present (rebuild/replay path).
+            // Use display_id from event payload if present (rebuild/replay path).
             // Otherwise compute via BLAKE3. In both cases, optimistic INSERT
-            // retries on UNIQUE(brain_id, id) collision by extending the hash.
+            // retries on UNIQUE(brain_id, display_id) collision by extending the hash.
             // Retry is needed even for payload-provided IDs during rebuild,
             // where brain_id="" collapses cross-brain hash namespaces.
             let full_hex = super::queries::blake3_short_hex(&event.task_id);
-            let base_len =
-                p.id.as_deref()
-                    .map(|id| id.len())
-                    .unwrap_or(super::queries::MIN_SHORT_HASH_LEN);
+            let base_len = p
+                .display_id
+                .as_deref()
+                .map(|id| id.len())
+                .unwrap_or(super::queries::MIN_SHORT_HASH_LEN);
             let mut hash_len = base_len;
 
             loop {
                 let id_value = &full_hex[..hash_len];
                 let result = conn.execute(
                     "INSERT INTO tasks (task_id, brain_id, title, description, status, priority, due_ts,
-                                        task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at, id)
+                                        task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at, display_id)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     rusqlite::params![
                         event.task_id,
@@ -63,7 +64,7 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                 match result {
                     Ok(_) => break,
                     Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
-                        // UNIQUE constraint on (brain_id, id) — extend hash and retry
+                        // UNIQUE constraint on (brain_id, display_id) — extend hash and retry
                         hash_len += 1;
                         if hash_len > full_hex.len() {
                             return Err(BrainCoreError::TaskEvent(
@@ -487,7 +488,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         )
     }

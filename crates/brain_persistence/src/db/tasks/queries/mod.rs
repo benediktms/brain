@@ -29,12 +29,12 @@ pub struct TaskRow {
     pub child_seq: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
-    /// Stable hash-based short ID (hex only). `None` for pre-migration tasks.
-    pub id: Option<String>,
+    /// Stable hash-based short display ID (hex only). `None` for pre-migration tasks.
+    pub display_id: Option<String>,
 }
 
 pub(super) const TASK_COLUMNS: &str = "task_id, title, description, status, priority, blocked_reason, due_ts, \
-     task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at, id";
+     task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at, display_id";
 
 /// Reusable `WITH RECURSIVE` CTE that produces `has_blocked_ancestor(tid)` — the set
 /// of task IDs whose parent chain contains at least one blocked ancestor.
@@ -92,7 +92,7 @@ pub(super) fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
         child_seq: row.get(11)?,
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
-        id: row.get(14)?,
+        display_id: row.get(14)?,
     })
 }
 
@@ -124,7 +124,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
         apply_event(conn, &ev, "").unwrap();
@@ -299,7 +299,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
         let ev2 = TaskEvent::from_payload(
@@ -315,7 +315,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
         let ev3 = TaskEvent::from_payload(
@@ -331,7 +331,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
 
@@ -590,7 +590,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: Some(parent_id.to_string()),
-                id: None,
+                display_id: None,
             },
         );
         apply_event(conn, &ev, "").unwrap();
@@ -610,7 +610,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
         apply_event(conn, &ev, "").unwrap();

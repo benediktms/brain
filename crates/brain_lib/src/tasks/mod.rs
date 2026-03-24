@@ -410,7 +410,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         )
     }

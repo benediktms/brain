@@ -159,10 +159,10 @@ pub struct TaskCreatedPayload {
     pub defer_until: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
-    /// Stable hash-based short ID (hex only, e.g. "a3f"). Prefix applied at runtime.
+    /// Stable hash-based short display ID (hex only, e.g. "a3f"). Prefix applied at runtime.
     /// Present on all post-migration events. `None` for pre-migration events (safety fallback).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "id")]
+    pub display_id: Option<String>,
 }
 
 fn default_priority() -> i32 {
@@ -388,7 +388,7 @@ mod tests {
                 assignee: None,
                 defer_until: None,
                 parent_task_id: None,
-                id: None,
+                display_id: None,
             },
         );
         assert_eq!(ev.event_type, EventType::TaskCreated);

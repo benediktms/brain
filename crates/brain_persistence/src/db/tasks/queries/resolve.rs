@@ -78,10 +78,10 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
                 .chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         {
-            // Exact match on id column
+            // Exact match on display_id column
             let exact: Option<String> = conn
                 .query_row(
-                    "SELECT task_id FROM tasks WHERE id = ?1",
+                    "SELECT task_id FROM tasks WHERE display_id = ?1",
                     [hex_part],
                     |row| row.get(0),
                 )
@@ -90,10 +90,11 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
                 return Ok(tid);
             }
 
-            // Prefix match on id column (range scan)
+            // Prefix match on display_id column (range scan)
             let upper = increment_string(hex_part);
-            let mut stmt =
-                conn.prepare("SELECT task_id, title FROM tasks WHERE id >= ?1 AND id < ?2")?;
+            let mut stmt = conn.prepare(
+                "SELECT task_id, title FROM tasks WHERE display_id >= ?1 AND display_id < ?2",
+            )?;
             let matches: Vec<(String, String)> = stmt
                 .query_map(rusqlite::params![hex_part, upper], |row| {
                     Ok((row.get(0)?, row.get(1)?))
@@ -242,7 +243,7 @@ pub fn compact_id(conn: &Connection, task_id: &str) -> Result<String> {
 fn short_id_display(conn: &Connection, task_id: &str) -> Result<Option<String>> {
     let row: Option<(Option<String>, String)> = conn
         .query_row(
-            "SELECT t.id, COALESCE(LOWER(b.prefix), 'brx')
+            "SELECT t.display_id, COALESCE(LOWER(b.prefix), 'brx')
              FROM tasks t
              LEFT JOIN brains b ON b.brain_id = t.brain_id
              WHERE t.task_id = ?1",
@@ -265,7 +266,7 @@ fn short_id_display(conn: &Connection, task_id: &str) -> Result<Option<String>> 
 pub fn compact_ids(conn: &Connection) -> Result<HashMap<String, String>> {
     // Load all tasks with their id and brain prefix
     let mut stmt = conn.prepare(
-        "SELECT t.task_id, t.id, COALESCE(LOWER(b.prefix), 'brx')
+        "SELECT t.task_id, t.display_id, COALESCE(LOWER(b.prefix), 'brx')
          FROM tasks t
          LEFT JOIN brains b ON b.brain_id = t.brain_id
          ORDER BY t.task_id",
