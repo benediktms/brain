@@ -10,7 +10,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
-use crate::tasks::enrichment::enrich_task_list;
+use crate::tasks::enrichment::{apply_compact_parent_id, enrich_task_list};
 use crate::tasks::events::TaskType;
 use crate::tasks::queries::{TaskFilter, apply_filters};
 use crate::uri::SynapseUri;
@@ -255,6 +255,7 @@ impl TaskList {
                     obj.remove("description");
                 }
             }
+            apply_compact_parent_id(store, task_val);
         }
 
         let count = tasks_json.len();

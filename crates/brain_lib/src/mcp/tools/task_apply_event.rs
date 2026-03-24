@@ -7,6 +7,7 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::tasks::enrichment::apply_compact_parent_id;
 use crate::tasks::events::{
     EventType, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
 };
@@ -323,7 +324,7 @@ impl TaskApplyEvent {
         }
 
         // Fetch resulting task state
-        let task_json = match ctx.stores.tasks.get_task(&task_id) {
+        let mut task_json = match ctx.stores.tasks.get_task(&task_id) {
             Ok(Some(row)) => {
                 let labels = store_or_warn(
                     ctx.stores.tasks.get_task_labels(&task_id),
@@ -338,6 +339,10 @@ impl TaskApplyEvent {
                 json!(null)
             }
         };
+
+        if !task_json.is_null() {
+            apply_compact_parent_id(&ctx.stores.tasks, &mut task_json);
+        }
 
         // Detect newly unblocked tasks after status_changed to done/cancelled
         let is_terminal = event_type == EventType::StatusChanged && {

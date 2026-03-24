@@ -174,6 +174,128 @@ async fn ipc_task_crud() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 2b: Close task by prefix through IPC (regression test for bug where
+// tasks_close failed with "no task found matching prefix" for a task that
+// tasks_apply_event with status_changed could resolve)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ipc_task_close_by_prefix() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let sock = tmp.path().join("task_close_prefix.sock");
+
+    let (_dir, token) = start_server(&sock).await;
+    let mut client = IpcClient::connect(&sock).await.expect("connect failed");
+
+    // Create a task with a known title.
+    let create_raw = client
+        .task_create(
+            "test-brain",
+            json!({ "title": "Prefix close regression test", "priority": 2 }),
+        )
+        .await
+        .expect("task_create failed");
+
+    assert!(
+        create_raw.get("isError").is_none(),
+        "task_create should not error: {create_raw}"
+    );
+
+    let create_result = content_json(&create_raw);
+    let compact_id = create_result
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .expect("task_id missing from create result");
+
+    // The compact_id is "{prefix}-{3-char-hash}" (e.g. "nsx-a3f").
+    // Use only the 3-char hash as a prefix — should still resolve uniquely.
+    // Format: the prefix part before the hyphen contains the brain prefix (e.g. "nsx").
+    // We test closing by the full compact_id (unique) and then by the hash-only prefix.
+    let parts: Vec<&str> = compact_id.split('-').collect();
+    assert_eq!(
+        parts.len(),
+        2,
+        "compact_id '{compact_id}' should have format 'brain-hash'"
+    );
+    let _hash = parts[1];
+
+    // --- Test 1: close by full compact_id (should always work) ---
+    let close_full_raw = client
+        .task_close("test-brain", json!({ "task_ids": compact_id }))
+        .await
+        .expect("task_close by full compact_id failed");
+
+    assert!(
+        close_full_raw.get("isError").is_none(),
+        "task_close by full compact_id should not error: {}",
+        content_text(&close_full_raw)
+    );
+
+    let close_full_result = content_json(&close_full_raw);
+    let closed_count = close_full_result["summary"]["closed"]
+        .as_i64()
+        .expect("summary.closed should be a number");
+    assert_eq!(
+        closed_count, 1,
+        "should have closed exactly 1 task, got {closed_count}"
+    );
+    let failed_count = close_full_result["summary"]["failed"]
+        .as_i64()
+        .expect("summary.failed should be a number");
+    assert_eq!(
+        failed_count, 0,
+        "should have 0 failures, got {failed_count}"
+    );
+
+    // --- Test 2: create another task and close by hash-only prefix ---
+    let create2_raw = client
+        .task_create(
+            "test-brain",
+            json!({ "title": "Second task for prefix test", "priority": 3 }),
+        )
+        .await
+        .expect("task_create 2 failed");
+
+    let create2_result = content_json(&create2_raw);
+    let compact_id2 = create2_result
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .expect("task_id missing from create2 result");
+
+    // Close using only the hash prefix (3 chars). Each hash is project-wide unique
+    // since it's derived from the task_id via BLAKE3.
+    let hash_prefix = compact_id2.split('-').nth(1).expect("brain-hash format");
+    let close_prefix_raw = client
+        .task_close("test-brain", json!({ "task_ids": hash_prefix }))
+        .await
+        .expect("task_close by hash prefix failed");
+
+    assert!(
+        close_prefix_raw.get("isError").is_none(),
+        "task_close by hash prefix '{hash_prefix}' should not error: {}",
+        content_text(&close_prefix_raw)
+    );
+
+    let close_prefix_result = content_json(&close_prefix_raw);
+    let prefix_closed = close_prefix_result["summary"]["closed"]
+        .as_i64()
+        .expect("summary.closed should be a number");
+    assert_eq!(
+        prefix_closed, 1,
+        "should have closed exactly 1 task by hash prefix, got {prefix_closed}"
+    );
+    let prefix_failed = close_prefix_result["summary"]["failed"]
+        .as_i64()
+        .expect("summary.failed should be a number");
+    assert_eq!(
+        prefix_failed, 0,
+        "hash prefix close should have 0 failures, got {prefix_failed}"
+    );
+
+    token.cancel();
+}
+
+// ---------------------------------------------------------------------------
 // Test 3: Record operations through IPC
 // ---------------------------------------------------------------------------
 

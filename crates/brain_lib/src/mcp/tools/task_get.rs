@@ -9,7 +9,10 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
+use crate::tasks::TaskStore;
+use crate::tasks::enrichment::{
+    apply_compact_parent_id, comments_to_json, dep_summary_to_json, note_links_to_json,
+};
 use crate::tasks::queries::TaskRow;
 use crate::uri::{SynapseUri, resolve_id};
 use crate::utils::task_row_to_json;
@@ -51,8 +54,9 @@ fn task_stub(task_id: &str, title: &str) -> Value {
 /// Build a full task JSON with labels but without description (expanded relations
 /// omit descriptions to keep responses concise — use `tasks.get` on the specific
 /// task to retrieve its full description).
-fn expanded_task(row: &TaskRow, labels: Vec<String>) -> Value {
+fn expanded_task(store: &TaskStore, row: &TaskRow, labels: Vec<String>) -> Value {
     let mut json = task_row_to_json(row, labels);
+    apply_compact_parent_id(store, &mut json);
     if let Some(obj) = json.as_object_mut() {
         obj.remove("description");
     }
@@ -155,7 +159,7 @@ impl TaskGet {
                         "get_task_labels",
                         &mut warnings,
                     );
-                    expanded_task(&parent, parent_labels)
+                    expanded_task(&ctx.stores.tasks, &parent, parent_labels)
                 })
                 .unwrap_or(Value::Null)
         } else {
@@ -184,6 +188,7 @@ impl TaskGet {
                         &mut warnings,
                     );
                     let mut json = task_row_to_json(c, labels);
+                    apply_compact_parent_id(&ctx.stores.tasks, &mut json);
                     if let Some(obj) = json.as_object_mut() {
                         obj.remove("description");
                     }
@@ -213,7 +218,7 @@ impl TaskGet {
                         "get_task_labels",
                         &mut warnings,
                     );
-                    expanded_task(&blocking_task, blocking_labels)
+                    expanded_task(&ctx.stores.tasks, &blocking_task, blocking_labels)
                 })
                 .collect()
         } else {
@@ -242,6 +247,7 @@ impl TaskGet {
                         &mut warnings,
                     );
                     let mut json = task_row_to_json(b, labels);
+                    apply_compact_parent_id(&ctx.stores.tasks, &mut json);
                     if let Some(obj) = json.as_object_mut() {
                         obj.remove("description");
                     }
@@ -289,6 +295,7 @@ impl TaskGet {
                 dep_summary_to_json(&dep_summary),
             );
         }
+        apply_compact_parent_id(&ctx.stores.tasks, &mut task_json);
 
         let uri = SynapseUri::for_task(ctx.brain_name(), &short_id).to_string();
         if let Some(obj) = task_json.as_object_mut() {

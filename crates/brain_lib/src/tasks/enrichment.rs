@@ -32,6 +32,26 @@ pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
     })
 }
 
+/// Convert the `parent_task_id` field of a serialized task to its compact form, if present.
+pub fn apply_compact_parent_id(store: &TaskStore, task_json: &mut Value) {
+    let Some(obj) = task_json.as_object_mut() else {
+        return;
+    };
+    let Some(parent_val) = obj.get("parent_task_id") else {
+        return;
+    };
+    let Some(parent_id) = parent_val.as_str() else {
+        return;
+    };
+    if parent_id.is_empty() {
+        return;
+    }
+    let compact = store
+        .compact_id(parent_id)
+        .unwrap_or_else(|_| parent_id.to_string());
+    obj.insert("parent_task_id".into(), json!(compact));
+}
+
 /// Convert a slice of comments to a JSON array.
 pub fn comments_to_json(comments: &[TaskComment]) -> Vec<Value> {
     comments

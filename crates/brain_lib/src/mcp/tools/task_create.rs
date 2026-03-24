@@ -7,6 +7,7 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::tasks::enrichment::apply_compact_parent_id;
 use crate::tasks::events::{
     EventType, ExternalIdPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
 };
@@ -222,7 +223,7 @@ impl TaskCreate {
             }
 
             // Fetch resulting task state from remote brain
-            let task_json = match remote_tasks.get_task(&task_id) {
+            let mut task_json = match remote_tasks.get_task(&task_id) {
                 Ok(Some(row)) => {
                     let labels = store_or_warn(
                         remote_tasks.get_task_labels(&task_id),
@@ -237,6 +238,10 @@ impl TaskCreate {
                     json!(null)
                 }
             };
+
+            if !task_json.is_null() {
+                apply_compact_parent_id(&remote_tasks, &mut task_json);
+            }
 
             let short_id = remote_tasks
                 .compact_id(&task_id)
@@ -356,7 +361,7 @@ impl TaskCreate {
             }
 
             // Fetch resulting task state
-            let task_json = match ctx.stores.tasks.get_task(&task_id) {
+            let mut task_json = match ctx.stores.tasks.get_task(&task_id) {
                 Ok(Some(row)) => {
                     let labels = store_or_warn(
                         ctx.stores.tasks.get_task_labels(&task_id),
@@ -371,6 +376,10 @@ impl TaskCreate {
                     json!(null)
                 }
             };
+
+            if !task_json.is_null() {
+                apply_compact_parent_id(&ctx.stores.tasks, &mut task_json);
+            }
 
             let short_id = ctx
                 .stores
