@@ -1049,4 +1049,53 @@ mod tests {
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
     }
+
+    #[tokio::test]
+    async fn test_list_parent_task_id_is_compact() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // Create parent
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "parent",
+                "payload": { "title": "Parent", "priority": 1, "task_type": "epic" }
+            }),
+        )
+        .await;
+        // Create child with parent
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "child",
+                "payload": { "title": "Child", "priority": 2, "parent_task_id": "parent" }
+            }),
+        )
+        .await;
+
+        let result = registry
+            .dispatch("tasks.list", json!({ "status": "open" }), &ctx)
+            .await;
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let tasks = parsed["tasks"].as_array().unwrap();
+        let child_task = tasks
+            .iter()
+            .find(|t| t["title"] == "Child")
+            .expect("child task should be in list");
+
+        // parent_task_id must be compact, not the raw ULID "parent"
+        assert_eq!(
+            child_task["parent_task_id"],
+            compact_id_for("parent"),
+            "parent_task_id should be compact form, got: {}",
+            child_task["parent_task_id"]
+        );
+    }
 }

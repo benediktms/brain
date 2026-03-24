@@ -693,4 +693,44 @@ mod tests {
         assert_eq!(blocks[0]["task_id"], "waiting");
         assert_eq!(blocks[0]["title"], "Waiting");
     }
+
+    #[tokio::test]
+    async fn test_get_parent_task_id_is_compact() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "epic",
+                "payload": { "title": "Epic", "priority": 1, "task_type": "epic" }
+            }),
+        )
+        .await;
+        apply(
+            &registry,
+            &ctx,
+            json!({
+                "event_type": "task_created",
+                "task_id": "sub",
+                "payload": { "title": "Subtask", "priority": 2, "parent_task_id": "epic" }
+            }),
+        )
+        .await;
+
+        let result = registry
+            .dispatch("tasks.get", json!({ "task_id": "sub" }), &ctx)
+            .await;
+        assert!(result.is_error.is_none());
+
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(
+            parsed["parent_task_id"],
+            compact_id_for("epic"),
+            "parent_task_id must be compact, got: {}",
+            parsed["parent_task_id"]
+        );
+    }
 }
