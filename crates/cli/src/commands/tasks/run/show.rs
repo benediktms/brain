@@ -4,7 +4,7 @@ use serde_json::json;
 use brain_lib::tasks::enrichment::{
     children_stubs_to_json, comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
 };
-use brain_lib::utils::task_row_to_json;
+use brain_lib::utils::task_row_to_compact_json;
 
 use super::{TaskCtx, format_ts, format_ts_short, priority_label};
 
@@ -41,7 +41,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
             .collect();
 
         let out = json!({
-            "task": task_row_to_json(&task, labels),
+            "task": task_row_to_compact_json(&ctx.store, &task, labels),
             "dependency_summary": dep_summary_to_json_with_blocking(&dep_summary),
             "linked_notes": note_links_json,
             "comments": comments_json,
@@ -58,7 +58,11 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
         println!("Type: {}", task.task_type);
         println!("Assignee: {}", task.assignee.as_deref().unwrap_or("-"));
         if let Some(ref parent) = task.parent_task_id {
-            println!("Parent: {parent}");
+            let display_parent = ctx
+                .store
+                .compact_id(parent)
+                .unwrap_or_else(|_| parent.clone());
+            println!("Parent: {display_parent}");
         }
         println!("Created: {}", format_ts(task.created_at));
         println!("Updated: {}", format_ts(task.updated_at));

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use brain_lib::tasks::enrichment::enrich_task_list;
 use brain_lib::tasks::queries::{TaskFilter, TaskRow, apply_filters};
-use brain_lib::utils::task_row_to_json;
+use brain_lib::utils::task_row_to_compact_json;
 
 use crate::markdown_table::MarkdownTable;
 
@@ -226,7 +226,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
                     .iter()
                     .map(|t| {
                         let labels = labels_map.get(&t.task_id).cloned().unwrap_or_default();
-                        let mut j = task_row_to_json(t, labels);
+                        let mut j = task_row_to_compact_json(&ctx.store, t, labels);
                         if let Some(obj) = j.as_object_mut() {
                             let short = display_id(&t.task_id, &short_ids);
                             obj.insert("short_id".into(), json!(short));
@@ -246,7 +246,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
                 .iter()
                 .map(|t| {
                     let labels = labels_map.get(&t.task_id).cloned().unwrap_or_default();
-                    let mut j = task_row_to_json(t, labels);
+                    let mut j = task_row_to_compact_json(&ctx.store, t, labels);
                     if let Some(obj) = j.as_object_mut() {
                         let short = display_id(&t.task_id, &short_ids);
                         obj.insert("short_id".into(), json!(short));

@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use serde_json::json;
 
 use brain_lib::tasks::events::*;
-use brain_lib::utils::task_row_to_json;
+use brain_lib::utils::task_row_to_compact_json;
 
 use super::{TaskCtx, UpdateParams, priority_label};
 
@@ -54,7 +54,7 @@ pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
 
     if ctx.json {
         let labels = ctx.store.get_task_labels(&params.id)?;
-        let out = json!({ "task": task_row_to_json(&task, labels) });
+        let out = json!({ "task": task_row_to_compact_json(&ctx.store, &task, labels) });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Updated task {}", params.id);
@@ -99,7 +99,7 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
                 .ok_or_else(|| anyhow::anyhow!("Task not found after close: {id}"))?;
             let labels = ctx.store.get_task_labels(&id)?;
             closed.push(json!({
-                "task": task_row_to_json(&task, labels),
+                "task": task_row_to_compact_json(&ctx.store, &task, labels),
                 "unblocked": unblocked,
             }));
         } else {

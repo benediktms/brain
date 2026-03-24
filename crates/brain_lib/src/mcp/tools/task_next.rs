@@ -8,7 +8,7 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::enrichment::{apply_compact_parent_id, enrich_task_summaries};
+use crate::tasks::enrichment::enrich_task_summaries;
 use crate::tasks::events::TaskType;
 use crate::uri::SynapseUri;
 
@@ -93,7 +93,6 @@ impl TaskNext {
                 }
                 obj.remove("description");
             }
-            apply_compact_parent_id(&ctx.stores.tasks, task_val);
         }
 
         // Collect unique parent_task_ids that are epics

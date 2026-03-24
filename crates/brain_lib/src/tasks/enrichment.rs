@@ -32,6 +32,16 @@ pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
     })
 }
 
+/// Serialize a `TaskRow` to JSON with compact `parent_task_id`.
+///
+/// Combines `task_row_to_json` + `apply_compact_parent_id` into one call.
+/// Prefer this over the two-step pattern whenever a `TaskStore` is available.
+pub fn task_row_to_compact_json(store: &TaskStore, row: &TaskRow, labels: Vec<String>) -> Value {
+    let mut json = task_row_to_json(row, labels);
+    apply_compact_parent_id(store, &mut json);
+    json
+}
+
 /// Convert the `parent_task_id` field of a serialized task to its compact form, if present.
 pub fn apply_compact_parent_id(store: &TaskStore, task_json: &mut Value) {
     let Some(obj) = task_json.as_object_mut() else {
@@ -170,7 +180,7 @@ pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
         }
     };
 
-    let mut task_json = task_row_to_json(task, labels);
+    let mut task_json = task_row_to_compact_json(store, task, labels);
     attach_summary_fields(&mut task_json, &dep_summary, &note_links);
     task_json
 }
@@ -187,7 +197,7 @@ pub fn enrich_task_list(
         .iter()
         .map(|task| {
             let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
-            task_row_to_json(task, labels)
+            task_row_to_compact_json(store, task, labels)
         })
         .collect();
     let (ready_count, blocked_count) = match store.count_ready_blocked() {
@@ -245,7 +255,7 @@ pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value>
             };
             let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
 
-            let mut task_json = task_row_to_json(task, labels);
+            let mut task_json = task_row_to_compact_json(store, task, labels);
             attach_summary_fields(&mut task_json, &dep_summary, &note_links);
             task_json
         })

@@ -21,7 +21,7 @@ use serde_json::json;
 use brain_lib::stores::BrainStores;
 use brain_lib::tasks::TaskStore;
 use brain_lib::tasks::events::{self, *};
-use brain_lib::utils::task_row_to_json;
+use brain_lib::utils::task_row_to_compact_json;
 
 // ── shared context ─────────────────────────────────────────
 
@@ -160,7 +160,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
             let labels = remote_store.get_task_labels(&task_id)?;
             let out = json!({
                 "event_id": event.event_id,
-                "task": task_row_to_json(&task, labels),
+                "task": task_row_to_compact_json(&remote_store, &task, labels),
                 "brain": bname,
             });
             println!("{}", serde_json::to_string_pretty(&out)?);
@@ -217,7 +217,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
         let labels = ctx.store.get_task_labels(&task_id)?;
         let out = json!({
             "event_id": event.event_id,
-            "task": task_row_to_json(&task, labels),
+            "task": task_row_to_compact_json(&ctx.store, &task, labels),
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {

@@ -1,7 +1,7 @@
 use serde_json::Value;
 use tracing::warn;
 
-pub use crate::tasks::enrichment::task_row_to_json;
+pub use crate::tasks::enrichment::{task_row_to_compact_json, task_row_to_json};
 
 /// Normalize content for deterministic hashing:
 /// - Strip trailing whitespace per line

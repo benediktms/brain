@@ -7,13 +7,12 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::enrichment::apply_compact_parent_id;
 use crate::tasks::events::{
     EventType, ExternalIdPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
 };
 use crate::tasks::queries::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 use crate::uri::SynapseUri;
-use crate::utils::{parse_timestamp, task_row_to_json};
+use crate::utils::{parse_timestamp, task_row_to_compact_json};
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
@@ -223,14 +222,14 @@ impl TaskCreate {
             }
 
             // Fetch resulting task state from remote brain
-            let mut task_json = match remote_tasks.get_task(&task_id) {
+            let task_json = match remote_tasks.get_task(&task_id) {
                 Ok(Some(row)) => {
                     let labels = store_or_warn(
                         remote_tasks.get_task_labels(&task_id),
                         "get_task_labels",
                         &mut warnings,
                     );
-                    task_row_to_json(&row, labels)
+                    task_row_to_compact_json(&remote_tasks, &row, labels)
                 }
                 Ok(None) => json!(null),
                 Err(e) => {
@@ -238,10 +237,6 @@ impl TaskCreate {
                     json!(null)
                 }
             };
-
-            if !task_json.is_null() {
-                apply_compact_parent_id(&remote_tasks, &mut task_json);
-            }
 
             let short_id = remote_tasks
                 .compact_id(&task_id)
@@ -361,14 +356,14 @@ impl TaskCreate {
             }
 
             // Fetch resulting task state
-            let mut task_json = match ctx.stores.tasks.get_task(&task_id) {
+            let task_json = match ctx.stores.tasks.get_task(&task_id) {
                 Ok(Some(row)) => {
                     let labels = store_or_warn(
                         ctx.stores.tasks.get_task_labels(&task_id),
                         "get_task_labels",
                         &mut warnings,
                     );
-                    task_row_to_json(&row, labels)
+                    task_row_to_compact_json(&ctx.stores.tasks, &row, labels)
                 }
                 Ok(None) => json!(null),
                 Err(e) => {
@@ -376,10 +371,6 @@ impl TaskCreate {
                     json!(null)
                 }
             };
-
-            if !task_json.is_null() {
-                apply_compact_parent_id(&ctx.stores.tasks, &mut task_json);
-            }
 
             let short_id = ctx
                 .stores
