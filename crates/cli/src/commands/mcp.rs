@@ -34,29 +34,34 @@ pub async fn run(
     Ok(())
 }
 
-/// Try to resolve brain paths from the global config registry.
+/// Try to resolve brain paths from the DB (source of truth).
 ///
 /// First checks if cwd falls under any registered brain's roots.
 /// Falls back to the first brain alphabetically if no root matches.
 fn resolve_from_registry() -> Option<(String, brain_lib::config::ResolvedPaths)> {
-    let config = brain_lib::config::load_global_config().ok()?;
+    let home = brain_lib::config::brain_home().ok()?;
+    let db = brain_lib::db::Db::open(&home.join("brain.db")).ok()?;
+    let brain_rows = db.list_brains(true).ok()?;
     let cwd = std::env::current_dir().ok();
 
     // Try to find a brain whose root contains the cwd.
     if let Some(ref cwd) = cwd {
-        for (name, entry) in &config.brains {
-            if entry.roots.iter().any(|r| cwd.starts_with(r))
-                && let Ok(resolved) = brain_lib::config::resolve_paths_for_brain(name)
+        for row in &brain_rows {
+            let roots: Vec<std::path::PathBuf> = row
+                .roots_json
+                .as_deref()
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default();
+            if roots.iter().any(|r| cwd.starts_with(r))
+                && let Ok(resolved) = brain_lib::config::resolve_paths_for_brain(&row.name)
             {
-                return Some((name.clone(), resolved));
+                return Some((row.name.clone(), resolved));
             }
         }
     }
 
     // Fall back to first brain alphabetically.
-    let mut names: Vec<&String> = config.brains.keys().collect();
-    names.sort();
-    let name = names.first()?;
+    let name = &brain_rows.first()?.name;
     let resolved = brain_lib::config::resolve_paths_for_brain(name).ok()?;
-    Some(((*name).clone(), resolved))
+    Some((name.clone(), resolved))
 }

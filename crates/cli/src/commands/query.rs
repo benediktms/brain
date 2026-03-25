@@ -139,7 +139,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
 
     // Determine which brain names to search.
     let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-        list_brain_keys(&stores.brain_home)?
+        list_brain_keys(stores.db())?
             .into_iter()
             .map(|(name, _id)| name)
             .collect()

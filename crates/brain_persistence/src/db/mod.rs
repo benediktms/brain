@@ -143,6 +143,36 @@ impl Db {
         self.with_read_conn(|conn| schema::resolve_brain(conn, input))
     }
 
+    /// Upsert a brain entry. Preserves existing prefix via COALESCE.
+    pub fn upsert_brain(&self, input: &schema::BrainUpsert<'_>) -> Result<()> {
+        self.with_write_conn(|conn| schema::upsert_brain(conn, input))
+    }
+
+    /// List all brain rows, optionally filtered to active-only.
+    pub fn list_brains(&self, active_only: bool) -> Result<Vec<schema::BrainRow>> {
+        self.with_read_conn(|conn| schema::list_brains(conn, active_only))
+    }
+
+    /// Read prefix for a brain by brain_id.
+    pub fn get_brain_prefix(&self, brain_id: &str) -> Result<Option<String>> {
+        self.with_read_conn(|conn| schema::get_brain_prefix(conn, brain_id))
+    }
+
+    /// Read a full brain row by brain_id.
+    pub fn get_brain(&self, brain_id: &str) -> Result<Option<schema::BrainRow>> {
+        self.with_read_conn(|conn| schema::get_brain(conn, brain_id))
+    }
+
+    /// Read a full brain row by name.
+    pub fn get_brain_by_name(&self, name: &str) -> Result<Option<schema::BrainRow>> {
+        self.with_read_conn(|conn| schema::get_brain_by_name(conn, name))
+    }
+
+    /// Delete a brain by name.
+    pub fn delete_brain(&self, name: &str) -> Result<bool> {
+        self.with_write_conn(|conn| schema::delete_brain(conn, name))
+    }
+
     /// Flush the WAL file to the main database and truncate it.
     ///
     /// This ensures all committed transactions are persisted to the main

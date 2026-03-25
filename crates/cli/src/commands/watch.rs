@@ -430,10 +430,10 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     info!(brains = brains.len(), "multi-brain daemon started");
 
-    // ── 3b. Project config.toml into brains table ────────────────────────
-    // Projects all registered brains into the SQL brains table so that
-    // resolve_brain() can look up by name, alias, or root path without
-    // parsing config.toml on every request.
+    // ── 3b. Sync brains into DB (preserving existing prefixes) ─────────
+    // Upserts all registered brains into the SQL brains table. Existing
+    // prefixes (e.g. set via `brain config set prefix`) are preserved via
+    // COALESCE — generate_prefix() is only used as fallback for new brains.
     {
         let shared_ctx = &brains
             .values()
@@ -441,31 +441,47 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             .expect("at least one brain")
             .mcp_context;
         let shared_db = shared_ctx.db();
+
+        // Read existing prefixes from DB to preserve manual overrides.
+        let existing_prefixes: std::collections::HashMap<String, String> = shared_db
+            .list_brains(false)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|row| row.prefix.map(|p| (row.brain_id, p)))
+            .collect();
+
         let projections: Vec<BrainProjection> = brains
             .iter()
             .filter_map(|(name, inst)| {
-                global_cfg.brains.get(name).map(|entry| BrainProjection {
-                    brain_id: inst.mcp_context.brain_id().to_string(),
-                    name: name.clone(),
-                    prefix: generate_prefix(name),
-                    roots_json: serde_json::to_string(&entry.roots)
-                        .unwrap_or_else(|_| "[]".to_string()),
-                    notes_json: serde_json::to_string(&entry.notes)
-                        .unwrap_or_else(|_| "[]".to_string()),
-                    aliases_json: serde_json::to_string(&entry.aliases)
-                        .unwrap_or_else(|_| "[]".to_string()),
-                    archived: entry.archived,
+                let bid = inst.mcp_context.brain_id().to_string();
+                global_cfg.brains.get(name).map(|entry| {
+                    let prefix = existing_prefixes
+                        .get(&bid)
+                        .cloned()
+                        .unwrap_or_else(|| generate_prefix(name));
+                    BrainProjection {
+                        brain_id: bid,
+                        name: name.clone(),
+                        prefix,
+                        roots_json: serde_json::to_string(&entry.roots)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        notes_json: serde_json::to_string(&entry.notes)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        aliases_json: serde_json::to_string(&entry.aliases)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        archived: entry.archived,
+                    }
                 })
             })
             .collect();
         if let Err(e) = shared_db.project_config_to_brains(&projections) {
-            warn!(error = %e, "failed to project config into brains table");
+            warn!(error = %e, "failed to sync brains into DB");
         } else {
-            info!(
-                brains = projections.len(),
-                "brain registry projected into DB"
-            );
+            info!(brains = projections.len(), "brain registry synced to DB");
         }
+
+        // Sync prefixes from DB back to config.toml (read-only projection).
+        sync_prefixes_to_config(shared_db, &brains);
     }
 
     // ── 3c. Start IPC server ─────────────────────────────────────────────
@@ -1018,26 +1034,44 @@ async fn reload_and_project(
     let cfg = load_global_config()?;
 
     if let Some(db) = brains.values().next().map(|inst| inst.mcp_context.db()) {
+        // Read existing prefixes from DB to preserve manual overrides.
+        let existing_prefixes: std::collections::HashMap<String, String> = db
+            .list_brains(false)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|row| row.prefix.map(|p| (row.brain_id, p)))
+            .collect();
+
         let projections: Vec<BrainProjection> = brains
             .iter()
             .filter_map(|(name, inst)| {
-                cfg.brains.get(name).map(|entry| BrainProjection {
-                    brain_id: inst.mcp_context.brain_id().to_string(),
-                    name: name.clone(),
-                    prefix: generate_prefix(name),
-                    roots_json: serde_json::to_string(&entry.roots)
-                        .unwrap_or_else(|_| "[]".to_string()),
-                    notes_json: serde_json::to_string(&entry.notes)
-                        .unwrap_or_else(|_| "[]".to_string()),
-                    aliases_json: serde_json::to_string(&entry.aliases)
-                        .unwrap_or_else(|_| "[]".to_string()),
-                    archived: entry.archived,
+                let bid = inst.mcp_context.brain_id().to_string();
+                cfg.brains.get(name).map(|entry| {
+                    let prefix = existing_prefixes
+                        .get(&bid)
+                        .cloned()
+                        .unwrap_or_else(|| generate_prefix(name));
+                    BrainProjection {
+                        brain_id: bid,
+                        name: name.clone(),
+                        prefix,
+                        roots_json: serde_json::to_string(&entry.roots)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        notes_json: serde_json::to_string(&entry.notes)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        aliases_json: serde_json::to_string(&entry.aliases)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        archived: entry.archived,
+                    }
                 })
             })
             .collect();
         if let Err(e) = db.project_config_to_brains(&projections) {
-            warn!(error = %e, "failed to re-project config into brains table");
+            warn!(error = %e, "failed to re-sync brains into DB");
         }
+
+        // Sync prefixes from DB back to config.toml.
+        sync_prefixes_to_config(db, brains);
     }
 
     Ok(())
@@ -1265,4 +1299,32 @@ fn validate_roots(brains: &mut HashMap<String, BrainInstance>, watcher: &mut Bra
     }
 
     prefix_map_dirty
+}
+
+/// Sync prefixes from the DB (source of truth) back to config.toml (projection).
+///
+/// Only writes if any prefix actually changed, to avoid triggering the config
+/// watcher unnecessarily.
+fn sync_prefixes_to_config(db: &brain_lib::db::Db, brains: &HashMap<String, BrainInstance>) {
+    let Ok(mut cfg) = load_global_config() else {
+        return;
+    };
+    let mut changed = false;
+    for (name, inst) in brains {
+        let brain_id = inst.mcp_context.brain_id().to_string();
+        if let Ok(Some(db_prefix)) = db.get_brain_prefix(&brain_id)
+            && let Some(entry) = cfg.brains.get_mut(name)
+            && entry.prefix.as_deref() != Some(&db_prefix)
+        {
+            entry.prefix = Some(db_prefix);
+            changed = true;
+        }
+    }
+    if changed {
+        if let Err(e) = save_global_config(&cfg) {
+            warn!(error = %e, "failed to sync prefix to config.toml");
+        } else {
+            debug!("synced prefixes from DB to config.toml");
+        }
+    }
 }

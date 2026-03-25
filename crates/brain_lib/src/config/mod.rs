@@ -44,6 +44,9 @@ pub struct BrainEntry {
     /// Alternate names for this brain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// 3-letter task ID prefix (read-only projection from DB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     /// Whether this brain has been archived. Omitted from TOML when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub archived: bool,
@@ -81,6 +84,8 @@ impl<'de> Deserialize<'de> for BrainEntry {
             id: Option<String>,
             #[serde(default, skip_serializing_if = "Vec::is_empty")]
             aliases: Vec<String>,
+            #[serde(default)]
+            prefix: Option<String>,
             // Accept but ignore legacy extra_roots field.
             #[serde(default)]
             extra_roots: Vec<PathBuf>,
@@ -104,6 +109,7 @@ impl<'de> Deserialize<'de> for BrainEntry {
             notes: raw.notes,
             id: raw.id,
             aliases: raw.aliases,
+            prefix: raw.prefix,
             archived: raw.archived.unwrap_or(false),
         })
     }
@@ -124,6 +130,9 @@ pub struct BrainToml {
     /// Stable brain ID (8-char Nano ID).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// 3-letter task ID prefix (read-only projection from DB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -313,20 +322,6 @@ pub fn resolve_brain_with_fallback(
 ///
 /// Prefer [`open_brain_stores`] which opens all stores (tasks, records,
 /// objects) in a single call and is the canonical entry point.
-pub fn open_remote_task_store(name: &str, _entry: &BrainEntry) -> Result<crate::tasks::TaskStore> {
-    let paths = resolve_paths_for_brain(name)?;
-
-    // Ensure the parent directory of the database file exists.
-    if let Some(parent) = paths.sqlite_db.parent() {
-        std::fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
-    }
-
-    let db = crate::db::Db::open(&paths.sqlite_db)?;
-
-    let store = crate::tasks::TaskStore::new(db);
-    Ok(store)
-}
-
 /// Open all stores for a brain identified by name or ID.
 ///
 /// Delegates to [`crate::stores::BrainStores::from_brain`] for the actual
@@ -378,23 +373,33 @@ pub async fn open_remote_search_context(
     _model_dir: &Path,
     _embedder: &Arc<dyn Embed>,
 ) -> Result<Option<RemoteSearchContext>> {
-    let config = {
-        let path = brain_home.join("config.toml");
-        if !path.exists() {
-            return Ok(None);
+    // Resolve brain from DB (source of truth), fallback to config.toml for
+    // backward compatibility with installs that haven't run the daemon yet.
+    let db_path = brain_home.join("brain.db");
+    let (name, brain_id) = if db_path.exists() {
+        let db = crate::db::Db::open(&db_path)?;
+        match db.resolve_brain(brain_key) {
+            Ok((id, n)) => (n, id),
+            Err(_) => return Ok(None),
         }
-        let text = std::fs::read_to_string(&path).map_err(BrainCoreError::Io)?;
-        toml::from_str::<GlobalConfig>(&text).map_err(|e| {
-            BrainCoreError::Config(format!("failed to parse {}: {e}", path.display()))
-        })?
+    } else {
+        // Fallback for first-run before daemon has created brain.db.
+        let config = {
+            let path = brain_home.join("config.toml");
+            if !path.exists() {
+                return Ok(None);
+            }
+            let text = std::fs::read_to_string(&path).map_err(BrainCoreError::Io)?;
+            toml::from_str::<GlobalConfig>(&text).map_err(|e| {
+                BrainCoreError::Config(format!("failed to parse {}: {e}", path.display()))
+            })?
+        };
+        let (n, entry) = match resolve_brain_entry_from_config(brain_key, &config) {
+            Ok(pair) => pair,
+            Err(_) => return Ok(None),
+        };
+        (n, entry.id.clone().unwrap_or_default())
     };
-
-    let (name, entry) = match resolve_brain_entry_from_config(brain_key, &config) {
-        Ok(pair) => pair,
-        Err(_) => return Ok(None),
-    };
-
-    let brain_id = entry.id.clone().unwrap_or_default();
 
     let paths = resolve_paths_for_brain_with_home(&name, brain_home);
 
@@ -444,23 +449,12 @@ pub fn find_brain_by_id<'a>(
     None
 }
 
-/// Return all brain `(name, id)` pairs from the global registry.
+/// Return all active brain `(name, id)` pairs from the database.
 ///
-/// The `id` field is the stable 8-char Nano ID stored in the config entry,
-/// or an empty string when no ID has been assigned yet.
-pub fn list_brain_keys(brain_home: &Path) -> Result<Vec<(String, String)>> {
-    let path = brain_home.join("config.toml");
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let text = std::fs::read_to_string(&path).map_err(BrainCoreError::Io)?;
-    let config: GlobalConfig = toml::from_str(&text)
-        .map_err(|e| BrainCoreError::Config(format!("failed to parse {}: {e}", path.display())))?;
-    let mut pairs: Vec<(String, String)> = config
-        .brains
-        .into_iter()
-        .map(|(name, entry)| (name, entry.id.unwrap_or_default()))
-        .collect();
+/// The `id` field is the stable brain_id stored in the `brains` table.
+pub fn list_brain_keys(db: &crate::db::Db) -> Result<Vec<(String, String)>> {
+    let rows = db.list_brains(true)?;
+    let mut pairs: Vec<(String, String)> = rows.into_iter().map(|r| (r.name, r.brain_id)).collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(pairs)
 }
@@ -775,6 +769,7 @@ mod tests {
                 notes: vec![],
                 id: id.map(str::to_string),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -820,41 +815,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // open_remote_task_store
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn open_remote_task_store_creates_functional_store() {
-        let brain_home_tmp = TempDir::new().unwrap();
-        let project_tmp = TempDir::new().unwrap();
-
-        // Point BRAIN_HOME at our temp dir.
-        // SAFETY: test is single-threaded; no concurrent env access.
-        unsafe {
-            std::env::set_var("BRAIN_HOME", brain_home_tmp.path());
-        }
-
-        let entry = BrainEntry {
-            roots: vec![project_tmp.path().to_path_buf()],
-            notes: vec![],
-            id: Some("test1234".to_string()),
-            aliases: vec![],
-            archived: false,
-        };
-
-        let store = open_remote_task_store("test-brain", &entry).unwrap();
-
-        // The store should be functional — listing tasks on an empty store succeeds.
-        let tasks = store.list_all().unwrap();
-        assert!(tasks.is_empty());
-
-        // Clean up env var.
-        unsafe {
-            std::env::remove_var("BRAIN_HOME");
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Brain ID helpers
     // -----------------------------------------------------------------------
 
@@ -874,6 +834,7 @@ mod tests {
             name: "test-brain".to_string(),
             notes: vec![],
             id: Some("abcd1234".to_string()),
+            prefix: None,
         };
         save_brain_toml(&brain_dir, &toml_cfg).unwrap();
         let loaded = load_brain_toml(&brain_dir).unwrap();
@@ -890,6 +851,7 @@ mod tests {
             name: "test-brain".to_string(),
             notes: vec![],
             id: None,
+            prefix: None,
         };
         save_brain_toml(&brain_dir, &toml_cfg).unwrap();
         let loaded = load_brain_toml(&brain_dir).unwrap();
@@ -915,45 +877,47 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn list_brain_keys_empty_when_no_config() {
-        let fake_home = TempDir::new().unwrap();
-        let keys = list_brain_keys(fake_home.path()).unwrap();
-        assert!(keys.is_empty());
+    fn list_brain_keys_empty_db() {
+        let db = crate::db::Db::open_in_memory().unwrap();
+        let keys = list_brain_keys(&db).unwrap();
+        // Only the (unscoped) sentinel from migration, filter to non-sentinel
+        let real: Vec<_> = keys
+            .into_iter()
+            .filter(|(n, _)| n != "(unscoped)")
+            .collect();
+        assert!(real.is_empty());
     }
 
     #[test]
     fn list_brain_keys_returns_name_and_id() {
-        let fake_home = TempDir::new().unwrap();
-        let home = fake_home.path();
+        use crate::db::schema::BrainUpsert;
+        let db = crate::db::Db::open_in_memory().unwrap();
+        db.upsert_brain(&BrainUpsert {
+            brain_id: "id000001",
+            name: "alpha",
+            prefix: "ALP",
+            roots_json: "[]",
+            notes_json: "[]",
+            aliases_json: "[]",
+            archived: false,
+        })
+        .unwrap();
+        db.upsert_brain(&BrainUpsert {
+            brain_id: "id000002",
+            name: "beta",
+            prefix: "BET",
+            roots_json: "[]",
+            notes_json: "[]",
+            aliases_json: "[]",
+            archived: false,
+        })
+        .unwrap();
 
-        let mut cfg = GlobalConfig::default();
-        cfg.brains.insert(
-            "alpha".to_string(),
-            BrainEntry {
-                roots: vec![home.to_path_buf()],
-                notes: vec![],
-                id: Some("id000001".to_string()),
-                aliases: vec![],
-                archived: false,
-            },
-        );
-        cfg.brains.insert(
-            "beta".to_string(),
-            BrainEntry {
-                roots: vec![home.to_path_buf()],
-                notes: vec![],
-                id: None,
-                aliases: vec![],
-                archived: false,
-            },
-        );
-        let text = toml::to_string_pretty(&cfg).unwrap();
-        fs::write(home.join("config.toml"), text).unwrap();
-
-        let keys = list_brain_keys(home).unwrap();
-        // Sorted alphabetically
-        assert_eq!(keys[0], ("alpha".to_string(), "id000001".to_string()));
-        assert_eq!(keys[1], ("beta".to_string(), "".to_string()));
+        let keys = list_brain_keys(&db).unwrap();
+        let alpha = keys.iter().find(|(n, _)| n == "alpha").unwrap();
+        assert_eq!(alpha.1, "id000001");
+        let beta = keys.iter().find(|(n, _)| n == "beta").unwrap();
+        assert_eq!(beta.1, "id000002");
     }
 
     // -----------------------------------------------------------------------
@@ -992,6 +956,7 @@ mod tests {
                 notes: vec![],
                 id: Some("testid01".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1025,6 +990,7 @@ mod tests {
                 notes: vec![],
                 id: Some("abc12345".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1082,6 +1048,7 @@ roots = ["/path1", "/path2"]
             notes: vec![],
             id: None,
             aliases: vec![],
+            prefix: None,
             archived: false,
         };
         assert_eq!(entry.primary_root(), PathBuf::from("/primary").as_path());
@@ -1097,6 +1064,7 @@ roots = ["/path1", "/path2"]
                 notes: vec![],
                 id: None,
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1150,6 +1118,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("abc12345".to_string()),
                 aliases: vec!["gateway".to_string(), "infra-alias".to_string()],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1174,6 +1143,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("aaaaaaaa".to_string()),
                 aliases: vec!["gateway".to_string()],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1184,6 +1154,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("bbbbbbbb".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1228,6 +1199,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("abcd1234".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1297,6 +1269,7 @@ roots = ["/some/path"]
             notes: vec![],
             id: None,
             aliases: vec![],
+            prefix: None,
             archived: true,
         };
         let toml_str = toml::to_string_pretty(&entry).unwrap();
@@ -1326,6 +1299,7 @@ roots = ["/some/path"]
             notes: vec![],
             id: None,
             aliases: vec![],
+            prefix: None,
             archived: false,
         };
         let toml_str = toml::to_string_pretty(&entry).unwrap();

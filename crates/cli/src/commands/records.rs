@@ -209,7 +209,7 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
         use brain_lib::store::StoreReader;
 
         let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-            list_brain_keys(&ctx.stores.brain_home)?
+            list_brain_keys(ctx.stores.db())?
                 .into_iter()
                 .map(|(name, _id)| name)
                 .collect()

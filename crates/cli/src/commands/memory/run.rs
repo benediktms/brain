@@ -93,7 +93,7 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
         use brain_lib::query_pipeline::FederatedPipeline;
 
         let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-            list_brain_keys(&ctx.stores.brain_home)?
+            list_brain_keys(ctx.stores.db())?
                 .into_iter()
                 .map(|(name, _id)| name)
                 .collect()

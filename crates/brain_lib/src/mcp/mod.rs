@@ -307,9 +307,9 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
 /// Resolve the brain name from MCP `initialize` roots.
 ///
 /// Parses each root URI (strips the `file://` prefix), then matches against
-/// all registered brain roots in the global config. Returns the name of the
-/// first matching brain, or `None` if no match is found.
-fn resolve_brain_from_roots(roots: &Value) -> Option<String> {
+/// all registered brain roots in the DB (source of truth). Returns the name
+/// of the first matching brain, or `None` if no match is found.
+fn resolve_brain_from_roots(roots: &Value, db: &crate::db::Db) -> Option<String> {
     let roots_arr = roots.as_array()?;
     if roots_arr.is_empty() {
         return None;
@@ -329,15 +329,20 @@ fn resolve_brain_from_roots(roots: &Value) -> Option<String> {
         return None;
     }
 
-    let config = crate::config::load_global_config().ok()?;
+    let brain_rows = db.list_brains(true).ok()?;
 
     // For each registered brain, check whether any root_path starts with (or
     // equals) any of the brain's registered root paths.
-    for (name, entry) in &config.brains {
-        for brain_root in &entry.roots {
+    for row in &brain_rows {
+        let brain_roots: Vec<std::path::PathBuf> = row
+            .roots_json
+            .as_deref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default();
+        for brain_root in &brain_roots {
             for client_root in &root_paths {
                 if client_root.starts_with(brain_root) || client_root == brain_root {
-                    return Some(name.clone());
+                    return Some(row.name.clone());
                 }
             }
         }
@@ -372,7 +377,7 @@ async fn handle_request(
                 } => session_brain_name,
             };
             if let Some(roots) = req.params.get("roots")
-                && let Some(resolved) = resolve_brain_from_roots(roots)
+                && let Some(resolved) = resolve_brain_from_roots(roots, ctx.db())
             {
                 info!(brain = %resolved, "session brain resolved from initialize roots");
                 *session_brain_name.write().await = resolved;
@@ -634,32 +639,36 @@ mod tests {
 
     // --- resolve_brain_from_roots ---
 
+    fn test_db() -> crate::db::Db {
+        crate::db::Db::open_in_memory().unwrap()
+    }
+
     #[test]
     fn test_resolve_brain_from_roots_empty_array() {
         let roots = json!([]);
-        assert_eq!(resolve_brain_from_roots(&roots), None);
+        assert_eq!(resolve_brain_from_roots(&roots, &test_db()), None);
     }
 
     #[test]
     fn test_resolve_brain_from_roots_null() {
         let roots = json!(null);
-        assert_eq!(resolve_brain_from_roots(&roots), None);
+        assert_eq!(resolve_brain_from_roots(&roots, &test_db()), None);
     }
 
     #[test]
     fn test_resolve_brain_from_roots_no_uri_field() {
         let roots = json!([{"path": "/some/path"}]);
         // No "uri" field — should produce no candidate paths, so None.
-        assert_eq!(resolve_brain_from_roots(&roots), None);
+        assert_eq!(resolve_brain_from_roots(&roots, &test_db()), None);
     }
 
     #[test]
     fn test_resolve_brain_from_roots_non_file_uri_ignored_gracefully() {
         // Even if a non-file URI is present, we should not panic.
+        let db = test_db();
         let roots = json!([{"uri": "https://example.com/project"}]);
-        // No registered brains match this path, so None (may match depending
-        // on local config, but we only assert it does not panic).
-        let _ = resolve_brain_from_roots(&roots);
+        // No registered brains match this path, so None.
+        let _ = resolve_brain_from_roots(&roots, &db);
     }
 
     // --- initialize root extraction ---

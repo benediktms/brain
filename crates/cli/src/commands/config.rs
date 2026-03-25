@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use brain_lib::config::{load_global_config, save_global_config};
 
 /// Try to read the prefix from `brains.prefix` for the named brain.
 /// Returns `None` if no match or column is NULL.
@@ -96,6 +97,13 @@ pub fn run_config_set(
             } else {
                 println!("Prefix updated: {old_prefix} → {new_prefix}");
                 println!("Note: existing task IDs retain their original prefix.");
+                // Project to config.toml (read-only projection).
+                if let Ok(mut global) = load_global_config() {
+                    if let Some(entry) = global.brains.get_mut(brain_name) {
+                        entry.prefix = Some(new_prefix);
+                    }
+                    let _ = save_global_config(&global);
+                }
             }
             Ok(())
         }
