@@ -129,18 +129,160 @@ pub struct BrainProjection {
     pub archived: bool,
 }
 
-/// Project config.toml brain entries into the brains table.
+/// Full brain row returned by `list_brains()`.
+#[derive(Debug, Clone)]
+pub struct BrainRow {
+    pub brain_id: String,
+    pub name: String,
+    pub prefix: Option<String>,
+    pub roots_json: Option<String>,
+    pub notes_json: Option<String>,
+    pub aliases_json: Option<String>,
+    pub archived: bool,
+    pub projected: bool,
+}
+
+/// Input for `upsert_brain()`.
+pub struct BrainUpsert<'a> {
+    pub brain_id: &'a str,
+    pub name: &'a str,
+    pub prefix: &'a str,
+    pub roots_json: &'a str,
+    pub notes_json: &'a str,
+    pub aliases_json: &'a str,
+    pub archived: bool,
+}
+
+/// Upsert a brain entry into the `brains` table.
 ///
-/// Both this function and `ensure_brain_registered` write to the brains table.
-/// `ensure_brain_registered` creates rows with (brain_id, name, prefix) only —
-/// roots/aliases/notes/projected are NULL. This function replaces all projected
-/// rows with fresh data from config.toml and sets projected=1.
+/// Preserves existing prefix via COALESCE — only uses the provided prefix
+/// for new brains (when no row exists). Sets `projected = 1`.
+pub fn upsert_brain(conn: &Connection, input: &BrainUpsert<'_>) -> Result<()> {
+    conn.execute(
+        "INSERT INTO brains (brain_id, name, prefix, roots, notes, aliases, archived, projected, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, strftime('%s','now'))
+         ON CONFLICT(brain_id) DO UPDATE SET
+           name = excluded.name,
+           prefix = COALESCE(brains.prefix, excluded.prefix),
+           roots = excluded.roots,
+           notes = excluded.notes,
+           aliases = excluded.aliases,
+           archived = excluded.archived,
+           projected = 1",
+        rusqlite::params![
+            input.brain_id,
+            input.name,
+            input.prefix,
+            input.roots_json,
+            input.notes_json,
+            input.aliases_json,
+            input.archived as i32
+        ],
+    )?;
+    Ok(())
+}
+
+/// List all brain rows, optionally filtered.
 ///
-/// Uses DELETE+INSERT to avoid `name UNIQUE` constraint conflicts when a
-/// brain_id changes but the name stays the same. All previously projected rows
-/// and any ensure_brain_registered-only rows matching the new config's brain_ids
-/// are deleted first, then fresh rows are inserted. The ON CONFLICT clause is
-/// a defensive guard only — the DELETE should prevent conflicts.
+/// When `active_only` is true, returns only projected=1, non-archived brains.
+pub fn list_brains(conn: &Connection, active_only: bool) -> Result<Vec<BrainRow>> {
+    let sql = if active_only {
+        "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains WHERE projected = 1 AND archived = 0 ORDER BY name"
+    } else {
+        "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains ORDER BY name"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(BrainRow {
+            brain_id: row.get(0)?,
+            name: row.get(1)?,
+            prefix: row.get(2)?,
+            roots_json: row.get(3)?,
+            notes_json: row.get(4)?,
+            aliases_json: row.get(5)?,
+            archived: row.get::<_, i32>(6)? != 0,
+            projected: row.get::<_, i32>(7)? != 0,
+        })
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+/// Read the prefix for a brain by brain_id.
+pub fn get_brain_prefix(conn: &Connection, brain_id: &str) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    let prefix: Option<String> = conn
+        .query_row(
+            "SELECT prefix FROM brains WHERE brain_id = ?1",
+            [brain_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(prefix)
+}
+
+/// Read a full brain row by brain_id.
+pub fn get_brain(conn: &Connection, brain_id: &str) -> Result<Option<BrainRow>> {
+    use rusqlite::OptionalExtension;
+    let row = conn
+        .query_row(
+            "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains WHERE brain_id = ?1",
+            [brain_id],
+            |row| {
+                Ok(BrainRow {
+                    brain_id: row.get(0)?,
+                    name: row.get(1)?,
+                    prefix: row.get(2)?,
+                    roots_json: row.get(3)?,
+                    notes_json: row.get(4)?,
+                    aliases_json: row.get(5)?,
+                    archived: row.get::<_, i32>(6)? != 0,
+                    projected: row.get::<_, i32>(7)? != 0,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// Read a full brain row by name.
+pub fn get_brain_by_name(conn: &Connection, name: &str) -> Result<Option<BrainRow>> {
+    use rusqlite::OptionalExtension;
+    let row = conn
+        .query_row(
+            "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains WHERE name = ?1",
+            [name],
+            |row| {
+                Ok(BrainRow {
+                    brain_id: row.get(0)?,
+                    name: row.get(1)?,
+                    prefix: row.get(2)?,
+                    roots_json: row.get(3)?,
+                    notes_json: row.get(4)?,
+                    aliases_json: row.get(5)?,
+                    archived: row.get::<_, i32>(6)? != 0,
+                    projected: row.get::<_, i32>(7)? != 0,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// Delete a brain by name from the `brains` table.
+pub fn delete_brain(conn: &Connection, name: &str) -> Result<bool> {
+    let rows = conn.execute("DELETE FROM brains WHERE name = ?1", [name])?;
+    Ok(rows > 0)
+}
+
+/// Sync config.toml brain entries into the brains table.
+///
+/// Uses UPSERT (not DELETE+INSERT) to preserve existing data, especially
+/// manually-set prefixes. Existing prefix is preserved via COALESCE —
+/// the provided prefix is only used for new brains without an existing row.
+///
+/// Brains no longer in config are soft-cleared to projected=0 but their
+/// rows (and prefixes) are preserved for historical access.
 pub fn project_config_to_brains(conn: &Connection, brains: &[BrainProjection]) -> Result<()> {
     // Alias uniqueness check — first-seen wins, duplicates are logged and skipped.
     let mut alias_owners: std::collections::HashMap<String, String> =
@@ -173,22 +315,13 @@ pub fn project_config_to_brains(conn: &Connection, brains: &[BrainProjection]) -
         })
         .collect();
 
-    let brain_ids: Vec<&str> = brains.iter().map(|b| b.brain_id.as_str()).collect();
+    // Step 1: Soft-clear all projected rows. Rows in the new config will be
+    // re-marked projected=1 below. Rows NOT in the new config stay as
+    // projected=0 — preserving their data for historical access.
+    conn.execute("UPDATE brains SET projected = 0 WHERE projected = 1", [])?;
 
-    // Step 1: Delete all currently-projected rows.
-    // - Rows in new config will be re-inserted below (projected=1).
-    // - Rows NOT in new config (removed brains) are gone — they were only
-    //   accessible via projection and have no historical FK data to preserve.
-    conn.execute("DELETE FROM brains WHERE projected = 1", [])?;
-
-    // Step 2: Delete any remaining rows whose brain_id appears in the new config
-    // (these are ensure_brain_registered-only rows, projected=0). Clearing them
-    // first avoids name UNIQUE conflicts on re-insert.
-    for brain_id in &brain_ids {
-        conn.execute("DELETE FROM brains WHERE brain_id = ?1", [brain_id])?;
-    }
-
-    // Step 3: Insert fresh rows for all config brains.
+    // Step 2: Upsert each brain. COALESCE preserves existing prefix because
+    // the row still exists (we didn't delete it).
     let mut stmt = conn.prepare_cached(
         "INSERT INTO brains (brain_id, name, prefix, roots, notes, aliases, archived, projected, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, strftime('%s','now'))
@@ -708,15 +841,15 @@ mod projection_tests {
             .unwrap();
         assert_eq!(b1_projected, 1, "b1 should remain projected=1");
 
-        // b2 was deleted (DELETE+INSERT strategy), so it should not exist
-        let b2_count: i64 = conn
+        // b2 should still exist but with projected=0 (soft-cleared, not deleted)
+        let b2_projected: i32 = conn
             .query_row(
-                "SELECT COUNT(*) FROM brains WHERE brain_id = 'b2'",
+                "SELECT projected FROM brains WHERE brain_id = 'b2'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(b2_count, 0, "b2 should have been removed");
+        assert_eq!(b2_projected, 0, "b2 should be soft-cleared to projected=0");
     }
 
     #[test]
@@ -752,9 +885,7 @@ mod projection_tests {
         };
         project_config_to_brains(&conn, &[brain]).unwrap();
 
-        // After DELETE+INSERT the prefix comes from the new insert (since the old row was deleted)
-        // The COALESCE preserves prefix on UPDATE conflict — but since we DELETE first, the new value is used.
-        // This is expected behavior: if the row was deleted and re-inserted, the config prefix applies.
+        // With UPSERT, COALESCE(brains.prefix, excluded.prefix) preserves the existing prefix.
         let prefix_after: String = conn
             .query_row(
                 "SELECT prefix FROM brains WHERE brain_id = 'brain-xyz'",
@@ -762,9 +893,9 @@ mod projection_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(
-            !prefix_after.is_empty(),
-            "prefix should still be set after projection"
+        assert_eq!(
+            prefix_after, prefix_before,
+            "UPSERT should preserve the original prefix via COALESCE"
         );
     }
 
@@ -795,6 +926,239 @@ mod projection_tests {
 
         assert_eq!(roots, "[]");
         assert_eq!(aliases, "[]");
+    }
+
+    #[test]
+    fn test_prefix_survives_multiple_projection_cycles() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup(&conn);
+
+        let brain = BrainProjection {
+            brain_id: "brain-multi".to_string(),
+            name: "multiproject".to_string(),
+            prefix: "ABC".to_string(),
+            roots_json: "[\"/first\"]".to_string(),
+            notes_json: "[]".to_string(),
+            aliases_json: "[]".to_string(),
+            archived: false,
+        };
+        project_config_to_brains(&conn, &[brain]).unwrap();
+
+        // Second projection with a DIFFERENT prefix — COALESCE preserves "ABC"
+        let brain2 = BrainProjection {
+            brain_id: "brain-multi".to_string(),
+            name: "multiproject".to_string(),
+            prefix: "XYZ".to_string(),
+            roots_json: "[\"/second\"]".to_string(),
+            notes_json: "[]".to_string(),
+            aliases_json: "[]".to_string(),
+            archived: false,
+        };
+        project_config_to_brains(&conn, &[brain2]).unwrap();
+
+        let prefix: String = conn
+            .query_row(
+                "SELECT prefix FROM brains WHERE brain_id = 'brain-multi'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            prefix, "ABC",
+            "prefix should survive second projection cycle"
+        );
+
+        // Third projection — still preserved
+        let brain3 = BrainProjection {
+            brain_id: "brain-multi".to_string(),
+            name: "multiproject".to_string(),
+            prefix: "QQQ".to_string(),
+            roots_json: "[\"/third\"]".to_string(),
+            notes_json: "[]".to_string(),
+            aliases_json: "[]".to_string(),
+            archived: false,
+        };
+        project_config_to_brains(&conn, &[brain3]).unwrap();
+
+        let prefix: String = conn
+            .query_row(
+                "SELECT prefix FROM brains WHERE brain_id = 'brain-multi'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            prefix, "ABC",
+            "prefix should survive third projection cycle"
+        );
+    }
+
+    #[test]
+    fn test_upsert_brain_preserves_prefix_via_coalesce() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup(&conn);
+
+        upsert_brain(
+            &conn,
+            &BrainUpsert {
+                brain_id: "brain-ups",
+                name: "upsertbrain",
+                prefix: "UPS",
+                roots_json: "[\"/root\"]",
+                notes_json: "[]",
+                aliases_json: "[]",
+                archived: false,
+            },
+        )
+        .unwrap();
+
+        let prefix: String = conn
+            .query_row(
+                "SELECT prefix FROM brains WHERE brain_id = 'brain-ups'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(prefix, "UPS");
+
+        // Second upsert with different prefix — COALESCE preserves original
+        upsert_brain(
+            &conn,
+            &BrainUpsert {
+                brain_id: "brain-ups",
+                name: "upsertbrain",
+                prefix: "NEW",
+                roots_json: "[\"/root2\"]",
+                notes_json: "[]",
+                aliases_json: "[\"al\"]",
+                archived: false,
+            },
+        )
+        .unwrap();
+
+        let prefix: String = conn
+            .query_row(
+                "SELECT prefix FROM brains WHERE brain_id = 'brain-ups'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            prefix, "UPS",
+            "upsert_brain COALESCE should preserve the original prefix"
+        );
+
+        // But other fields should update
+        let (roots, aliases): (String, String) = conn
+            .query_row(
+                "SELECT roots, aliases FROM brains WHERE brain_id = 'brain-ups'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(roots, "[\"/root2\"]");
+        assert_eq!(aliases, "[\"al\"]");
+    }
+
+    #[test]
+    fn test_list_brains_returns_correct_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup(&conn);
+
+        let b1 = BrainProjection {
+            brain_id: "b-list-1".to_string(),
+            name: "alpha".to_string(),
+            prefix: "ALP".to_string(),
+            roots_json: "[\"/alpha\"]".to_string(),
+            notes_json: "[\"/alpha/notes\"]".to_string(),
+            aliases_json: "[\"a\"]".to_string(),
+            archived: false,
+        };
+        let b2 = BrainProjection {
+            brain_id: "b-list-2".to_string(),
+            name: "beta".to_string(),
+            prefix: "BET".to_string(),
+            roots_json: "[\"/beta\"]".to_string(),
+            notes_json: "[]".to_string(),
+            aliases_json: "[]".to_string(),
+            archived: true,
+        };
+        project_config_to_brains(&conn, &[b1, b2]).unwrap();
+
+        // list all
+        let all = list_brains(&conn, false).unwrap();
+        let test_brains: Vec<_> = all
+            .iter()
+            .filter(|b| b.brain_id.starts_with("b-list-"))
+            .collect();
+        assert_eq!(test_brains.len(), 2);
+
+        let a = test_brains.iter().find(|b| b.name == "alpha").unwrap();
+        assert_eq!(a.prefix.as_deref(), Some("ALP"));
+        assert_eq!(a.roots_json.as_deref(), Some("[\"/alpha\"]"));
+        assert!(!a.archived);
+        assert!(a.projected);
+
+        // list active only — archived beta excluded
+        let active = list_brains(&conn, true).unwrap();
+        let active_test: Vec<_> = active
+            .iter()
+            .filter(|b| b.brain_id.starts_with("b-list-"))
+            .collect();
+        assert_eq!(active_test.len(), 1);
+        assert_eq!(active_test[0].name, "alpha");
+    }
+
+    #[test]
+    fn test_get_brain_and_get_brain_by_name() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup(&conn);
+
+        let brain = BrainProjection {
+            brain_id: "brain-get-test".to_string(),
+            name: "gettest".to_string(),
+            prefix: "GET".to_string(),
+            roots_json: "[\"/get\"]".to_string(),
+            notes_json: "[]".to_string(),
+            aliases_json: "[\"gt\"]".to_string(),
+            archived: false,
+        };
+        project_config_to_brains(&conn, &[brain]).unwrap();
+
+        let row = get_brain(&conn, "brain-get-test").unwrap().unwrap();
+        assert_eq!(row.name, "gettest");
+        assert_eq!(row.prefix.as_deref(), Some("GET"));
+        assert!(row.projected);
+
+        let row2 = get_brain_by_name(&conn, "gettest").unwrap().unwrap();
+        assert_eq!(row2.brain_id, "brain-get-test");
+
+        assert!(get_brain(&conn, "nonexistent").unwrap().is_none());
+        assert!(get_brain_by_name(&conn, "nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_brain() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup(&conn);
+
+        let brain = BrainProjection {
+            brain_id: "brain-del".to_string(),
+            name: "deleteme".to_string(),
+            prefix: "DEL".to_string(),
+            roots_json: "[]".to_string(),
+            notes_json: "[]".to_string(),
+            aliases_json: "[]".to_string(),
+            archived: false,
+        };
+        project_config_to_brains(&conn, &[brain]).unwrap();
+
+        let deleted = delete_brain(&conn, "deleteme").unwrap();
+        assert!(deleted);
+        assert!(get_brain(&conn, "brain-del").unwrap().is_none());
+
+        let deleted_again = delete_brain(&conn, "deleteme").unwrap();
+        assert!(!deleted_again);
     }
 
     #[test]

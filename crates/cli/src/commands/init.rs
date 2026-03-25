@@ -4,6 +4,7 @@ use brain_lib::config::{
     load_brain_toml, load_global_config, paths::normalize_note_paths, save_brain_toml,
     save_global_config,
 };
+use brain_lib::db::schema::BrainUpsert;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -28,28 +29,71 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
             let existing_name = find_brain_by_id(&global, local_id).map(|(n, _)| n);
 
             if let Some(brain_name) = existing_name {
-                let root_count = {
-                    let entry = global.brains.get_mut(&brain_name).unwrap();
-                    if !entry.roots.contains(&cwd) {
-                        entry.roots.push(cwd.clone());
-                        entry.roots.len()
+                // Update DB (source of truth) with the new root.
+                let home = brain_home()?;
+                let db_path = home.join("brain.db");
+                let db = brain_lib::db::Db::open(&db_path)?;
+                if let Ok(Some(brain_row)) = db.get_brain(local_id) {
+                    let mut roots: Vec<std::path::PathBuf> = brain_row
+                        .roots_json
+                        .as_deref()
+                        .and_then(|j| serde_json::from_str(j).ok())
+                        .unwrap_or_default();
+                    if roots.contains(&cwd) {
+                        println!(
+                            "Path already registered in brain \"{}\" ({} roots)",
+                            brain_name,
+                            roots.len()
+                        );
                     } else {
-                        // already present — use negative sentinel to signal no-op
-                        usize::MAX
+                        roots.push(cwd.clone());
+                        let roots_json = serde_json::to_string(&roots)?;
+                        db.upsert_brain(&BrainUpsert {
+                            brain_id: local_id,
+                            name: &brain_name,
+                            prefix: brain_row.prefix.as_deref().unwrap_or("BRN"),
+                            roots_json: &roots_json,
+                            notes_json: brain_row.notes_json.as_deref().unwrap_or("[]"),
+                            aliases_json: brain_row.aliases_json.as_deref().unwrap_or("[]"),
+                            archived: brain_row.archived,
+                        })?;
+                        // Project to config.toml.
+                        let entry = global.brains.get_mut(&brain_name).unwrap();
+                        if !entry.roots.contains(&cwd) {
+                            entry.roots.push(cwd.clone());
+                        }
+                        save_global_config(&global)?;
+                        println!(
+                            "Path added to existing brain \"{}\" (now has {} roots)",
+                            brain_name,
+                            roots.len()
+                        );
                     }
-                };
-                if root_count == usize::MAX {
-                    let n = global.brains[&brain_name].roots.len();
-                    println!(
-                        "Path already registered in brain \"{}\" ({} roots)",
-                        brain_name, n
-                    );
                 } else {
-                    save_global_config(&global)?;
-                    println!(
-                        "Path added to existing brain \"{}\" (now has {} roots)",
-                        brain_name, root_count
-                    );
+                    // Brain in config but not in DB yet — fall through to re-register.
+                    // (backward compat with old installs)
+                    let already_has_root = global
+                        .brains
+                        .get(&brain_name)
+                        .map(|e| e.roots.contains(&cwd))
+                        .unwrap_or(false);
+                    if !already_has_root {
+                        if let Some(entry) = global.brains.get_mut(&brain_name) {
+                            entry.roots.push(cwd.clone());
+                        }
+                        let root_count = global.brains[&brain_name].roots.len();
+                        save_global_config(&global)?;
+                        println!(
+                            "Path added to existing brain \"{}\" (now has {} roots)",
+                            brain_name, root_count
+                        );
+                    } else {
+                        let root_count = global.brains[&brain_name].roots.len();
+                        println!(
+                            "Path already registered in brain \"{}\" ({} roots)",
+                            brain_name, root_count
+                        );
+                    }
                 }
                 return Ok(());
             }
@@ -75,6 +119,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
                 name: brain_name.clone(),
                 notes: vec![],
                 id: Some(brain_id.clone()),
+                prefix: None,
             };
             save_brain_toml(&brain_dir, &brain_toml)?;
             // cwd is already in roots — nothing to add, just report.
@@ -114,6 +159,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         name: brain_name.clone(),
         notes: note_dirs.clone(),
         id: Some(brain_id.clone()),
+        prefix: None,
     };
     save_brain_toml(&brain_dir, &brain_toml)?;
 
@@ -124,40 +170,49 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         "# Derived data — do not commit\nbrain.db*\nlancedb/\nmodels/\n",
     )?;
 
-    // 4. Register in global config (~/.brain/config.toml)
-    let mut global = load_global_config()?;
-
-    let abs_notes = normalize_note_paths(&note_dirs, &cwd)?;
-
-    global.brains.insert(
-        brain_name.clone(),
-        BrainEntry {
-            roots: vec![cwd.clone()],
-            notes: abs_notes,
-            id: Some(brain_id.clone()),
-            aliases: vec![],
-            archived: false,
-        },
-    );
-    save_global_config(&global)?;
-
-    // 5. Create ~/.brain/brains/<name>/ with restrictive permissions
+    // 4. Create ~/.brain/brains/<name>/ with restrictive permissions
     let home = brain_home()?;
     let brains_dir = home.join("brains").join(&brain_name);
     brain_lib::fs_permissions::ensure_private_dir(&brains_dir)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // Seed project_prefix at init time so first task IDs are stable and derived
-    // from init context (`--name` or current directory basename).
-    // Use unified DB path — all brains share ~/.brain/brain.db.
+    let abs_notes = normalize_note_paths(&note_dirs, &cwd)?;
+
+    // 4b. Register brain in DB (source of truth) with roots, notes, prefix.
     let db_path = home.join("brain.db");
     seed_project_prefix_if_missing(&db_path, &brain_name)?;
-
-    // Register the brain in the brains table — ensures brains.prefix is populated
-    // from brain_name. This is the single source of truth for prefix resolution.
     {
         let db = brain_lib::db::Db::open(&db_path)?;
-        db.ensure_brain_registered(&brain_id, &brain_name)?;
+        let prefix = brain_lib::db::meta::generate_prefix(&brain_name);
+        let roots_json = serde_json::to_string(&vec![&cwd])?;
+        let notes_json = serde_json::to_string(&abs_notes)?;
+        let aliases_json = "[]".to_string();
+        db.upsert_brain(&BrainUpsert {
+            brain_id: &brain_id,
+            name: &brain_name,
+            prefix: &prefix,
+            roots_json: &roots_json,
+            notes_json: &notes_json,
+            aliases_json: &aliases_json,
+            archived: false,
+        })?;
+    }
+
+    // 4c. Project to config.toml (read-only projection for human readability).
+    {
+        let mut global = load_global_config()?;
+        global.brains.insert(
+            brain_name.clone(),
+            BrainEntry {
+                roots: vec![cwd.clone()],
+                notes: abs_notes,
+                id: Some(brain_id.clone()),
+                aliases: vec![],
+                prefix: None,
+                archived: false,
+            },
+        );
+        save_global_config(&global)?;
     }
 
     // 5b. One-time import: if the project already has a .brain/tasks/events.jsonl

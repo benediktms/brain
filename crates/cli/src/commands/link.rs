@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use brain_lib::config::{
-    BrainToml, load_brain_toml, load_global_config, resolve_brain_entry_from_config,
-    resolve_paths_for_brain, save_brain_toml, save_global_config,
+    BrainToml, brain_home, load_brain_toml, load_global_config, save_brain_toml, save_global_config,
 };
 use brain_lib::db::Db;
+use brain_lib::db::schema::BrainUpsert;
 use std::fs;
+use std::path::PathBuf;
 
 /// Link the current directory as an additional root for an existing brain.
 pub fn run(name: &str) -> Result<()> {
@@ -13,13 +14,29 @@ pub fn run(name: &str) -> Result<()> {
         .canonicalize()
         .with_context(|| format!("cannot canonicalize {}", cwd.display()))?;
 
-    let mut config = load_global_config()?;
+    // Resolve brain from DB (source of truth).
+    let home = brain_home().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let db_path = home.join("brain.db");
+    let db = Db::open(&db_path).context("failed to open brain DB")?;
 
-    let (brain_name, entry) = resolve_brain_entry_from_config(name, &config)
+    let (brain_id, brain_name) = db
+        .resolve_brain(name)
         .map_err(|_| anyhow::anyhow!("Error: brain '{}' not found in registry", name))?;
 
+    let brain_row = db
+        .get_brain(&brain_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .ok_or_else(|| anyhow::anyhow!("brain '{}' not found in DB", brain_id))?;
+
+    // Parse existing roots from DB.
+    let mut roots: Vec<PathBuf> = brain_row
+        .roots_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+
     // Error if cwd is already a root of this brain.
-    if entry.roots.contains(&cwd) {
+    if roots.contains(&cwd) {
         anyhow::bail!(
             "'{}' is already a root of brain '{}'",
             cwd.display(),
@@ -34,30 +51,21 @@ pub fn run(name: &str) -> Result<()> {
     if marker_path.exists() {
         let local_toml =
             load_brain_toml(&brain_dir).context("failed to read existing .brain/brain.toml")?;
-        if let Some(ref local_id) = local_toml.id {
-            let entry_id = entry.id.as_deref().unwrap_or("");
-            if !entry_id.is_empty() && local_id != entry_id {
-                // Find the name of the other brain this directory belongs to.
-                let other_name = config
-                    .brains
-                    .iter()
-                    .find(|(_, e)| e.id.as_deref() == Some(local_id.as_str()))
-                    .map(|(n, _)| n.clone())
-                    .unwrap_or_else(|| local_toml.name.clone());
-                anyhow::bail!(
-                    "'{}' already belongs to brain '{}' ({})",
-                    cwd.display(),
-                    other_name,
-                    local_id
-                );
-            }
+        if let Some(ref local_id) = local_toml.id
+            && !brain_id.is_empty()
+            && local_id != &brain_id
+        {
+            anyhow::bail!(
+                "'{}' already belongs to a different brain ({})",
+                cwd.display(),
+                local_id
+            );
         }
     }
 
     // Create .brain/ directory and write marker files.
     fs::create_dir_all(&brain_dir)?;
 
-    let brain_id = entry.id.clone().unwrap_or_default();
     let brain_toml = BrainToml {
         name: brain_name.clone(),
         notes: vec![],
@@ -66,6 +74,7 @@ pub fn run(name: &str) -> Result<()> {
         } else {
             Some(brain_id.clone())
         },
+        prefix: brain_row.prefix.clone(),
     };
     save_brain_toml(&brain_dir, &brain_toml)?;
 
@@ -77,33 +86,38 @@ pub fn run(name: &str) -> Result<()> {
         )?;
     }
 
-    // Append cwd to this brain's roots in the global config.
-    let was_archived = config.brains.get(&brain_name).unwrap().archived;
-    config
-        .brains
-        .get_mut(&brain_name)
-        .unwrap()
-        .roots
-        .push(cwd.clone());
-    if was_archived {
-        config.brains.get_mut(&brain_name).unwrap().archived = false;
-    }
-    save_global_config(&config)?;
+    // Append cwd to roots and update DB (source of truth).
+    roots.push(cwd.clone());
+    let was_archived = brain_row.archived;
+    let roots_json = serde_json::to_string(&roots)?;
+    let notes_json = brain_row.notes_json.as_deref().unwrap_or("[]");
+    let aliases_json = brain_row.aliases_json.as_deref().unwrap_or("[]");
+    let prefix = brain_row
+        .prefix
+        .as_deref()
+        .unwrap_or_else(|| brain_lib::db::meta::generate_prefix(&brain_name).leak());
+    db.upsert_brain(&BrainUpsert {
+        brain_id: &brain_id,
+        name: &brain_name,
+        prefix,
+        roots_json: &roots_json,
+        notes_json,
+        aliases_json,
+        archived: false, // unarchive if linking
+    })?;
 
-    // If the brain was archived, clear the archived flag in the DB as well.
-    if was_archived && !brain_id.is_empty() {
-        let paths = resolve_paths_for_brain(&brain_name)
-            .context("failed to resolve brain paths for unarchive")?;
-        if paths.sqlite_db.exists() {
-            let db = Db::open(&paths.sqlite_db).context("failed to open brain DB for unarchive")?;
-            db.with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE brains SET archived = 0 WHERE brain_id = ?1",
-                    rusqlite::params![brain_id],
-                )?;
-                Ok(())
-            })?;
+    // Project to config.toml (read-only projection).
+    if let Ok(mut config) = load_global_config() {
+        if let Some(entry) = config.brains.get_mut(&brain_name) {
+            entry.roots.push(cwd.clone());
+            if was_archived {
+                entry.archived = false;
+            }
         }
+        let _ = save_global_config(&config);
+    }
+
+    if was_archived {
         println!("Brain '{}' has been unarchived.", brain_name);
     }
 

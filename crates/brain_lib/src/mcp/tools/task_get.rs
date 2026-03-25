@@ -42,6 +42,8 @@ struct Params {
     task_id: String,
     #[serde(default)]
     expand: HashSet<ExpandField>,
+    #[serde(default)]
+    brains: Option<Vec<String>>,
 }
 
 /// Build a compact stub: `{task_id, title}`.
@@ -64,23 +66,64 @@ pub(super) struct TaskGet;
 
 impl TaskGet {
     fn execute(&self, params: Value, ctx: &McpContext) -> ToolCallResult {
-        let mut warnings: Vec<Warning> = Vec::new();
-
         let params: Params = match serde_json::from_value(params) {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
+        let task_id_input = resolve_id(&params.task_id);
+
+        // Cross-brain path: try each specified brain in order
+        if let Some(ref brain_names) = params.brains {
+            for brain_ref in brain_names {
+                let (remote_brain_name, bid) = match ctx.resolve_brain_id(brain_ref) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return ToolCallResult::error(format!(
+                            "Failed to resolve brain '{brain_ref}': {e}"
+                        ));
+                    }
+                };
+                let remote_store =
+                    match TaskStore::with_brain_id(ctx.db().clone(), &bid, &remote_brain_name) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return ToolCallResult::error(format!(
+                                "Failed to open brain '{remote_brain_name}': {e}"
+                            ));
+                        }
+                    };
+                // Try resolving the task in this brain's store
+                if let Ok(resolved_id) = remote_store.resolve_task_id(&task_id_input)
+                    && remote_store.get_task(&resolved_id).ok().flatten().is_some()
+                {
+                    return Self::execute_with_store(&params, &remote_store, &remote_brain_name);
+                }
+            }
+            return ToolCallResult::error(format!(
+                "Task '{}' not found in brains: {}",
+                params.task_id,
+                brain_names.join(", ")
+            ));
+        }
+
+        // Default path: use the current brain's store
+        Self::execute_with_store(&params, &ctx.stores.tasks, ctx.brain_name())
+    }
+
+    fn execute_with_store(params: &Params, store: &TaskStore, brain_name: &str) -> ToolCallResult {
+        let mut warnings: Vec<Warning> = Vec::new();
+
         // 1. Resolve task_id (strip synapse:// URI if present, then resolve prefix)
         let task_id_input = resolve_id(&params.task_id);
-        let task_id = match ctx.stores.tasks.resolve_task_id(&task_id_input) {
+        let task_id = match store.resolve_task_id(&task_id_input) {
             Ok(id) => id,
             Err(e) => return ToolCallResult::error(format!("Failed to resolve task_id: {e}")),
         };
 
         // 2. Get task
         let task_id = task_id.as_str();
-        let task = match ctx.stores.tasks.get_task(task_id) {
+        let task = match store.get_task(task_id) {
             Ok(Some(t)) => t,
             Ok(None) => return ToolCallResult::error(format!("Task not found: {task_id}")),
             Err(e) => {
@@ -91,24 +134,24 @@ impl TaskGet {
 
         // 3. Fetch enrichment data
         let labels = store_or_warn(
-            ctx.stores.tasks.get_task_labels(task_id),
+            store.get_task_labels(task_id),
             "get_task_labels",
             &mut warnings,
         );
         let external_ids = store_or_warn(
-            ctx.stores.tasks.get_external_ids(task_id),
+            store.get_external_ids(task_id),
             "get_external_ids",
             &mut warnings,
         );
 
         let comments = store_or_warn(
-            ctx.stores.tasks.get_task_comments(task_id),
+            store.get_task_comments(task_id),
             "get_task_comments",
             &mut warnings,
         );
         let comments_json = comments_to_json(&comments);
 
-        let dep_summary = match ctx.stores.tasks.get_dependency_summary(task_id) {
+        let dep_summary = match store.get_dependency_summary(task_id) {
             Ok(summary) => summary,
             Err(err) => {
                 warnings.push(Warning {
@@ -124,19 +167,15 @@ impl TaskGet {
         };
 
         let note_links = store_or_warn(
-            ctx.stores.tasks.get_task_note_links(task_id),
+            store.get_task_note_links(task_id),
             "get_task_note_links",
             &mut warnings,
         );
         let linked_notes_json = note_links_to_json(&note_links);
 
-        let children = store_or_warn(
-            ctx.stores.tasks.get_children(task_id),
-            "get_children",
-            &mut warnings,
-        );
+        let children = store_or_warn(store.get_children(task_id), "get_children", &mut warnings);
         let blocks = store_or_warn(
-            ctx.stores.tasks.get_tasks_blocking(task_id),
+            store.get_tasks_blocking(task_id),
             "get_tasks_blocking",
             &mut warnings,
         );
@@ -147,24 +186,20 @@ impl TaskGet {
                 .as_deref()
                 .map(|pid| {
                     let Some(parent) =
-                        store_or_warn(ctx.stores.tasks.get_task(pid), "get_task", &mut warnings)
+                        store_or_warn(store.get_task(pid), "get_task", &mut warnings)
                     else {
                         return task_stub(pid, "(not found)");
                     };
-                    let parent_labels = store_or_warn(
-                        ctx.stores.tasks.get_task_labels(pid),
-                        "get_task_labels",
-                        &mut warnings,
-                    );
-                    expanded_task(&ctx.stores.tasks, &parent, parent_labels)
+                    let parent_labels =
+                        store_or_warn(store.get_task_labels(pid), "get_task_labels", &mut warnings);
+                    expanded_task(store, &parent, parent_labels)
                 })
                 .unwrap_or(Value::Null)
         } else {
             task.parent_task_id
                 .as_deref()
                 .map(|pid| {
-                    ctx.stores
-                        .tasks
+                    store
                         .get_task(pid)
                         .ok()
                         .flatten()
@@ -180,11 +215,11 @@ impl TaskGet {
                 .iter()
                 .map(|c| {
                     let labels = store_or_warn(
-                        ctx.stores.tasks.get_task_labels(&c.task_id),
+                        store.get_task_labels(&c.task_id),
                         "get_task_labels",
                         &mut warnings,
                     );
-                    let mut json = task_row_to_compact_json(&ctx.stores.tasks, c, labels);
+                    let mut json = task_row_to_compact_json(store, c, labels);
                     if let Some(obj) = json.as_object_mut() {
                         obj.remove("description");
                     }
@@ -205,16 +240,13 @@ impl TaskGet {
                 .iter()
                 .map(|id| {
                     let Some(blocking_task) =
-                        store_or_warn(ctx.stores.tasks.get_task(id), "get_task", &mut warnings)
+                        store_or_warn(store.get_task(id), "get_task", &mut warnings)
                     else {
                         return task_stub(id, "(not found)");
                     };
-                    let blocking_labels = store_or_warn(
-                        ctx.stores.tasks.get_task_labels(id),
-                        "get_task_labels",
-                        &mut warnings,
-                    );
-                    expanded_task(&ctx.stores.tasks, &blocking_task, blocking_labels)
+                    let blocking_labels =
+                        store_or_warn(store.get_task_labels(id), "get_task_labels", &mut warnings);
+                    expanded_task(store, &blocking_task, blocking_labels)
                 })
                 .collect()
         } else {
@@ -222,8 +254,7 @@ impl TaskGet {
                 .blocking_task_ids
                 .iter()
                 .filter_map(|id| {
-                    ctx.stores
-                        .tasks
+                    store
                         .get_task(id)
                         .ok()
                         .flatten()
@@ -238,11 +269,11 @@ impl TaskGet {
                 .iter()
                 .map(|b| {
                     let labels = store_or_warn(
-                        ctx.stores.tasks.get_task_labels(&b.task_id),
+                        store.get_task_labels(&b.task_id),
                         "get_task_labels",
                         &mut warnings,
                     );
-                    let mut json = task_row_to_compact_json(&ctx.stores.tasks, b, labels);
+                    let mut json = task_row_to_compact_json(store, b, labels);
                     if let Some(obj) = json.as_object_mut() {
                         obj.remove("description");
                     }
@@ -257,12 +288,10 @@ impl TaskGet {
         };
 
         // 8. Build base task JSON
-        let short_id = ctx
-            .stores
-            .tasks
+        let short_id = store
             .compact_id(task_id)
             .unwrap_or_else(|_| task_id.to_string());
-        let mut task_json = task_row_to_compact_json(&ctx.stores.tasks, &task, labels);
+        let mut task_json = task_row_to_compact_json(store, &task, labels);
         if let Some(obj) = task_json.as_object_mut() {
             obj.insert("task_id".into(), json!(short_id));
             obj.insert("parent".into(), parent_json);
@@ -291,7 +320,7 @@ impl TaskGet {
             );
         }
 
-        let uri = SynapseUri::for_task(ctx.brain_name(), &short_id).to_string();
+        let uri = SynapseUri::for_task(brain_name, &short_id).to_string();
         if let Some(obj) = task_json.as_object_mut() {
             obj.insert("uri".into(), json!(uri));
         }
@@ -324,6 +353,11 @@ impl McpTool for TaskGet {
                             "enum": ["parent", "children", "blocked_by", "blocks"]
                         },
                         "description": "Expand relationship stubs to full task objects. Pass as a JSON array, e.g. [\"parent\", \"blocked_by\"]"
+                    },
+                    "brains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional list of brain names or IDs to search. When provided, searches across the specified brains instead of just the current brain."
                     },
                 },
                 "required": ["task_id"]

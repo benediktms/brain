@@ -4,7 +4,6 @@ use std::pin::Pin;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::config::{load_global_config, open_remote_task_store};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
@@ -53,7 +52,7 @@ impl McpTool for BrainsList {
     fn call<'a>(
         &'a self,
         params: Value,
-        _ctx: &'a McpContext,
+        ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
             let include_archived = params
@@ -61,47 +60,42 @@ impl McpTool for BrainsList {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let config = match load_global_config() {
-                Ok(c) => c,
+            let active_only = !include_archived;
+            let rows = match ctx.db().list_brains(active_only) {
+                Ok(r) => r,
                 Err(err) => {
-                    return ToolCallResult::error(format!("Failed to load global config: {err}"));
+                    return ToolCallResult::error(format!("Failed to list brains: {err}"));
                 }
             };
 
-            let mut brains: Vec<BrainInfo> = config
-                .brains
+            let brains: Vec<BrainInfo> = rows
                 .into_iter()
-                .map(|(name, entry)| {
-                    // Try to read the prefix from the brain's SQLite store.
-                    let prefix = open_remote_task_store(&name, &entry)
-                        .ok()
-                        .and_then(|store| store.get_project_prefix().ok());
+                .map(|row| {
+                    let roots: Vec<String> = row
+                        .roots_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default();
+                    let root = roots.first().cloned().unwrap_or_default();
+                    let extra_roots = roots.into_iter().skip(1).collect();
 
-                    let extra_roots: Vec<String> = entry
-                        .roots
-                        .iter()
-                        .skip(1)
-                        .map(|p| p.display().to_string())
-                        .collect();
+                    let aliases: Vec<String> = row
+                        .aliases_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default();
+
                     BrainInfo {
-                        name,
-                        root: entry.primary_root().display().to_string(),
-                        aliases: entry.aliases,
+                        name: row.name,
+                        id: Some(row.brain_id),
+                        root,
+                        aliases,
                         extra_roots,
-                        id: entry.id,
-                        prefix,
-                        archived: entry.archived,
+                        prefix: row.prefix,
+                        archived: row.archived,
                     }
                 })
                 .collect();
-
-            // Filter archived brains unless explicitly requested.
-            if !include_archived {
-                brains.retain(|info| !info.archived);
-            }
-
-            // Sort by name for deterministic output.
-            brains.sort_by(|a, b| a.name.cmp(&b.name));
 
             let count = brains.len();
             json_response(&BrainsListResponse { brains, count })

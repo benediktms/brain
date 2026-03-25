@@ -44,6 +44,9 @@ pub struct BrainEntry {
     /// Alternate names for this brain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// 3-letter task ID prefix (read-only projection from DB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     /// Whether this brain has been archived. Omitted from TOML when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub archived: bool,
@@ -81,6 +84,8 @@ impl<'de> Deserialize<'de> for BrainEntry {
             id: Option<String>,
             #[serde(default, skip_serializing_if = "Vec::is_empty")]
             aliases: Vec<String>,
+            #[serde(default)]
+            prefix: Option<String>,
             // Accept but ignore legacy extra_roots field.
             #[serde(default)]
             extra_roots: Vec<PathBuf>,
@@ -104,6 +109,7 @@ impl<'de> Deserialize<'de> for BrainEntry {
             notes: raw.notes,
             id: raw.id,
             aliases: raw.aliases,
+            prefix: raw.prefix,
             archived: raw.archived.unwrap_or(false),
         })
     }
@@ -124,6 +130,9 @@ pub struct BrainToml {
     /// Stable brain ID (8-char Nano ID).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// 3-letter task ID prefix (read-only projection from DB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +784,7 @@ mod tests {
                 notes: vec![],
                 id: id.map(str::to_string),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -839,6 +849,7 @@ mod tests {
             notes: vec![],
             id: Some("test1234".to_string()),
             aliases: vec![],
+            prefix: None,
             archived: false,
         };
 
@@ -874,6 +885,7 @@ mod tests {
             name: "test-brain".to_string(),
             notes: vec![],
             id: Some("abcd1234".to_string()),
+            prefix: None,
         };
         save_brain_toml(&brain_dir, &toml_cfg).unwrap();
         let loaded = load_brain_toml(&brain_dir).unwrap();
@@ -890,6 +902,7 @@ mod tests {
             name: "test-brain".to_string(),
             notes: vec![],
             id: None,
+            prefix: None,
         };
         save_brain_toml(&brain_dir, &toml_cfg).unwrap();
         let loaded = load_brain_toml(&brain_dir).unwrap();
@@ -934,6 +947,7 @@ mod tests {
                 notes: vec![],
                 id: Some("id000001".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -944,6 +958,7 @@ mod tests {
                 notes: vec![],
                 id: None,
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -992,6 +1007,7 @@ mod tests {
                 notes: vec![],
                 id: Some("testid01".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1025,6 +1041,7 @@ mod tests {
                 notes: vec![],
                 id: Some("abc12345".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1082,6 +1099,7 @@ roots = ["/path1", "/path2"]
             notes: vec![],
             id: None,
             aliases: vec![],
+            prefix: None,
             archived: false,
         };
         assert_eq!(entry.primary_root(), PathBuf::from("/primary").as_path());
@@ -1097,6 +1115,7 @@ roots = ["/path1", "/path2"]
                 notes: vec![],
                 id: None,
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1150,6 +1169,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("abc12345".to_string()),
                 aliases: vec!["gateway".to_string(), "infra-alias".to_string()],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1174,6 +1194,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("aaaaaaaa".to_string()),
                 aliases: vec!["gateway".to_string()],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1184,6 +1205,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("bbbbbbbb".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1228,6 +1250,7 @@ roots = ["/some/path"]
                 notes: vec![],
                 id: Some("abcd1234".to_string()),
                 aliases: vec![],
+                prefix: None,
                 archived: false,
             },
         );
@@ -1297,6 +1320,7 @@ roots = ["/some/path"]
             notes: vec![],
             id: None,
             aliases: vec![],
+            prefix: None,
             archived: true,
         };
         let toml_str = toml::to_string_pretty(&entry).unwrap();
@@ -1326,6 +1350,7 @@ roots = ["/some/path"]
             notes: vec![],
             id: None,
             aliases: vec![],
+            prefix: None,
             archived: false,
         };
         let toml_str = toml::to_string_pretty(&entry).unwrap();

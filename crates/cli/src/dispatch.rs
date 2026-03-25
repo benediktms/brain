@@ -186,7 +186,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             all,
             archived,
         } => {
-            commands::registry::run_list(json, all, archived)?;
+            commands::registry::run_list(&cli.sqlite_db, json, all, archived)?;
         }
         Command::Remove { name, purge } => {
             commands::registry::run_remove(&name, purge)?;
