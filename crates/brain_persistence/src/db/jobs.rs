@@ -1,15 +1,16 @@
 //! Job queue CRUD for async operations (summarization, consolidation, etc.).
 //!
-//! Jobs are direct CRUD (not event-sourced). The dedup index on `(kind, ref_id)`
-//! prevents duplicate active jobs for the same target. The poll index supports
-//! efficient `claim_jobs` queries ordered by priority and schedule time.
+//! Jobs are direct CRUD (not event-sourced). The `kind` column is derived from
+//! the [`JobPayload`] variant discriminant. The poll index supports efficient
+//! claim queries ordered by priority and schedule time.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::Result;
+
+pub use super::job::{Job, JobPayload, JobStatus, RetryStrategy};
 
 /// Priority constants for job scheduling.
 pub mod priority {
@@ -19,98 +20,12 @@ pub mod priority {
     pub const BACKGROUND: i32 = 200;
 }
 
-/// Valid job statuses. Stored as lowercase strings in SQLite.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JobStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Dead,
-}
-
-impl std::fmt::Display for JobStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_ref())
-    }
-}
-
-impl AsRef<str> for JobStatus {
-    fn as_ref(&self) -> &str {
-        match self {
-            JobStatus::Pending => "pending",
-            JobStatus::Running => "running",
-            JobStatus::Completed => "completed",
-            JobStatus::Failed => "failed",
-            JobStatus::Dead => "dead",
-        }
-    }
-}
-
-impl std::str::FromStr for JobStatus {
-    type Err = String;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "pending" => Ok(JobStatus::Pending),
-            "running" => Ok(JobStatus::Running),
-            "completed" => Ok(JobStatus::Completed),
-            "failed" => Ok(JobStatus::Failed),
-            "dead" => Ok(JobStatus::Dead),
-            _ => Err(format!("invalid job status: '{s}'")),
-        }
-    }
-}
-
-/// A row from the `jobs` table.
-#[derive(Debug, Clone)]
-pub struct JobRow {
-    pub job_id: String,
-    pub kind: String,
-    pub status: JobStatus,
-    pub brain_id: String,
-    pub ref_id: Option<String>,
-    pub ref_kind: Option<String>,
-    pub priority: i32,
-    pub payload: String,
-    pub result: Option<String>,
-    pub attempts: i32,
-    pub max_attempts: i32,
-    pub last_error: Option<String>,
-    pub created_at: i64,
-    pub scheduled_at: i64,
-    pub started_at: Option<i64>,
-    pub completed_at: Option<i64>,
-    pub updated_at: i64,
-}
-
-const JOB_COLUMNS: &str = "job_id, kind, status, brain_id, ref_id, ref_kind, priority, \
-     payload, result, attempts, max_attempts, last_error, \
-     created_at, scheduled_at, started_at, completed_at, updated_at";
-
-fn row_to_job(row: &rusqlite::Row) -> rusqlite::Result<JobRow> {
-    let status_str: String = row.get(2)?;
-    let status = status_str.parse().unwrap_or(JobStatus::Pending);
-    Ok(JobRow {
-        job_id: row.get(0)?,
-        kind: row.get(1)?,
-        status,
-        brain_id: row.get(3)?,
-        ref_id: row.get(4)?,
-        ref_kind: row.get(5)?,
-        priority: row.get(6)?,
-        payload: row.get(7)?,
-        result: row.get(8)?,
-        attempts: row.get(9)?,
-        max_attempts: row.get(10)?,
-        last_error: row.get(11)?,
-        created_at: row.get(12)?,
-        scheduled_at: row.get(13)?,
-        started_at: row.get(14)?,
-        completed_at: row.get(15)?,
-        updated_at: row.get(16)?,
-    })
-}
+/// Column list for SELECT/RETURNING queries. 16 columns.
+const JOB_COLUMNS: &str = "\
+    job_id, kind, status, priority, payload, \
+    retry_config, stuck_threshold_secs, \
+    result, attempts, last_error, metadata, \
+    created_at, scheduled_at, started_at, processed_at, updated_at";
 
 fn now_secs() -> i64 {
     SystemTime::now()
@@ -119,99 +34,135 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-/// Parameters for enqueuing a job.
-pub struct EnqueueParams<'a> {
-    pub kind: &'a str,
-    pub brain_id: &'a str,
-    pub ref_id: Option<&'a str>,
-    pub ref_kind: Option<&'a str>,
-    pub priority: i32,
-    pub payload: &'a str,
-    pub max_attempts: i32,
+/// Map a row (selected via `JOB_COLUMNS`) to a [`Job`].
+fn row_to_job(row: &rusqlite::Row) -> rusqlite::Result<Job> {
+    let status_str: String = row.get(2)?;
+    let status: JobStatus = status_str.parse().unwrap_or(JobStatus::Ready);
+
+    let payload_str: String = row.get(4)?;
+    let payload: JobPayload = serde_json::from_str(&payload_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+
+    let retry_config_str: String = row.get(5)?;
+    let retry_config: RetryStrategy =
+        serde_json::from_str(&retry_config_str).unwrap_or_else(|_| RetryStrategy::NoRetry);
+
+    let metadata_str: String = row.get(10)?;
+    let metadata: serde_json::Value =
+        serde_json::from_str(&metadata_str).unwrap_or_else(|_| serde_json::json!({}));
+
+    Ok(Job {
+        job_id: row.get(0)?,
+        payload,
+        status,
+        priority: row.get(3)?,
+        retry_config,
+        stuck_threshold_secs: row.get(6)?,
+        result: row.get(7)?,
+        attempts: row.get::<_, i32>(8)? as u32,
+        last_error: row.get(9)?,
+        metadata,
+        created_at: row.get(11)?,
+        scheduled_at: row.get(12)?,
+        started_at: row.get(13)?,
+        processed_at: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
 }
 
-/// Enqueue a job. If a pending/running job already exists for the same
-/// `(kind, ref_id)`, upgrades its priority to the minimum of old and new.
-/// Returns the job_id (either newly created or existing).
-pub fn enqueue_job(conn: &Connection, p: &EnqueueParams) -> Result<String> {
+// ─── Enqueue ─────────────────────────────────────────────────────
+
+/// Input for enqueueing a job.
+///
+/// `kind` and `retry_config` defaults are derived from the payload variant
+/// unless overridden.
+#[derive(Debug, Clone)]
+pub struct EnqueueJobInput {
+    pub payload: JobPayload,
+    pub priority: i32,
+    /// Override the default retry strategy for this kind. `None` = use payload default.
+    pub retry_config: Option<RetryStrategy>,
+    pub stuck_threshold_secs: Option<i64>,
+    pub metadata: serde_json::Value,
+    /// When to schedule (0 = immediately).
+    pub scheduled_at: i64,
+}
+
+/// Enqueue a job. Returns the new job_id.
+pub fn enqueue_job(conn: &Connection, input: &EnqueueJobInput) -> Result<String> {
     let job_id = ulid::Ulid::new().to_string();
     let now = now_secs();
+    let scheduled_at = if input.scheduled_at == 0 {
+        now
+    } else {
+        input.scheduled_at
+    };
 
-    // ON CONFLICT targets the partial unique index idx_jobs_dedup(kind, ref_id)
-    // WHERE status IN ('pending', 'running'). On collision, upgrade priority
-    // to the minimum (higher urgency wins).
-    let changed = conn.execute(
-        "INSERT INTO jobs (job_id, kind, brain_id, ref_id, ref_kind, priority, payload,
-                           max_attempts, created_at, scheduled_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?9)
-         ON CONFLICT (kind, ref_id) WHERE status IN ('pending', 'running')
-         DO UPDATE SET priority = MIN(jobs.priority, excluded.priority),
-                       updated_at = excluded.updated_at",
+    let kind = input.payload.kind();
+    let retry_config = input
+        .retry_config
+        .clone()
+        .unwrap_or_else(|| input.payload.default_retry_strategy());
+    let stuck_threshold = input
+        .stuck_threshold_secs
+        .unwrap_or_else(|| input.payload.default_stuck_threshold_secs());
+
+    let payload_json = serde_json::to_string(&input.payload)
+        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize payload: {e}")))?;
+    let retry_json = serde_json::to_string(&retry_config).map_err(|e| {
+        crate::error::BrainCoreError::Internal(format!("serialize retry_config: {e}"))
+    })?;
+    let metadata_json = serde_json::to_string(&input.metadata)
+        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize metadata: {e}")))?;
+
+    conn.execute(
+        "INSERT INTO jobs (job_id, kind, status, priority, payload,
+                            retry_config, stuck_threshold_secs,
+                            attempts, metadata, created_at, scheduled_at, updated_at)
+         VALUES (?1, ?2, 'ready', ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10)",
         params![
             job_id,
-            p.kind,
-            p.brain_id,
-            p.ref_id,
-            p.ref_kind,
-            p.priority,
-            p.payload,
-            p.max_attempts,
-            now
+            kind,
+            input.priority,
+            payload_json,
+            retry_json,
+            stuck_threshold,
+            metadata_json,
+            now,
+            scheduled_at,
+            now,
         ],
     )?;
-
-    if changed == 1 {
-        // Check if this was an insert or an update by seeing if our job_id exists
-        let exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM jobs WHERE job_id = ?1)",
-            [&job_id],
-            |row| row.get(0),
-        )?;
-        if exists {
-            return Ok(job_id);
-        }
-    }
-
-    // If we hit ON CONFLICT, the existing job was updated. Find its ID.
-    if let Some(existing_id) = conn
-        .query_row(
-            "SELECT job_id FROM jobs WHERE kind = ?1 AND ref_id = ?2 AND status IN ('pending', 'running')",
-            params![p.kind, p.ref_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-    {
-        return Ok(existing_id);
-    }
 
     Ok(job_id)
 }
 
-/// Atomically claim up to `limit` pending jobs of the given `kind`.
-/// Sets status to 'running', increments attempts, records started_at.
-pub fn claim_jobs(conn: &Connection, kind: &str, limit: i32) -> Result<Vec<JobRow>> {
+// ─── Claim / advance ─────────────────────────────────────────────
+
+/// Atomically claim up to `limit` ready jobs.
+/// Sets status to 'pending', increments attempts, records started_at.
+/// Returns jobs sorted by priority then scheduled_at.
+pub fn claim_ready_jobs(conn: &Connection, limit: i32) -> Result<Vec<Job>> {
     let now = now_secs();
 
-    // Two-step claim: SELECT candidates, then UPDATE. The RETURNING clause
-    // doesn't preserve subquery ordering, so we sort after.
     let mut stmt = conn.prepare(&format!(
-        "UPDATE jobs SET status = 'running',
-                         started_at = ?1,
-                         attempts = attempts + 1,
-                         updated_at = ?1
+        "UPDATE jobs SET status = 'pending',
+                          started_at = ?1,
+                          attempts = attempts + 1,
+                          updated_at = ?1
          WHERE job_id IN (
              SELECT job_id FROM jobs
-             WHERE status = 'pending'
+             WHERE status = 'ready'
                AND scheduled_at <= ?1
-               AND kind = ?2
              ORDER BY priority ASC, scheduled_at ASC
-             LIMIT ?3
+             LIMIT ?2
          )
          RETURNING {JOB_COLUMNS}"
     ))?;
 
-    let mut jobs: Vec<JobRow> = stmt
-        .query_map(params![now, kind, limit], row_to_job)?
+    let mut jobs: Vec<Job> = stmt
+        .query_map(params![now, limit], row_to_job)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     jobs.sort_by(|a, b| {
@@ -223,120 +174,150 @@ pub fn claim_jobs(conn: &Connection, kind: &str, limit: i32) -> Result<Vec<JobRo
     Ok(jobs)
 }
 
-/// Mark a job as completed with an optional result payload.
+/// Advance a job from `pending` to `in_progress` just before dispatch.
+pub fn advance_to_in_progress(conn: &Connection, job_id: &str) -> Result<()> {
+    let now = now_secs();
+    conn.execute(
+        "UPDATE jobs SET status = 'in_progress', updated_at = ?1
+         WHERE job_id = ?2 AND status = 'pending'",
+        params![now, job_id],
+    )?;
+    Ok(())
+}
+
+// ─── Complete / fail ─────────────────────────────────────────────
+
+/// Mark a job as done with an optional result. Sets processed_at.
 pub fn complete_job(conn: &Connection, job_id: &str, result: Option<&str>) -> Result<()> {
     let now = now_secs();
     conn.execute(
-        "UPDATE jobs SET status = 'completed', result = ?1, completed_at = ?2, updated_at = ?2
+        "UPDATE jobs SET status = 'done', result = ?1, processed_at = ?2, updated_at = ?2
          WHERE job_id = ?3",
         params![result, now, job_id],
     )?;
     Ok(())
 }
 
-/// Handle a job failure. If retries remain, reschedule with exponential backoff.
-/// If max attempts reached, mark as failed.
+/// Handle a job failure. If retries remain, reschedule to `ready` with
+/// exponential backoff. If exhausted, mark as `failed` and set processed_at.
 pub fn fail_job(conn: &Connection, job_id: &str, error_msg: &str) -> Result<()> {
     let now = now_secs();
 
-    let (attempts, max_attempts): (i32, i32) = conn.query_row(
-        "SELECT attempts, max_attempts FROM jobs WHERE job_id = ?1",
+    let (attempts, retry_config_str): (i32, String) = conn.query_row(
+        "SELECT attempts, retry_config FROM jobs WHERE job_id = ?1",
         [job_id],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
 
-    if attempts < max_attempts {
-        // Exponential backoff: min(30 * 2^(attempts-1), 3600) seconds
-        let backoff = std::cmp::min(30_i64 * (1_i64 << (attempts - 1).min(6)), 3600);
+    let retry_config: RetryStrategy =
+        serde_json::from_str(&retry_config_str).unwrap_or(RetryStrategy::NoRetry);
+
+    if retry_config.is_exhausted(attempts as u32) {
+        // Terminal failure.
+        conn.execute(
+            "UPDATE jobs SET status = 'failed', last_error = ?1, processed_at = ?2, updated_at = ?2
+             WHERE job_id = ?3",
+            params![error_msg, now, job_id],
+        )?;
+    } else {
+        // Reschedule with exponential backoff: 30s, 60s, 120s, ... capped at 1h.
+        let backoff = std::cmp::min(
+            30_i64 * (1_i64 << (attempts - 1).max(0).min(6) as u32),
+            3600,
+        );
         let next_scheduled = now + backoff;
 
         conn.execute(
-            "UPDATE jobs SET status = 'pending',
-                             last_error = ?1,
-                             scheduled_at = ?2,
-                             started_at = NULL,
-                             updated_at = ?3
+            "UPDATE jobs SET status = 'ready',
+                              last_error = ?1,
+                              scheduled_at = ?2,
+                              started_at = NULL,
+                              updated_at = ?3
              WHERE job_id = ?4",
             params![error_msg, next_scheduled, now, job_id],
-        )?;
-    } else {
-        conn.execute(
-            "UPDATE jobs SET status = 'failed',
-                             last_error = ?1,
-                             completed_at = ?2,
-                             updated_at = ?2
-             WHERE job_id = ?3",
-            params![error_msg, now, job_id],
         )?;
     }
 
     Ok(())
 }
 
-/// Reap stuck jobs: reset running jobs older than `threshold_secs` back to pending.
-/// Returns the number of reaped jobs.
-pub fn reap_stuck_jobs(conn: &Connection, threshold_secs: i64) -> Result<usize> {
-    let cutoff = now_secs() - threshold_secs;
-    let count = conn.execute(
-        "UPDATE jobs SET status = 'pending',
-                         started_at = NULL,
-                         updated_at = ?1
-         WHERE status = 'running' AND started_at < ?2",
-        params![now_secs(), cutoff],
+// ─── Maintenance ─────────────────────────────────────────────────
+
+/// Reap stuck jobs: reset in_progress/pending jobs that exceeded their
+/// `stuck_threshold_secs` back to `ready`. Only reaps retryable jobs.
+pub fn reap_stuck_jobs(conn: &Connection) -> Result<usize> {
+    let now = now_secs();
+
+    let r1 = conn.execute(
+        "UPDATE jobs SET status = 'ready',
+                          started_at = NULL,
+                          updated_at = ?1
+         WHERE status = 'in_progress'
+           AND processed_at IS NULL
+           AND started_at < ?1 - stuck_threshold_secs
+           AND retry_config != '{\"type\":\"noRetry\"}'",
+        params![now],
     )?;
-    Ok(count)
+
+    let r2 = conn.execute(
+        "UPDATE jobs SET status = 'ready',
+                          updated_at = ?1
+         WHERE status = 'pending'
+           AND started_at IS NULL
+           AND updated_at < ?1 - stuck_threshold_secs
+           AND retry_config != '{\"type\":\"noRetry\"}'",
+        params![now],
+    )?;
+
+    Ok(r1 + r2)
 }
 
-/// Delete completed, failed, and dead jobs older than `age_secs`.
-/// Returns the number of deleted jobs.
+/// Delete old completed jobs older than `age_secs`.
 pub fn gc_completed_jobs(conn: &Connection, age_secs: i64) -> Result<usize> {
     let cutoff = now_secs() - age_secs;
     let count = conn.execute(
-        "DELETE FROM jobs WHERE status IN ('completed', 'failed', 'dead') AND completed_at < ?1",
+        "DELETE FROM jobs WHERE status = 'done' AND processed_at < ?1",
         [cutoff],
     )?;
     Ok(count)
 }
 
+// ─── Queries ─────────────────────────────────────────────────────
+
 /// Get a single job by ID.
-pub fn get_job(conn: &Connection, job_id: &str) -> Result<Option<JobRow>> {
-    let row = conn
+pub fn get_job(conn: &Connection, job_id: &str) -> Result<Option<Job>> {
+    let job = conn
         .query_row(
             &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE job_id = ?1"),
             [job_id],
             row_to_job,
         )
         .optional()?;
-    Ok(row)
+    Ok(job)
 }
 
-/// List jobs with optional filters. Returns up to `limit` rows.
+/// List jobs with optional status filter.
 pub fn list_jobs(
     conn: &Connection,
     status_filter: Option<&JobStatus>,
-    brain_id_filter: Option<&str>,
     limit: i32,
-) -> Result<Vec<JobRow>> {
+) -> Result<Vec<Job>> {
     let mut sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE 1=1");
-    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
     if let Some(status) = status_filter {
-        param_values.push(Box::new(status.to_string()));
-        sql.push_str(&format!(" AND status = ?{}", param_values.len()));
-    }
-    if let Some(brain_id) = brain_id_filter {
-        param_values.push(Box::new(brain_id.to_string()));
-        sql.push_str(&format!(" AND brain_id = ?{}", param_values.len()));
+        params_vec.push(Box::new(status.as_ref().to_string()));
+        sql.push_str(&format!(" AND status = ?{}", params_vec.len()));
     }
 
-    param_values.push(Box::new(limit));
+    params_vec.push(Box::new(limit));
     sql.push_str(&format!(
         " ORDER BY priority ASC, scheduled_at ASC LIMIT ?{}",
-        param_values.len()
+        params_vec.len()
     ));
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|p| p.as_ref()).collect();
+        params_vec.iter().map(|p| p.as_ref()).collect();
     let mut stmt = conn.prepare(&sql)?;
     let jobs = stmt
         .query_map(param_refs.as_slice(), row_to_job)?
@@ -344,6 +325,8 @@ pub fn list_jobs(
 
     Ok(jobs)
 }
+
+// ─── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -355,87 +338,73 @@ mod tests {
             "PRAGMA foreign_keys = OFF;
 
              CREATE TABLE jobs (
-                 job_id        TEXT PRIMARY KEY,
-                 kind          TEXT NOT NULL,
-                 status        TEXT NOT NULL DEFAULT 'pending'
-                               CHECK (status IN ('pending', 'running', 'completed', 'failed', 'dead')),
-                 brain_id      TEXT NOT NULL DEFAULT '',
-                 ref_id        TEXT,
-                 ref_kind      TEXT,
-                 priority      INTEGER NOT NULL DEFAULT 100,
-                 payload       TEXT NOT NULL DEFAULT '{}',
-                 result        TEXT,
-                 attempts      INTEGER NOT NULL DEFAULT 0,
-                 max_attempts  INTEGER NOT NULL DEFAULT 3,
-                 last_error    TEXT,
-                 created_at    INTEGER NOT NULL,
-                 scheduled_at  INTEGER NOT NULL,
-                 started_at    INTEGER,
-                 completed_at  INTEGER,
-                 updated_at    INTEGER NOT NULL
+                 job_id              TEXT PRIMARY KEY,
+                 kind                TEXT NOT NULL,
+                 status              TEXT NOT NULL DEFAULT 'ready'
+                                     CHECK (status IN ('ready', 'pending', 'in_progress', 'done', 'failed')),
+                 priority            INTEGER NOT NULL DEFAULT 100,
+                 payload             TEXT NOT NULL DEFAULT '{}',
+                 retry_config        TEXT NOT NULL DEFAULT '{\"type\":\"noRetry\"}',
+                 stuck_threshold_secs INTEGER NOT NULL DEFAULT 300,
+                 result              TEXT,
+                 attempts            INTEGER NOT NULL DEFAULT 0,
+                 last_error          TEXT,
+                 metadata            TEXT NOT NULL DEFAULT '{}',
+                 created_at          INTEGER NOT NULL,
+                 scheduled_at        INTEGER NOT NULL,
+                 started_at          INTEGER,
+                 processed_at        INTEGER,
+                 updated_at          INTEGER NOT NULL
              );
 
              CREATE INDEX idx_jobs_poll ON jobs(status, priority, scheduled_at);
-             CREATE INDEX idx_jobs_brain_status ON jobs(brain_id, status);
-             CREATE UNIQUE INDEX idx_jobs_dedup ON jobs(kind, ref_id)
-                 WHERE status IN ('pending', 'running');",
+             CREATE INDEX idx_jobs_kind ON jobs(kind, status);",
         )
         .unwrap();
         conn
     }
 
-    fn enq(conn: &Connection, kind: &str, ref_id: Option<&str>, prio: i32, max: i32) -> String {
-        enqueue_job(
-            conn,
-            &EnqueueParams {
-                kind,
-                brain_id: "",
-                ref_id,
-                ref_kind: None,
-                priority: prio,
-                payload: "{}",
-                max_attempts: max,
-            },
-        )
-        .unwrap()
+    fn make_payload() -> JobPayload {
+        JobPayload::SummarizeScope {
+            scope_type: "directory".into(),
+            scope_value: "src/".into(),
+            content: "fn main() {}".into(),
+        }
+    }
+
+    fn enq(conn: &Connection, payload: JobPayload, prio: i32) -> String {
+        let input = EnqueueJobInput {
+            payload,
+            priority: prio,
+            retry_config: None,
+            stuck_threshold_secs: None,
+            metadata: serde_json::json!({}),
+            scheduled_at: 0,
+        };
+        enqueue_job(conn, &input).unwrap()
     }
 
     #[test]
-    fn test_enqueue_creates_pending_job() {
+    fn test_enqueue_creates_ready_job() {
         let conn = setup_db();
-        let job_id = enqueue_job(
-            &conn,
-            &EnqueueParams {
-                kind: "summarize_scope",
-                brain_id: "brain-1",
-                ref_id: Some("scope-1"),
-                ref_kind: Some("scope"),
-                priority: priority::NORMAL,
-                payload: "{}",
-                max_attempts: 3,
-            },
-        )
-        .unwrap();
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
-        assert_eq!(job.status, JobStatus::Pending);
-        assert_eq!(job.kind, "summarize_scope");
-        assert_eq!(job.brain_id, "brain-1");
-        assert_eq!(job.ref_id.as_deref(), Some("scope-1"));
-        assert_eq!(job.priority, priority::NORMAL);
+        assert_eq!(job.status, JobStatus::Ready);
+        assert_eq!(job.kind(), "summarize_scope");
         assert_eq!(job.attempts, 0);
-        assert_eq!(job.max_attempts, 3);
+        assert_eq!(job.retry_config, RetryStrategy::Fixed { attempts: 3 });
     }
 
     #[test]
-    fn test_claim_returns_job_and_sets_running() {
+    fn test_claim_returns_job_and_sets_pending() {
         let conn = setup_db();
-        let job_id = enq(&conn, "test_kind", Some("ref-1"), priority::NORMAL, 3);
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
 
-        let claimed = claim_jobs(&conn, "test_kind", 10).unwrap();
+        let claimed = claim_ready_jobs(&conn, 10).unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].job_id, job_id);
-        assert_eq!(claimed[0].status, JobStatus::Running);
+        assert_eq!(claimed[0].status, JobStatus::Pending);
         assert_eq!(claimed[0].attempts, 1);
         assert!(claimed[0].started_at.is_some());
     }
@@ -444,18 +413,30 @@ mod tests {
     fn test_claim_respects_priority_ordering() {
         let conn = setup_db();
         let now = now_secs();
+        let payload_low = serde_json::to_string(&JobPayload::SummarizeScope {
+            scope_type: "directory".into(),
+            scope_value: "low/".into(),
+            content: "".into(),
+        })
+        .unwrap();
+        let payload_high = serde_json::to_string(&JobPayload::SummarizeScope {
+            scope_type: "directory".into(),
+            scope_value: "high/".into(),
+            content: "".into(),
+        })
+        .unwrap();
         conn.execute(
-            "INSERT INTO jobs (job_id, kind, status, priority, ref_id, created_at, scheduled_at, updated_at)
-             VALUES ('J-LOW', 'test', 'pending', 200, 'r1', ?1, ?1, ?1)",
-            [now],
+            "INSERT INTO jobs (job_id, kind, status, priority, payload, retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J-LOW', 'summarize_scope', 'ready', 200, ?1, '{\"type\":\"fixed\",\"attempts\":3}', '{}', ?2, ?2, ?2)",
+            params![payload_low, now],
         ).unwrap();
         conn.execute(
-            "INSERT INTO jobs (job_id, kind, status, priority, ref_id, created_at, scheduled_at, updated_at)
-             VALUES ('J-HIGH', 'test', 'pending', 0, 'r2', ?1, ?1, ?1)",
-            [now],
+            "INSERT INTO jobs (job_id, kind, status, priority, payload, retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J-HIGH', 'summarize_scope', 'ready', 0, ?1, '{\"type\":\"fixed\",\"attempts\":3}', '{}', ?2, ?2, ?2)",
+            params![payload_high, now],
         ).unwrap();
 
-        let claimed = claim_jobs(&conn, "test", 10).unwrap();
+        let claimed = claim_ready_jobs(&conn, 10).unwrap();
         assert_eq!(claimed.len(), 2);
         assert_eq!(claimed[0].job_id, "J-HIGH");
         assert_eq!(claimed[1].job_id, "J-LOW");
@@ -465,92 +446,169 @@ mod tests {
     fn test_claim_skips_future_scheduled() {
         let conn = setup_db();
         let now = now_secs();
+        let payload = serde_json::to_string(&make_payload()).unwrap();
         conn.execute(
-            "INSERT INTO jobs (job_id, kind, status, priority, created_at, scheduled_at, updated_at)
-             VALUES ('J-FUTURE', 'test', 'pending', 100, ?1, ?2, ?1)",
-            params![now, now + 3600],
+            "INSERT INTO jobs (job_id, kind, status, priority, payload, retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J-FUTURE', 'summarize_scope', 'ready', 100, ?1, '{\"type\":\"fixed\",\"attempts\":3}', '{}', ?2, ?3, ?2)",
+            params![payload, now, now + 3600],
         ).unwrap();
 
-        let claimed = claim_jobs(&conn, "test", 10).unwrap();
+        let claimed = claim_ready_jobs(&conn, 10).unwrap();
         assert!(claimed.is_empty());
     }
 
     #[test]
-    fn test_complete_sets_status() {
+    fn test_advance_to_in_progress() {
         let conn = setup_db();
-        let job_id = enq(&conn, "test", Some("r1"), 100, 3);
-        claim_jobs(&conn, "test", 1).unwrap();
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
+        claim_ready_jobs(&conn, 1).unwrap();
 
-        complete_job(&conn, &job_id, Some("{\"summary\":\"done\"}")).unwrap();
+        advance_to_in_progress(&conn, &job_id).unwrap();
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
-        assert_eq!(job.status, JobStatus::Completed);
-        assert_eq!(job.result.as_deref(), Some("{\"summary\":\"done\"}"));
-        assert!(job.completed_at.is_some());
+        assert_eq!(job.status, JobStatus::InProgress);
     }
 
     #[test]
-    fn test_fail_with_retries_reschedules() {
+    fn test_complete_sets_done_and_processed_at() {
         let conn = setup_db();
-        let job_id = enq(&conn, "test", Some("r1"), 100, 3);
-        claim_jobs(&conn, "test", 1).unwrap();
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
+        claim_ready_jobs(&conn, 1).unwrap();
+        advance_to_in_progress(&conn, &job_id).unwrap();
 
-        let before = now_secs();
-        fail_job(&conn, &job_id, "timeout").unwrap();
+        complete_job(&conn, &job_id, Some(r#"{"summary":"done"}"#)).unwrap();
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
-        assert_eq!(job.status, JobStatus::Pending);
+        assert_eq!(job.status, JobStatus::Done);
+        assert_eq!(job.result.as_deref(), Some(r#"{"summary":"done"}"#));
+        assert!(job.processed_at.is_some());
+    }
+
+    #[test]
+    fn test_fail_with_retries_reschedules_to_ready() {
+        let conn = setup_db();
+        let payload = serde_json::to_string(&make_payload()).unwrap();
+        conn.execute(
+            "INSERT INTO jobs (job_id, kind, status, priority, payload, attempts,
+                               retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J1', 'summarize_scope', 'pending', 100, ?1, 1,
+                     '{\"type\":\"fixed\",\"attempts\":3}', '{}', 1000, 1000, 1000)",
+            [&payload],
+        )
+        .unwrap();
+
+        fail_job(&conn, "J1", "timeout").unwrap();
+
+        let job = get_job(&conn, "J1").unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Ready, "should reschedule to ready");
         assert_eq!(job.last_error.as_deref(), Some("timeout"));
         assert!(job.started_at.is_none());
-        assert!(job.scheduled_at >= before + 30);
+        assert!(job.scheduled_at > now_secs() - 5);
     }
 
     #[test]
     fn test_fail_exhausted_retries_marks_failed() {
         let conn = setup_db();
-        let job_id = enq(&conn, "test", Some("r1"), 100, 1);
-        claim_jobs(&conn, "test", 1).unwrap();
+        let payload = serde_json::to_string(&make_payload()).unwrap();
+        conn.execute(
+            "INSERT INTO jobs (job_id, kind, status, priority, payload, attempts,
+                               retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J1', 'summarize_scope', 'pending', 100, ?1, 3,
+                     '{\"type\":\"fixed\",\"attempts\":3}', '{}', 1000, 1000, 1000)",
+            [&payload],
+        )
+        .unwrap();
 
-        fail_job(&conn, &job_id, "fatal error").unwrap();
+        fail_job(&conn, "J1", "fatal error").unwrap();
 
-        let job = get_job(&conn, &job_id).unwrap().unwrap();
+        let job = get_job(&conn, "J1").unwrap().unwrap();
         assert_eq!(job.status, JobStatus::Failed);
-        assert_eq!(job.last_error.as_deref(), Some("fatal error"));
-        assert!(job.completed_at.is_some());
+        assert!(job.processed_at.is_some());
     }
 
     #[test]
-    fn test_dedup_upgrades_priority() {
+    fn test_fail_no_retry_marks_failed_immediately() {
         let conn = setup_db();
-        let id1 = enq(&conn, "test", Some("ref-1"), priority::BACKGROUND, 3);
-        let id2 = enq(&conn, "test", Some("ref-1"), priority::CRITICAL, 3);
+        let payload = serde_json::to_string(&make_payload()).unwrap();
+        conn.execute(
+            "INSERT INTO jobs (job_id, kind, status, priority, payload, attempts,
+                               retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J1', 'summarize_scope', 'pending', 100, ?1, 1,
+                     '{\"type\":\"noRetry\"}', '{}', 1000, 1000, 1000)",
+            [&payload],
+        )
+        .unwrap();
 
-        assert_eq!(id1, id2);
-        let job = get_job(&conn, &id1).unwrap().unwrap();
-        assert_eq!(job.priority, priority::CRITICAL);
+        fail_job(&conn, "J1", "no retry").unwrap();
 
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 1);
+        let job = get_job(&conn, "J1").unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Failed);
     }
 
     #[test]
-    fn test_reap_stuck_jobs() {
+    fn test_fail_infinite_always_reschedules() {
+        let conn = setup_db();
+        let payload = serde_json::to_string(&make_payload()).unwrap();
+        conn.execute(
+            "INSERT INTO jobs (job_id, kind, status, priority, payload, attempts,
+                               retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J1', 'summarize_scope', 'pending', 100, ?1, 999,
+                     '{\"type\":\"infinite\"}', '{}', 1000, 1000, 1000)",
+            [&payload],
+        )
+        .unwrap();
+
+        fail_job(&conn, "J1", "transient error").unwrap();
+
+        let job = get_job(&conn, "J1").unwrap().unwrap();
+        assert_eq!(
+            job.status,
+            JobStatus::Ready,
+            "Infinite should always reschedule"
+        );
+    }
+
+    #[test]
+    fn test_reap_stuck_in_progress() {
         let conn = setup_db();
         let old = now_secs() - 600;
+        let payload = serde_json::to_string(&make_payload()).unwrap();
         conn.execute(
-            "INSERT INTO jobs (job_id, kind, status, started_at, created_at, scheduled_at, updated_at)
-             VALUES ('J-STUCK', 'test', 'running', ?1, ?1, ?1, ?1)",
-            [old],
-        ).unwrap();
+            "INSERT INTO jobs (job_id, kind, status, started_at, priority, payload, attempts,
+                               retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J-STUCK', 'summarize_scope', 'in_progress', ?1, 100, ?2, 1,
+                     '{\"type\":\"fixed\",\"attempts\":3}', '{}', ?1, ?1, ?1)",
+            params![old, payload],
+        )
+        .unwrap();
 
-        let reaped = reap_stuck_jobs(&conn, 300).unwrap();
+        let reaped = reap_stuck_jobs(&conn).unwrap();
         assert_eq!(reaped, 1);
 
         let job = get_job(&conn, "J-STUCK").unwrap().unwrap();
-        assert_eq!(job.status, JobStatus::Pending);
+        assert_eq!(job.status, JobStatus::Ready);
         assert!(job.started_at.is_none());
+    }
+
+    #[test]
+    fn test_reap_skips_no_retry_jobs() {
+        let conn = setup_db();
+        let old = now_secs() - 600;
+        let payload = serde_json::to_string(&make_payload()).unwrap();
+        conn.execute(
+            "INSERT INTO jobs (job_id, kind, status, started_at, priority, payload, attempts,
+                               retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J-NORETRY', 'summarize_scope', 'in_progress', ?1, 100, ?2, 1,
+                     '{\"type\":\"noRetry\"}', '{}', ?1, ?1, ?1)",
+            params![old, payload],
+        )
+        .unwrap();
+
+        let reaped = reap_stuck_jobs(&conn).unwrap();
+        assert_eq!(reaped, 0);
+
+        let job = get_job(&conn, "J-NORETRY").unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::InProgress);
     }
 
     #[test]
@@ -558,16 +616,24 @@ mod tests {
         let conn = setup_db();
         let now = now_secs();
         let old = now - 86400 * 2;
+        let payload = serde_json::to_string(&make_payload()).unwrap();
+
         conn.execute(
-            "INSERT INTO jobs (job_id, kind, status, completed_at, created_at, scheduled_at, updated_at)
-             VALUES ('J-OLD', 'test', 'completed', ?1, ?1, ?1, ?1)",
-            [old],
-        ).unwrap();
+            "INSERT INTO jobs (job_id, kind, status, processed_at, priority, payload, attempts,
+                               retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J-OLD', 'summarize_scope', 'done', ?1, 100, ?2, 1,
+                     '{\"type\":\"fixed\",\"attempts\":3}', '{}', ?1, ?1, ?1)",
+            params![old, payload],
+        )
+        .unwrap();
         conn.execute(
-            "INSERT INTO jobs (job_id, kind, status, completed_at, created_at, scheduled_at, updated_at)
-             VALUES ('J-RECENT', 'test', 'completed', ?1, ?1, ?1, ?1)",
-            [now],
-        ).unwrap();
+            "INSERT INTO jobs (job_id, kind, status, processed_at, priority, payload, attempts,
+                               retry_config, metadata, created_at, scheduled_at, updated_at)
+             VALUES ('J-RECENT', 'summarize_scope', 'done', ?1, 100, ?2, 1,
+                     '{\"type\":\"fixed\",\"attempts\":3}', '{}', ?1, ?1, ?1)",
+            params![now, payload],
+        )
+        .unwrap();
 
         let deleted = gc_completed_jobs(&conn, 86400).unwrap();
         assert_eq!(deleted, 1);
@@ -576,72 +642,50 @@ mod tests {
     }
 
     #[test]
-    fn test_list_jobs_with_filters() {
+    fn test_list_jobs_with_status_filter() {
         let conn = setup_db();
-        enqueue_job(
+        enq(&conn, make_payload(), priority::NORMAL);
+        let id2 = enq(
             &conn,
-            &EnqueueParams {
-                kind: "kind_a",
-                brain_id: "brain-1",
-                ref_id: Some("r1"),
-                ref_kind: None,
-                priority: 100,
-                payload: "{}",
-                max_attempts: 3,
+            JobPayload::ConsolidateCluster {
+                episodes: "ep1".into(),
             },
-        )
-        .unwrap();
-        enqueue_job(
-            &conn,
-            &EnqueueParams {
-                kind: "kind_b",
-                brain_id: "brain-2",
-                ref_id: Some("r2"),
-                ref_kind: None,
-                priority: 100,
-                payload: "{}",
-                max_attempts: 3,
-            },
-        )
-        .unwrap();
+            priority::NORMAL,
+        );
 
-        let all = list_jobs(&conn, None, None, 50).unwrap();
+        conn.execute("UPDATE jobs SET status = 'done' WHERE job_id = ?1", [&id2])
+            .unwrap();
+
+        let all = list_jobs(&conn, None, 50).unwrap();
         assert_eq!(all.len(), 2);
 
-        let b1 = list_jobs(&conn, None, Some("brain-1"), 50).unwrap();
-        assert_eq!(b1.len(), 1);
-        assert_eq!(b1[0].brain_id, "brain-1");
-
-        let pending = list_jobs(&conn, Some(&JobStatus::Pending), None, 50).unwrap();
-        assert_eq!(pending.len(), 2);
-
-        let running = list_jobs(&conn, Some(&JobStatus::Running), None, 50).unwrap();
-        assert!(running.is_empty());
+        let done = list_jobs(&conn, Some(&JobStatus::Done), 50).unwrap();
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].kind(), "consolidate_cluster");
     }
 
     #[test]
-    fn test_null_ref_id_does_not_dedup() {
+    fn test_payload_roundtrip_through_db() {
         let conn = setup_db();
+        let payload = JobPayload::SummarizeScope {
+            scope_type: "tag".into(),
+            scope_value: "rust".into(),
+            content: "fn hello() {}".into(),
+        };
+        let job_id = enq(&conn, payload, priority::NORMAL);
 
-        // Two jobs with ref_id=None — dedup does NOT apply (SQLite NULL uniqueness)
-        let id1 = enq(&conn, "test", None, 100, 3);
-        let id2 = enq(&conn, "test", None, 100, 3);
-
-        assert_ne!(id1, id2);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 2, "NULL ref_id should not trigger dedup");
-    }
-
-    #[test]
-    fn test_list_jobs_respects_limit() {
-        let conn = setup_db();
-        enq(&conn, "a", Some("r1"), 100, 3);
-        enq(&conn, "b", Some("r2"), 100, 3);
-        enq(&conn, "c", Some("r3"), 100, 3);
-
-        let limited = list_jobs(&conn, None, None, 1).unwrap();
-        assert_eq!(limited.len(), 1);
+        let job = get_job(&conn, &job_id).unwrap().unwrap();
+        match &job.payload {
+            JobPayload::SummarizeScope {
+                scope_type,
+                scope_value,
+                content,
+            } => {
+                assert_eq!(scope_type, "tag");
+                assert_eq!(scope_value, "rust");
+                assert_eq!(content, "fn hello() {}");
+            }
+            _ => panic!("unexpected payload variant"),
+        }
     }
 }

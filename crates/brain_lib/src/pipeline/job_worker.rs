@@ -1,33 +1,29 @@
-//! Job worker: claims pending jobs from the queue and processes them via an LLM provider.
+//! Job worker: claims pending jobs from the queue and dispatches to handlers
+//! based on the typed [`JobPayload`] variant.
 
 use tracing::{debug, info, warn};
 
+use crate::db::jobs::{self, EnqueueJobInput, JobPayload};
 use crate::db::Db;
-use crate::db::jobs::{self, EnqueueParams};
 use crate::summarizer::Summarize;
 
-/// Prompt template for scope summarization.
 const SUMMARIZE_SCOPE_PROMPT: &str = "\
 Summarize the following content concisely in 2-3 sentences. \
 Be factual and direct. No markdown formatting.\n\nContent:\n";
 
-/// Prompt template for cluster consolidation.
 const CONSOLIDATE_CLUSTER_PROMPT: &str = "\
 Synthesize these episodes into a single concise reflection. \
 Include key decisions, outcomes, and lessons learned. \
 No markdown formatting.\n\nEpisodes:\n";
 
-/// Process pending summarization jobs.
-///
-/// Claims up to `limit` jobs from the queue, sends each to the summarizer,
-/// and marks them as completed or failed. Returns the number of successfully
-/// processed jobs.
+/// Process pending jobs. Claims up to `limit` ready jobs, dispatches each
+/// to the appropriate handler based on its payload variant, and marks them
+/// as completed or failed. Returns the number of successfully processed jobs.
 pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> usize {
-    let claimed = match db.with_write_conn(|conn| jobs::claim_jobs(conn, "summarize_scope", limit))
-    {
+    let claimed = match db.with_write_conn(|conn| jobs::claim_ready_jobs(conn, limit)) {
         Ok(jobs) => jobs,
         Err(e) => {
-            warn!(error = %e, "failed to claim summarization jobs");
+            warn!(error = %e, "failed to claim ready jobs");
             return 0;
         }
     };
@@ -36,12 +32,12 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
         return 0;
     }
 
-    debug!(count = claimed.len(), "claimed summarization jobs");
+    debug!(count = claimed.len(), "claimed ready jobs");
 
     let mut success_count = 0;
 
     for job in &claimed {
-        let prompt = build_prompt(&job.kind, &job.payload);
+        let prompt = build_prompt(&job.payload);
 
         match summarizer.summarize(&prompt).await {
             Ok(result) => {
@@ -51,7 +47,7 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
                     warn!(job_id = %job.job_id, error = %e, "failed to mark job as completed");
                 } else {
                     success_count += 1;
-                    debug!(job_id = %job.job_id, kind = %job.kind, "job completed");
+                    debug!(job_id = %job.job_id, kind = %job.kind(), "job completed");
                 }
             }
             Err(e) => {
@@ -66,7 +62,7 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
                         "failed to record job failure"
                     );
                 } else {
-                    warn!(job_id = %job.job_id, error = %error_msg, "job failed — will retry if attempts remain");
+                    warn!(job_id = %job.job_id, error = %error_msg, "job failed");
                 }
             }
         }
@@ -76,54 +72,51 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
         info!(
             processed = success_count,
             total_claimed = claimed.len(),
-            "summarization jobs processed"
+            "jobs processed"
         );
     }
 
     success_count
 }
 
-/// Build the prompt for a given job kind and payload.
-fn build_prompt(kind: &str, payload: &str) -> String {
-    // Extract content from JSON payload, falling back to raw payload
-    let content = serde_json::from_str::<serde_json::Value>(payload)
-        .ok()
-        .and_then(|v| v.get("content").and_then(|c| c.as_str()).map(String::from))
-        .unwrap_or_else(|| payload.to_string());
-
-    match kind {
-        "consolidate_cluster" => format!("{CONSOLIDATE_CLUSTER_PROMPT}{content}"),
-        _ => format!("{SUMMARIZE_SCOPE_PROMPT}{content}"),
+/// Build the LLM prompt from the typed payload.
+fn build_prompt(payload: &JobPayload) -> String {
+    match payload {
+        JobPayload::SummarizeScope { content, .. } => {
+            format!("{SUMMARIZE_SCOPE_PROMPT}{content}")
+        }
+        JobPayload::ConsolidateCluster { episodes } => {
+            format!("{CONSOLIDATE_CLUSTER_PROMPT}{episodes}")
+        }
     }
 }
 
-/// Enqueue a summarization job for a scope.
+/// Enqueue a scope summarization job.
 pub fn enqueue_scope_summary(
     db: &Db,
-    brain_id: &str,
-    scope_key: &str,
+    scope_type: &str,
+    scope_value: &str,
     content: &str,
 ) -> crate::error::Result<String> {
-    let payload = serde_json::json!({ "content": content }).to_string();
-    db.with_write_conn(|conn| {
-        jobs::enqueue_job(
-            conn,
-            &EnqueueParams {
-                kind: "summarize_scope",
-                brain_id,
-                ref_id: Some(scope_key),
-                ref_kind: Some("scope"),
-                priority: jobs::priority::NORMAL,
-                payload: &payload,
-                max_attempts: 3,
-            },
-        )
-    })
+    let input = EnqueueJobInput {
+        payload: JobPayload::SummarizeScope {
+            scope_type: scope_type.to_string(),
+            scope_value: scope_value.to_string(),
+            content: content.to_string(),
+        },
+        priority: jobs::priority::NORMAL,
+        retry_config: None, // uses payload default (Fixed{3})
+        stuck_threshold_secs: None,
+        metadata: serde_json::json!({}),
+        scheduled_at: 0,
+    };
+    db.with_write_conn(|conn| jobs::enqueue_job(conn, &input))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::jobs::JobStatus;
     use crate::summarizer::MockSummarizer;
 
     fn setup_db() -> Db {
@@ -143,21 +136,18 @@ mod tests {
         let db = setup_db();
         let summarizer = MockSummarizer;
 
-        // Enqueue a job
         let job_id =
-            enqueue_scope_summary(&db, "", "dir:/src", "fn main() { println!(\"hello\"); }")
+            enqueue_scope_summary(&db, "directory", "src/", "fn main() { println!(\"hello\"); }")
                 .unwrap();
 
-        // Process it
         let count = process_jobs(&db, &summarizer, 10).await;
         assert_eq!(count, 1);
 
-        // Verify completed
         let job = db
             .with_read_conn(|conn| jobs::get_job(conn, &job_id))
             .unwrap()
             .unwrap();
-        assert_eq!(job.status, jobs::JobStatus::Completed);
+        assert_eq!(job.status, JobStatus::Done);
         assert!(job.result.is_some());
     }
 
@@ -165,7 +155,6 @@ mod tests {
     async fn test_process_jobs_failure_retries() {
         let db = setup_db();
 
-        // Create a summarizer that always fails
         struct FailingSummarizer;
         #[async_trait::async_trait]
         impl Summarize for FailingSummarizer {
@@ -179,16 +168,16 @@ mod tests {
             }
         }
 
-        let job_id = enqueue_scope_summary(&db, "", "dir:/fail", "content").unwrap();
+        let job_id = enqueue_scope_summary(&db, "directory", "fail/", "content").unwrap();
         let count = process_jobs(&db, &FailingSummarizer, 10).await;
         assert_eq!(count, 0);
 
-        // Job should be back to pending with error recorded
         let job = db
             .with_read_conn(|conn| jobs::get_job(conn, &job_id))
             .unwrap()
             .unwrap();
-        assert_eq!(job.status, jobs::JobStatus::Pending); // retryable
+        // After claim (attempts=1) + fail with Fixed{3}, reschedules to ready
+        assert_eq!(job.status, JobStatus::Ready);
         assert!(
             job.last_error
                 .as_deref()
@@ -200,16 +189,22 @@ mod tests {
 
     #[test]
     fn test_build_prompt_scope() {
-        let payload = r#"{"content": "hello world"}"#;
-        let prompt = build_prompt("summarize_scope", payload);
+        let payload = JobPayload::SummarizeScope {
+            scope_type: "directory".into(),
+            scope_value: "src/".into(),
+            content: "hello world".into(),
+        };
+        let prompt = build_prompt(&payload);
         assert!(prompt.contains("hello world"));
         assert!(prompt.starts_with("Summarize the following"));
     }
 
     #[test]
     fn test_build_prompt_cluster() {
-        let payload = r#"{"content": "episode data"}"#;
-        let prompt = build_prompt("consolidate_cluster", payload);
+        let payload = JobPayload::ConsolidateCluster {
+            episodes: "episode data".into(),
+        };
+        let prompt = build_prompt(&payload);
         assert!(prompt.contains("episode data"));
         assert!(prompt.starts_with("Synthesize these episodes"));
     }

@@ -2,46 +2,58 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
-/// v32 → v33: Create `jobs` table for async LLM job queue.
+/// v32 → v33: Add `jobs` table for async job queue.
 ///
-/// The jobs table stores pending, running, completed, and failed jobs for
-/// async operations like summarization. Key design:
+/// The job queue is a central service (shared by all brains in a ~/.brain/
+/// install). It manages async operations: LLM summarization, consolidation,
+/// and future background work.
 ///
-/// - **Dedup index**: partial unique on `(kind, ref_id)` WHERE status IN
-///   ('pending', 'running') prevents duplicate active jobs for the same target.
-/// - **Poll index**: `(status, priority, scheduled_at)` for efficient claim queries.
-/// - **Backoff**: `scheduled_at` is pushed forward on retryable failures.
-/// - **Crash recovery**: reaper finds stuck `running` jobs by `started_at` age.
+/// Schema:
+/// - `kind` TEXT — job variant discriminant (e.g. "summarize_scope")
+/// - `status` — ready → pending → in_progress → done/failed
+/// - `payload` TEXT (JSON) — typed per-kind payload
+/// - `retry_config` TEXT (JSON) — NoRetry/Fixed/Infinite
+/// - No `brain_id` (jobs are global)
+/// - No `ref_id` (dedup handled at application layer)
+/// - No `is_recurring`/`period_secs` (scheduling policy lives in the daemon)
 pub fn migrate_v32_to_v33(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "CREATE TABLE jobs (
-            job_id        TEXT PRIMARY KEY,
-            kind          TEXT NOT NULL,
-            status        TEXT NOT NULL DEFAULT 'pending'
-                          CHECK (status IN ('pending', 'running', 'completed', 'failed', 'dead')),
-            brain_id      TEXT NOT NULL DEFAULT '',
-            ref_id        TEXT,
-            ref_kind      TEXT,
-            priority      INTEGER NOT NULL DEFAULT 100,
-            payload       TEXT NOT NULL DEFAULT '{}',
-            result        TEXT,
-            attempts      INTEGER NOT NULL DEFAULT 0,
-            max_attempts  INTEGER NOT NULL DEFAULT 3,
-            last_error    TEXT,
-            created_at    INTEGER NOT NULL,
-            scheduled_at  INTEGER NOT NULL,
-            started_at    INTEGER,
-            completed_at  INTEGER,
-            updated_at    INTEGER NOT NULL
+        "
+        PRAGMA foreign_keys = OFF;
+
+        BEGIN;
+
+        CREATE TABLE jobs (
+            job_id              TEXT PRIMARY KEY,
+            kind                TEXT NOT NULL,
+            status              TEXT NOT NULL DEFAULT 'ready'
+                                CHECK (status IN ('ready', 'pending', 'in_progress', 'done', 'failed')),
+            priority            INTEGER NOT NULL DEFAULT 100,
+            payload             TEXT NOT NULL DEFAULT '{}',
+            retry_config        TEXT NOT NULL DEFAULT '{\"type\":\"noRetry\"}',
+            stuck_threshold_secs INTEGER NOT NULL DEFAULT 300,
+            result              TEXT,
+            attempts            INTEGER NOT NULL DEFAULT 0,
+            last_error          TEXT,
+            metadata            TEXT NOT NULL DEFAULT '{}',
+            created_at          INTEGER NOT NULL,
+            scheduled_at        INTEGER NOT NULL,
+            started_at          INTEGER,
+            processed_at        INTEGER,
+            updated_at          INTEGER NOT NULL
         );
 
         CREATE INDEX idx_jobs_poll ON jobs(status, priority, scheduled_at);
-        CREATE INDEX idx_jobs_brain_status ON jobs(brain_id, status);
-        CREATE UNIQUE INDEX idx_jobs_dedup ON jobs(kind, ref_id)
-            WHERE status IN ('pending', 'running');
+        CREATE INDEX idx_jobs_kind ON jobs(kind, status);
 
-        PRAGMA user_version = 33;",
+        COMMIT;
+
+        PRAGMA foreign_keys = ON;
+
+        PRAGMA user_version = 33;
+        ",
     )?;
+
     Ok(())
 }
 
@@ -50,12 +62,10 @@ mod tests {
     use super::*;
 
     fn setup_v32(conn: &Connection) {
-        // Minimal v32 schema — just enough to run migration.
-        // The jobs table doesn't depend on other tables.
         conn.execute_batch(
             "PRAGMA foreign_keys = OFF;
-             PRAGMA user_version = 32;
-             PRAGMA foreign_keys = ON;",
+             PRAGMA foreign_keys = ON;
+             PRAGMA user_version = 32;",
         )
         .unwrap();
     }
@@ -73,49 +83,26 @@ mod tests {
     }
 
     #[test]
-    fn test_table_exists() {
+    fn test_jobs_table_created() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v32(&conn);
         migrate_v32_to_v33(&conn).unwrap();
 
         let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='jobs'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 0, "jobs table should exist (empty)");
     }
 
     #[test]
-    fn test_indices_exist() {
-        let conn = Connection::open_in_memory().unwrap();
-        setup_v32(&conn);
-        migrate_v32_to_v33(&conn).unwrap();
-
-        let indices: Vec<String> = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='jobs' ORDER BY name")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-
-        assert!(indices.contains(&"idx_jobs_poll".to_string()));
-        assert!(indices.contains(&"idx_jobs_brain_status".to_string()));
-        assert!(indices.contains(&"idx_jobs_dedup".to_string()));
-    }
-
-    #[test]
-    fn test_insert_succeeds() {
+    fn test_status_default_ready() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v32(&conn);
         migrate_v32_to_v33(&conn).unwrap();
 
         conn.execute(
-            "INSERT INTO jobs (job_id, kind, brain_id, priority, payload, created_at, scheduled_at, updated_at)
-             VALUES ('J1', 'summarize_scope', 'brain-1', 100, '{\"scope\":\"test\"}', 1000, 1000, 1000)",
+            "INSERT INTO jobs (job_id, kind, created_at, scheduled_at, updated_at)
+             VALUES ('J1', 'summarize_scope', 1000, 1000, 1000)",
             [],
         )
         .unwrap();
@@ -125,57 +112,71 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(status, "pending");
+        assert_eq!(status, "ready");
     }
 
     #[test]
-    fn test_check_constraint_rejects_invalid_status() {
+    fn test_columns_exist() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v32(&conn);
         migrate_v32_to_v33(&conn).unwrap();
 
-        let result = conn.execute(
-            "INSERT INTO jobs (job_id, kind, status, created_at, scheduled_at, updated_at)
-             VALUES ('J2', 'test', 'invalid_status', 1000, 1000, 1000)",
-            [],
-        );
-        assert!(result.is_err());
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(jobs)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        // Present
+        for expected in [
+            "job_id",
+            "kind",
+            "status",
+            "priority",
+            "payload",
+            "retry_config",
+            "stuck_threshold_secs",
+            "result",
+            "attempts",
+            "last_error",
+            "metadata",
+            "created_at",
+            "scheduled_at",
+            "started_at",
+            "processed_at",
+            "updated_at",
+        ] {
+            assert!(
+                cols.contains(&expected.to_string()),
+                "missing column: {expected}"
+            );
+        }
+
+        // Absent
+        assert!(!cols.contains(&"brain_id".to_string()));
+        assert!(!cols.contains(&"ref_id".to_string()));
+        assert!(!cols.contains(&"ref_kind".to_string()));
+        assert!(!cols.contains(&"is_recurring".to_string()));
+        assert!(!cols.contains(&"period_secs".to_string()));
     }
 
     #[test]
-    fn test_dedup_index_prevents_duplicate_active_jobs() {
+    fn test_indexes_created() {
         let conn = Connection::open_in_memory().unwrap();
         setup_v32(&conn);
         migrate_v32_to_v33(&conn).unwrap();
 
-        // First insert succeeds
-        conn.execute(
-            "INSERT INTO jobs (job_id, kind, ref_id, status, created_at, scheduled_at, updated_at)
-             VALUES ('J3', 'summarize', 'ref-1', 'pending', 1000, 1000, 1000)",
-            [],
-        )
-        .unwrap();
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='jobs'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
 
-        // Duplicate (kind, ref_id) with active status fails
-        let result = conn.execute(
-            "INSERT INTO jobs (job_id, kind, ref_id, status, created_at, scheduled_at, updated_at)
-             VALUES ('J4', 'summarize', 'ref-1', 'pending', 1001, 1001, 1001)",
-            [],
-        );
-        assert!(result.is_err());
-
-        // Same (kind, ref_id) with completed status succeeds (dedup only covers active)
-        conn.execute(
-            "UPDATE jobs SET status = 'completed', completed_at = 1002 WHERE job_id = 'J3'",
-            [],
-        )
-        .unwrap();
-
-        conn.execute(
-            "INSERT INTO jobs (job_id, kind, ref_id, status, created_at, scheduled_at, updated_at)
-             VALUES ('J5', 'summarize', 'ref-1', 'pending', 1003, 1003, 1003)",
-            [],
-        )
-        .unwrap();
+        assert!(indexes.iter().any(|i| i == "idx_jobs_poll"));
+        assert!(indexes.iter().any(|i| i == "idx_jobs_kind"));
     }
 }
