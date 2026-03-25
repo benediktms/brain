@@ -185,11 +185,12 @@ pub fn upsert_brain(conn: &Connection, input: &BrainUpsert<'_>) -> Result<()> {
 /// List all brain rows, optionally filtered.
 ///
 /// When `active_only` is true, returns only projected=1, non-archived brains.
+/// Always excludes the `(unscoped)` sentinel row (brain_id='') from migration v21→v22.
 pub fn list_brains(conn: &Connection, active_only: bool) -> Result<Vec<BrainRow>> {
     let sql = if active_only {
-        "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains WHERE projected = 1 AND archived = 0 ORDER BY name"
+        "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains WHERE projected = 1 AND archived = 0 AND brain_id != '' ORDER BY name"
     } else {
-        "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains ORDER BY name"
+        "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains WHERE brain_id != '' ORDER BY name"
     };
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([], |row| {

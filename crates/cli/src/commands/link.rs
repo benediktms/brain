@@ -92,10 +92,8 @@ pub fn run(name: &str) -> Result<()> {
     let roots_json = serde_json::to_string(&roots)?;
     let notes_json = brain_row.notes_json.as_deref().unwrap_or("[]");
     let aliases_json = brain_row.aliases_json.as_deref().unwrap_or("[]");
-    let prefix = brain_row
-        .prefix
-        .as_deref()
-        .unwrap_or_else(|| brain_lib::db::meta::generate_prefix(&brain_name).leak());
+    let prefix_fallback = brain_lib::db::meta::generate_prefix(&brain_name);
+    let prefix = brain_row.prefix.as_deref().unwrap_or(&prefix_fallback);
     db.upsert_brain(&BrainUpsert {
         brain_id: &brain_id,
         name: &brain_name,
