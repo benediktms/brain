@@ -114,7 +114,10 @@ async fn process_stale_scope_sweep(
         let scope_type = crate::hierarchy::ScopeType::parse_db(&summary.scope_type);
         if let Some(scope_type) = scope_type {
             match crate::hierarchy::generate_scope_summary_with_options(
-                db, &scope_type, &summary.scope_value, true,
+                db,
+                &scope_type,
+                &summary.scope_value,
+                true,
             ) {
                 Ok(_) => enqueued += 1,
                 Err(e) => {
@@ -124,7 +127,10 @@ async fn process_stale_scope_sweep(
         }
     }
 
-    Ok(Some(format!(r#"{{"enqueued":{enqueued},"stale":{}}}"#, stale.len())))
+    Ok(Some(format!(
+        r#"{{"enqueued":{enqueued},"stale":{}}}"#,
+        stale.len()
+    )))
 }
 
 /// Sweep: find unclustered episodes and enqueue ConsolidateCluster child jobs.
@@ -133,9 +139,8 @@ async fn process_consolidation_sweep(
 ) -> std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
     use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 
-    let episodes = db.with_read_conn(|conn| {
-        brain_persistence::db::summaries::list_episodes(conn, 100, "")
-    })?;
+    let episodes =
+        db.with_read_conn(|conn| brain_persistence::db::summaries::list_episodes(conn, 100, ""))?;
 
     if episodes.is_empty() {
         return Ok(Some(r#"{"clusters":0,"enqueued":0}"#.to_string()));

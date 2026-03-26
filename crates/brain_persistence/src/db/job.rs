@@ -168,9 +168,7 @@ impl JobPayload {
                 RetryStrategy::Fixed { attempts: 3 }
             }
             // Sweep jobs always retry — they're idempotent discovery jobs.
-            JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => {
-                RetryStrategy::Infinite
-            }
+            JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => RetryStrategy::Infinite,
         }
     }
 
