@@ -219,6 +219,26 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 ConfigAction::Set { key, value } => {
                     commands::config::run_config_set(&cli.sqlite_db, &brain_name, &key, value)?;
                 }
+                ConfigAction::Provider { action } => match action {
+                    ProviderAction::Set { name, api_key } => {
+                        commands::provider::run_set(
+                            &cli.sqlite_db,
+                            Some(&cli.lance_db),
+                            &name,
+                            api_key.as_deref(),
+                        )?;
+                    }
+                    ProviderAction::List => {
+                        commands::provider::run_list(&cli.sqlite_db, Some(&cli.lance_db))?;
+                    }
+                    ProviderAction::Remove { target } => {
+                        commands::provider::run_remove(
+                            &cli.sqlite_db,
+                            Some(&cli.lance_db),
+                            &target,
+                        )?;
+                    }
+                },
             }
         }
         Command::Tasks {
@@ -683,8 +703,13 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             let ctx = MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
 
             match action {
-                MemoryAction::Consolidate { limit, gap_seconds } => {
-                    commands::memory::run::consolidate(&ctx, limit, gap_seconds).await?;
+                MemoryAction::Consolidate {
+                    limit,
+                    gap_seconds,
+                    auto_summarize,
+                } => {
+                    commands::memory::run::consolidate(&ctx, limit, gap_seconds, auto_summarize)
+                        .await?;
                 }
                 MemoryAction::Search {
                     query,
@@ -754,12 +779,14 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     scope_type,
                     scope_value,
                     regenerate,
+                    async_llm,
                 } => {
                     commands::memory::run::summarize_scope(
                         &ctx,
                         &scope_type,
                         &scope_value,
                         regenerate,
+                        async_llm,
                     )
                     .await?;
                 }
@@ -807,6 +834,17 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Status { json } => {
             commands::status::run(&cli.sqlite_db, Some(&cli.lance_db), json)?;
         }
+        Command::Jobs { action } => match action {
+            JobsAction::Status { json } => {
+                commands::jobs::run_status(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+            }
+            JobsAction::Retry { job_id } => {
+                commands::jobs::run_retry(&cli.sqlite_db, Some(&cli.lance_db), &job_id)?;
+            }
+            JobsAction::Gc { older_than_days } => {
+                commands::jobs::run_gc(&cli.sqlite_db, Some(&cli.lance_db), older_than_days)?;
+            }
+        },
     }
 
     Ok(())

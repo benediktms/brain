@@ -4,7 +4,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::hierarchy::{ScopeType, generate_scope_summary, get_scope_summary};
+use crate::hierarchy::{ScopeType, generate_scope_summary_with_options, get_scope_summary};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
@@ -12,6 +12,10 @@ use super::{McpTool, json_response};
 
 fn default_regenerate() -> bool {
     false
+}
+
+fn default_async_llm() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -23,6 +27,9 @@ struct Params {
     /// When true, force regeneration even if a summary already exists.
     #[serde(default = "default_regenerate")]
     regenerate: bool,
+    /// When true, enqueue an async LLM job to replace the placeholder summary.
+    #[serde(default = "default_async_llm")]
+    async_llm: bool,
 }
 
 pub(super) struct MemSummarizeScope;
@@ -40,6 +47,8 @@ impl McpTool for MemSummarizeScope {
                 "scoped to a directory path or tag.\n\n",
                 "When `regenerate` is false (default), returns any cached summary. ",
                 "Set `regenerate: true` to force a fresh extraction. ",
+                "When `async_llm` is true (default), the tool enqueues an async LLM job ",
+                "and returns the extractive placeholder immediately. ",
                 "The response includes a `stale` flag when the cached summary is ",
                 "out of date and should be regenerated on the next call."
             )
@@ -60,6 +69,11 @@ impl McpTool for MemSummarizeScope {
                         "type": "boolean",
                         "description": "Force regeneration of the summary even if one already exists. Default: false.",
                         "default": false
+                    },
+                    "async_llm": {
+                        "type": "boolean",
+                        "description": "Enqueue an async LLM refresh after generating the placeholder summary. Default: true.",
+                        "default": true
                     }
                 },
                 "required": ["scope_type", "scope_value"]
@@ -90,13 +104,20 @@ impl McpTool for MemSummarizeScope {
 
             let db = ctx.db();
 
+            let mut llm_pending = false;
+
             if params.regenerate {
                 // Force-generate a fresh summary.
-                match generate_scope_summary(db, &scope_type, &params.scope_value) {
+                match generate_scope_summary_with_options(
+                    db,
+                    &scope_type,
+                    &params.scope_value,
+                    params.async_llm,
+                ) {
                     Err(e) => {
                         return ToolCallResult::error(format!("Failed to generate summary: {e}"));
                     }
-                    Ok(_id) => {}
+                    Ok(generation) => llm_pending = generation.llm_pending,
                 }
             }
 
@@ -105,26 +126,35 @@ impl McpTool for MemSummarizeScope {
                 Err(e) => ToolCallResult::error(format!("Failed to retrieve summary: {e}")),
                 Ok(None) => {
                     // No existing summary — generate one now.
-                    match generate_scope_summary(db, &scope_type, &params.scope_value) {
+                    match generate_scope_summary_with_options(
+                        db,
+                        &scope_type,
+                        &params.scope_value,
+                        params.async_llm,
+                    ) {
                         Err(e) => ToolCallResult::error(format!("Failed to generate summary: {e}")),
-                        Ok(_id) => match get_scope_summary(db, &scope_type, &params.scope_value) {
-                            Err(e) => ToolCallResult::error(format!(
-                                "Failed to retrieve summary after generation: {e}"
-                            )),
-                            Ok(None) => {
-                                ToolCallResult::error("Summary generation produced no result")
+                        Ok(generation) => {
+                            llm_pending = generation.llm_pending;
+                            match get_scope_summary(db, &scope_type, &params.scope_value) {
+                                Err(e) => ToolCallResult::error(format!(
+                                    "Failed to retrieve summary after generation: {e}"
+                                )),
+                                Ok(None) => {
+                                    ToolCallResult::error("Summary generation produced no result")
+                                }
+                                Ok(Some(summary)) => {
+                                    let response = json!({
+                                        "scope_type": summary.scope_type,
+                                        "scope_value": summary.scope_value,
+                                        "content": summary.content,
+                                        "stale": summary.stale,
+                                        "llm_pending": llm_pending,
+                                        "generated_at": summary.generated_at,
+                                    });
+                                    json_response(&response)
+                                }
                             }
-                            Ok(Some(summary)) => {
-                                let response = json!({
-                                    "scope_type": summary.scope_type,
-                                    "scope_value": summary.scope_value,
-                                    "content": summary.content,
-                                    "stale": summary.stale,
-                                    "generated_at": summary.generated_at,
-                                });
-                                json_response(&response)
-                            }
-                        },
+                        }
                     }
                 }
                 Ok(Some(summary)) => {
@@ -133,6 +163,7 @@ impl McpTool for MemSummarizeScope {
                         "scope_value": summary.scope_value,
                         "content": summary.content,
                         "stale": summary.stale,
+                        "llm_pending": llm_pending,
                         "generated_at": summary.generated_at,
                     });
                     json_response(&response)
@@ -144,6 +175,7 @@ impl McpTool for MemSummarizeScope {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::params;
     use serde_json::json;
 
     use super::super::ToolRegistry;
@@ -194,6 +226,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["scope_type"], "directory");
         assert_eq!(parsed["scope_value"], "src/");
+        assert_eq!(parsed["llm_pending"], false);
     }
 
     #[tokio::test]
@@ -212,5 +245,48 @@ mod tests {
             "unexpected error: {:?}",
             result.content
         );
+    }
+
+    #[tokio::test]
+    async fn test_summarize_scope_async_llm_enqueues_job() {
+        let (_dir, ctx) = create_test_context().await;
+        ctx.db()
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?1, 'idle')",
+                    params!["src/example.rs"],
+                )?;
+                conn.execute(
+                    "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate)
+                     VALUES (?1, ?2, 0, '', ?3, '', 0, 0, 0)",
+                    params!["chunk-1", "src/example.rs", "Example content for async scope summary"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.summarize_scope",
+                json!({
+                    "scope_type": "directory",
+                    "scope_value": "src/",
+                    "regenerate": true,
+                    "async_llm": true
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+
+        let text = &result.content[0].text;
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["llm_pending"], true);
+
+        let jobs = ctx
+            .db()
+            .with_read_conn(|conn| crate::db::jobs::list_jobs(conn, None, 10))
+            .unwrap();
+        assert_eq!(jobs.len(), 1);
     }
 }

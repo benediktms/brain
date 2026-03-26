@@ -24,6 +24,19 @@ pub struct GlobalConfig {
     /// Registered brains keyed by name.
     #[serde(default)]
     pub brains: HashMap<String, BrainEntry>,
+    /// Projected provider metadata (id + name only, no keys).
+    /// Read-only projection from DB — do not edit manually.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderEntry>,
+}
+
+/// A projected provider entry in config.toml (metadata only, no secrets).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderEntry {
+    /// Provider UUID.
+    pub id: String,
+    /// Provider name (e.g. "anthropic", "openai").
+    pub name: String,
 }
 
 /// An entry for a registered brain inside the global config.
@@ -469,9 +482,6 @@ pub struct ResolvedPaths {
     pub model_dir: PathBuf,
     pub lance_db: PathBuf,
     pub sqlite_db: PathBuf,
-    /// Path to the Flan-T5-small summarizer model directory.
-    /// `None` if the model has not been downloaded yet.
-    pub summarizer_model_dir: Option<PathBuf>,
 }
 
 /// Walk up from `start` looking for `.brain/brain.toml`.
@@ -507,17 +517,10 @@ pub(crate) fn resolve_brain_paths_with_home(
     };
     let brain_toml = load_brain_toml(&root.join(".brain"))?;
     let brain_data = home.join("brains").join(&brain_toml.name);
-    let summarizer_model_dir = home.join("models").join("flan-t5-small");
-
     Ok(Some(ResolvedPaths {
         model_dir: home.join("models").join("bge-small-en-v1.5"),
         lance_db: brain_data.join("lancedb"),
         sqlite_db: home.join("brain.db"),
-        summarizer_model_dir: if summarizer_model_dir.is_dir() {
-            Some(summarizer_model_dir)
-        } else {
-            None
-        },
     }))
 }
 
@@ -537,16 +540,10 @@ pub fn resolve_paths_for_brain(name: &str) -> Result<ResolvedPaths> {
 /// since home is provided and no fallible discovery is needed.
 pub fn resolve_paths_for_brain_with_home(name: &str, home: &Path) -> ResolvedPaths {
     let brain_data = home.join("brains").join(name);
-    let summarizer_model_dir = home.join("models").join("flan-t5-small");
     ResolvedPaths {
         model_dir: home.join("models").join("bge-small-en-v1.5"),
         lance_db: brain_data.join("lancedb"),
         sqlite_db: home.join("brain.db"),
-        summarizer_model_dir: if summarizer_model_dir.is_dir() {
-            Some(summarizer_model_dir)
-        } else {
-            None
-        },
     }
 }
 

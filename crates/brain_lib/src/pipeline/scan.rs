@@ -13,7 +13,7 @@ impl<S> IndexPipeline<S>
 where
     S: ChunkIndexWriter + SchemaMeta + Send + Sync,
 {
-    /// Full scan: index all files, detect deletions, recover stuck states.
+    /// Full scan: index all files, recover stuck states.
     #[instrument(skip(self))]
     pub async fn full_scan(&self, dirs: &[PathBuf]) -> crate::error::Result<super::ScanStats> {
         let start = std::time::Instant::now();
@@ -47,29 +47,7 @@ where
             .map_err(|e| {
                 crate::error::BrainCoreError::Internal(format!("scan task panicked: {e}"))
             })?;
-        let disk_paths: std::collections::HashSet<String> = scanned_files
-            .iter()
-            .map(|f| f.path.to_string_lossy().to_string())
-            .collect();
-
-        // 3. Detect deletions (files in DB but not on disk)
-        info!("checking for stale files in DB");
-        let active_paths = self.db.get_all_active_paths()?;
-        info!(
-            active_in_db = active_paths.len(),
-            on_disk = disk_paths.len(),
-            "deletion check"
-        );
-        for (file_id, db_path) in &active_paths {
-            if !disk_paths.contains(db_path.as_str()) {
-                self.db.handle_delete(db_path)?;
-                self.store.delete_file_chunks(file_id).await?;
-                info!(path = %db_path, "deleted stale file from index");
-                stats.deleted += 1;
-            }
-        }
-
-        // 4. Check for stale chunker versions
+        // 3. Check for stale chunker versions
         let stale_count = self.db.count_stale_chunker_version(CHUNKER_VERSION)?;
         if stale_count > 0 {
             warn!(
@@ -78,7 +56,7 @@ where
             );
         }
 
-        // 5. Batch-index all scanned files (hash gate skips unchanged)
+        // 4. Batch-index all scanned files (hash gate skips unchanged)
         let paths: Vec<PathBuf> = scanned_files.iter().map(|f| f.path.clone()).collect();
         let batch_stats = self.index_files_batch(&paths).await?;
         stats.indexed += batch_stats.indexed;

@@ -11,6 +11,7 @@ use brain_lib::db::files;
 use brain_lib::doctor::CheckStatus;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
+use brain_lib::ports::FileMetaWriter;
 use brain_lib::store::Store;
 
 use tempfile::TempDir;
@@ -248,8 +249,25 @@ async fn test_full_scan_detects_deletion() {
 
     std::fs::remove_file(&path).unwrap();
 
+    // full_scan no longer detects deletions (cross-brain safety).
+    // Deletion is handled via the file watcher or explicit handle_delete.
     let stats = pipeline.full_scan(&[notes_dir]).await.unwrap();
-    assert_eq!(stats.deleted, 1);
+    assert_eq!(stats.deleted, 0);
+
+    // Explicitly delete via the API
+    pipeline
+        .db()
+        .handle_delete(&path.to_string_lossy())
+        .unwrap();
+
+    let active = pipeline
+        .db()
+        .with_read_conn(files::get_all_active_paths)
+        .unwrap();
+    assert!(
+        active.is_empty(),
+        "handle_delete should soft-delete the file"
+    );
 
     let active = pipeline
         .db()
@@ -276,13 +294,17 @@ async fn test_vacuum_purges_soft_deleted_files() {
 
     let path = write_md(&notes_dir, "old.md", "# Old\n\nWill be deleted.");
 
-    // Index and then delete
+    // Index and then delete via explicit handle_delete (full_scan no longer sweeps deletions)
     pipeline
         .full_scan(std::slice::from_ref(&notes_dir))
         .await
         .unwrap();
     std::fs::remove_file(&path).unwrap();
-    pipeline.full_scan(&[notes_dir]).await.unwrap();
+    // full_scan no longer detects deletions — use explicit handle_delete
+    pipeline
+        .db()
+        .handle_delete(&path.to_string_lossy())
+        .unwrap();
 
     // Verify it's soft-deleted (not active) but the row still exists
     let active = pipeline

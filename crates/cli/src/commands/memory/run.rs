@@ -467,8 +467,13 @@ pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> R
 // consolidate
 // ---------------------------------------------------------------------------
 
-pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Result<()> {
-    use brain_lib::consolidation::consolidate_episodes;
+pub async fn consolidate(
+    ctx: &MemoryCtx,
+    limit: usize,
+    gap_seconds: i64,
+    auto_summarize: bool,
+) -> Result<()> {
+    use brain_lib::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
     use brain_lib::ports::EpisodeReader;
 
     let episodes = ctx
@@ -478,6 +483,11 @@ pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Res
         .unwrap_or_default();
 
     let result = consolidate_episodes(episodes, gap_seconds);
+    let jobs_enqueued = if auto_summarize {
+        enqueue_cluster_summarization(ctx.stores.db(), &result.clusters)?
+    } else {
+        0
+    };
 
     if ctx.json {
         let clusters_json: Vec<serde_json::Value> = result
@@ -496,6 +506,7 @@ pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Res
             .collect();
         let out = json!({
             "cluster_count": clusters_json.len(),
+            "jobs_enqueued": jobs_enqueued,
             "clusters": clusters_json,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
@@ -519,6 +530,10 @@ pub async fn consolidate(ctx: &MemoryCtx, limit: usize, gap_seconds: i64) -> Res
             }
             println!();
         }
+        if auto_summarize {
+            println!("Enqueued {jobs_enqueued} async consolidation job(s).");
+            println!();
+        }
         println!("Use `brain memory reflect --commit` to synthesize a cluster into a reflection.");
     }
 
@@ -534,9 +549,10 @@ pub async fn summarize_scope(
     scope_type: &str,
     scope_value: &str,
     regenerate: bool,
+    async_llm: bool,
 ) -> Result<()> {
     use brain_lib::hierarchy::{
-        DerivedSummary, ScopeType, generate_scope_summary, get_scope_summary,
+        DerivedSummary, ScopeType, generate_scope_summary_with_options, get_scope_summary,
     };
 
     let st = match scope_type {
@@ -545,17 +561,34 @@ pub async fn summarize_scope(
         other => bail!("Invalid scope_type '{other}'. Must be 'directory' or 'tag'."),
     };
 
+    let mut llm_pending = false;
+
     let summary: DerivedSummary = if regenerate {
-        let id = generate_scope_summary(ctx.stores.db(), &st, scope_value)?;
-        get_scope_summary(ctx.stores.db(), &st, scope_value)?
-            .ok_or_else(|| anyhow::anyhow!("Generated summary '{id}' not found after insert"))?
+        let generation =
+            generate_scope_summary_with_options(ctx.stores.db(), &st, scope_value, async_llm)?;
+        llm_pending = generation.llm_pending;
+        get_scope_summary(ctx.stores.db(), &st, scope_value)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Generated summary '{}' not found after insert",
+                generation.id
+            )
+        })?
     } else {
         match get_scope_summary(ctx.stores.db(), &st, scope_value)? {
             Some(s) => s,
             None => {
-                let id = generate_scope_summary(ctx.stores.db(), &st, scope_value)?;
+                let generation = generate_scope_summary_with_options(
+                    ctx.stores.db(),
+                    &st,
+                    scope_value,
+                    async_llm,
+                )?;
+                llm_pending = generation.llm_pending;
                 get_scope_summary(ctx.stores.db(), &st, scope_value)?.ok_or_else(|| {
-                    anyhow::anyhow!("Generated summary '{id}' not found after insert")
+                    anyhow::anyhow!(
+                        "Generated summary '{}' not found after insert",
+                        generation.id
+                    )
                 })?
             }
         }
@@ -567,6 +600,7 @@ pub async fn summarize_scope(
             "scope_value": summary.scope_value,
             "content": summary.content,
             "stale": summary.stale,
+            "llm_pending": llm_pending,
             "generated_at": summary.generated_at,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
@@ -577,6 +611,9 @@ pub async fn summarize_scope(
         );
         if summary.stale {
             println!("  [stale — use --regenerate to refresh]");
+        }
+        if llm_pending {
+            println!("  [async LLM refresh queued]");
         }
         println!("  Generated: {}", summary.generated_at);
         println!();

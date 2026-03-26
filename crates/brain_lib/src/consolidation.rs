@@ -10,6 +10,9 @@
 
 use brain_persistence::db::summaries::SummaryRow;
 
+use crate::pipeline::job_worker::enqueue_cluster_summary;
+use crate::ports::JobQueue;
+
 /// A group of temporally proximate episodes with a suggested consolidation.
 #[derive(Debug, Clone)]
 pub struct ConsolidationCluster {
@@ -28,6 +31,38 @@ pub struct ConsolidationCluster {
 pub struct ConsolidateResult {
     /// One entry per temporal cluster found.
     pub clusters: Vec<ConsolidationCluster>,
+}
+
+/// Enqueue async consolidation jobs for the provided clusters.
+pub fn enqueue_cluster_summarization(
+    queue: &dyn JobQueue,
+    clusters: &[ConsolidationCluster],
+) -> crate::error::Result<usize> {
+    let mut count = 0;
+
+    for (cluster_index, cluster) in clusters.iter().enumerate() {
+        let episodes = cluster
+            .episodes
+            .iter()
+            .map(|episode| episode.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+
+        if episodes.is_empty() {
+            continue;
+        }
+
+        enqueue_cluster_summary(
+            queue,
+            cluster_index,
+            &cluster.suggested_title,
+            &cluster.episode_ids,
+            &episodes,
+        )?;
+        count += 1;
+    }
+
+    Ok(count)
 }
 
 /// Group `episodes` into temporal clusters and return consolidation candidates.

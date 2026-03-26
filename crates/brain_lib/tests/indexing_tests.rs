@@ -11,6 +11,7 @@ use brain_lib::db::files;
 use brain_lib::db::meta;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
+use brain_lib::ports::FileMetaWriter;
 use brain_lib::store::{LANCE_SCHEMA_VERSION, Store};
 use brain_lib::utils::content_hash;
 use brain_lib::watcher::FileEvent;
@@ -145,12 +146,14 @@ async fn test_file_deletion_removes_from_index() {
     // Delete the file
     std::fs::remove_file(&path).unwrap();
 
-    // Re-scan — should detect deletion
+    // Re-scan — full_scan no longer detects deletions (cross-brain safety:
+    // deletion is handled by the file watcher or explicit handle_delete).
+    // Deletion stats are 0; the file remains in SQLite until explicitly deleted.
     let stats = pipeline
         .full_scan(std::slice::from_ref(&notes_dir))
         .await
         .unwrap();
-    assert_eq!(stats.deleted, 1);
+    assert_eq!(stats.deleted, 0);
     assert_eq!(stats.indexed, 0);
 }
 
@@ -450,13 +453,13 @@ async fn test_delete_then_recreate_resurrects_id() {
         })
         .unwrap();
 
-    // Delete on disk, full scan detects it
+    // Delete on disk — explicit handle_delete (full_scan no longer sweeps deletions)
     std::fs::remove_file(&path).unwrap();
-    let stats = pipeline
-        .full_scan(std::slice::from_ref(&notes_dir))
-        .await
+    let deleted = pipeline
+        .db()
+        .handle_delete(&path.to_string_lossy())
         .unwrap();
-    assert_eq!(stats.deleted, 1);
+    assert!(deleted.is_some(), "handle_delete should return the file_id");
 
     // Recreate with different content (same path)
     write_md(

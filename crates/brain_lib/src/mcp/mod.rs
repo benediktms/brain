@@ -607,7 +607,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&resp).unwrap();
 
         let tools = parsed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 29);
+        assert_eq!(tools.len(), 30);
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"memory.search_minimal"));
@@ -619,6 +619,7 @@ mod tests {
         assert!(names.contains(&"tasks.get"));
         assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));
+        assert!(names.contains(&"jobs.status"));
         assert!(!names.contains(&"tasks.create_remote"));
     }
 

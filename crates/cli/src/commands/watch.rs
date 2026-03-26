@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -16,11 +15,11 @@ use brain_lib::ipc::router::BrainRouter;
 use brain_lib::ipc::server::IpcServer;
 use brain_lib::mcp::McpContext;
 use brain_lib::pipeline::IndexPipeline;
-use brain_lib::pipeline::consolidation::ConsolidationScheduler;
 use brain_lib::pipeline::embed_poll;
+use brain_lib::pipeline::job_worker;
+use brain_lib::ports::JobQueue;
 use brain_lib::prelude::*;
 use brain_lib::store::Store;
-use brain_lib::summarizer::FlanT5Summarizer;
 use tracing::{debug, info, warn};
 
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
@@ -60,20 +59,10 @@ pub async fn run(
 
     let mut pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
 
-    // Try to load the summarizer if the model directory exists alongside the embedder
-    let summarizer_dir = model_dir.parent().map(|p| p.join("flan-t5-small"));
-    if let Some(ref dir) = summarizer_dir
-        && dir.is_dir()
-    {
-        match FlanT5Summarizer::load(dir) {
-            Ok(s) => {
-                info!(model_dir = %dir.display(), "loaded Flan-T5 summarizer");
-                pipeline.set_summarizer(Arc::new(s));
-            }
-            Err(e) => {
-                warn!(error = %e, "failed to load summarizer, consolidation disabled");
-            }
-        }
+    // Resolve LLM provider: env vars first, then DB-backed credentials.
+    let brain_home = brain_lib::config::brain_home().unwrap_or_else(|_| PathBuf::from("."));
+    if let Some(provider) = brain_lib::llm::resolve_provider_with_db(pipeline.db(), &brain_home) {
+        pipeline.set_summarizer(Arc::from(provider));
     }
 
     // Full scan on startup to catch offline changes
@@ -106,16 +95,12 @@ pub async fn run(
     // threshold is evaluated inside should_optimize().
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
-    // Consolidation scheduler: runs ML summarization when the system has been
-    // idle for 5 minutes. The tick is cheap (atomic load); actual work only
-    // happens when a summarizer is configured and idle threshold is met.
-    let last_event_ts = Arc::new(AtomicU64::new(0));
-    let consolidator = ConsolidationScheduler::new(last_event_ts.clone());
-    let mut consolidation_tick = tokio::time::interval(Duration::from_secs(30));
-
     // Embedding poll: catches tasks/chunks that missed inline embedding
     // (e.g. written directly to SQLite, or failed during MCP handler).
     let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
+
+    // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
+    let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
 
     // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -170,9 +155,6 @@ pub async fn run(
 
                         // 6. Check row-count trigger after each batch
                         pipeline.store().optimizer().maybe_optimize().await;
-
-                        // 7. Stamp the last-event timestamp for idle detection
-                        consolidator.record_file_event();
                     }
                     None => {
                         info!("watcher channel closed, shutting down");
@@ -184,11 +166,22 @@ pub async fn run(
                 // Check time-elapsed trigger during quiet periods
                 pipeline.store().optimizer().maybe_optimize().await;
             }
-            _ = consolidation_tick.tick() => {
-                if let Some(summarizer) = pipeline.summarizer()
-                    && let Err(e) = consolidator.maybe_consolidate(pipeline.db(), summarizer).await
-                {
-                    tracing::warn!("consolidation error: {e}");
+            _ = summarize_poll_interval.tick() => {
+                if let Some(summarizer) = pipeline.summarizer() {
+                    if let Err(e) = pipeline.db().reap_stuck_jobs() {
+                        tracing::warn!(error = %e, "reap_stuck_jobs failed");
+                    }
+                    let n = job_worker::process_jobs(
+                        pipeline.db(),
+                        summarizer.as_ref(),
+                        20,
+                    ).await;
+                    if n > 0 {
+                        info!(processed = n, "summarization jobs completed");
+                    }
+                }
+                if let Err(e) = pipeline.db().gc_completed_jobs(7 * 86400) {
+                    tracing::warn!(error = %e, "gc_completed_jobs failed");
                 }
             }
             _ = embed_poll_interval.tick() => {
@@ -362,7 +355,6 @@ struct BrainInstance {
     pipeline: IndexPipeline,
     work_queue: WorkQueue,
     note_dirs: Vec<PathBuf>,
-    consolidator: ConsolidationScheduler,
     mcp_context: Arc<McpContext>,
 }
 
@@ -370,9 +362,9 @@ struct BrainInstance {
 /// re-index incrementally.
 ///
 /// Reads `~/.brain/config.toml`, creates a separate [`IndexPipeline`] for
-/// each registered brain (sharing a single embedder), and routes file events
-/// to the correct pipeline via longest-prefix matching.  Handles SIGHUP to
-/// reload the brain registry without restarting.
+/// each registered brain (sharing a single embedder and a single `Db` handle),
+/// and routes file events to the correct pipeline via longest-prefix matching.
+/// Handles SIGHUP to reload the brain registry without restarting.
 pub async fn run_multi() -> Result<ShutdownOutcome> {
     // ── 1. Load global config ────────────────────────────────────────────
     let global_cfg = load_global_config()?;
@@ -388,11 +380,18 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // global registry. Best-effort: failures are logged but not fatal.
     sync_brain_ids(&global_cfg);
 
-    // ── 2. Load embedder once (model_dir is the same for all brains) ─────
-    // Use the first registered brain to derive model_dir.
+    // ── 2. Load shared resources once ────────────────────────────────────
+    // All brains share a single Db handle (unified ~/.brain/brain.db) and
+    // a single embedder. Db is Clone (Arc-backed) — cloning shares the
+    // same connection pool.
     let first_name = global_cfg.brains.keys().next().expect("non-empty map");
     let first_paths = resolve_paths_for_brain(first_name)?;
     let model_dir = first_paths.model_dir.clone();
+
+    let sqlite_path = first_paths.sqlite_db.clone();
+    let shared_db: Db = tokio::task::spawn_blocking(move || Db::open(&sqlite_path))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking Db::open: {e}"))??;
 
     let embedder: Arc<dyn Embed> = {
         let model_dir_clone = model_dir.clone();
@@ -413,7 +412,14 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                 continue;
             }
         };
-        match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder), &brain_id).await
+        match init_brain_instance(
+            name,
+            entry.notes.clone(),
+            Arc::clone(&embedder),
+            &brain_id,
+            shared_db.clone(),
+        )
+        .await
         {
             Ok(instance) => {
                 brains.insert(name.clone(), instance);
@@ -582,12 +588,11 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Periodic optimization tick (same as single-brain run())
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
-    // Consolidation tick: cheap idle check every 30s; actual work gated on
-    // per-brain idle threshold (5min) and summarizer being configured.
-    let mut consolidation_tick = tokio::time::interval(Duration::from_secs(30));
-
     // Embedding poll: catches tasks/chunks that missed inline embedding.
     let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
+
+    // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
+    let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
 
     // Root validation tick: checks that registered roots still exist on disk,
     // prunes stale roots, and archives brains whose all roots are gone.
@@ -612,7 +617,6 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                             if let Some(brain_name) = lookup_brain(&prefix_map, &event_path) {
                                 if let Some(instance) = brains.get_mut(&brain_name) {
                                     instance.work_queue.push(evt);
-                                    instance.consolidator.record_file_event();
                                 }
                             } else {
                                 debug!(path = %event_path.display(), "event path matches no brain, dropping");
@@ -657,15 +661,23 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                     instance.pipeline.store().optimizer().maybe_optimize().await;
                 }
             }
-            _ = consolidation_tick.tick() => {
+            _ = summarize_poll_interval.tick() => {
                 for instance in brains.values() {
-                    if let Some(summarizer) = instance.pipeline.summarizer()
-                        && let Err(e) = instance.consolidator.maybe_consolidate(
+                    if let Some(summarizer) = instance.pipeline.summarizer() {
+                        if let Err(e) = instance.pipeline.db().reap_stuck_jobs() {
+                            tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
+                        }
+                        let n = job_worker::process_jobs(
                             instance.pipeline.db(),
-                            summarizer,
-                        ).await
-                    {
-                        tracing::warn!(brain = %instance.name, "consolidation error: {e}");
+                            summarizer.as_ref(),
+                            20,
+                        ).await;
+                        if n > 0 {
+                            info!(brain = %instance.name, processed = n, "summarization jobs completed");
+                        }
+                    }
+                    if let Err(e) = instance.pipeline.db().gc_completed_jobs(7 * 86400) {
+                        tracing::warn!(brain = %instance.name, error = %e, "gc_completed_jobs failed");
                     }
                 }
             }
@@ -707,7 +719,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = config_rx.recv() => {
                 info!("config.toml changed, reloading brain registry");
-                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
+                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder), &shared_db).await {
                     Ok(()) => {
                         prefix_map = build_prefix_map(&brains);
                         info!(brains = brains.len(), "brain registry re-projected from config.toml");
@@ -719,7 +731,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = sighup.recv() => {
                 info!("received SIGHUP, reloading brain registry");
-                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
+                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder), &shared_db).await {
                     Ok(()) => {
                         prefix_map = build_prefix_map(&brains);
                         info!(brains = brains.len(), "brain registry reloaded");
@@ -838,11 +850,14 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 }
 
 /// Initialise a single [`BrainInstance`] from a brain name and note directories.
+///
+/// Accepts a shared `Db` handle (all brains use the unified `~/.brain/brain.db`).
 async fn init_brain_instance(
     name: &str,
     notes: Vec<PathBuf>,
     embedder: Arc<dyn Embed>,
     brain_id: &str,
+    db: Db,
 ) -> Result<BrainInstance> {
     let paths = resolve_paths_for_brain(name)?;
 
@@ -859,29 +874,17 @@ async fn init_brain_instance(
         })
         .collect();
 
-    // Open the SQLite database (sync, needs spawn_blocking)
-    let sqlite_path = paths.sqlite_db.clone();
-    let db = tokio::task::spawn_blocking(move || Db::open(&sqlite_path))
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking Db::open: {e}"))??;
-
     // Open or create the LanceDB store
     let store = Store::open_or_create(&paths.lance_db).await?;
 
     // Create the pipeline with the shared embedder
     let mut pipeline = IndexPipeline::with_embedder(db, store, embedder).await?;
 
-    // Load summarizer if model is available
-    if let Some(ref dir) = paths.summarizer_model_dir {
-        match FlanT5Summarizer::load(dir) {
-            Ok(s) => {
-                info!(brain = %name, model_dir = %dir.display(), "loaded Flan-T5 summarizer");
-                pipeline.set_summarizer(Arc::new(s));
-            }
-            Err(e) => {
-                warn!(brain = %name, error = %e, "failed to load summarizer, consolidation disabled");
-            }
-        }
+    // Resolve LLM provider: env vars first, then DB-backed credentials.
+    let brain_home =
+        brain_lib::config::brain_home().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let Some(provider) = brain_lib::llm::resolve_provider_with_db(pipeline.db(), &brain_home) {
+        pipeline.set_summarizer(Arc::from(provider));
     }
 
     // Run initial full scan with self-healing on failure
@@ -924,9 +927,6 @@ async fn init_brain_instance(
         }
     }
 
-    let last_event_ts = Arc::new(AtomicU64::new(0));
-    let consolidator = ConsolidationScheduler::new(last_event_ts);
-
     // Build MCP context from the pipeline's stores + task/record/object stores.
     // Derive brain_data_dir from the LanceDB path (per-brain), not sqlite_db
     // (which now points to the unified ~/.brain/brain.db).
@@ -957,7 +957,6 @@ async fn init_brain_instance(
         pipeline,
         work_queue: WorkQueue::default(),
         note_dirs,
-        consolidator,
         mcp_context,
     })
 }
@@ -1027,52 +1026,58 @@ async fn reload_and_project(
     brains: &mut HashMap<String, BrainInstance>,
     watcher: &mut BrainWatcher,
     embedder: Arc<dyn Embed>,
+    shared_db: &Db,
 ) -> Result<()> {
-    reload_brains(brains, watcher, Arc::clone(&embedder)).await?;
+    reload_brains(brains, watcher, Arc::clone(&embedder), shared_db).await?;
 
     // Load the freshest config after reload to build projections.
     let cfg = load_global_config()?;
 
-    if let Some(db) = brains.values().next().map(|inst| inst.mcp_context.db()) {
-        // Read existing prefixes from DB to preserve manual overrides.
-        let existing_prefixes: std::collections::HashMap<String, String> = db
-            .list_brains(false)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|row| row.prefix.map(|p| (row.brain_id, p)))
-            .collect();
+    let db = brains
+        .values()
+        .next()
+        .map(|inst| inst.mcp_context.db())
+        .unwrap_or(shared_db);
 
-        let projections: Vec<BrainProjection> = brains
-            .iter()
-            .filter_map(|(name, inst)| {
-                let bid = inst.mcp_context.brain_id().to_string();
-                cfg.brains.get(name).map(|entry| {
-                    let prefix = existing_prefixes
-                        .get(&bid)
-                        .cloned()
-                        .unwrap_or_else(|| generate_prefix(name));
-                    BrainProjection {
-                        brain_id: bid,
-                        name: name.clone(),
-                        prefix,
-                        roots_json: serde_json::to_string(&entry.roots)
-                            .unwrap_or_else(|_| "[]".to_string()),
-                        notes_json: serde_json::to_string(&entry.notes)
-                            .unwrap_or_else(|_| "[]".to_string()),
-                        aliases_json: serde_json::to_string(&entry.aliases)
-                            .unwrap_or_else(|_| "[]".to_string()),
-                        archived: entry.archived,
-                    }
-                })
+    // Read existing prefixes from DB to preserve manual overrides.
+    let existing_prefixes: std::collections::HashMap<String, String> = db
+        .list_brains(false)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|row| row.prefix.map(|p| (row.brain_id, p)))
+        .collect();
+
+    let projections: Vec<BrainProjection> = brains
+        .iter()
+        .filter_map(|(name, inst)| {
+            let bid = inst.mcp_context.brain_id().to_string();
+            cfg.brains.get(name).map(|entry| {
+                let prefix = existing_prefixes
+                    .get(&bid)
+                    .cloned()
+                    .unwrap_or_else(|| generate_prefix(name));
+                BrainProjection {
+                    brain_id: bid,
+                    name: name.clone(),
+                    prefix,
+                    roots_json: serde_json::to_string(&entry.roots)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    notes_json: serde_json::to_string(&entry.notes)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    aliases_json: serde_json::to_string(&entry.aliases)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    archived: entry.archived,
+                }
             })
-            .collect();
-        if let Err(e) = db.project_config_to_brains(&projections) {
-            warn!(error = %e, "failed to re-sync brains into DB");
-        }
+        })
+        .collect();
 
-        // Sync prefixes from DB back to config.toml.
-        sync_prefixes_to_config(db, brains);
+    if let Err(e) = db.project_config_to_brains(&projections) {
+        warn!(error = %e, "failed to re-sync brains into DB");
     }
+
+    // Sync prefixes from DB back to config.toml.
+    sync_prefixes_to_config(db, brains);
 
     Ok(())
 }
@@ -1086,6 +1091,7 @@ async fn reload_brains(
     brains: &mut HashMap<String, BrainInstance>,
     watcher: &mut BrainWatcher,
     embedder: Arc<dyn Embed>,
+    shared_db: &Db,
 ) -> Result<()> {
     let new_cfg = load_global_config()?;
 
@@ -1119,8 +1125,14 @@ async fn reload_brains(
                     continue;
                 }
             };
-            match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder), &brain_id)
-                .await
+            match init_brain_instance(
+                name,
+                entry.notes.clone(),
+                Arc::clone(&embedder),
+                &brain_id,
+                shared_db.clone(),
+            )
+            .await
             {
                 Ok(instance) => {
                     for dir in &instance.note_dirs {

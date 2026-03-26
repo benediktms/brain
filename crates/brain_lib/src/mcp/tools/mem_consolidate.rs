@@ -4,7 +4,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::consolidation::consolidate_episodes;
+use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::ports::EpisodeReader;
@@ -13,6 +13,10 @@ use super::{McpTool, json_response};
 
 fn default_limit() -> usize {
     50
+}
+
+fn default_auto_summarize() -> bool {
+    false
 }
 
 #[derive(Deserialize)]
@@ -25,6 +29,8 @@ struct Params {
     /// Default: 3600 (1 hour).
     #[serde(default = "default_gap_seconds")]
     gap_seconds: i64,
+    #[serde(default = "default_auto_summarize")]
+    auto_summarize: bool,
 }
 
 fn default_gap_seconds() -> i64 {
@@ -64,6 +70,11 @@ impl McpTool for MemConsolidate {
                         "type": "integer",
                         "description": "Gap in seconds that separates two clusters. Default: 3600 (1 hour)",
                         "default": 3600
+                    },
+                    "auto_summarize": {
+                        "type": "boolean",
+                        "description": "Enqueue async LLM synthesis jobs for each cluster. Default: false",
+                        "default": false
                     }
                 },
                 "required": []
@@ -91,6 +102,18 @@ impl McpTool for MemConsolidate {
                 .unwrap_or_default();
 
             let result = consolidate_episodes(episodes, params.gap_seconds);
+            let jobs_enqueued = if params.auto_summarize {
+                match enqueue_cluster_summarization(ctx.db(), &result.clusters) {
+                    Ok(count) => count,
+                    Err(e) => {
+                        return ToolCallResult::error(format!(
+                            "Failed to enqueue consolidation jobs: {e}"
+                        ));
+                    }
+                }
+            } else {
+                0
+            };
 
             let clusters_json: Vec<Value> = result
                 .clusters
@@ -109,6 +132,7 @@ impl McpTool for MemConsolidate {
 
             let response = json!({
                 "cluster_count": clusters_json.len(),
+                "jobs_enqueued": jobs_enqueued,
                 "clusters": clusters_json,
             });
 
@@ -139,6 +163,7 @@ mod tests {
         let text = &result.content[0].text;
         let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(parsed["cluster_count"], 0);
+        assert_eq!(parsed["jobs_enqueued"], 0);
     }
 
     #[tokio::test]
@@ -149,6 +174,20 @@ mod tests {
             .dispatch("memory.consolidate", json!({"limit": 10}), &ctx)
             .await;
         assert!(result.is_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_consolidate_auto_summarize_empty_enqueues_no_jobs() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch("memory.consolidate", json!({"auto_summarize": true}), &ctx)
+            .await;
+        assert!(result.is_error.is_none());
+
+        let text = &result.content[0].text;
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["jobs_enqueued"], 0);
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
 mod artifacts;
+mod jobs;
 mod memory;
 mod record_common;
 mod records;
@@ -10,6 +11,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 
 pub(crate) use artifacts::*;
+pub(crate) use jobs::*;
 pub(crate) use memory::*;
 pub(crate) use record_common::*;
 pub(crate) use records::*;
@@ -453,6 +455,21 @@ pub(crate) enum Command {
         json: bool,
     },
 
+    /// Observe and manage the async job queue (status, retry, gc)
+    #[command(
+        visible_alias = "j",
+        long_about = "Observe and manage the async job queue.\n\n\
+            Shows per-status counts, recent failures, and stuck jobs.\n\
+            Subcommands:\n\
+            - status    Show job queue health\n\
+            - retry     Reset a failed/stuck job to pending\n\
+            - gc        Garbage-collect old completed jobs"
+    )]
+    Jobs {
+        #[command(subcommand)]
+        action: JobsAction,
+    },
+
     /// Migrate all per-brain SQLite databases into the unified ~/.brain/brain.db (polished)
     #[command(
         name = "migrate",
@@ -494,6 +511,33 @@ pub(crate) enum ConfigAction {
     Get {
         /// Configuration key (e.g. "prefix")
         key: String,
+    },
+
+    /// Manage LLM provider API keys
+    Provider {
+        #[command(subcommand)]
+        action: ProviderAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ProviderAction {
+    /// Add or update an LLM provider API key
+    Set {
+        /// Provider name (anthropic or openai)
+        name: String,
+
+        /// API key (reads from stdin if omitted)
+        api_key: Option<String>,
+    },
+
+    /// List configured providers (no keys shown)
+    List,
+
+    /// Remove a provider by ID or name
+    Remove {
+        /// Provider ID or name to remove
+        target: String,
     },
 }
 

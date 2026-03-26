@@ -1,12 +1,16 @@
 pub mod chunks;
+pub mod crypto;
 pub mod files;
 pub mod fts;
+pub mod job;
+pub mod jobs;
 pub mod links;
 pub mod meta;
 #[cfg(test)]
 mod migration_harness;
 mod migrations;
 pub mod object_links;
+pub mod providers;
 pub mod records;
 pub mod schema;
 pub mod summaries;
@@ -171,6 +175,39 @@ impl Db {
     /// Delete a brain by name.
     pub fn delete_brain(&self, name: &str) -> Result<bool> {
         self.with_write_conn(|conn| schema::delete_brain(conn, name))
+    }
+
+    // ── Provider CRUD ──────────────────────────────────────────────────
+
+    /// Insert a new provider. Returns the generated ID.
+    pub fn insert_provider(&self, input: &providers::InsertProvider) -> Result<String> {
+        self.with_write_conn(|conn| providers::insert_provider(conn, input))
+    }
+
+    /// Get a provider by ID.
+    pub fn get_provider(&self, id: &str) -> Result<Option<providers::ProviderRow>> {
+        self.with_read_conn(|conn| providers::get_provider(conn, id))
+    }
+
+    /// Get the most recently updated provider for a given name.
+    pub fn get_provider_by_name(&self, name: &str) -> Result<Option<providers::ProviderRow>> {
+        self.with_read_conn(|conn| providers::get_provider_by_name(conn, name))
+    }
+
+    /// List all providers.
+    pub fn list_providers(&self) -> Result<Vec<providers::ProviderRow>> {
+        self.with_read_conn(providers::list_providers)
+    }
+
+    /// Delete a provider by ID.
+    pub fn delete_provider(&self, id: &str) -> Result<bool> {
+        let id = id.to_string();
+        self.with_write_conn(move |conn| providers::delete_provider(conn, &id))
+    }
+
+    /// Check if a provider with the given name and key hash exists.
+    pub fn provider_exists(&self, name: &str, api_key_hash: &str) -> Result<bool> {
+        self.with_read_conn(|conn| providers::provider_exists(conn, name, api_key_hash))
     }
 
     /// Flush the WAL file to the main database and truncate it.

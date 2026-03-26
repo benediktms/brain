@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::ports::{SummaryReader, SummaryWriter};
-use crate::summarizer::{Summarize, summarize_async};
+use crate::summarizer::Summarize;
 
 /// Default idle threshold: 5 minutes of no file events before consolidation starts.
 const DEFAULT_IDLE_THRESHOLD: Duration = Duration::from_secs(300);
@@ -123,7 +123,7 @@ impl ConsolidationScheduler {
                 break;
             }
 
-            match summarize_async(summarizer, content).await {
+            match summarizer.summarize(&content).await {
                 Ok(summary) => {
                     match db.store_ml_summary(&chunk_id, &summary, summarizer.backend_name()) {
                         Ok(_) => {

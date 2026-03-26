@@ -963,12 +963,16 @@ impl GraphLinkReader for Db {
 // established pattern: traits defined in brain_lib, impls for brain_persistence
 // types also in brain_lib (in this file).
 
-use crate::hierarchy::{DerivedSummary, DerivedSummaryStore, ScopeType};
+use crate::hierarchy::{DerivedSummary, DerivedSummaryStore, GeneratedScopeSummary, ScopeType};
 
 // -- DerivedSummaryStore for Db --------------------------------------------
 
 impl DerivedSummaryStore for Db {
-    fn generate_scope_summary(&self, scope_type: &ScopeType, scope_value: &str) -> Result<String> {
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<GeneratedScopeSummary> {
         use brain_persistence::error::BrainCoreError;
         use rusqlite::params;
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -1011,6 +1015,8 @@ impl DerivedSummaryStore for Db {
             Ok(rows)
         })?;
 
+        let source_content = contents.join("\n\n");
+
         let summary_content: String = contents
             .iter()
             .map(|c| c.get(..200).unwrap_or(c.as_str()))
@@ -1044,7 +1050,7 @@ impl DerivedSummaryStore for Db {
             Ok(())
         })?;
 
-        Ok(id)
+        Ok(GeneratedScopeSummary { id, source_content })
     }
 
     fn get_scope_summary(
@@ -1172,6 +1178,162 @@ impl DerivedSummaryStore for Db {
                 Ok(summaries)
             }
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Job queue operations — used by job_worker and daemon event loop
+// ---------------------------------------------------------------------------
+
+use crate::db::job::Job;
+use crate::db::job::JobStatus;
+use crate::db::jobs::EnqueueJobInput;
+
+/// Job queue operations required by the daemon event loop and job worker.
+///
+/// Consumers: `pipeline::job_worker::process_jobs`, daemon watch loop
+/// (job tick + reaper), and the `jobs.status` MCP tool.
+pub trait JobQueue: Send + Sync {
+    /// Atomically claim up to `limit` ready jobs. Sets status to `pending`,
+    /// increments attempts, records `started_at`.
+    fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>>;
+
+    /// Mark a job as done with an optional result. Sets `processed_at`.
+    fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()>;
+
+    /// Handle a job failure. If retries remain, reschedule to `ready` with
+    /// backoff. If exhausted, mark as `failed`.
+    fn fail_job(&self, job_id: &str, error_msg: &str) -> Result<()>;
+
+    /// Reset stuck `in_progress`/`pending` jobs that exceeded their
+    /// `stuck_threshold_secs` back to `ready`. Returns the count of reaped jobs.
+    fn reap_stuck_jobs(&self) -> Result<usize>;
+
+    /// Enqueue a new job. Returns the `job_id`.
+    fn enqueue_job(&self, input: &EnqueueJobInput) -> Result<String>;
+
+    /// Delete old completed jobs older than `age_secs`. Returns deleted count.
+    fn gc_completed_jobs(&self, age_secs: i64) -> Result<usize>;
+
+    /// Count jobs with the given status.
+    fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64>;
+
+    /// List recent jobs filtered by status, ordered by most recent first.
+    fn list_jobs_by_status(&self, status: &JobStatus, limit: i32) -> Result<Vec<Job>>;
+
+    /// List stuck jobs (in_progress/pending past their threshold) that are retryable.
+    fn list_stuck_jobs(&self) -> Result<Vec<Job>>;
+
+    /// Reset a failed job back to `ready`. Returns true if the job was updated.
+    fn retry_failed_job(&self, job_id: &str) -> Result<bool>;
+}
+
+// -- JobQueue for Db -------------------------------------------------------
+
+impl JobQueue for Db {
+    fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>> {
+        self.with_write_conn(|conn| crate::db::jobs::claim_ready_jobs(conn, limit))
+    }
+
+    fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()> {
+        let job_id = job_id.to_string();
+        let result = result.map(|s| s.to_string());
+        self.with_write_conn(move |conn| {
+            crate::db::jobs::complete_job(conn, &job_id, result.as_deref())
+        })
+    }
+
+    fn fail_job(&self, job_id: &str, error_msg: &str) -> Result<()> {
+        let job_id = job_id.to_string();
+        let error_msg = error_msg.to_string();
+        self.with_write_conn(move |conn| crate::db::jobs::fail_job(conn, &job_id, &error_msg))
+    }
+
+    fn reap_stuck_jobs(&self) -> Result<usize> {
+        self.with_write_conn(crate::db::jobs::reap_stuck_jobs)
+    }
+
+    fn enqueue_job(&self, input: &EnqueueJobInput) -> Result<String> {
+        let input = input.clone();
+        self.with_write_conn(move |conn| crate::db::jobs::enqueue_job(conn, &input))
+    }
+
+    fn gc_completed_jobs(&self, age_secs: i64) -> Result<usize> {
+        self.with_write_conn(move |conn| crate::db::jobs::gc_completed_jobs(conn, age_secs))
+    }
+
+    fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64> {
+        self.with_read_conn(move |conn| crate::db::jobs::count_jobs_by_status(conn, status))
+    }
+
+    fn list_jobs_by_status(&self, status: &JobStatus, limit: i32) -> Result<Vec<Job>> {
+        self.with_read_conn(move |conn| crate::db::jobs::list_jobs_by_status(conn, status, limit))
+    }
+
+    fn list_stuck_jobs(&self) -> Result<Vec<Job>> {
+        self.with_read_conn(crate::db::jobs::list_stuck_jobs)
+    }
+
+    fn retry_failed_job(&self, job_id: &str) -> Result<bool> {
+        let id = job_id.to_string();
+        self.with_write_conn(move |conn| crate::db::jobs::retry_failed_job(conn, &id))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Provider store — used by llm::resolve_provider and CLI
+// ---------------------------------------------------------------------------
+
+use crate::db::providers::{InsertProvider, ProviderRow};
+
+/// Provider credential operations.
+///
+/// Consumers: `llm::resolve_provider`, CLI `brain config provider` commands.
+pub trait ProviderStore: Send + Sync {
+    /// Insert a new provider. Returns the generated ID.
+    fn insert_provider(&self, input: &InsertProvider) -> Result<String>;
+
+    /// Get a provider by ID.
+    fn get_provider(&self, id: &str) -> Result<Option<ProviderRow>>;
+
+    /// Get the most recently updated provider for a given name.
+    fn get_provider_by_name(&self, name: &str) -> Result<Option<ProviderRow>>;
+
+    /// List all providers.
+    fn list_providers(&self) -> Result<Vec<ProviderRow>>;
+
+    /// Delete a provider by ID. Returns true if deleted.
+    fn delete_provider(&self, id: &str) -> Result<bool>;
+
+    /// Check if a provider with the given name and key hash exists.
+    fn provider_exists(&self, name: &str, api_key_hash: &str) -> Result<bool>;
+}
+
+// -- ProviderStore for Db --------------------------------------------------
+
+impl ProviderStore for Db {
+    fn insert_provider(&self, input: &InsertProvider) -> Result<String> {
+        self.insert_provider(input)
+    }
+
+    fn get_provider(&self, id: &str) -> Result<Option<ProviderRow>> {
+        self.get_provider(id)
+    }
+
+    fn get_provider_by_name(&self, name: &str) -> Result<Option<ProviderRow>> {
+        self.get_provider_by_name(name)
+    }
+
+    fn list_providers(&self) -> Result<Vec<ProviderRow>> {
+        self.list_providers()
+    }
+
+    fn delete_provider(&self, id: &str) -> Result<bool> {
+        self.delete_provider(id)
+    }
+
+    fn provider_exists(&self, name: &str, api_key_hash: &str) -> Result<bool> {
+        self.provider_exists(name, api_key_hash)
     }
 }
 

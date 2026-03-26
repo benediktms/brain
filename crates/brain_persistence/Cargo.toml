@@ -22,6 +22,9 @@ arrow-array = "57"
 futures = "0.3"
 parking_lot = "0.12"
 regex = "1"
+aes-gcm = { workspace = true }
+rand = { workspace = true }
+base64 = "0.22"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

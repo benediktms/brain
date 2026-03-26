@@ -1,6 +1,7 @@
 mod brains_list;
 mod helpers;
 /// MCP tool definitions and handlers.
+mod jobs_status;
 mod mem_consolidate;
 mod mem_expand;
 mod mem_reflect;
@@ -114,6 +115,7 @@ impl ToolRegistry {
                 Box::new(record_link::RecordLinkAdd),
                 Box::new(record_link::RecordLinkRemove),
                 Box::new(brains_list::BrainsList),
+                Box::new(jobs_status::JobsStatus),
             ],
         }
     }
@@ -145,7 +147,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 29);
+        assert_eq!(defs.len(), 30);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));

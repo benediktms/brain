@@ -14,7 +14,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-# ML inference
+# ML inference (embeddings)
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
@@ -39,6 +39,8 @@ nanoid = { workspace = true }
 base64 = "0.22"
 zstd = "0.13"
 tempfile = "3"
+async-trait = { workspace = true }
+reqwest = { workspace = true }
 
 # Enable Accelerate (Apple BLAS) on macOS for ~2x faster embeddings.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -52,6 +54,7 @@ rusqlite = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 ulid = { workspace = true }
+wiremock = "0.6"
 
 [[bench]]
 name = "latency"
