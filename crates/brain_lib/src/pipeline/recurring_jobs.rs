@@ -108,10 +108,7 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue, brains: &[BrainInfo]) -> R
 pub fn is_recurring_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "stale_scope_sweep"
-            | "consolidation_sweep"
-            | "full_scan_sweep"
-            | "embed_poll_sweep"
+        "stale_scope_sweep" | "consolidation_sweep" | "full_scan_sweep" | "embed_poll_sweep"
     )
 }
 

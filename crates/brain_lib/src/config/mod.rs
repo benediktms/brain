@@ -1049,7 +1049,10 @@ roots = ["/path1", "/path2"]
             prefix: None,
             archived: false,
         };
-        assert_eq!(entry.primary_root().unwrap(), PathBuf::from("/primary").as_path());
+        assert_eq!(
+            entry.primary_root().unwrap(),
+            PathBuf::from("/primary").as_path()
+        );
     }
 
     #[test]
