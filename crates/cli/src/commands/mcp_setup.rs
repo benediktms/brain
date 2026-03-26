@@ -231,7 +231,6 @@ pub fn run(target: McpTarget, dry_run: bool) -> Result<()> {
         McpTarget::Claude => register_claude(&brain_bin, dry_run),
         McpTarget::Cursor => setup_cursor(&brain_bin, dry_run),
         McpTarget::Vscode => setup_vscode(&brain_bin, dry_run),
-        McpTarget::ClaudePlugin => setup_claude_plugin(dry_run),
     }
 }
 
@@ -249,14 +248,18 @@ fn render(template: &str) -> String {
     result
 }
 
-fn setup_claude_plugin(dry_run: bool) -> Result<()> {
+fn plugin_root() -> Result<std::path::PathBuf> {
     let home = dirs::home_dir().context("cannot determine home directory")?;
-    let plugin_root = home
+    Ok(home
         .join(".claude")
         .join("plugins")
         .join("marketplaces")
         .join("brain-marketplace")
-        .join("claude-plugin");
+        .join("claude-plugin"))
+}
+
+pub fn install_claude_plugin(dry_run: bool) -> Result<()> {
+    let plugin_root = plugin_root()?;
 
     let templates: &[TemplateFile] = &[
         TemplateFile {
@@ -411,6 +414,23 @@ fn setup_claude_plugin(dry_run: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn uninstall_claude_plugin() -> Result<()> {
+    let plugin_root = plugin_root()?;
+
+    if !plugin_root.exists() {
+        println!("No brain plugin found at {}", plugin_root.display());
+        return Ok(());
+    }
+
+    fs::remove_dir_all(&plugin_root)
+        .with_context(|| format!("failed to remove {}", plugin_root.display()))?;
+
+    println!("Removed brain Claude Code plugin");
+    println!("  Was at: {}", plugin_root.display());
+    println!("\nRestart Claude Code to unload the plugin.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,8 +498,8 @@ mod tests {
     }
 
     #[test]
-    fn setup_claude_plugin_dry_run_succeeds() {
-        assert!(setup_claude_plugin(true).is_ok());
+    fn install_claude_plugin_dry_run_succeeds() {
+        assert!(install_claude_plugin(true).is_ok());
     }
 
     #[test]

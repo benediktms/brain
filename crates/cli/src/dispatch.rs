@@ -149,6 +149,14 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 commands::mcp_setup::run(target, dry_run)?;
             }
         },
+        Command::Plugin { action } => match action {
+            PluginAction::Install { dry_run } => {
+                commands::mcp_setup::install_claude_plugin(dry_run)?;
+            }
+            PluginAction::Uninstall => {
+                commands::mcp_setup::uninstall_claude_plugin()?;
+            }
+        },
         Command::Hooks { action } => match action {
             HooksAction::Install { dry_run } => {
                 commands::hooks::install(dry_run)?;
