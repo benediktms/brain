@@ -324,6 +324,51 @@ pub fn list_jobs(
     Ok(jobs)
 }
 
+// ─── Status counts ────────────────────────────────────────────────
+
+/// Count jobs by status.
+pub fn count_jobs_by_status(conn: &Connection, status: &JobStatus) -> Result<i64> {
+    let status_str = status.as_ref().to_string();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM jobs WHERE status = ?1",
+        [&status_str],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+/// List recent jobs filtered by status, ordered by most recent first.
+pub fn list_jobs_by_status(conn: &Connection, status: &JobStatus, limit: i32) -> Result<Vec<Job>> {
+    let status_str = status.as_ref().to_string();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {JOB_COLUMNS} FROM jobs
+         WHERE status = ?1
+         ORDER BY updated_at DESC
+         LIMIT ?2"
+    ))?;
+    let jobs = stmt
+        .query_map(params![status_str, limit], row_to_job)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(jobs)
+}
+
+/// List stuck jobs (in_progress with started_at past threshold, or pending with
+/// updated_at past threshold) that are still retryable.
+pub fn list_stuck_jobs(conn: &Connection) -> Result<Vec<Job>> {
+    let now = now_secs();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {JOB_COLUMNS} FROM jobs
+         WHERE (status = 'in_progress' AND started_at < ?1 - stuck_threshold_secs)
+            OR (status = 'pending' AND updated_at < ?1 - stuck_threshold_secs)
+         ORDER BY started_at ASC
+         LIMIT 50"
+    ))?;
+    let jobs = stmt
+        .query_map(params![now], row_to_job)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(jobs)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]

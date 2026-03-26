@@ -814,6 +814,17 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Status { json } => {
             commands::status::run(&cli.sqlite_db, Some(&cli.lance_db), json)?;
         }
+        Command::Jobs { action } => match action {
+            JobsAction::Status { json } => {
+                commands::jobs::run_status(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+            }
+            JobsAction::Retry { job_id } => {
+                commands::jobs::run_retry(&cli.sqlite_db, Some(&cli.lance_db), &job_id)?;
+            }
+            JobsAction::Gc { older_than_days } => {
+                commands::jobs::run_gc(&cli.sqlite_db, Some(&cli.lance_db), older_than_days)?;
+            }
+        },
     }
 
     Ok(())

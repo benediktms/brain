@@ -1186,12 +1186,13 @@ impl DerivedSummaryStore for Db {
 // ---------------------------------------------------------------------------
 
 use crate::db::job::Job;
+use crate::db::job::JobStatus;
 use crate::db::jobs::EnqueueJobInput;
 
 /// Job queue operations required by the daemon event loop and job worker.
 ///
 /// Consumers: `pipeline::job_worker::process_jobs`, daemon watch loop
-/// (job tick + reaper).
+/// (job tick + reaper), and the `jobs.status` MCP tool.
 pub trait JobQueue: Send + Sync {
     /// Atomically claim up to `limit` ready jobs. Sets status to `pending`,
     /// increments attempts, records `started_at`.
@@ -1213,6 +1214,15 @@ pub trait JobQueue: Send + Sync {
 
     /// Delete old completed jobs older than `age_secs`. Returns deleted count.
     fn gc_completed_jobs(&self, age_secs: i64) -> Result<usize>;
+
+    /// Count jobs with the given status.
+    fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64>;
+
+    /// List recent jobs filtered by status, ordered by most recent first.
+    fn list_jobs_by_status(&self, status: &JobStatus, limit: i32) -> Result<Vec<Job>>;
+
+    /// List stuck jobs (in_progress/pending past their threshold) that are retryable.
+    fn list_stuck_jobs(&self) -> Result<Vec<Job>>;
 }
 
 // -- JobQueue for Db -------------------------------------------------------
@@ -1247,6 +1257,18 @@ impl JobQueue for Db {
 
     fn gc_completed_jobs(&self, age_secs: i64) -> Result<usize> {
         self.with_write_conn(move |conn| crate::db::jobs::gc_completed_jobs(conn, age_secs))
+    }
+
+    fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64> {
+        self.with_read_conn(move |conn| crate::db::jobs::count_jobs_by_status(conn, status))
+    }
+
+    fn list_jobs_by_status(&self, status: &JobStatus, limit: i32) -> Result<Vec<Job>> {
+        self.with_read_conn(move |conn| crate::db::jobs::list_jobs_by_status(conn, status, limit))
+    }
+
+    fn list_stuck_jobs(&self) -> Result<Vec<Job>> {
+        self.with_read_conn(crate::db::jobs::list_stuck_jobs)
     }
 }
 

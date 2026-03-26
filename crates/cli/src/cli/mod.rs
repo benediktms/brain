@@ -1,4 +1,5 @@
 mod artifacts;
+mod jobs;
 mod memory;
 mod record_common;
 mod records;
@@ -10,6 +11,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 
 pub(crate) use artifacts::*;
+pub(crate) use jobs::*;
 pub(crate) use memory::*;
 pub(crate) use record_common::*;
 pub(crate) use records::*;
@@ -451,6 +453,21 @@ pub(crate) enum Command {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+
+    /// Observe and manage the async job queue (status, retry, gc)
+    #[command(
+        visible_alias = "j",
+        long_about = "Observe and manage the async job queue.\n\n\
+            Shows per-status counts, recent failures, and stuck jobs.\n\
+            Subcommands:\n\
+            - status    Show job queue health\n\
+            - retry     Reset a failed/stuck job to pending\n\
+            - gc        Garbage-collect old completed jobs"
+    )]
+    Jobs {
+        #[command(subcommand)]
+        action: JobsAction,
     },
 
     /// Migrate all per-brain SQLite databases into the unified ~/.brain/brain.db (polished)
