@@ -67,21 +67,38 @@ pub async fn run(
         pipeline.set_summarizer(Arc::from(provider));
     }
 
-    // Full scan on startup to catch offline changes
-    let stats = pipeline.full_scan(&note_dirs).await?;
-    info!(
-        indexed = stats.indexed,
-        skipped = stats.skipped,
-        deleted = stats.deleted,
-        "startup scan complete"
-    );
-
-    // Compact fragments created during full scan
-    pipeline.store().optimizer().force_optimize().await;
-
-    // Startup self-heal: if LanceDB is missing, reset embedded_at so all
-    // tasks and chunks will be re-embedded on the next poll cycle.
-    embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.store()).await;
+    // Spawn full scan in the background so the event loop starts immediately.
+    // The scan catches offline changes; any file events during the scan are
+    // queued by the watcher and processed once the event loop is running.
+    {
+        let db = pipeline.db().clone();
+        let store = pipeline.store().clone();
+        let embedder = pipeline.embedder().clone();
+        let dirs = note_dirs.clone();
+        tokio::spawn(async move {
+            // Build a lightweight pipeline clone for the scan.
+            match brain_lib::pipeline::IndexPipeline::with_store(db.clone(), store.clone(), embedder).await {
+                Ok(scan_pipeline) => {
+                    match scan_pipeline.full_scan(&dirs).await {
+                        Ok(stats) => {
+                            info!(
+                                indexed = stats.indexed,
+                                skipped = stats.skipped,
+                                deleted = stats.deleted,
+                                "startup scan complete"
+                            );
+                        }
+                        Err(e) => warn!(error = %e, "startup scan failed"),
+                    }
+                    // Compact fragments created during full scan
+                    store.optimizer().force_optimize().await;
+                    // Self-heal: reset embedded_at if LanceDB is missing
+                    embed_poll::self_heal_if_lance_missing(&db, &store).await;
+                }
+                Err(e) => warn!(error = %e, "failed to create scan pipeline"),
+            }
+        });
+    }
 
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
