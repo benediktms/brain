@@ -531,10 +531,20 @@ pub fn ensure_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Resul
 /// 2. If a row exists in terminal state → reset to `ready`.
 /// 3. If a row exists and is active → no-op.
 pub fn reconcile_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Result<()> {
+    reconcile_singleton_job_with_delay(conn, input, 0)
+}
+
+/// Like [`reconcile_singleton_job`] but schedules the rescheduled job
+/// `delay_secs` into the future (so it won't be claimed immediately).
+pub fn reconcile_singleton_job_with_delay(
+    conn: &Connection,
+    input: &EnqueueJobInput,
+    delay_secs: i64,
+) -> Result<()> {
     let inserted = ensure_singleton_job(conn, input)?;
     if inserted.is_none() {
         // Row already exists — try to reschedule if terminal.
-        reschedule_terminal_job(conn, input.payload.kind(), input.payload.brain_id())?;
+        reschedule_terminal_job(conn, input.payload.kind(), input.payload.brain_id(), delay_secs)?;
     }
     Ok(())
 }
@@ -549,8 +559,10 @@ pub fn reschedule_terminal_job(
     conn: &Connection,
     kind: &str,
     brain_id: Option<&str>,
+    delay_secs: i64,
 ) -> Result<bool> {
     let now = now_secs();
+    let scheduled_at = now + delay_secs;
 
     let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(bid) =
         brain_id
@@ -563,12 +575,13 @@ pub fn reschedule_terminal_job(
                               started_at = NULL,
                               processed_at = NULL,
                               scheduled_at = ?1,
-                              updated_at = ?1
-             WHERE kind = ?2 AND json_extract(payload, '$.brain_id') = ?3
+                              updated_at = ?2
+             WHERE kind = ?3 AND json_extract(payload, '$.brain_id') = ?4
                AND status IN ('done', 'failed')"
                 .to_string(),
             vec![
-                Box::new(now) as Box<dyn rusqlite::types::ToSql>,
+                Box::new(scheduled_at) as Box<dyn rusqlite::types::ToSql>,
+                Box::new(now),
                 Box::new(kind.to_string()),
                 Box::new(bid.to_string()),
             ],
@@ -582,11 +595,12 @@ pub fn reschedule_terminal_job(
                               started_at = NULL,
                               processed_at = NULL,
                               scheduled_at = ?1,
-                              updated_at = ?1
-             WHERE kind = ?2 AND status IN ('done', 'failed')"
+                              updated_at = ?2
+             WHERE kind = ?3 AND status IN ('done', 'failed')"
                 .to_string(),
             vec![
-                Box::new(now) as Box<dyn rusqlite::types::ToSql>,
+                Box::new(scheduled_at) as Box<dyn rusqlite::types::ToSql>,
+                Box::new(now),
                 Box::new(kind.to_string()),
             ],
         )
@@ -1131,7 +1145,7 @@ mod tests {
         let job_id = enq(&conn, make_payload(), priority::NORMAL);
         set_status(&conn, &job_id, "done");
 
-        let reset = reschedule_terminal_job(&conn, "summarize_scope", None).unwrap();
+        let reset = reschedule_terminal_job(&conn, "summarize_scope", None, 0).unwrap();
         assert!(reset);
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
@@ -1147,7 +1161,7 @@ mod tests {
         let job_id = enq(&conn, make_payload(), priority::NORMAL);
         set_status(&conn, &job_id, "failed");
 
-        let reset = reschedule_terminal_job(&conn, "summarize_scope", None).unwrap();
+        let reset = reschedule_terminal_job(&conn, "summarize_scope", None, 0).unwrap();
         assert!(reset);
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
@@ -1160,7 +1174,7 @@ mod tests {
         let job_id = enq(&conn, make_payload(), priority::NORMAL);
         set_status(&conn, &job_id, "in_progress");
 
-        let reset = reschedule_terminal_job(&conn, "summarize_scope", None).unwrap();
+        let reset = reschedule_terminal_job(&conn, "summarize_scope", None, 0).unwrap();
         assert!(!reset, "should not reset in_progress job");
 
         let job = get_job(&conn, &job_id).unwrap().unwrap();
@@ -1172,7 +1186,7 @@ mod tests {
         let conn = setup_db();
         enq(&conn, make_payload(), priority::NORMAL);
 
-        let reset = reschedule_terminal_job(&conn, "summarize_scope", None).unwrap();
+        let reset = reschedule_terminal_job(&conn, "summarize_scope", None, 0).unwrap();
         assert!(!reset, "should not reset already-ready job");
     }
 

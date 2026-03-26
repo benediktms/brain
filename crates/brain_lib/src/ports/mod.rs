@@ -1277,6 +1277,13 @@ pub trait JobQueue: Send + Sync {
     /// Ensure a singleton job exists and is schedulable (combined
     /// ensure + reschedule in one write transaction).
     fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()>;
+
+    /// Like `reconcile_singleton_job` but reschedules with a delay (seconds).
+    fn reconcile_singleton_job_with_delay(
+        &self,
+        input: &EnqueueJobInput,
+        delay_secs: i64,
+    ) -> Result<()>;
 }
 
 // -- JobQueue for Db -------------------------------------------------------
@@ -1348,7 +1355,7 @@ impl JobQueue for Db {
         let kind = kind.to_string();
         let brain_id = brain_id.map(|s| s.to_string());
         self.with_write_conn(move |conn| {
-            crate::db::jobs::reschedule_terminal_job(conn, &kind, brain_id.as_deref())
+            crate::db::jobs::reschedule_terminal_job(conn, &kind, brain_id.as_deref(), 0)
         })
     }
 
@@ -1360,6 +1367,17 @@ impl JobQueue for Db {
     fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()> {
         let input = input.clone();
         self.with_write_conn(move |conn| crate::db::jobs::reconcile_singleton_job(conn, &input))
+    }
+
+    fn reconcile_singleton_job_with_delay(
+        &self,
+        input: &EnqueueJobInput,
+        delay_secs: i64,
+    ) -> Result<()> {
+        let input = input.clone();
+        self.with_write_conn(move |conn| {
+            crate::db::jobs::reconcile_singleton_job_with_delay(conn, &input, delay_secs)
+        })
     }
 }
 

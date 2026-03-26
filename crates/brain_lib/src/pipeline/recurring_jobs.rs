@@ -24,6 +24,8 @@ pub struct RecurringJobSpec {
     pub retry_strategy: RetryStrategy,
     /// How long before a running job is considered stuck (seconds).
     pub stuck_threshold_secs: i64,
+    /// Delay (seconds) before rescheduling after completion. 0 = immediate.
+    pub reschedule_delay_secs: i64,
 }
 
 /// Global recurring jobs (not brain-scoped).
@@ -34,6 +36,7 @@ pub const GLOBAL_RECURRING_JOBS: &[RecurringJobSpec] = &[
         priority: jobs::priority::BACKGROUND,
         retry_strategy: RetryStrategy::Infinite,
         stuck_threshold_secs: 60,
+        reschedule_delay_secs: 300, // 5 minutes
     },
     RecurringJobSpec {
         kind: "consolidation_sweep",
@@ -41,6 +44,7 @@ pub const GLOBAL_RECURRING_JOBS: &[RecurringJobSpec] = &[
         priority: jobs::priority::BACKGROUND,
         retry_strategy: RetryStrategy::Infinite,
         stuck_threshold_secs: 60,
+        reschedule_delay_secs: 300, // 5 minutes
     },
 ];
 
@@ -64,12 +68,12 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue, brains: &[BrainInfo]) -> R
             metadata: serde_json::json!({}),
             scheduled_at: 0,
         };
-        queue.reconcile_singleton_job(&input)?;
+        queue.reconcile_singleton_job_with_delay(&input, spec.reschedule_delay_secs)?;
     }
 
     // Per-brain jobs
     for brain in brains {
-        // Full scan sweep
+        // Full scan sweep — every 5 minutes
         let input = EnqueueJobInput {
             payload: JobPayload::FullScanSweep {
                 brain_id: brain.brain_id.clone(),
@@ -81,9 +85,9 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue, brains: &[BrainInfo]) -> R
             metadata: serde_json::json!({}),
             scheduled_at: 0,
         };
-        queue.reconcile_singleton_job(&input)?;
+        queue.reconcile_singleton_job_with_delay(&input, 300)?;
 
-        // Embed poll sweep
+        // Embed poll sweep — every 10 seconds
         let input = EnqueueJobInput {
             payload: JobPayload::EmbedPollSweep {
                 brain_id: brain.brain_id.clone(),
@@ -94,7 +98,7 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue, brains: &[BrainInfo]) -> R
             metadata: serde_json::json!({}),
             scheduled_at: 0,
         };
-        queue.reconcile_singleton_job(&input)?;
+        queue.reconcile_singleton_job_with_delay(&input, 10)?;
     }
 
     Ok(())
