@@ -963,12 +963,16 @@ impl GraphLinkReader for Db {
 // established pattern: traits defined in brain_lib, impls for brain_persistence
 // types also in brain_lib (in this file).
 
-use crate::hierarchy::{DerivedSummary, DerivedSummaryStore, ScopeType};
+use crate::hierarchy::{DerivedSummary, DerivedSummaryStore, GeneratedScopeSummary, ScopeType};
 
 // -- DerivedSummaryStore for Db --------------------------------------------
 
 impl DerivedSummaryStore for Db {
-    fn generate_scope_summary(&self, scope_type: &ScopeType, scope_value: &str) -> Result<String> {
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<GeneratedScopeSummary> {
         use brain_persistence::error::BrainCoreError;
         use rusqlite::params;
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -1011,6 +1015,8 @@ impl DerivedSummaryStore for Db {
             Ok(rows)
         })?;
 
+        let source_content = contents.join("\n\n");
+
         let summary_content: String = contents
             .iter()
             .map(|c| c.get(..200).unwrap_or(c.as_str()))
@@ -1044,7 +1050,7 @@ impl DerivedSummaryStore for Db {
             Ok(())
         })?;
 
-        Ok(id)
+        Ok(GeneratedScopeSummary { id, source_content })
     }
 
     fn get_scope_summary(

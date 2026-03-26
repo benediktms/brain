@@ -119,12 +119,16 @@ impl RetryStrategy {
 pub enum JobPayload {
     /// Summarize a scope (directory or tag) using an LLM.
     SummarizeScope {
+        summary_id: String,
         scope_type: String,
         scope_value: String,
         content: String,
     },
     /// Consolidate a cluster of episodes into a single reflection.
     ConsolidateCluster {
+        cluster_index: usize,
+        suggested_title: String,
+        episode_ids: Vec<String>,
         /// Newline-separated episode content.
         episodes: String,
     },
@@ -264,6 +268,7 @@ mod tests {
     #[test]
     fn test_payload_kind_derivation() {
         let p = JobPayload::SummarizeScope {
+            summary_id: "sum-1".into(),
             scope_type: "directory".into(),
             scope_value: "src/".into(),
             content: "hello".into(),
@@ -271,6 +276,9 @@ mod tests {
         assert_eq!(p.kind(), "summarize_scope");
 
         let p = JobPayload::ConsolidateCluster {
+            cluster_index: 0,
+            suggested_title: "Episodes".into(),
+            episode_ids: vec!["ep1".into(), "ep2".into()],
             episodes: "ep1\nep2".into(),
         };
         assert_eq!(p.kind(), "consolidate_cluster");
@@ -279,6 +287,7 @@ mod tests {
     #[test]
     fn test_payload_serialization_roundtrip() {
         let p = JobPayload::SummarizeScope {
+            summary_id: "sum-1".into(),
             scope_type: "directory".into(),
             scope_value: "src/".into(),
             content: "fn main() {}".into(),
@@ -292,6 +301,7 @@ mod tests {
     #[test]
     fn test_payload_default_retry_strategy() {
         let p = JobPayload::SummarizeScope {
+            summary_id: "sum-1".into(),
             scope_type: "directory".into(),
             scope_value: "src/".into(),
             content: "".into(),
@@ -306,6 +316,7 @@ mod tests {
         Job {
             job_id: "j1".into(),
             payload: JobPayload::SummarizeScope {
+                summary_id: "sum-1".into(),
                 scope_type: "directory".into(),
                 scope_value: "src/".into(),
                 content: "".into(),

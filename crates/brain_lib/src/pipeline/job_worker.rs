@@ -1,8 +1,12 @@
 //! Job worker: claims pending jobs from the queue and dispatches to handlers
 //! based on the typed [`JobPayload`] variant.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use rusqlite::params;
 use tracing::{debug, info, warn};
 
+use crate::db::Db;
 use crate::db::jobs::{self, EnqueueJobInput, JobPayload};
 use crate::ports::JobQueue;
 use crate::summarizer::Summarize;
@@ -19,8 +23,8 @@ No markdown formatting.\n\nEpisodes:\n";
 /// Process pending jobs. Claims up to `limit` ready jobs, dispatches each
 /// to the appropriate handler based on its payload variant, and marks them
 /// as completed or failed. Returns the number of successfully processed jobs.
-pub async fn process_jobs(queue: &dyn JobQueue, summarizer: &dyn Summarize, limit: i32) -> usize {
-    let claimed = match queue.claim_ready_jobs(limit) {
+pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> usize {
+    let claimed = match db.claim_ready_jobs(limit) {
         Ok(jobs) => jobs,
         Err(e) => {
             warn!(error = %e, "failed to claim ready jobs");
@@ -41,7 +45,12 @@ pub async fn process_jobs(queue: &dyn JobQueue, summarizer: &dyn Summarize, limi
 
         match summarizer.summarize(&prompt).await {
             Ok(result) => {
-                if let Err(e) = queue.complete_job(&job.job_id, Some(&result)) {
+                if let Err(e) = persist_job_result(db, &job.payload, &result) {
+                    warn!(job_id = %job.job_id, error = %e, "failed to persist job result");
+                    continue;
+                }
+
+                if let Err(e) = db.complete_job(&job.job_id, Some(&result)) {
                     warn!(job_id = %job.job_id, error = %e, "failed to mark job as completed");
                 } else {
                     success_count += 1;
@@ -50,7 +59,7 @@ pub async fn process_jobs(queue: &dyn JobQueue, summarizer: &dyn Summarize, limi
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                if let Err(fail_err) = queue.fail_job(&job.job_id, &error_msg) {
+                if let Err(fail_err) = db.fail_job(&job.job_id, &error_msg) {
                     warn!(
                         job_id = %job.job_id,
                         original_error = %error_msg,
@@ -81,24 +90,82 @@ fn build_prompt(payload: &JobPayload) -> String {
         JobPayload::SummarizeScope { content, .. } => {
             format!("{SUMMARIZE_SCOPE_PROMPT}{content}")
         }
-        JobPayload::ConsolidateCluster { episodes } => {
-            format!("{CONSOLIDATE_CLUSTER_PROMPT}{episodes}")
+        JobPayload::ConsolidateCluster {
+            suggested_title,
+            episodes,
+            ..
+        } => {
+            format!("{CONSOLIDATE_CLUSTER_PROMPT}Title: {suggested_title}\n\n{episodes}")
         }
     }
+}
+
+fn persist_job_result(db: &Db, payload: &JobPayload, result: &str) -> crate::error::Result<()> {
+    match payload {
+        JobPayload::SummarizeScope { summary_id, .. } => {
+            let summary_id = summary_id.clone();
+            let result = result.to_string();
+            let now = now_unix_secs();
+
+            db.with_write_conn(move |conn| {
+                conn.execute(
+                    "UPDATE derived_summaries
+                     SET content = ?1, stale = 0, generated_at = ?2
+                     WHERE id = ?3",
+                    params![result, now, summary_id],
+                )?;
+                Ok(())
+            })
+        }
+        JobPayload::ConsolidateCluster { .. } => Ok(()),
+    }
+}
+
+fn now_unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 /// Enqueue a scope summarization job.
 pub fn enqueue_scope_summary(
     queue: &dyn JobQueue,
+    summary_id: &str,
     scope_type: &str,
     scope_value: &str,
     content: &str,
 ) -> crate::error::Result<String> {
     let input = EnqueueJobInput {
         payload: JobPayload::SummarizeScope {
+            summary_id: summary_id.to_string(),
             scope_type: scope_type.to_string(),
             scope_value: scope_value.to_string(),
             content: content.to_string(),
+        },
+        priority: jobs::priority::NORMAL,
+        retry_config: None, // uses payload default (Fixed{3})
+        stuck_threshold_secs: None,
+        metadata: serde_json::json!({}),
+        scheduled_at: 0,
+    };
+    queue.enqueue_job(&input)
+}
+
+/// Enqueue a cluster consolidation job.
+pub fn enqueue_cluster_summary(
+    queue: &dyn JobQueue,
+    cluster_index: usize,
+    suggested_title: &str,
+    episode_ids: &[String],
+    episodes: &str,
+) -> crate::error::Result<String> {
+    let input = EnqueueJobInput {
+        payload: JobPayload::ConsolidateCluster {
+            cluster_index,
+            suggested_title: suggested_title.to_string(),
+            episode_ids: episode_ids.to_vec(),
+            episodes: episodes.to_string(),
         },
         priority: jobs::priority::NORMAL,
         retry_config: None, // uses payload default (Fixed{3})
@@ -133,8 +200,19 @@ mod tests {
         let db = setup_db();
         let summarizer = MockSummarizer;
 
+        db.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT INTO derived_summaries (id, scope_type, scope_value, content, stale, generated_at)
+                 VALUES (?1, ?2, ?3, '', 0, 0)",
+                params!["sum-1", "directory", "src/"],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
         let job_id = enqueue_scope_summary(
             &db,
+            "sum-1",
             "directory",
             "src/",
             "fn main() { println!(\"hello\"); }",
@@ -169,7 +247,7 @@ mod tests {
             }
         }
 
-        let job_id = enqueue_scope_summary(&db, "directory", "fail/", "content").unwrap();
+        let job_id = enqueue_scope_summary(&db, "sum-1", "directory", "fail/", "content").unwrap();
         let count = process_jobs(&db, &FailingSummarizer, 10).await;
         assert_eq!(count, 0);
 
@@ -191,6 +269,7 @@ mod tests {
     #[test]
     fn test_build_prompt_scope() {
         let payload = JobPayload::SummarizeScope {
+            summary_id: "sum-1".into(),
             scope_type: "directory".into(),
             scope_value: "src/".into(),
             content: "hello world".into(),
@@ -203,6 +282,9 @@ mod tests {
     #[test]
     fn test_build_prompt_cluster() {
         let payload = JobPayload::ConsolidateCluster {
+            cluster_index: 0,
+            suggested_title: "Episodes".into(),
+            episode_ids: vec!["ep-1".into()],
             episodes: "episode data".into(),
         };
         let prompt = build_prompt(&payload);
@@ -219,18 +301,15 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({
-                        "content": [{ "type": "text", "text": "Mock summary result" }],
-                        "usage": {
-                            "input_tokens": 10,
-                            "output_tokens": 5,
-                            "cache_creation_input_tokens": null,
-                            "cache_read_input_tokens": null
-                        }
-                    })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{ "type": "text", "text": "Mock summary result" }],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "cache_creation_input_tokens": null,
+                    "cache_read_input_tokens": null
+                }
+            })))
             .mount(&mock_server)
             .await;
 
@@ -241,7 +320,17 @@ mod tests {
         );
 
         let db = setup_db();
-        let job_id = enqueue_scope_summary(&db, "directory", "src/", "some content").unwrap();
+        db.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT INTO derived_summaries (id, scope_type, scope_value, content, stale, generated_at)
+                 VALUES (?1, ?2, ?3, '', 0, 0)",
+                params!["sum-1", "directory", "src/"],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let job_id =
+            enqueue_scope_summary(&db, "sum-1", "directory", "src/", "some content").unwrap();
 
         let count = process_jobs(&db, &provider, 10).await;
         assert_eq!(count, 1, "expected 1 successful job");
@@ -252,6 +341,17 @@ mod tests {
             .unwrap();
         assert_eq!(job.status, JobStatus::Done);
         assert_eq!(job.result.as_deref(), Some("Mock summary result"));
+        let stored: String = db
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT content FROM derived_summaries WHERE id = ?1",
+                    params!["sum-1"],
+                    |row| row.get(0),
+                )
+                .map_err(|e| crate::error::BrainCoreError::Database(e.to_string()))
+            })
+            .unwrap();
+        assert_eq!(stored, "Mock summary result");
     }
 
     #[tokio::test]
@@ -274,7 +374,8 @@ mod tests {
         );
 
         let db = setup_db();
-        let job_id = enqueue_scope_summary(&db, "directory", "src/", "some content").unwrap();
+        let job_id =
+            enqueue_scope_summary(&db, "sum-1", "directory", "src/", "some content").unwrap();
 
         let count = process_jobs(&db, &provider, 10).await;
         assert_eq!(count, 0, "expected 0 successes on HTTP failure");
@@ -283,7 +384,11 @@ mod tests {
             .with_read_conn(|conn| jobs::get_job(conn, &job_id))
             .unwrap()
             .unwrap();
-        assert_eq!(job.status, JobStatus::Ready, "job should be rescheduled for retry");
+        assert_eq!(
+            job.status,
+            JobStatus::Ready,
+            "job should be rescheduled for retry"
+        );
         assert!(job.last_error.is_some(), "error should be recorded");
         assert_eq!(job.attempts, 1);
     }

@@ -13,6 +13,9 @@
 
 use brain_persistence::error::Result;
 
+use crate::pipeline::job_worker::enqueue_scope_summary;
+use crate::ports::JobQueue;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /// Scope discriminant for a derived summary.
@@ -51,6 +54,22 @@ pub struct DerivedSummary {
     pub generated_at: i64,
 }
 
+/// Result of generating a scope summary placeholder.
+#[derive(Debug, Clone)]
+pub struct GeneratedScopeSummary {
+    /// Newly assigned row identifier.
+    pub id: String,
+    /// Full source content sent to the async LLM job.
+    pub source_content: String,
+}
+
+/// Result of generating a scope summary, including whether an LLM job is pending.
+#[derive(Debug, Clone)]
+pub struct ScopeSummaryGeneration {
+    pub id: String,
+    pub llm_pending: bool,
+}
+
 // ─── Port trait ───────────────────────────────────────────────────────────────
 
 /// Persistence port for derived summary operations.
@@ -60,7 +79,11 @@ pub struct DerivedSummary {
 pub trait DerivedSummaryStore: Send + Sync {
     /// Generate and persist a derived summary for the given scope.
     /// Returns the newly assigned summary id.
-    fn generate_scope_summary(&self, scope_type: &ScopeType, scope_value: &str) -> Result<String>;
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<GeneratedScopeSummary>;
 
     /// Retrieve an existing derived summary for the given scope.
     /// Returns `Ok(None)` if no row exists.
@@ -94,11 +117,38 @@ pub trait DerivedSummaryStore: Send + Sync {
 /// # Returns
 /// The newly assigned summary `id` on success.
 pub fn generate_scope_summary(
-    store: &impl DerivedSummaryStore,
+    store: &(impl DerivedSummaryStore + JobQueue),
     scope_type: &ScopeType,
     scope_value: &str,
 ) -> Result<String> {
-    store.generate_scope_summary(scope_type, scope_value)
+    Ok(generate_scope_summary_with_options(store, scope_type, scope_value, true)?.id)
+}
+
+/// Generate a placeholder summary and optionally enqueue an async LLM refresh.
+pub fn generate_scope_summary_with_options(
+    store: &(impl DerivedSummaryStore + JobQueue),
+    scope_type: &ScopeType,
+    scope_value: &str,
+    async_llm: bool,
+) -> Result<ScopeSummaryGeneration> {
+    let generated = store.generate_scope_summary(scope_type, scope_value)?;
+    let llm_pending = if async_llm && !generated.source_content.is_empty() {
+        enqueue_scope_summary(
+            store,
+            &generated.id,
+            scope_type.as_str(),
+            scope_value,
+            &generated.source_content,
+        )?;
+        true
+    } else {
+        false
+    };
+
+    Ok(ScopeSummaryGeneration {
+        id: generated.id,
+        llm_pending,
+    })
 }
 
 /// Retrieve an existing derived summary for the given scope.

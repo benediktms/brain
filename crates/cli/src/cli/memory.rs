@@ -170,6 +170,10 @@ pub(crate) enum MemoryAction {
         /// Gap in seconds between episodes that triggers a cluster boundary
         #[arg(long, default_value = "3600")]
         gap_seconds: i64,
+
+        /// Enqueue async LLM synthesis jobs for returned clusters
+        #[arg(long)]
+        auto_summarize: bool,
     },
 
     /// Generate or retrieve a scope summary for a directory or tag
@@ -186,7 +190,8 @@ pub(crate) enum MemoryAction {
             brain memory summarize-scope --scope-type directory --scope-value src/auth\n  \
             brain memory summarize-scope --scope-type tag --scope-value rust\n  \
             brain memory summarize-scope --scope-type directory --scope-value src/auth --regenerate\n  \
-            brain memory ss --scope-type tag --scope-value debugging --regenerate"
+            brain memory ss --scope-type tag --scope-value debugging --regenerate\n  \
+            brain memory ss --scope-type directory --scope-value src/auth --no-async-llm"
     )]
     SummarizeScope {
         /// Scope type: "directory" or "tag"
@@ -200,6 +205,10 @@ pub(crate) enum MemoryAction {
         /// Force regeneration of the summary even if one exists
         #[arg(long)]
         regenerate: bool,
+
+        /// Disable async LLM refresh and keep the extractive placeholder only
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        async_llm: bool,
     },
 
     /// Retrieve source material for reflection (prepare) or store a reflection (commit)

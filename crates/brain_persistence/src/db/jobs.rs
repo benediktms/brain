@@ -364,6 +364,7 @@ mod tests {
 
     fn make_payload() -> JobPayload {
         JobPayload::SummarizeScope {
+            summary_id: "sum-1".into(),
             scope_type: "directory".into(),
             scope_value: "src/".into(),
             content: "fn main() {}".into(),
@@ -412,12 +413,14 @@ mod tests {
         let conn = setup_db();
         let now = now_secs();
         let payload_low = serde_json::to_string(&JobPayload::SummarizeScope {
+            summary_id: "sum-low".into(),
             scope_type: "directory".into(),
             scope_value: "low/".into(),
             content: "".into(),
         })
         .unwrap();
         let payload_high = serde_json::to_string(&JobPayload::SummarizeScope {
+            summary_id: "sum-high".into(),
             scope_type: "directory".into(),
             scope_value: "high/".into(),
             content: "".into(),
@@ -646,6 +649,9 @@ mod tests {
         let id2 = enq(
             &conn,
             JobPayload::ConsolidateCluster {
+                cluster_index: 0,
+                suggested_title: "Episodes".into(),
+                episode_ids: vec!["ep1".into()],
                 episodes: "ep1".into(),
             },
             priority::NORMAL,
@@ -666,6 +672,7 @@ mod tests {
     fn test_payload_roundtrip_through_db() {
         let conn = setup_db();
         let payload = JobPayload::SummarizeScope {
+            summary_id: "sum-tag".into(),
             scope_type: "tag".into(),
             scope_value: "rust".into(),
             content: "fn hello() {}".into(),
@@ -675,10 +682,12 @@ mod tests {
         let job = get_job(&conn, &job_id).unwrap().unwrap();
         match &job.payload {
             JobPayload::SummarizeScope {
+                summary_id,
                 scope_type,
                 scope_value,
                 content,
             } => {
+                assert_eq!(summary_id, "sum-tag");
                 assert_eq!(scope_type, "tag");
                 assert_eq!(scope_value, "rust");
                 assert_eq!(content, "fn hello() {}");
