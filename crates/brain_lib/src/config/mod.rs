@@ -70,12 +70,9 @@ fn is_false(b: &bool) -> bool {
 }
 
 impl BrainEntry {
-    /// Return the primary root path (first element of `roots`).
-    ///
-    /// # Panics
-    /// Panics if `roots` is empty, which should never happen for a valid entry.
-    pub fn primary_root(&self) -> &Path {
-        &self.roots[0]
+    /// Return the primary root path (first element of `roots`), if any.
+    pub fn primary_root(&self) -> Option<&Path> {
+        self.roots.first().map(|p| p.as_path())
     }
 }
 
@@ -300,8 +297,12 @@ pub fn resolve_brain_entry(name_or_id: &str) -> Result<(String, BrainEntry)> {
 pub fn resolve_brain_id(entry: &BrainEntry, _name: &str) -> Result<String> {
     if let Some(ref id) = entry.id {
         Ok(id.clone())
+    } else if let Some(root) = entry.primary_root() {
+        get_or_generate_brain_id(&root.join(".brain"))
     } else {
-        get_or_generate_brain_id(&entry.primary_root().join(".brain"))
+        Err(crate::error::BrainCoreError::Internal(
+            "brain entry has no roots".to_string(),
+        ))
     }
 }
 
@@ -780,7 +781,7 @@ mod tests {
 
         let (name, entry) = resolve_brain_entry_from_config("infra", &cfg).unwrap();
         assert_eq!(name, "infra");
-        assert_eq!(entry.primary_root(), tmp.path());
+        assert_eq!(entry.primary_root().unwrap(), tmp.path());
         assert_eq!(entry.id, Some("abc12345".to_string()));
     }
 
@@ -791,7 +792,7 @@ mod tests {
 
         let (name, entry) = resolve_brain_entry_from_config("abc12345", &cfg).unwrap();
         assert_eq!(name, "infra");
-        assert_eq!(entry.primary_root(), tmp.path());
+        assert_eq!(entry.primary_root().unwrap(), tmp.path());
     }
 
     #[test]
@@ -1048,7 +1049,7 @@ roots = ["/path1", "/path2"]
             prefix: None,
             archived: false,
         };
-        assert_eq!(entry.primary_root(), PathBuf::from("/primary").as_path());
+        assert_eq!(entry.primary_root().unwrap(), PathBuf::from("/primary").as_path());
     }
 
     #[test]
@@ -1122,7 +1123,7 @@ roots = ["/some/path"]
 
         let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
         assert_eq!(name, "infra");
-        assert_eq!(entry.primary_root(), tmp.path());
+        assert_eq!(entry.primary_root().unwrap(), tmp.path());
 
         let (name2, _) = resolve_brain_entry_from_config("infra-alias", &cfg).unwrap();
         assert_eq!(name2, "infra");
