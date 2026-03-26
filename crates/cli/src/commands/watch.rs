@@ -17,6 +17,7 @@ use brain_lib::mcp::McpContext;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::pipeline::embed_poll;
 use brain_lib::pipeline::job_worker;
+use brain_lib::pipeline::recurring_jobs;
 use brain_lib::ports::JobQueue;
 use brain_lib::prelude::*;
 use brain_lib::store::Store;
@@ -167,6 +168,11 @@ pub async fn run(
                 pipeline.store().optimizer().maybe_optimize().await;
             }
             _ = summarize_poll_interval.tick() => {
+                // Reconcile recurring singleton jobs (idempotent).
+                if let Err(e) = recurring_jobs::reconcile_recurring_jobs(pipeline.db()) {
+                    tracing::warn!(error = %e, "reconcile_recurring_jobs failed");
+                }
+
                 if let Some(summarizer) = pipeline.summarizer() {
                     if let Err(e) = pipeline.db().reap_stuck_jobs() {
                         tracing::warn!(error = %e, "reap_stuck_jobs failed");
@@ -180,7 +186,8 @@ pub async fn run(
                         info!(processed = n, "summarization jobs completed");
                     }
                 }
-                if let Err(e) = pipeline.db().gc_completed_jobs(7 * 86400) {
+                let protected = recurring_jobs::protected_kinds();
+                if let Err(e) = pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
                     tracing::warn!(error = %e, "gc_completed_jobs failed");
                 }
             }
@@ -663,6 +670,11 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = summarize_poll_interval.tick() => {
                 for instance in brains.values() {
+                    // Reconcile recurring singleton jobs (idempotent).
+                    if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.db()) {
+                        tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
+                    }
+
                     if let Some(summarizer) = instance.pipeline.summarizer() {
                         if let Err(e) = instance.pipeline.db().reap_stuck_jobs() {
                             tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
@@ -676,7 +688,8 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                             info!(brain = %instance.name, processed = n, "summarization jobs completed");
                         }
                     }
-                    if let Err(e) = instance.pipeline.db().gc_completed_jobs(7 * 86400) {
+                    let protected = recurring_jobs::protected_kinds();
+                    if let Err(e) = instance.pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
                         tracing::warn!(brain = %instance.name, error = %e, "gc_completed_jobs failed");
                     }
                 }

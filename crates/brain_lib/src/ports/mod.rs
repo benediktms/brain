@@ -1213,7 +1213,8 @@ pub trait JobQueue: Send + Sync {
     fn enqueue_job(&self, input: &EnqueueJobInput) -> Result<String>;
 
     /// Delete old completed jobs older than `age_secs`. Returns deleted count.
-    fn gc_completed_jobs(&self, age_secs: i64) -> Result<usize>;
+    /// Protected kinds (recurring singletons) are excluded from deletion.
+    fn gc_completed_jobs(&self, age_secs: i64, protected_kinds: &[&str]) -> Result<usize>;
 
     /// Count jobs with the given status.
     fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64>;
@@ -1226,6 +1227,25 @@ pub trait JobQueue: Send + Sync {
 
     /// Reset a failed job back to `ready`. Returns true if the job was updated.
     fn retry_failed_job(&self, job_id: &str) -> Result<bool>;
+
+    /// Get a job by its `kind` column.
+    fn get_job_by_kind(&self, kind: &str) -> Result<Option<Job>>;
+
+    /// Ensure a singleton job row exists for the given kind.
+    /// Returns `Some(job_id)` if inserted, `None` if already exists.
+    fn ensure_singleton_job(&self, input: &EnqueueJobInput) -> Result<Option<String>>;
+
+    /// If the singleton job for `kind` is terminal (done/failed), reset to ready.
+    /// Returns `true` if reset, `false` if active or missing.
+    fn reschedule_terminal_job(&self, kind: &str) -> Result<bool>;
+
+    /// Enqueue a dedup job. If a non-terminal job of the same kind exists,
+    /// returns its job_id. Returns `(job_id, was_created)`.
+    fn enqueue_dedup_job(&self, input: &EnqueueJobInput) -> Result<(String, bool)>;
+
+    /// Ensure a singleton job exists and is schedulable (combined
+    /// ensure + reschedule in one write transaction).
+    fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()>;
 }
 
 // -- JobQueue for Db -------------------------------------------------------
@@ -1258,8 +1278,12 @@ impl JobQueue for Db {
         self.with_write_conn(move |conn| crate::db::jobs::enqueue_job(conn, &input))
     }
 
-    fn gc_completed_jobs(&self, age_secs: i64) -> Result<usize> {
-        self.with_write_conn(move |conn| crate::db::jobs::gc_completed_jobs(conn, age_secs))
+    fn gc_completed_jobs(&self, age_secs: i64, protected_kinds: &[&str]) -> Result<usize> {
+        let protected: Vec<String> = protected_kinds.iter().map(|s| s.to_string()).collect();
+        self.with_write_conn(move |conn| {
+            let refs: Vec<&str> = protected.iter().map(|s| s.as_str()).collect();
+            crate::db::jobs::gc_completed_jobs(conn, age_secs, &refs)
+        })
     }
 
     fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64> {
@@ -1277,6 +1301,31 @@ impl JobQueue for Db {
     fn retry_failed_job(&self, job_id: &str) -> Result<bool> {
         let id = job_id.to_string();
         self.with_write_conn(move |conn| crate::db::jobs::retry_failed_job(conn, &id))
+    }
+
+    fn get_job_by_kind(&self, kind: &str) -> Result<Option<Job>> {
+        let kind = kind.to_string();
+        self.with_read_conn(move |conn| crate::db::jobs::get_job_by_kind(conn, &kind))
+    }
+
+    fn ensure_singleton_job(&self, input: &EnqueueJobInput) -> Result<Option<String>> {
+        let input = input.clone();
+        self.with_write_conn(move |conn| crate::db::jobs::ensure_singleton_job(conn, &input))
+    }
+
+    fn reschedule_terminal_job(&self, kind: &str) -> Result<bool> {
+        let kind = kind.to_string();
+        self.with_write_conn(move |conn| crate::db::jobs::reschedule_terminal_job(conn, &kind))
+    }
+
+    fn enqueue_dedup_job(&self, input: &EnqueueJobInput) -> Result<(String, bool)> {
+        let input = input.clone();
+        self.with_write_conn(move |conn| crate::db::jobs::enqueue_dedup_job(conn, &input))
+    }
+
+    fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()> {
+        let input = input.clone();
+        self.with_write_conn(move |conn| crate::db::jobs::reconcile_singleton_job(conn, &input))
     }
 }
 

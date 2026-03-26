@@ -3,6 +3,7 @@ pub mod embed_poll;
 mod indexing;
 pub mod job_worker;
 mod maintenance;
+pub mod recurring_jobs;
 mod scan;
 
 use std::path::Path;
