@@ -1229,6 +1229,9 @@ pub trait JobQueue: Send + Sync {
     /// increments attempts, records `started_at`.
     fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>>;
 
+    /// Advance a job from `pending` to `in_progress`. No-op if already past that state.
+    fn advance_to_in_progress(&self, job_id: &str) -> Result<()>;
+
     /// Mark a job as done with an optional result. Sets `processed_at`.
     fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()>;
 
@@ -1291,6 +1294,11 @@ pub trait JobQueue: Send + Sync {
 impl JobQueue for Db {
     fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>> {
         self.with_write_conn(|conn| crate::db::jobs::claim_ready_jobs(conn, limit))
+    }
+
+    fn advance_to_in_progress(&self, job_id: &str) -> Result<()> {
+        let job_id = job_id.to_string();
+        self.with_write_conn(move |conn| crate::db::jobs::advance_to_in_progress(conn, &job_id))
     }
 
     fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()> {

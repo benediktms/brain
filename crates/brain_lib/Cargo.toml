@@ -42,6 +42,7 @@ zstd = "0.13"
 tempfile = "3"
 async-trait = { workspace = true }
 reqwest = { workspace = true }
+dashmap = "6"
 
 # Enable Accelerate (Apple BLAS) on macOS for ~2x faster embeddings.
 [target.'cfg(target_os = "macos")'.dependencies]

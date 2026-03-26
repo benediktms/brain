@@ -3,11 +3,16 @@
 //!
 //! Each claimed job is spawned as a separate `tokio::spawn` task for
 //! concurrent execution. LLM jobs resolve their own provider from the DB.
+//!
+//! An [`ActiveJobs`] lock set prevents the stuck-job reaper from resetting
+//! jobs that are still being actively worked on. Each spawned task holds a
+//! [`JobGuard`] that removes the job from the set on drop (including panics).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use dashmap::DashSet;
 use rusqlite::params;
 use tracing::{debug, warn};
 
@@ -16,6 +21,52 @@ use crate::db::jobs::{self, EnqueueJobInput, JobPayload};
 use crate::embedder::Embed;
 use crate::ports::JobQueue;
 use crate::store::Store;
+
+// ─── Active-job lock set ────────────────────────────────────────
+
+/// In-memory set of job IDs that are currently being executed by a
+/// `tokio::spawn` task. The stuck-job reaper consults this set to avoid
+/// resetting jobs that are still running (which would cause duplicate
+/// execution and wasted LLM calls).
+///
+/// This is the correct mutex for a single-process daemon. If the process
+/// crashes, the locks are lost — and that is fine, because the spawned tasks
+/// die with it. The time-based reaper handles crash recovery.
+#[derive(Clone, Default)]
+pub struct ActiveJobs(Arc<DashSet<String>>);
+
+impl ActiveJobs {
+    pub fn new() -> Self {
+        Self(Arc::new(DashSet::new()))
+    }
+
+    /// Insert a job ID. Returns a [`JobGuard`] that removes it on drop.
+    pub fn acquire(&self, job_id: String) -> JobGuard {
+        self.0.insert(job_id.clone());
+        JobGuard {
+            set: Arc::clone(&self.0),
+            job_id,
+        }
+    }
+
+    /// Check whether a job ID is currently held.
+    pub fn contains(&self, job_id: &str) -> bool {
+        self.0.contains(job_id)
+    }
+}
+
+/// RAII guard that removes a job ID from the [`ActiveJobs`] set on drop.
+/// This guarantees cleanup even if the spawned task panics.
+pub struct JobGuard {
+    set: Arc<DashSet<String>>,
+    job_id: String,
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        self.set.remove(&self.job_id);
+    }
+}
 
 const SUMMARIZE_SCOPE_PROMPT: &str = "\
 Summarize the following content concisely in 2-3 sentences. \
@@ -29,10 +80,14 @@ No markdown formatting.\n\nEpisodes:\n";
 /// Process pending jobs. Claims up to `limit` ready jobs, dispatches each
 /// to the appropriate handler via `tokio::spawn` for concurrent execution.
 /// Returns the number of claimed jobs (not completed — they run in background).
+///
+/// Each spawned task holds a [`JobGuard`] from the `active` set, preventing
+/// the stuck-job reaper from resetting the job while it is still running.
 pub async fn process_jobs(
     db: &Db,
     store: &Store,
     embedder: &Arc<dyn Embed>,
+    active: &ActiveJobs,
     limit: i32,
 ) -> usize {
     let claimed = match db.claim_ready_jobs(limit) {
@@ -54,8 +109,19 @@ pub async fn process_jobs(
         let db = db.clone();
         let store = store.clone();
         let embedder = embedder.clone();
+        // Acquire the lock before spawning — the guard lives inside the task.
+        let _guard = active.acquire(job.job_id.clone());
 
         tokio::spawn(async move {
+            // _guard is moved into this future and dropped when the task ends
+            // (success, failure, or panic).
+            let _guard = _guard;
+
+            if let Err(e) = db.advance_to_in_progress(&job.job_id) {
+                warn!(job_id = %job.job_id, error = %e, "failed to advance to in_progress");
+                return;
+            }
+
             let result = dispatch_job(&db, &store, &embedder, &job.payload).await;
 
             match result {
@@ -84,6 +150,43 @@ pub async fn process_jobs(
     }
 
     count
+}
+
+/// Reap stuck jobs, but skip any that are still actively running (present in
+/// the `active` set). This prevents the reaper from resetting jobs that are
+/// just slow, not actually stuck.
+pub fn reap_stuck_jobs_filtered(db: &Db, active: &ActiveJobs) -> crate::error::Result<usize> {
+    let stuck = db.list_stuck_jobs()?;
+    if stuck.is_empty() {
+        return Ok(0);
+    }
+
+    let truly_stuck: Vec<_> = stuck
+        .into_iter()
+        .filter(|j| !active.contains(&j.job_id))
+        .collect();
+
+    if truly_stuck.is_empty() {
+        return Ok(0);
+    }
+
+    let mut count = 0;
+    for job in &truly_stuck {
+        if job.retry_config.is_retryable() {
+            // Reset to ready for re-claim.
+            match db.fail_job(&job.job_id, "reaped: exceeded stuck threshold") {
+                Ok(()) => count += 1,
+                Err(e) => {
+                    warn!(job_id = %job.job_id, error = %e, "failed to reap stuck job");
+                }
+            }
+        }
+    }
+
+    if count > 0 {
+        debug!(count, "reaped stuck jobs (filtered)");
+    }
+    Ok(count)
 }
 
 type JobResult = std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>>;
@@ -119,8 +222,9 @@ async fn dispatch_job(
 async fn process_llm_job(db: &Db, payload: &JobPayload) -> JobResult {
     let brain_home =
         crate::config::brain_home().map_err(|e| format!("failed to resolve brain_home: {e}"))?;
-    let summarizer = crate::llm::resolve_provider_with_db(db, &brain_home)
-        .ok_or("no LLM provider configured — set ANTHROPIC_API_KEY or configure via brain config")?;
+    let summarizer = crate::llm::resolve_provider_with_db(db, &brain_home).ok_or(
+        "no LLM provider configured — set ANTHROPIC_API_KEY or configure via brain config",
+    )?;
 
     let prompt = build_prompt(payload);
     let result = summarizer.summarize(&prompt).await?;
@@ -208,7 +312,8 @@ async fn process_consolidation_sweep(db: &Db) -> JobResult {
     use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 
     // Don't enqueue new clusters if previous ones are still being processed.
-    let active_count: i64 = db.with_read_conn(|conn| {
+    // Use write conn to avoid stale WAL snapshots.
+    let active_count: i64 = db.with_write_conn(|conn| {
         conn.query_row(
             "SELECT COUNT(*) FROM jobs WHERE kind = 'consolidate_cluster'
              AND status NOT IN ('done', 'failed')",
@@ -402,5 +507,50 @@ mod tests {
     fn test_build_prompt_sweep_is_empty() {
         assert!(build_prompt(&JobPayload::StaleScopeSweep).is_empty());
         assert!(build_prompt(&JobPayload::ConsolidationSweep).is_empty());
+    }
+
+    #[test]
+    fn test_active_jobs_acquire_and_release() {
+        let active = ActiveJobs::new();
+        assert!(!active.contains("job-1"));
+
+        let guard = active.acquire("job-1".into());
+        assert!(active.contains("job-1"));
+
+        drop(guard);
+        assert!(!active.contains("job-1"));
+    }
+
+    #[test]
+    fn test_active_jobs_guard_cleanup_on_panic() {
+        let active = ActiveJobs::new();
+        let active2 = active.clone();
+
+        let handle = std::thread::spawn(move || {
+            let _guard = active2.acquire("job-panic".into());
+            panic!("simulated panic");
+        });
+        // The thread panicked, but the guard's Drop should have removed the entry.
+        let _ = handle.join();
+        assert!(!active.contains("job-panic"));
+    }
+
+    #[test]
+    fn test_active_jobs_multiple_concurrent() {
+        let active = ActiveJobs::new();
+
+        let g1 = active.acquire("job-a".into());
+        let g2 = active.acquire("job-b".into());
+
+        assert!(active.contains("job-a"));
+        assert!(active.contains("job-b"));
+        assert!(!active.contains("job-c"));
+
+        drop(g1);
+        assert!(!active.contains("job-a"));
+        assert!(active.contains("job-b"));
+
+        drop(g2);
+        assert!(!active.contains("job-b"));
     }
 }

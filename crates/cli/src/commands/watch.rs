@@ -89,6 +89,10 @@ pub async fn run(
     // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
     let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
 
+    // In-memory lock set: prevents the reaper from resetting jobs that are
+    // still actively running in a tokio::spawn task.
+    let active_jobs = job_worker::ActiveJobs::new();
+
     // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
         .expect("failed to register SIGTERM handler");
@@ -163,13 +167,14 @@ pub async fn run(
                     tracing::warn!(error = %e, "reconcile_recurring_jobs failed");
                 }
 
-                if let Err(e) = pipeline.db().reap_stuck_jobs() {
+                if let Err(e) = job_worker::reap_stuck_jobs_filtered(pipeline.db(), &active_jobs) {
                     tracing::warn!(error = %e, "reap_stuck_jobs failed");
                 }
                 let n = job_worker::process_jobs(
                     pipeline.db(),
                     pipeline.store(),
                     pipeline.embedder(),
+                    &active_jobs,
                     20,
                 ).await;
                 if n > 0 {
@@ -565,6 +570,10 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Job poll: reconcile recurring jobs, process ready jobs, GC old ones.
     let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
 
+    // In-memory lock set shared across all brains — prevents the reaper from
+    // resetting jobs that are still actively running in a tokio::spawn task.
+    let active_jobs = job_worker::ActiveJobs::new();
+
     // Root validation tick: checks that registered roots still exist on disk,
     // prunes stale roots, and archives brains whose all roots are gone.
     let mut root_validation_tick = tokio::time::interval(Duration::from_secs(60));
@@ -643,13 +652,14 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                         tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
                     }
 
-                    if let Err(e) = instance.pipeline.db().reap_stuck_jobs() {
+                    if let Err(e) = job_worker::reap_stuck_jobs_filtered(instance.pipeline.db(), &active_jobs) {
                         tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
                     }
                     let n = job_worker::process_jobs(
                         instance.pipeline.db(),
                         instance.pipeline.store(),
                         instance.pipeline.embedder(),
+                        &active_jobs,
                         20,
                     ).await;
                     if n > 0 {
@@ -917,7 +927,9 @@ fn event_primary_path(event: &FileEvent) -> PathBuf {
 /// `brain.toml` and the global registry. Generates missing IDs on the fly.
 fn sync_brain_ids(global_cfg: &brain_lib::config::GlobalConfig) {
     for (name, entry) in &global_cfg.brains {
-        let Some(root) = entry.primary_root() else { continue };
+        let Some(root) = entry.primary_root() else {
+            continue;
+        };
         let brain_dir = root.join(".brain");
         match get_or_generate_brain_id(&brain_dir) {
             Ok(id) => {

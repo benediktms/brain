@@ -698,6 +698,7 @@ dependencies = [
  "candle-transformers",
  "chrono",
  "criterion",
+ "dashmap",
  "dirs",
  "futures",
  "ignore",

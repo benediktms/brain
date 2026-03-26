@@ -196,7 +196,7 @@ pub fn complete_job(conn: &Connection, job_id: &str, result: Option<&str>) -> Re
     let now = now_secs();
     conn.execute(
         "UPDATE jobs SET status = 'done', result = ?1, processed_at = ?2, updated_at = ?2
-         WHERE job_id = ?3",
+         WHERE job_id = ?3 AND status IN ('pending', 'in_progress')",
         params![result, now, job_id],
     )?;
     Ok(())
@@ -220,7 +220,7 @@ pub fn fail_job(conn: &Connection, job_id: &str, error_msg: &str) -> Result<()> 
         // Terminal failure.
         conn.execute(
             "UPDATE jobs SET status = 'failed', last_error = ?1, processed_at = ?2, updated_at = ?2
-             WHERE job_id = ?3",
+             WHERE job_id = ?3 AND status IN ('pending', 'in_progress')",
             params![error_msg, now, job_id],
         )?;
     } else {
@@ -235,7 +235,7 @@ pub fn fail_job(conn: &Connection, job_id: &str, error_msg: &str) -> Result<()> 
                               scheduled_at = ?2,
                               started_at = NULL,
                               updated_at = ?3
-             WHERE job_id = ?4",
+             WHERE job_id = ?4 AND status IN ('pending', 'in_progress')",
             params![error_msg, next_scheduled, now, job_id],
         )?;
     }
@@ -516,11 +516,7 @@ pub fn ensure_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Resul
         param_values.iter().map(|p| p.as_ref()).collect();
     let rows = conn.execute(&sql, param_refs.as_slice())?;
 
-    if rows > 0 {
-        Ok(Some(job_id))
-    } else {
-        Ok(None)
-    }
+    if rows > 0 { Ok(Some(job_id)) } else { Ok(None) }
 }
 
 /// Ensure a singleton job exists and is schedulable. Combines
@@ -544,7 +540,12 @@ pub fn reconcile_singleton_job_with_delay(
     let inserted = ensure_singleton_job(conn, input)?;
     if inserted.is_none() {
         // Row already exists — try to reschedule if terminal.
-        reschedule_terminal_job(conn, input.payload.kind(), input.payload.brain_id(), delay_secs)?;
+        reschedule_terminal_job(
+            conn,
+            input.payload.kind(),
+            input.payload.brain_id(),
+            delay_secs,
+        )?;
     }
     Ok(())
 }
@@ -564,11 +565,10 @@ pub fn reschedule_terminal_job(
     let now = now_secs();
     let scheduled_at = now + delay_secs;
 
-    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(bid) =
-        brain_id
-    {
-        (
-            "UPDATE jobs SET status = 'ready',
+    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        if let Some(bid) = brain_id {
+            (
+                "UPDATE jobs SET status = 'ready',
                               attempts = 0,
                               result = NULL,
                               last_error = NULL,
@@ -578,17 +578,17 @@ pub fn reschedule_terminal_job(
                               updated_at = ?2
              WHERE kind = ?3 AND json_extract(payload, '$.brain_id') = ?4
                AND status IN ('done', 'failed')"
-                .to_string(),
-            vec![
-                Box::new(scheduled_at) as Box<dyn rusqlite::types::ToSql>,
-                Box::new(now),
-                Box::new(kind.to_string()),
-                Box::new(bid.to_string()),
-            ],
-        )
-    } else {
-        (
-            "UPDATE jobs SET status = 'ready',
+                    .to_string(),
+                vec![
+                    Box::new(scheduled_at) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(now),
+                    Box::new(kind.to_string()),
+                    Box::new(bid.to_string()),
+                ],
+            )
+        } else {
+            (
+                "UPDATE jobs SET status = 'ready',
                               attempts = 0,
                               result = NULL,
                               last_error = NULL,
@@ -597,14 +597,14 @@ pub fn reschedule_terminal_job(
                               scheduled_at = ?1,
                               updated_at = ?2
              WHERE kind = ?3 AND status IN ('done', 'failed')"
-                .to_string(),
-            vec![
-                Box::new(scheduled_at) as Box<dyn rusqlite::types::ToSql>,
-                Box::new(now),
-                Box::new(kind.to_string()),
-            ],
-        )
-    };
+                    .to_string(),
+                vec![
+                    Box::new(scheduled_at) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(now),
+                    Box::new(kind.to_string()),
+                ],
+            )
+        };
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> =
         params_vec.iter().map(|p| p.as_ref()).collect();
