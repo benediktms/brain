@@ -1179,6 +1179,37 @@ impl DerivedSummaryStore for Db {
             }
         })
     }
+
+    fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>> {
+        use brain_persistence::error::BrainCoreError;
+        use rusqlite::params;
+
+        let limit_i64 = limit as i64;
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, scope_type, scope_value, content, stale, generated_at
+                 FROM derived_summaries
+                 WHERE stale = 1
+                 ORDER BY generated_at ASC
+                 LIMIT ?1",
+            )?;
+            let summaries = stmt
+                .query_map(params![limit_i64], |row| {
+                    Ok(DerivedSummary {
+                        id: row.get(0)?,
+                        scope_type: row.get(1)?,
+                        scope_value: row.get(2)?,
+                        content: row.get(3)?,
+                        stale: row.get::<_, i64>(4)? != 0,
+                        generated_at: row.get(5)?,
+                    })
+                })
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                .collect::<std::result::Result<Vec<DerivedSummary>, _>>()
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            Ok(summaries)
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

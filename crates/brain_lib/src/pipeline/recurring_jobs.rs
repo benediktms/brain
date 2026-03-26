@@ -23,9 +23,22 @@ pub struct RecurringJobSpec {
 }
 
 /// All recurring jobs the daemon should maintain.
-///
-/// Ships empty — entries are added here as recurring job kinds are implemented.
-pub const RECURRING_JOBS: &[RecurringJobSpec] = &[];
+pub const RECURRING_JOBS: &[RecurringJobSpec] = &[
+    RecurringJobSpec {
+        kind: "stale_scope_sweep",
+        make_payload: || JobPayload::StaleScopeSweep,
+        priority: crate::db::jobs::priority::BACKGROUND,
+        retry_strategy: RetryStrategy::Infinite,
+        stuck_threshold_secs: 60,
+    },
+    RecurringJobSpec {
+        kind: "consolidation_sweep",
+        make_payload: || JobPayload::ConsolidationSweep,
+        priority: crate::db::jobs::priority::BACKGROUND,
+        retry_strategy: RetryStrategy::Infinite,
+        stuck_threshold_secs: 60,
+    },
+];
 
 /// Reconcile recurring singleton jobs. Called once per daemon tick.
 ///
@@ -74,8 +87,17 @@ mod tests {
     }
 
     #[test]
-    fn test_is_recurring_kind_empty_registry() {
+    fn test_is_recurring_kind() {
+        assert!(is_recurring_kind("stale_scope_sweep"));
+        assert!(is_recurring_kind("consolidation_sweep"));
         assert!(!is_recurring_kind("summarize_scope"));
         assert!(!is_recurring_kind("consolidate_cluster"));
+    }
+
+    #[test]
+    fn test_protected_kinds() {
+        let protected = protected_kinds();
+        assert!(protected.contains(&"stale_scope_sweep"));
+        assert!(protected.contains(&"consolidation_sweep"));
     }
 }

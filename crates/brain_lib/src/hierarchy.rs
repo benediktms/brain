@@ -35,6 +35,15 @@ impl ScopeType {
             ScopeType::Tag => "tag",
         }
     }
+
+    /// Parse from the DB string. Returns `None` for unknown values.
+    pub fn parse_db(s: &str) -> Option<Self> {
+        match s {
+            "directory" => Some(ScopeType::Directory),
+            "tag" => Some(ScopeType::Tag),
+            _ => None,
+        }
+    }
 }
 
 /// A derived summary row returned from the `derived_summaries` table.
@@ -99,6 +108,9 @@ pub trait DerivedSummaryStore: Send + Sync {
 
     /// Search derived summaries by keyword across all scopes.
     fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>>;
+
+    /// List derived summaries that are marked stale, ordered by oldest first.
+    fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>>;
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
