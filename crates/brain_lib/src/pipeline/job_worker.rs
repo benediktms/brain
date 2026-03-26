@@ -509,6 +509,93 @@ mod tests {
         assert!(build_prompt(&JobPayload::ConsolidationSweep).is_empty());
     }
 
+    /// Insert a stuck job directly into the DB for testing.
+    /// Uses `in_progress` status with `started_at` backdated 600s.
+    fn insert_stuck_job(db: &Db, job_id: &str) {
+        let old = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - 600;
+        let payload = serde_json::to_string(&JobPayload::StaleScopeSweep).unwrap();
+        db.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT INTO jobs (job_id, kind, status, started_at, priority, payload, attempts,
+                                   retry_config, stuck_threshold_secs, metadata,
+                                   created_at, scheduled_at, updated_at)
+                 VALUES (?1, 'stale_scope_sweep', 'in_progress', ?2, 100, ?3, 1,
+                         '{\"type\":\"fixed\",\"attempts\":3}', 60, '{}', ?2, ?2, ?2)",
+                params![job_id, old, payload],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn test_reap_skips_active_jobs() {
+        let db = setup_db();
+        let active = ActiveJobs::new();
+
+        insert_stuck_job(&db, "J-ACTIVE");
+
+        // Guard held → reaper should skip this job.
+        let _guard = active.acquire("J-ACTIVE".into());
+        let reaped = reap_stuck_jobs_filtered(&db, &active).unwrap();
+        assert_eq!(reaped, 0, "reaper must skip jobs in the active set");
+
+        // Verify the job is still in_progress (not reset).
+        let job = db
+            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-ACTIVE"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.status, crate::db::jobs::JobStatus::InProgress);
+    }
+
+    #[test]
+    fn test_reap_proceeds_after_guard_dropped() {
+        let db = setup_db();
+        let active = ActiveJobs::new();
+
+        insert_stuck_job(&db, "J-RELEASED");
+
+        // Acquire and immediately drop — simulates task completion.
+        let guard = active.acquire("J-RELEASED".into());
+        drop(guard);
+
+        let reaped = reap_stuck_jobs_filtered(&db, &active).unwrap();
+        assert_eq!(reaped, 1, "reaper must process jobs no longer in active set");
+    }
+
+    #[test]
+    fn test_reap_mixed_active_and_stuck() {
+        let db = setup_db();
+        let active = ActiveJobs::new();
+
+        insert_stuck_job(&db, "J-HELD");
+        insert_stuck_job(&db, "J-FREE");
+
+        // Only hold one guard.
+        let _guard = active.acquire("J-HELD".into());
+
+        let reaped = reap_stuck_jobs_filtered(&db, &active).unwrap();
+        assert_eq!(reaped, 1, "should reap only the unguarded job");
+
+        // Verify: J-HELD still in_progress, J-FREE was reaped (fail_job was called).
+        let held = db
+            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-HELD"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(held.status, crate::db::jobs::JobStatus::InProgress);
+
+        let freed = db
+            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-FREE"))
+            .unwrap()
+            .unwrap();
+        // fail_job with retryable config resets to Ready.
+        assert_eq!(freed.status, crate::db::jobs::JobStatus::Ready);
+    }
+
     #[test]
     fn test_active_jobs_acquire_and_release() {
         let active = ActiveJobs::new();
