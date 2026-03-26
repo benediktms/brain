@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use ignore::WalkBuilder;
 use tracing::{info, warn};
-use walkdir::WalkDir;
 
 /// A scanned note file path.
 pub struct ScannedFile {
@@ -9,15 +9,23 @@ pub struct ScannedFile {
 }
 
 /// Walk `dirs`, collect all `*.md` file paths.
-/// Skips hidden directories and unreadable entries with a warning.
+///
+/// Uses the `ignore` crate (same library ripgrep uses) which automatically
+/// respects `.gitignore`, `.ignore`, and global gitignore rules. Hidden
+/// directories (`.git`, etc.) are also skipped by default.
 pub fn scan_brain(dirs: &[PathBuf]) -> Vec<ScannedFile> {
     let mut files = Vec::new();
 
     for dir in dirs {
-        for entry in WalkDir::new(dir)
-            .into_iter()
-            .filter_entry(|e| !is_hidden(e))
-        {
+        let walker = WalkBuilder::new(dir)
+            .hidden(true) // skip hidden files/dirs
+            .git_ignore(true) // respect .gitignore
+            .git_global(true) // respect global gitignore
+            .git_exclude(true) // respect .git/info/exclude
+            .require_git(false) // still walk non-git directories
+            .build();
+
+        for entry in walker {
             let entry = match entry {
                 Ok(e) => e,
                 Err(err) => {
@@ -26,7 +34,7 @@ pub fn scan_brain(dirs: &[PathBuf]) -> Vec<ScannedFile> {
                 }
             };
 
-            if !entry.file_type().is_file() {
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                 continue;
             }
 
@@ -43,14 +51,6 @@ pub fn scan_brain(dirs: &[PathBuf]) -> Vec<ScannedFile> {
     files
 }
 
-pub(crate) fn is_hidden(entry: &walkdir::DirEntry) -> bool {
-    entry
-        .file_name()
-        .to_str()
-        .map(|s| s.starts_with('.'))
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -58,10 +58,10 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{is_hidden, scan_brain};
+    use super::scan_brain;
 
-    /// Create a TempDir with a visible (non-dot) name so that `filter_entry` / `is_hidden`
-    /// does not prune the root of the walk on macOS (where `TempDir::new()` uses `.tmp*` names).
+    /// Create a TempDir with a visible (non-dot) name so that the walker
+    /// does not prune the root on macOS (where `TempDir::new()` uses `.tmp*` names).
     fn tempdir() -> TempDir {
         tempfile::Builder::new()
             .prefix("brain_test_")
@@ -188,40 +188,49 @@ mod tests {
     }
 
     #[test]
-    fn is_hidden_detects_dot_names() {
-        // We construct real DirEntries by walking a temp tree.
+    fn scan_respects_gitignore() {
         let dir = tempdir();
-        fs::create_dir(dir.path().join(".git")).unwrap();
-        fs::create_dir(dir.path().join(".hidden")).unwrap();
-        fs::create_dir(dir.path().join("visible")).unwrap();
-        fs::write(dir.path().join(".hidden_file.md"), "").unwrap();
+        let root = dir.path();
 
-        let entries: Vec<walkdir::DirEntry> = walkdir::WalkDir::new(dir.path())
-            .min_depth(1)
-            .max_depth(1)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .collect();
+        // Init a git repo so .gitignore is respected
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
 
-        for entry in &entries {
-            let name = entry.file_name().to_str().unwrap_or("");
-            if name.starts_with('.') {
-                assert!(
-                    is_hidden(entry),
-                    "is_hidden should return true for `{name}`"
-                );
-            } else {
-                assert!(
-                    !is_hidden(entry),
-                    "is_hidden should return false for `{name}`"
-                );
-            }
-        }
+        fs::write(root.join("visible.md"), "# Visible").unwrap();
+        fs::create_dir(root.join("ignored")).unwrap();
+        fs::write(root.join("ignored/hidden.md"), "# Hidden").unwrap();
+
+        let results = scan_brain(&[root.to_path_buf()]);
+        let paths = sorted_paths(results);
+
+        assert_eq!(paths.len(), 1, "only visible.md should be found: {paths:?}");
+        assert!(paths[0].ends_with("visible.md"));
+    }
+
+    #[test]
+    fn scan_respects_nested_gitignore() {
+        let dir = tempdir();
+        let root = dir.path();
+
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/.gitignore"), "*.md\n").unwrap();
+        fs::write(root.join("top.md"), "# Top").unwrap();
+        fs::write(root.join("sub/ignored.md"), "# Ignored").unwrap();
+
+        let results = scan_brain(&[root.to_path_buf()]);
+        let paths = sorted_paths(results);
+
+        assert_eq!(
+            paths.len(),
+            1,
+            "sub/ignored.md should be excluded: {paths:?}"
+        );
+        assert!(paths[0].ends_with("top.md"));
     }
 
     #[test]
     fn scan_does_not_panic_on_nonexistent_dir() {
-        // A directory that does not exist should produce no results, not a panic.
         let results = scan_brain(&[PathBuf::from("/tmp/__brain_nonexistent_dir_xyz__")]);
         assert!(
             results.is_empty(),
