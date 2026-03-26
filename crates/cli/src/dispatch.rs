@@ -219,6 +219,26 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 ConfigAction::Set { key, value } => {
                     commands::config::run_config_set(&cli.sqlite_db, &brain_name, &key, value)?;
                 }
+                ConfigAction::Provider { action } => match action {
+                    ProviderAction::Set { name, api_key } => {
+                        commands::provider::run_set(
+                            &cli.sqlite_db,
+                            Some(&cli.lance_db),
+                            &name,
+                            api_key.as_deref(),
+                        )?;
+                    }
+                    ProviderAction::List => {
+                        commands::provider::run_list(&cli.sqlite_db, Some(&cli.lance_db))?;
+                    }
+                    ProviderAction::Remove { target } => {
+                        commands::provider::run_remove(
+                            &cli.sqlite_db,
+                            Some(&cli.lance_db),
+                            &target,
+                        )?;
+                    }
+                },
             }
         }
         Command::Tasks {

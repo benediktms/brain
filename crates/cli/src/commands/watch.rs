@@ -59,8 +59,9 @@ pub async fn run(
 
     let mut pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
 
-    // Resolve LLM provider from env vars (ANTHROPIC_API_KEY or OPENAI_API_KEY).
-    if let Some(provider) = brain_lib::llm::resolve_provider() {
+    // Resolve LLM provider: env vars first, then DB-backed credentials.
+    let brain_home = brain_lib::config::brain_home().unwrap_or_else(|_| PathBuf::from("."));
+    if let Some(provider) = brain_lib::llm::resolve_provider_with_db(pipeline.db(), &brain_home) {
         pipeline.set_summarizer(Arc::from(provider));
     }
 
@@ -879,8 +880,10 @@ async fn init_brain_instance(
     // Create the pipeline with the shared embedder
     let mut pipeline = IndexPipeline::with_embedder(db, store, embedder).await?;
 
-    // Resolve LLM provider from env vars (ANTHROPIC_API_KEY or OPENAI_API_KEY).
-    if let Some(provider) = brain_lib::llm::resolve_provider() {
+    // Resolve LLM provider: env vars first, then DB-backed credentials.
+    let brain_home =
+        brain_lib::config::brain_home().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let Some(provider) = brain_lib::llm::resolve_provider_with_db(pipeline.db(), &brain_home) {
         pipeline.set_summarizer(Arc::from(provider));
     }
 

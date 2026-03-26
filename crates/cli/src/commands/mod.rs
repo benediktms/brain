@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod mcp_setup;
 pub mod memory;
 pub mod migrate;
+pub mod provider;
 pub mod query;
 pub mod records;
 pub mod registry;

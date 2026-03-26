@@ -1,11 +1,14 @@
 //! LLM provider clients for async summarization via HTTP API.
 //!
-//! Provider selection is env-var-driven:
-//! 1. `ANTHROPIC_API_KEY` → Anthropic Messages API (also covers MiniMax via `ANTHROPIC_BASE_URL`)
-//! 2. `OPENAI_API_KEY` → OpenAI Chat Completions API (also covers MiniMax via `OPENAI_BASE_URL`)
+//! Provider resolution order:
+//! 1. Environment variables (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) — highest priority.
+//! 2. DB-backed providers (stored encrypted via `brain config provider set`).
 //!
 //! First key found wins. Model names are configurable via `BRAIN_ANTHROPIC_MODEL` /
-//! `BRAIN_OPENAI_MODEL` env vars with sane defaults.
+//! `BRAIN_OPENAI_MODEL` env vars with sane defaults. Base URLs are hardcoded
+//! constants with optional env-var overrides for custom endpoints.
+
+use std::path::Path;
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -14,30 +17,129 @@ use tracing::{info, warn};
 use crate::error::BrainCoreError;
 use crate::summarizer::Summarize;
 
+// ─── Default provider constants ──────────────────────────────────
+
+pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
+pub const OPENAI_BASE_URL: &str = "https://api.openai.com";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-4o-mini";
+
 // ─── Provider resolution ─────────────────────────────────────────
 
-/// Resolve an LLM provider from environment variables.
+/// Resolve an LLM provider from environment variables only.
 /// Returns `None` if no API key is set.
+///
+/// This is the legacy entry point. Prefer [`resolve_provider_with_db`] when
+/// a Db handle is available.
 pub fn resolve_provider() -> Option<Box<dyn Summarize>> {
+    if let Some(provider) = resolve_from_env() {
+        return Some(provider);
+    }
+
+    warn!(
+        "no LLM provider configured — set ANTHROPIC_API_KEY or OPENAI_API_KEY, or run `brain config provider set`"
+    );
+    None
+}
+
+/// Resolve an LLM provider checking env vars first, then the DB.
+///
+/// `brain_home` is needed to locate the master key file for decryption.
+pub fn resolve_provider_with_db(
+    db: &crate::db::Db,
+    brain_home: &Path,
+) -> Option<Box<dyn Summarize>> {
+    // 1. Env vars take priority
+    if let Some(provider) = resolve_from_env() {
+        return Some(provider);
+    }
+
+    // 2. Try DB-backed providers
+    if let Some(provider) = resolve_from_db(db, brain_home) {
+        return Some(provider);
+    }
+
+    warn!(
+        "no LLM provider configured — set ANTHROPIC_API_KEY or OPENAI_API_KEY, or run `brain config provider set`"
+    );
+    None
+}
+
+/// Try to resolve from environment variables.
+fn resolve_from_env() -> Option<Box<dyn Summarize>> {
     if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        let base_url = std::env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+        let base_url =
+            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| ANTHROPIC_BASE_URL.to_string());
         let model = std::env::var("BRAIN_ANTHROPIC_MODEL")
-            .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
-        info!(provider = "anthropic", base_url = %base_url, model = %model, "LLM provider resolved");
+            .unwrap_or_else(|_| ANTHROPIC_DEFAULT_MODEL.to_string());
+        info!(provider = "anthropic", base_url = %base_url, model = %model, "LLM provider resolved from env");
         return Some(Box::new(AnthropicProvider::new(key, base_url, model)));
     }
 
     if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        let base_url = std::env::var("OPENAI_BASE_URL")
-            .unwrap_or_else(|_| "https://api.openai.com".to_string());
-        let model =
-            std::env::var("BRAIN_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-        info!(provider = "openai", base_url = %base_url, model = %model, "LLM provider resolved");
+        let base_url =
+            std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| OPENAI_BASE_URL.to_string());
+        let model = std::env::var("BRAIN_OPENAI_MODEL")
+            .unwrap_or_else(|_| OPENAI_DEFAULT_MODEL.to_string());
+        info!(provider = "openai", base_url = %base_url, model = %model, "LLM provider resolved from env");
         return Some(Box::new(OpenAiProvider::new(key, base_url, model)));
     }
 
-    warn!("no LLM provider configured — set ANTHROPIC_API_KEY or OPENAI_API_KEY");
+    None
+}
+
+/// Try to resolve from DB-backed providers.
+fn resolve_from_db(db: &crate::db::Db, brain_home: &Path) -> Option<Box<dyn Summarize>> {
+    use crate::db::crypto;
+
+    let master_key = match crypto::load_or_create_master_key(brain_home) {
+        Ok(k) => k,
+        Err(e) => {
+            warn!(error = %e, "failed to load master key; skipping DB provider resolution");
+            return None;
+        }
+    };
+
+    // Try anthropic first, then openai (same priority order as env vars)
+    for provider_name in &["anthropic", "openai"] {
+        let row = match db.get_provider_by_name(provider_name) {
+            Ok(Some(row)) => row,
+            Ok(None) => continue,
+            Err(e) => {
+                warn!(provider = %provider_name, error = %e, "failed to query provider from DB");
+                continue;
+            }
+        };
+
+        let api_key = match crypto::decrypt(&master_key, &row.api_key) {
+            Ok(key) => key,
+            Err(e) => {
+                warn!(provider = %provider_name, error = %e, "failed to decrypt provider API key");
+                continue;
+            }
+        };
+
+        match *provider_name {
+            "anthropic" => {
+                let base_url = std::env::var("ANTHROPIC_BASE_URL")
+                    .unwrap_or_else(|_| ANTHROPIC_BASE_URL.to_string());
+                let model = std::env::var("BRAIN_ANTHROPIC_MODEL")
+                    .unwrap_or_else(|_| ANTHROPIC_DEFAULT_MODEL.to_string());
+                info!(provider = "anthropic", base_url = %base_url, model = %model, "LLM provider resolved from DB");
+                return Some(Box::new(AnthropicProvider::new(api_key, base_url, model)));
+            }
+            "openai" => {
+                let base_url = std::env::var("OPENAI_BASE_URL")
+                    .unwrap_or_else(|_| OPENAI_BASE_URL.to_string());
+                let model = std::env::var("BRAIN_OPENAI_MODEL")
+                    .unwrap_or_else(|_| OPENAI_DEFAULT_MODEL.to_string());
+                info!(provider = "openai", base_url = %base_url, model = %model, "LLM provider resolved from DB");
+                return Some(Box::new(OpenAiProvider::new(api_key, base_url, model)));
+            }
+            _ => {}
+        }
+    }
+
     None
 }
 

@@ -24,6 +24,19 @@ pub struct GlobalConfig {
     /// Registered brains keyed by name.
     #[serde(default)]
     pub brains: HashMap<String, BrainEntry>,
+    /// Projected provider metadata (id + name only, no keys).
+    /// Read-only projection from DB — do not edit manually.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderEntry>,
+}
+
+/// A projected provider entry in config.toml (metadata only, no secrets).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderEntry {
+    /// Provider UUID.
+    pub id: String,
+    /// Provider name (e.g. "anthropic", "openai").
+    pub name: String,
 }
 
 /// An entry for a registered brain inside the global config.

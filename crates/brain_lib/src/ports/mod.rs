@@ -1281,6 +1281,63 @@ impl JobQueue for Db {
 }
 
 // ---------------------------------------------------------------------------
+// Provider store — used by llm::resolve_provider and CLI
+// ---------------------------------------------------------------------------
+
+use crate::db::providers::{InsertProvider, ProviderRow};
+
+/// Provider credential operations.
+///
+/// Consumers: `llm::resolve_provider`, CLI `brain config provider` commands.
+pub trait ProviderStore: Send + Sync {
+    /// Insert a new provider. Returns the generated ID.
+    fn insert_provider(&self, input: &InsertProvider) -> Result<String>;
+
+    /// Get a provider by ID.
+    fn get_provider(&self, id: &str) -> Result<Option<ProviderRow>>;
+
+    /// Get the most recently updated provider for a given name.
+    fn get_provider_by_name(&self, name: &str) -> Result<Option<ProviderRow>>;
+
+    /// List all providers.
+    fn list_providers(&self) -> Result<Vec<ProviderRow>>;
+
+    /// Delete a provider by ID. Returns true if deleted.
+    fn delete_provider(&self, id: &str) -> Result<bool>;
+
+    /// Check if a provider with the given name and key hash exists.
+    fn provider_exists(&self, name: &str, api_key_hash: &str) -> Result<bool>;
+}
+
+// -- ProviderStore for Db --------------------------------------------------
+
+impl ProviderStore for Db {
+    fn insert_provider(&self, input: &InsertProvider) -> Result<String> {
+        self.insert_provider(input)
+    }
+
+    fn get_provider(&self, id: &str) -> Result<Option<ProviderRow>> {
+        self.get_provider(id)
+    }
+
+    fn get_provider_by_name(&self, name: &str) -> Result<Option<ProviderRow>> {
+        self.get_provider_by_name(name)
+    }
+
+    fn list_providers(&self) -> Result<Vec<ProviderRow>> {
+        self.list_providers()
+    }
+
+    fn delete_provider(&self, id: &str) -> Result<bool> {
+        self.delete_provider(id)
+    }
+
+    fn provider_exists(&self, name: &str, api_key_hash: &str) -> Result<bool> {
+        self.provider_exists(name, api_key_hash)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock implementations for testing
 // ---------------------------------------------------------------------------
 
