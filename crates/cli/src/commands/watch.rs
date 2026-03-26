@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -111,6 +112,9 @@ pub async fn run(
     let mut sigusr1 = tokio::signal::unix::signal(SignalKind::user_defined1())
         .expect("failed to register SIGUSR1 handler");
 
+    // Guard: skip embed poll tick if a previous one is still running.
+    let embed_running = Arc::new(AtomicBool::new(false));
+
     // Event loop: batch-drain, coalesce, and dispatch
     let shutdown_reason = loop {
         // Update queue depth + lancedb pending rows at top of each iteration
@@ -192,25 +196,20 @@ pub async fn run(
                 }
             }
             _ = embed_poll_interval.tick() => {
-                let n_tasks = embed_poll::poll_stale_tasks(
-                    pipeline.db(),
-                    pipeline.store(),
-                    pipeline.embedder(),
-                    "",
-                ).await;
-                let n_chunks = embed_poll::poll_stale_chunks(
-                    pipeline.db(),
-                    pipeline.store(),
-                    pipeline.embedder(),
-                ).await;
-                let n_records = embed_poll::poll_stale_records(
-                    pipeline.db(),
-                    pipeline.store(),
-                    pipeline.embedder(),
-                    "",
-                ).await;
-                if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
-                    debug!(tasks = n_tasks, chunks = n_chunks, records = n_records, "embed_poll cycle complete");
+                if embed_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                    let db = pipeline.db().clone();
+                    let store = pipeline.store().clone();
+                    let embedder = pipeline.embedder().clone();
+                    let guard = embed_running.clone();
+                    tokio::spawn(async move {
+                        let n_tasks = embed_poll::poll_stale_tasks(&db, &store, &embedder, "").await;
+                        let n_chunks = embed_poll::poll_stale_chunks(&db, &store, &embedder).await;
+                        let n_records = embed_poll::poll_stale_records(&db, &store, &embedder, "").await;
+                        if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
+                            tracing::debug!(tasks = n_tasks, chunks = n_chunks, records = n_records, "embed_poll cycle complete");
+                        }
+                        guard.store(false, Ordering::SeqCst);
+                    });
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -605,6 +604,9 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // prunes stale roots, and archives brains whose all roots are gone.
     let mut root_validation_tick = tokio::time::interval(Duration::from_secs(60));
 
+    // Guard: skip embed poll tick if a previous one is still running.
+    let embed_running = Arc::new(AtomicBool::new(false));
+
     // ── 7. Event loop ─────────────────────────────────────────────────────
     let shutdown_reason = loop {
         tokio::select! {
@@ -695,34 +697,34 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                 }
             }
             _ = embed_poll_interval.tick() => {
-                for instance in brains.values() {
-                    let brain_id = &instance.mcp_context.brain_id();
-                    let n_tasks = embed_poll::poll_stale_tasks(
-                        instance.pipeline.db(),
-                        instance.pipeline.store(),
-                        instance.pipeline.embedder(),
-                        brain_id,
-                    ).await;
-                    let n_chunks = embed_poll::poll_stale_chunks(
-                        instance.pipeline.db(),
-                        instance.pipeline.store(),
-                        instance.pipeline.embedder(),
-                    ).await;
-                    let n_records = embed_poll::poll_stale_records(
-                        instance.pipeline.db(),
-                        instance.pipeline.store(),
-                        instance.pipeline.embedder(),
-                        brain_id,
-                    ).await;
-                    if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
-                        debug!(
-                            brain = %instance.name,
-                            tasks = n_tasks,
-                            chunks = n_chunks,
-                            records = n_records,
-                            "embed_poll cycle complete"
-                        );
-                    }
+                if embed_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                    let work: Vec<_> = brains.values().map(|instance| {
+                        (
+                            instance.name.clone(),
+                            instance.pipeline.db().clone(),
+                            instance.pipeline.store().clone(),
+                            instance.pipeline.embedder().clone(),
+                            instance.mcp_context.brain_id().to_string(),
+                        )
+                    }).collect();
+                    let guard = embed_running.clone();
+                    tokio::spawn(async move {
+                        for (name, db, store, embedder, brain_id) in work {
+                            let n_tasks = embed_poll::poll_stale_tasks(&db, &store, &embedder, &brain_id).await;
+                            let n_chunks = embed_poll::poll_stale_chunks(&db, &store, &embedder).await;
+                            let n_records = embed_poll::poll_stale_records(&db, &store, &embedder, &brain_id).await;
+                            if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
+                                tracing::debug!(
+                                    brain = %name,
+                                    tasks = n_tasks,
+                                    chunks = n_chunks,
+                                    records = n_records,
+                                    "embed_poll cycle complete"
+                                );
+                            }
+                        }
+                        guard.store(false, Ordering::SeqCst);
+                    });
                 }
             }
             _ = root_validation_tick.tick() => {
