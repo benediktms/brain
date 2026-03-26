@@ -124,7 +124,7 @@ pub struct OptimizeScheduler {
     guard: tokio::sync::Mutex<Instant>,
     row_threshold: u64,
     time_threshold: Duration,
-    db: Option<Arc<crate::db::Db>>,
+    db: std::sync::Mutex<Option<Arc<crate::db::Db>>>,
 }
 
 impl OptimizeScheduler {
@@ -135,13 +135,18 @@ impl OptimizeScheduler {
             guard: tokio::sync::Mutex::new(Instant::now()),
             row_threshold,
             time_threshold,
-            db: None,
+            db: std::sync::Mutex::new(None),
         }
     }
 
     /// Attach a SQLite database pool for post-optimize PageRank computation.
-    pub fn set_db(&mut self, db: Arc<crate::db::Db>) {
-        self.db = Some(db);
+    pub fn set_db(&self, db: Arc<crate::db::Db>) {
+        *self.db.lock().expect("set_db lock") = Some(db);
+    }
+
+    /// Take the current db reference (for preservation across table rebuilds).
+    pub fn take_db(&self) -> Option<Arc<crate::db::Db>> {
+        self.db.lock().expect("take_db lock").take()
     }
 
     /// Record that `n` mutations occurred (called from all write methods).
@@ -224,7 +229,7 @@ impl OptimizeScheduler {
         self.maybe_create_index().await;
 
         // Recompute PageRank scores after compaction so link scores stay fresh
-        if let Some(ref db) = self.db
+        if let Some(ref db) = *self.db.lock().expect("optimize db lock")
             && let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank)
         {
             warn!(error = %e, "PageRank computation failed, will retry on next optimize");
@@ -293,12 +298,13 @@ impl OptimizeScheduler {
     }
 }
 
+#[derive(Clone)]
 pub struct Store {
     /// Kept alive so the LanceDB table handle remains valid.
     #[allow(dead_code)]
     db: lancedb::Connection,
     table: Arc<lancedb::Table>,
-    optimize_scheduler: OptimizeScheduler,
+    optimize_scheduler: Arc<OptimizeScheduler>,
 }
 
 /// Read-only handle to a LanceDB table for query operations.
@@ -373,7 +379,7 @@ impl Store {
         Ok(Self {
             db,
             table,
-            optimize_scheduler,
+            optimize_scheduler: Arc::new(optimize_scheduler),
         })
     }
 
@@ -383,7 +389,7 @@ impl Store {
     }
 
     /// Attach a SQLite database pool so that PageRank is recomputed after each optimize.
-    pub fn set_db(&mut self, db: Arc<crate::db::Db>) {
+    pub fn set_db(&self, db: Arc<crate::db::Db>) {
         self.optimize_scheduler.set_db(db);
     }
 
@@ -415,13 +421,15 @@ impl Store {
             .map_err(|e| BrainCoreError::VectorDb(format!("failed to recreate table: {e}")))?;
 
         let table = Arc::new(table);
-        let saved_db = self.optimize_scheduler.db.take();
-        self.optimize_scheduler = OptimizeScheduler::new(
+        let saved_db = self.optimize_scheduler.take_db();
+        self.optimize_scheduler = Arc::new(OptimizeScheduler::new(
             Arc::clone(&table),
             DEFAULT_ROW_THRESHOLD,
             DEFAULT_TIME_THRESHOLD,
-        );
-        self.optimize_scheduler.db = saved_db;
+        ));
+        if let Some(db) = saved_db {
+            self.optimize_scheduler.set_db(db);
+        }
         self.table = table;
 
         info!("LanceDB chunks table recreated with current schema");
