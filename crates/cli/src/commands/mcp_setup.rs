@@ -407,7 +407,10 @@ pub fn install_claude_plugin(dry_run: bool) -> Result<()> {
             .with_context(|| format!("failed to write {}", target.display()))?;
     }
 
-    println!("Installed brain Claude Code plugin ({} files)", templates.len());
+    println!(
+        "Installed brain Claude Code plugin ({} files)",
+        templates.len()
+    );
     println!("  Location: {}", plugin_root.display());
     println!("  To uninstall: rm -rf {}", plugin_root.display());
     println!("\nRestart Claude Code to load the new plugin.");
