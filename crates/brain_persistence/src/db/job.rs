@@ -136,6 +136,15 @@ pub enum JobPayload {
     StaleScopeSweep,
     /// Sweep: find unclustered episodes and enqueue ConsolidateCluster jobs.
     ConsolidationSweep,
+    /// Scan note directories for new/changed files and index them.
+    FullScanSweep {
+        brain_id: String,
+        dirs: Vec<String>,
+    },
+    /// Embed stale chunks, tasks, and records for a specific brain.
+    EmbedPollSweep {
+        brain_id: String,
+    },
 }
 
 impl JobPayload {
@@ -148,6 +157,8 @@ impl JobPayload {
             } => suggested_title,
             JobPayload::StaleScopeSweep => "sweep",
             JobPayload::ConsolidationSweep => "sweep",
+            JobPayload::FullScanSweep { brain_id, .. } => brain_id,
+            JobPayload::EmbedPollSweep { brain_id } => brain_id,
         }
     }
 
@@ -158,6 +169,17 @@ impl JobPayload {
             JobPayload::ConsolidateCluster { .. } => "consolidate_cluster",
             JobPayload::StaleScopeSweep => "stale_scope_sweep",
             JobPayload::ConsolidationSweep => "consolidation_sweep",
+            JobPayload::FullScanSweep { .. } => "full_scan_sweep",
+            JobPayload::EmbedPollSweep { .. } => "embed_poll_sweep",
+        }
+    }
+
+    /// Extract the brain_id from the payload, if present.
+    pub fn brain_id(&self) -> Option<&str> {
+        match self {
+            JobPayload::FullScanSweep { brain_id, .. }
+            | JobPayload::EmbedPollSweep { brain_id } => Some(brain_id),
+            _ => None,
         }
     }
 
@@ -167,8 +189,11 @@ impl JobPayload {
             JobPayload::SummarizeScope { .. } | JobPayload::ConsolidateCluster { .. } => {
                 RetryStrategy::Fixed { attempts: 3 }
             }
-            // Sweep jobs always retry — they're idempotent discovery jobs.
-            JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => RetryStrategy::Infinite,
+            // Recurring jobs always retry — they're idempotent.
+            JobPayload::StaleScopeSweep
+            | JobPayload::ConsolidationSweep
+            | JobPayload::FullScanSweep { .. }
+            | JobPayload::EmbedPollSweep { .. } => RetryStrategy::Infinite,
         }
     }
 
@@ -176,8 +201,11 @@ impl JobPayload {
     pub fn default_stuck_threshold_secs(&self) -> i64 {
         match self {
             JobPayload::SummarizeScope { .. } | JobPayload::ConsolidateCluster { .. } => 300,
-            // Sweep jobs run fast (just DB queries + enqueues), 60s is generous.
+            // Sweep jobs: 60s for lightweight DB queries.
             JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => 60,
+            // Scan and embed can take longer.
+            JobPayload::FullScanSweep { .. } => 600,
+            JobPayload::EmbedPollSweep { .. } => 600,
         }
     }
 }

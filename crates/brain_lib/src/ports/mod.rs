@@ -1268,7 +1268,7 @@ pub trait JobQueue: Send + Sync {
 
     /// If the singleton job for `kind` is terminal (done/failed), reset to ready.
     /// Returns `true` if reset, `false` if active or missing.
-    fn reschedule_terminal_job(&self, kind: &str) -> Result<bool>;
+    fn reschedule_terminal_job(&self, kind: &str, brain_id: Option<&str>) -> Result<bool>;
 
     /// Enqueue a dedup job. If a non-terminal job of the same kind exists,
     /// returns its job_id. Returns `(job_id, was_created)`.
@@ -1344,9 +1344,12 @@ impl JobQueue for Db {
         self.with_write_conn(move |conn| crate::db::jobs::ensure_singleton_job(conn, &input))
     }
 
-    fn reschedule_terminal_job(&self, kind: &str) -> Result<bool> {
+    fn reschedule_terminal_job(&self, kind: &str, brain_id: Option<&str>) -> Result<bool> {
         let kind = kind.to_string();
-        self.with_write_conn(move |conn| crate::db::jobs::reschedule_terminal_job(conn, &kind))
+        let brain_id = brain_id.map(|s| s.to_string());
+        self.with_write_conn(move |conn| {
+            crate::db::jobs::reschedule_terminal_job(conn, &kind, brain_id.as_deref())
+        })
     }
 
     fn enqueue_dedup_job(&self, input: &EnqueueJobInput) -> Result<(String, bool)> {

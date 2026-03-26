@@ -190,22 +190,25 @@ pub async fn run(
             }
             _ = summarize_poll_interval.tick() => {
                 // Reconcile recurring singleton jobs (idempotent).
-                if let Err(e) = recurring_jobs::reconcile_recurring_jobs(pipeline.db()) {
+                let brain_infos = vec![recurring_jobs::BrainInfo {
+                    brain_id: String::new(),
+                    note_dirs: note_dirs.iter().map(|p| p.display().to_string()).collect(),
+                }];
+                if let Err(e) = recurring_jobs::reconcile_recurring_jobs(pipeline.db(), &brain_infos) {
                     tracing::warn!(error = %e, "reconcile_recurring_jobs failed");
                 }
 
-                if let Some(summarizer) = pipeline.summarizer() {
-                    if let Err(e) = pipeline.db().reap_stuck_jobs() {
-                        tracing::warn!(error = %e, "reap_stuck_jobs failed");
-                    }
-                    let n = job_worker::process_jobs(
-                        pipeline.db(),
-                        summarizer.as_ref(),
-                        20,
-                    ).await;
-                    if n > 0 {
-                        info!(processed = n, "summarization jobs completed");
-                    }
+                if let Err(e) = pipeline.db().reap_stuck_jobs() {
+                    tracing::warn!(error = %e, "reap_stuck_jobs failed");
+                }
+                let n = job_worker::process_jobs(
+                    pipeline.db(),
+                    pipeline.store(),
+                    pipeline.embedder(),
+                    20,
+                ).await;
+                if n > 0 {
+                    info!(processed = n, "jobs dispatched");
                 }
                 let protected = recurring_jobs::protected_kinds();
                 if let Err(e) = pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
@@ -690,22 +693,25 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             _ = summarize_poll_interval.tick() => {
                 for instance in brains.values() {
                     // Reconcile recurring singleton jobs (idempotent).
-                    if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.db()) {
+                    let brain_infos = vec![recurring_jobs::BrainInfo {
+                        brain_id: instance.mcp_context.brain_id().to_string(),
+                        note_dirs: instance.note_dirs.iter().map(|p| p.display().to_string()).collect(),
+                    }];
+                    if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.db(), &brain_infos) {
                         tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
                     }
 
-                    if let Some(summarizer) = instance.pipeline.summarizer() {
-                        if let Err(e) = instance.pipeline.db().reap_stuck_jobs() {
-                            tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
-                        }
-                        let n = job_worker::process_jobs(
-                            instance.pipeline.db(),
-                            summarizer.as_ref(),
-                            20,
-                        ).await;
-                        if n > 0 {
-                            info!(brain = %instance.name, processed = n, "summarization jobs completed");
-                        }
+                    if let Err(e) = instance.pipeline.db().reap_stuck_jobs() {
+                        tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
+                    }
+                    let n = job_worker::process_jobs(
+                        instance.pipeline.db(),
+                        instance.pipeline.store(),
+                        instance.pipeline.embedder(),
+                        20,
+                    ).await;
+                    if n > 0 {
+                        info!(brain = %instance.name, processed = n, "jobs dispatched");
                     }
                     let protected = recurring_jobs::protected_kinds();
                     if let Err(e) = instance.pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
