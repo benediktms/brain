@@ -41,16 +41,17 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
     let mut success_count = 0;
 
     for job in &claimed {
-        let prompt = build_prompt(&job.payload);
+        let result = match &job.payload {
+            // Sweep jobs: no LLM needed, just DB queries + child job enqueues.
+            JobPayload::StaleScopeSweep => process_stale_scope_sweep(db).await,
+            JobPayload::ConsolidationSweep => process_consolidation_sweep(db).await,
+            // LLM jobs: build prompt, call summarizer, persist result.
+            _ => process_llm_job(db, summarizer, &job.payload).await,
+        };
 
-        match summarizer.summarize(&prompt).await {
-            Ok(result) => {
-                if let Err(e) = persist_job_result(db, &job.payload, &result) {
-                    warn!(job_id = %job.job_id, error = %e, "failed to persist job result");
-                    continue;
-                }
-
-                if let Err(e) = db.complete_job(&job.job_id, Some(&result)) {
+        match result {
+            Ok(result_str) => {
+                if let Err(e) = db.complete_job(&job.job_id, result_str.as_deref()) {
                     warn!(job_id = %job.job_id, error = %e, "failed to mark job as completed");
                 } else {
                     success_count += 1;
@@ -84,6 +85,77 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
     success_count
 }
 
+/// Process an LLM job: build prompt, call summarizer, persist result.
+async fn process_llm_job(
+    db: &Db,
+    summarizer: &dyn Summarize,
+    payload: &JobPayload,
+) -> std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let prompt = build_prompt(payload);
+    let result = summarizer.summarize(&prompt).await?;
+    persist_job_result(db, payload, &result)?;
+    Ok(Some(result))
+}
+
+/// Sweep: find stale derived summaries and enqueue SummarizeScope child jobs.
+async fn process_stale_scope_sweep(
+    db: &Db,
+) -> std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::hierarchy::DerivedSummaryStore;
+
+    let stale = db.list_stale_summaries(20)?;
+    if stale.is_empty() {
+        return Ok(Some(r#"{"enqueued":0}"#.to_string()));
+    }
+
+    let mut enqueued = 0;
+    for summary in &stale {
+        // Generate the scope summary content (extractive placeholder) and enqueue LLM job.
+        let scope_type = crate::hierarchy::ScopeType::parse_db(&summary.scope_type);
+        if let Some(scope_type) = scope_type {
+            match crate::hierarchy::generate_scope_summary_with_options(
+                db, &scope_type, &summary.scope_value, true,
+            ) {
+                Ok(_) => enqueued += 1,
+                Err(e) => {
+                    warn!(scope = %summary.scope_value, error = %e, "failed to enqueue stale scope");
+                }
+            }
+        }
+    }
+
+    Ok(Some(format!(r#"{{"enqueued":{enqueued},"stale":{}}}"#, stale.len())))
+}
+
+/// Sweep: find unclustered episodes and enqueue ConsolidateCluster child jobs.
+async fn process_consolidation_sweep(
+    db: &Db,
+) -> std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
+
+    let episodes = db.with_read_conn(|conn| {
+        brain_persistence::db::summaries::list_episodes(conn, 100, "")
+    })?;
+
+    if episodes.is_empty() {
+        return Ok(Some(r#"{"clusters":0,"enqueued":0}"#.to_string()));
+    }
+
+    let result = consolidate_episodes(episodes, 7200);
+    let enqueued = match enqueue_cluster_summarization(db, &result.clusters) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!(error = %e, "failed to enqueue consolidation clusters");
+            0
+        }
+    };
+
+    Ok(Some(format!(
+        r#"{{"clusters":{},"enqueued":{enqueued}}}"#,
+        result.clusters.len()
+    )))
+}
+
 /// Build the LLM prompt from the typed payload.
 fn build_prompt(payload: &JobPayload) -> String {
     match payload {
@@ -97,6 +169,8 @@ fn build_prompt(payload: &JobPayload) -> String {
         } => {
             format!("{CONSOLIDATE_CLUSTER_PROMPT}Title: {suggested_title}\n\n{episodes}")
         }
+        // Sweep jobs don't produce prompts — handled by dedicated functions.
+        JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => String::new(),
     }
 }
 
@@ -117,7 +191,9 @@ fn persist_job_result(db: &Db, payload: &JobPayload, result: &str) -> crate::err
                 Ok(())
             })
         }
-        JobPayload::ConsolidateCluster { .. } => Ok(()),
+        JobPayload::ConsolidateCluster { .. }
+        | JobPayload::StaleScopeSweep
+        | JobPayload::ConsolidationSweep => Ok(()),
     }
 }
 

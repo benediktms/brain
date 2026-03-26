@@ -132,6 +132,10 @@ pub enum JobPayload {
         /// Newline-separated episode content.
         episodes: String,
     },
+    /// Sweep: find stale derived summaries and enqueue SummarizeScope jobs.
+    StaleScopeSweep,
+    /// Sweep: find unclustered episodes and enqueue ConsolidateCluster jobs.
+    ConsolidationSweep,
 }
 
 impl JobPayload {
@@ -142,6 +146,8 @@ impl JobPayload {
             JobPayload::ConsolidateCluster {
                 suggested_title, ..
             } => suggested_title,
+            JobPayload::StaleScopeSweep => "sweep",
+            JobPayload::ConsolidationSweep => "sweep",
         }
     }
 
@@ -150,22 +156,30 @@ impl JobPayload {
         match self {
             JobPayload::SummarizeScope { .. } => "summarize_scope",
             JobPayload::ConsolidateCluster { .. } => "consolidate_cluster",
+            JobPayload::StaleScopeSweep => "stale_scope_sweep",
+            JobPayload::ConsolidationSweep => "consolidation_sweep",
         }
     }
 
     /// Default retry strategy for this job kind.
     pub fn default_retry_strategy(&self) -> RetryStrategy {
         match self {
-            JobPayload::SummarizeScope { .. } => RetryStrategy::Fixed { attempts: 3 },
-            JobPayload::ConsolidateCluster { .. } => RetryStrategy::Fixed { attempts: 3 },
+            JobPayload::SummarizeScope { .. } | JobPayload::ConsolidateCluster { .. } => {
+                RetryStrategy::Fixed { attempts: 3 }
+            }
+            // Sweep jobs always retry — they're idempotent discovery jobs.
+            JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => {
+                RetryStrategy::Infinite
+            }
         }
     }
 
     /// Default stuck threshold (seconds) for this job kind.
     pub fn default_stuck_threshold_secs(&self) -> i64 {
         match self {
-            JobPayload::SummarizeScope { .. } => 300,
-            JobPayload::ConsolidateCluster { .. } => 300,
+            JobPayload::SummarizeScope { .. } | JobPayload::ConsolidateCluster { .. } => 300,
+            // Sweep jobs run fast (just DB queries + enqueues), 60s is generous.
+            JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => 60,
         }
     }
 }
