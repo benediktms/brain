@@ -124,12 +124,15 @@ impl TaskLabelsBatch {
             match result {
                 Ok(()) => {
                     let tid = &events[i].task_id;
-                    let uri = SynapseUri::for_task(brain_name, tid).to_string();
-                    succeeded.push(json!({ "task_id": tid, "uri": uri }));
+                    let short_id = store.compact_id(tid).unwrap_or_else(|_| tid.to_string());
+                    let uri = SynapseUri::for_task(brain_name, &short_id).to_string();
+                    succeeded.push(json!({ "task_id": short_id, "uri": uri }));
                 }
                 Err(e) => {
+                    let tid = &events[i].task_id;
+                    let short_id = store.compact_id(tid).unwrap_or_else(|_| tid.to_string());
                     failed.push(json!({
-                        "task_id": events[i].task_id,
+                        "task_id": short_id,
                         "error": format!("{e}"),
                     }));
                 }
@@ -190,8 +193,9 @@ impl TaskLabelsBatch {
             let add_ok = results[add_idx].is_ok();
 
             if remove_ok && add_ok {
-                let uri = SynapseUri::for_task(brain_name, tid).to_string();
-                succeeded.push(json!({ "task_id": tid, "uri": uri }));
+                let short_id = store.compact_id(tid).unwrap_or_else(|_| tid.to_string());
+                let uri = SynapseUri::for_task(brain_name, &short_id).to_string();
+                succeeded.push(json!({ "task_id": short_id, "uri": uri }));
             } else {
                 let mut errors = Vec::new();
                 if let Err(e) = &results[remove_idx] {
@@ -200,8 +204,9 @@ impl TaskLabelsBatch {
                 if let Err(e) = &results[add_idx] {
                     errors.push(format!("add: {e}"));
                 }
+                let short_id = store.compact_id(tid).unwrap_or_else(|_| tid.to_string());
                 failed.push(json!({
-                    "task_id": tid,
+                    "task_id": short_id,
                     "error": errors.join("; "),
                 }));
             }
@@ -247,12 +252,15 @@ impl TaskLabelsBatch {
             match result {
                 Ok(()) => {
                     let tid = &task_ids[i];
-                    let uri = SynapseUri::for_task(brain_name, tid).to_string();
-                    succeeded.push(json!({ "task_id": tid, "uri": uri }));
+                    let short_id = store.compact_id(tid).unwrap_or_else(|_| tid.to_string());
+                    let uri = SynapseUri::for_task(brain_name, &short_id).to_string();
+                    succeeded.push(json!({ "task_id": short_id, "uri": uri }));
                 }
                 Err(e) => {
+                    let tid = &task_ids[i];
+                    let short_id = store.compact_id(tid).unwrap_or_else(|_| tid.to_string());
                     failed.push(json!({
-                        "task_id": task_ids[i],
+                        "task_id": short_id,
                         "error": format!("{e}"),
                     }));
                 }

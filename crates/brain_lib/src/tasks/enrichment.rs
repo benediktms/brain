@@ -38,8 +38,26 @@ pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
 /// Prefer this over the two-step pattern whenever a `TaskStore` is available.
 pub fn task_row_to_compact_json(store: &TaskStore, row: &TaskRow, labels: Vec<String>) -> Value {
     let mut json = task_row_to_json(row, labels);
+    apply_compact_task_id(store, &mut json);
     apply_compact_parent_id(store, &mut json);
     json
+}
+
+/// Convert the `task_id` field of a serialized task to its compact form.
+pub fn apply_compact_task_id(store: &TaskStore, task_json: &mut Value) {
+    let Some(obj) = task_json.as_object_mut() else {
+        return;
+    };
+    let Some(task_id) = obj.get("task_id").and_then(|v| v.as_str()) else {
+        return;
+    };
+    if task_id.is_empty() {
+        return;
+    }
+    let compact = store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
+    obj.insert("task_id".into(), json!(compact));
 }
 
 /// Convert the `parent_task_id` field of a serialized task to its compact form, if present.
@@ -99,21 +117,29 @@ pub fn dep_summary_to_json(summary: &DependencySummary) -> Value {
 }
 
 /// Convert a dependency summary to JSON including the blocking_task_ids list.
-pub fn dep_summary_to_json_with_blocking(summary: &DependencySummary) -> Value {
+pub fn dep_summary_to_json_with_blocking(store: &TaskStore, summary: &DependencySummary) -> Value {
+    let compact_blocking: Vec<String> = summary
+        .blocking_task_ids
+        .iter()
+        .map(|id| store.compact_id(id).unwrap_or_else(|_| id.clone()))
+        .collect();
     json!({
         "total_deps": summary.total_deps,
         "done_deps": summary.done_deps,
-        "blocking_task_ids": summary.blocking_task_ids,
+        "blocking_task_ids": compact_blocking,
     })
 }
 
 /// Convert child task rows to compact stubs (task_id, title, status, priority).
-pub fn children_stubs_to_json(children: &[TaskRow]) -> Vec<Value> {
+pub fn children_stubs_to_json(store: &TaskStore, children: &[TaskRow]) -> Vec<Value> {
     children
         .iter()
         .map(|c| {
+            let short = store
+                .compact_id(&c.task_id)
+                .unwrap_or_else(|_| c.task_id.clone());
             json!({
-                "task_id": c.task_id,
+                "task_id": short,
                 "title": c.title,
                 "status": c.status,
                 "priority": c.priority,
@@ -127,6 +153,7 @@ pub fn children_stubs_to_json(children: &[TaskRow]) -> Vec<Value> {
 /// Shared by `enrich_task_summary` and `enrich_task_summaries` to avoid duplicating
 /// the JSON construction logic.
 fn attach_summary_fields(
+    store: &TaskStore,
     task_json: &mut Value,
     dep_summary: &DependencySummary,
     note_links: &[TaskNoteLink],
@@ -134,11 +161,7 @@ fn attach_summary_fields(
     if let Some(obj) = task_json.as_object_mut() {
         obj.insert(
             "dependency_summary".into(),
-            json!({
-                "total_deps": dep_summary.total_deps,
-                "done_deps": dep_summary.done_deps,
-                "blocking_task_ids": dep_summary.blocking_task_ids,
-            }),
+            dep_summary_to_json_with_blocking(store, dep_summary),
         );
         obj.insert("linked_notes".into(), json!(note_links_to_json(note_links)));
     }
@@ -181,7 +204,7 @@ pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
     };
 
     let mut task_json = task_row_to_compact_json(store, task, labels);
-    attach_summary_fields(&mut task_json, &dep_summary, &note_links);
+    attach_summary_fields(store, &mut task_json, &dep_summary, &note_links);
     task_json
 }
 
@@ -256,7 +279,7 @@ pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value>
             let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
 
             let mut task_json = task_row_to_compact_json(store, task, labels);
-            attach_summary_fields(&mut task_json, &dep_summary, &note_links);
+            attach_summary_fields(store, &mut task_json, &dep_summary, &note_links);
             task_json
         })
         .collect()
@@ -329,8 +352,11 @@ mod tests {
 
     #[test]
     fn test_dep_summary_to_json_with_blocking_has_field() {
+        use crate::db::Db;
+        let db = Db::open_in_memory().unwrap();
+        let store = TaskStore::new(db);
         let summary = make_dep_summary(3, 2, vec!["t1".to_string()]);
-        let result = dep_summary_to_json_with_blocking(&summary);
+        let result = dep_summary_to_json_with_blocking(&store, &summary);
         assert_eq!(result["total_deps"], 3);
         assert_eq!(result["done_deps"], 2);
         let blocking = result["blocking_task_ids"].as_array().unwrap();
@@ -340,7 +366,10 @@ mod tests {
 
     #[test]
     fn test_children_stubs_to_json_shape() {
+        use crate::db::Db;
         use crate::tasks::queries::TaskRow;
+        let db = Db::open_in_memory().unwrap();
+        let store = TaskStore::new(db);
         let child = TaskRow {
             task_id: "c1".to_string(),
             title: "Child Task".to_string(),
@@ -358,18 +387,19 @@ mod tests {
             updated_at: 0,
             display_id: None,
         };
-        let result = children_stubs_to_json(&[child]);
+        let result = children_stubs_to_json(&store, &[child]);
         assert_eq!(result.len(), 1);
+        // compact_id falls back to raw ID when task not in DB
         assert_eq!(result[0]["task_id"], "c1");
         assert_eq!(result[0]["title"], "Child Task");
         assert_eq!(result[0]["status"], "open");
         assert_eq!(result[0]["priority"], 2);
-        // Stubs should NOT have description or other full fields
         assert!(result[0].get("description").is_none());
     }
 
     #[test]
     fn test_attach_summary_fields_key_names() {
+        use crate::db::Db;
         use crate::tasks::queries::TaskRow;
         let row = TaskRow {
             task_id: "t1".to_string(),
@@ -388,11 +418,13 @@ mod tests {
             updated_at: 0,
             display_id: None,
         };
+        let db = Db::open_in_memory().unwrap();
+        let store = TaskStore::new(db);
         let dep = make_dep_summary(2, 1, vec!["blocker".to_string()]);
         let links = vec![make_note_link("c1", "/file.md")];
 
         let mut json = task_row_to_json(&row, vec![]);
-        attach_summary_fields(&mut json, &dep, &links);
+        attach_summary_fields(&store, &mut json, &dep, &links);
 
         // Verify key names are consistent
         let ds = &json["dependency_summary"];

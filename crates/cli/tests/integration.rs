@@ -736,12 +736,8 @@ fn set_prefix(db_path: &std::path::Path, prefix: &str) {
         [prefix],
     )
     .unwrap();
-    // Also update brains.prefix for any already-registered brains.
-    conn.execute(
-        "UPDATE brains SET prefix = ?1 WHERE brain_id != ''",
-        [prefix],
-    )
-    .unwrap();
+    conn.execute("UPDATE brains SET prefix = ?1", [prefix])
+        .unwrap();
 }
 
 /// Helper: read project_prefix from a SQLite database.
@@ -820,8 +816,8 @@ fn task_prefix_json_uses_brain_db() {
     let task_id = parsed["task"]["task_id"].as_str().unwrap();
 
     assert!(
-        task_id.starts_with("COR-"),
-        "task_id should start with 'COR-', got: {task_id}"
+        task_id.starts_with("cor-"),
+        "task_id should use compact form with lowercase prefix 'cor-', got: {task_id}"
     );
 }
 

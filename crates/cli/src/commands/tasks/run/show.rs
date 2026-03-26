@@ -27,7 +27,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
     if ctx.json {
         let comments_json = comments_to_json(&comments);
         let note_links_json = note_links_to_json(&note_links);
-        let children_json = children_stubs_to_json(&children);
+        let children_json = children_stubs_to_json(&ctx.store, &children);
 
         let ext_ids_json: Vec<serde_json::Value> = external_ids
             .iter()
@@ -42,7 +42,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
 
         let out = json!({
             "task": task_row_to_compact_json(&ctx.store, &task, labels),
-            "dependency_summary": dep_summary_to_json_with_blocking(&dep_summary),
+            "dependency_summary": dep_summary_to_json_with_blocking(&ctx.store, &dep_summary),
             "linked_notes": note_links_json,
             "comments": comments_json,
             "children": children_json,
@@ -114,11 +114,15 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
         if !children.is_empty() {
             println!("\nChildren:");
             for child in &children {
+                let short = ctx
+                    .store
+                    .compact_id(&child.task_id)
+                    .unwrap_or_else(|_| child.task_id.clone());
                 println!(
                     "  [{}] {} {}  {}",
                     child.status,
                     priority_label(child.priority),
-                    child.task_id,
+                    short,
                     child.title
                 );
             }

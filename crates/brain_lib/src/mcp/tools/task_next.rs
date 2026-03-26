@@ -74,21 +74,10 @@ impl TaskNext {
         // Build enriched task JSON with batch label fetching
         let mut results_json = enrich_task_summaries(&ctx.stores.tasks, &selected);
 
-        // Replace task_id with short form, add uri, strip description from each task
         for task_val in &mut results_json {
             if let Some(obj) = task_val.as_object_mut() {
-                if let Some(tid) = obj
-                    .get("task_id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                {
-                    let short = ctx
-                        .stores
-                        .tasks
-                        .compact_id(&tid)
-                        .unwrap_or_else(|_| tid.clone());
-                    let uri = SynapseUri::for_task(ctx.brain_name(), &short).to_string();
-                    obj.insert("task_id".into(), json!(short));
+                if let Some(tid) = obj.get("task_id").and_then(|v| v.as_str()) {
+                    let uri = SynapseUri::for_task(ctx.brain_name(), tid).to_string();
                     obj.insert("uri".into(), json!(uri));
                 }
                 obj.remove("description");
@@ -110,13 +99,13 @@ impl TaskNext {
                     .flatten()
                     .filter(|t| t.task_type == TaskType::Epic)
                     .map(|t| {
-                        let short_id = ctx
+                        let short = ctx
                             .stores
                             .tasks
                             .compact_id(&t.task_id)
                             .unwrap_or_else(|_| t.task_id.clone());
                         json!({
-                            "task_id": short_id,
+                            "task_id": short,
                             "title": t.title,
                         })
                     });

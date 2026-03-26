@@ -144,6 +144,10 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
         return label_add(&remote_ctx, task_id, label, None);
     }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let display_id = ctx
+        .store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -157,13 +161,13 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
     if ctx.json {
         let out = json!({
             "event_id": event.event_id,
-            "task_id": task_id,
+            "task_id": display_id,
             "label": label,
             "action": "added",
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Added label \"{label}\" to task {task_id}");
+        println!("Added label \"{label}\" to task {display_id}");
     }
 
     Ok(())
@@ -190,6 +194,10 @@ pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&st
         return label_remove(&remote_ctx, task_id, label, None);
     }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let display_id = ctx
+        .store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -203,13 +211,13 @@ pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&st
     if ctx.json {
         let out = json!({
             "event_id": event.event_id,
-            "task_id": task_id,
+            "task_id": display_id,
             "label": label,
             "action": "removed",
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Removed label \"{label}\" from task {task_id}");
+        println!("Removed label \"{label}\" from task {display_id}");
     }
 
     Ok(())
@@ -251,18 +259,33 @@ fn batch_label_op(
     }
 
     if ctx.json {
+        let succeeded = succeeded
+            .iter()
+            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .collect::<Vec<_>>();
+        let failed = failed
+            .iter()
+            .map(|(id, e)| {
+                (
+                    ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()),
+                    format!("{e}"),
+                )
+            })
+            .collect::<Vec<_>>();
         let out = json!({
             "succeeded": succeeded,
-            "failed": failed.iter().map(|(id, e)| json!({"task_id": id, "error": format!("{e}")})).collect::<Vec<_>>(),
+            "failed": failed.iter().map(|(id, e)| json!({"task_id": id, "error": e})).collect::<Vec<_>>(),
             "summary": { "succeeded": succeeded.len(), "failed": failed.len() },
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         for tid in &succeeded {
-            println!("{action_name} label \"{label}\" on task {tid}");
+            let display_id = ctx.store.compact_id(tid).unwrap_or_else(|_| (*tid).clone());
+            println!("{action_name} label \"{label}\" on task {display_id}");
         }
         for (tid, e) in &failed {
-            println!("Failed on task {tid}: {e}");
+            let display_id = ctx.store.compact_id(tid).unwrap_or_else(|_| (*tid).clone());
+            println!("Failed on task {display_id}: {e}");
         }
         println!("{} succeeded, {} failed", succeeded.len(), failed.len());
     }
@@ -364,6 +387,14 @@ pub fn label_rename(ctx: &TaskCtx, old_label: &str, new_label: &str) -> Result<(
     }
 
     if ctx.json {
+        let succeeded = succeeded
+            .iter()
+            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .collect::<Vec<_>>();
+        let failed = failed
+            .iter()
+            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .collect::<Vec<_>>();
         let out = json!({
             "succeeded": succeeded,
             "failed": failed,
@@ -424,9 +455,22 @@ pub fn label_purge(ctx: &TaskCtx, label: &str) -> Result<()> {
     }
 
     if ctx.json {
+        let succeeded = succeeded
+            .iter()
+            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .collect::<Vec<_>>();
+        let failed = failed
+            .iter()
+            .map(|(id, e)| {
+                (
+                    ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()),
+                    format!("{e}"),
+                )
+            })
+            .collect::<Vec<_>>();
         let out = json!({
             "succeeded": succeeded,
-            "failed": failed.iter().map(|(id, e)| json!({"task_id": id, "error": format!("{e}")})).collect::<Vec<_>>(),
+            "failed": failed.iter().map(|(id, e)| json!({"task_id": id, "error": e})).collect::<Vec<_>>(),
             "summary": { "succeeded": succeeded.len(), "failed": failed.len() },
         });
         println!("{}", serde_json::to_string_pretty(&out)?);

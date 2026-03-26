@@ -15,6 +15,7 @@ fn format_ts(ts: i64) -> String {
 
 fn render_task_markdown(
     task: &TaskRow,
+    display_id: &str,
     labels: &[&str],
     blocks: &[&str],
     blocked_by: &[&str],
@@ -23,7 +24,7 @@ fn render_task_markdown(
 
     // YAML frontmatter
     out.push_str("---\n");
-    out.push_str(&format!("id: {}\n", task.task_id));
+    out.push_str(&format!("id: {display_id}\n"));
     // Quote title to handle special YAML characters
     out.push_str(&format!(
         "title: \"{}\"\n",
@@ -79,19 +80,26 @@ pub fn run(dir: PathBuf, sqlite_db: PathBuf, lance_db: Option<PathBuf>) -> Resul
     // Load all deps and labels in bulk
     let all_deps = store.list_all_deps()?;
     let all_labels = store.list_all_labels()?;
+    let short_ids = store.compact_ids()?;
 
-    // Build dependency maps: blocked_by[task] = [deps...], blocks[dep] = [tasks...]
-    let mut blocked_by: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut blocks: HashMap<&str, Vec<&str>> = HashMap::new();
+    // Build dependency maps using compact IDs so references match filenames.
+    // blocked_by[task] = [deps...], blocks[dep] = [tasks...]
+    let compact = |raw: &str| -> String {
+        short_ids
+            .get(raw)
+            .cloned()
+            .unwrap_or_else(|| raw.to_string())
+    };
+    let mut blocked_by: HashMap<String, Vec<String>> = HashMap::new();
+    let mut blocks: HashMap<String, Vec<String>> = HashMap::new();
     for dep in &all_deps {
+        let task_short = compact(&dep.task_id);
+        let dep_short = compact(&dep.depends_on);
         blocked_by
-            .entry(&dep.task_id)
+            .entry(task_short.clone())
             .or_default()
-            .push(&dep.depends_on);
-        blocks
-            .entry(&dep.depends_on)
-            .or_default()
-            .push(&dep.task_id);
+            .push(dep_short.clone());
+        blocks.entry(dep_short).or_default().push(task_short);
     }
 
     // Build label map
@@ -106,22 +114,32 @@ pub fn run(dir: PathBuf, sqlite_db: PathBuf, lance_db: Option<PathBuf>) -> Resul
 
     let mut count = 0;
     for task in &tasks {
+        let display_id = short_ids
+            .get(&task.task_id)
+            .cloned()
+            .unwrap_or_else(|| task.task_id.clone());
         let task_labels = labels_map
             .get(task.task_id.as_str())
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        let task_blocks = blocks
-            .get(task.task_id.as_str())
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        let task_blocked_by = blocked_by
-            .get(task.task_id.as_str())
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+        let task_blocks: Vec<&str> = blocks
+            .get(&display_id)
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+        let task_blocked_by: Vec<&str> = blocked_by
+            .get(&display_id)
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
 
-        let md = render_task_markdown(task, task_labels, task_blocks, task_blocked_by);
+        let md = render_task_markdown(
+            task,
+            &display_id,
+            task_labels,
+            &task_blocks,
+            &task_blocked_by,
+        );
 
-        let file_path = dir.join(format!("{}.md", task.task_id));
+        let file_path = dir.join(format!("{}.md", display_id));
         std::fs::write(&file_path, md)
             .with_context(|| format!("Failed to write {}", file_path.display()))?;
         count += 1;

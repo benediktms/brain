@@ -109,15 +109,35 @@ impl TaskDepsBatch {
 
             match ctx.stores.tasks.append(&event) {
                 Ok(()) => {
+                    let short_task_id = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&task_id)
+                        .unwrap_or_else(|_| task_id.clone());
+                    let short_depends_on = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&depends_on)
+                        .unwrap_or_else(|_| depends_on.clone());
                     succeeded.push(json!({
-                        "task_id": task_id,
-                        "depends_on_task_id": depends_on,
+                        "task_id": short_task_id,
+                        "depends_on_task_id": short_depends_on,
                     }));
                 }
                 Err(e) => {
+                    let short_task_id = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&task_id)
+                        .unwrap_or_else(|_| task_id.clone());
+                    let short_depends_on = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&depends_on)
+                        .unwrap_or_else(|_| depends_on.clone());
                     failed.push(json!({
-                        "task_id": task_id,
-                        "depends_on_task_id": depends_on,
+                        "task_id": short_task_id,
+                        "depends_on_task_id": short_depends_on,
                         "error": format!("{e}"),
                     }));
                 }
@@ -175,15 +195,35 @@ impl TaskDepsBatch {
 
             match ctx.stores.tasks.append(&event) {
                 Ok(()) => {
+                    let short_task_id = ctx
+                        .stores
+                        .tasks
+                        .compact_id(task_id)
+                        .unwrap_or_else(|_| task_id.to_string());
+                    let short_depends_on = ctx
+                        .stores
+                        .tasks
+                        .compact_id(depends_on)
+                        .unwrap_or_else(|_| depends_on.to_string());
                     succeeded.push(json!({
-                        "task_id": task_id,
-                        "depends_on_task_id": depends_on,
+                        "task_id": short_task_id,
+                        "depends_on_task_id": short_depends_on,
                     }));
                 }
                 Err(e) => {
+                    let short_task_id = ctx
+                        .stores
+                        .tasks
+                        .compact_id(task_id)
+                        .unwrap_or_else(|_| task_id.to_string());
+                    let short_depends_on = ctx
+                        .stores
+                        .tasks
+                        .compact_id(depends_on)
+                        .unwrap_or_else(|_| depends_on.to_string());
                     failed.push(json!({
-                        "task_id": task_id,
-                        "depends_on_task_id": depends_on,
+                        "task_id": short_task_id,
+                        "depends_on_task_id": short_depends_on,
                         "error": format!("{e}"),
                     }));
                 }
@@ -214,6 +254,11 @@ impl TaskDepsBatch {
                 return ToolCallResult::error(format!("Failed to resolve source_task_id: {e}"));
             }
         };
+        let source_compact = ctx
+            .stores
+            .tasks
+            .compact_id(&source_resolved)
+            .unwrap_or_else(|_| source_resolved.clone());
 
         let mut succeeded = Vec::new();
         let mut failed = Vec::new();
@@ -225,7 +270,7 @@ impl TaskDepsBatch {
                 Err(e) => {
                     failed.push(json!({
                         "task_id": raw_id,
-                        "depends_on_task_id": source_resolved,
+                        "depends_on_task_id": source_compact,
                         "error": format!("{e}"),
                     }));
                     continue;
@@ -243,15 +288,25 @@ impl TaskDepsBatch {
 
             match ctx.stores.tasks.append(&event) {
                 Ok(()) => {
+                    let short_dep_id = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&dep_id)
+                        .unwrap_or_else(|_| dep_id.clone());
                     succeeded.push(json!({
-                        "task_id": dep_id,
-                        "depends_on_task_id": source_resolved,
+                        "task_id": short_dep_id,
+                        "depends_on_task_id": source_compact,
                     }));
                 }
                 Err(e) => {
+                    let short_dep_id = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&dep_id)
+                        .unwrap_or_else(|_| dep_id.clone());
                     failed.push(json!({
-                        "task_id": dep_id,
-                        "depends_on_task_id": source_resolved,
+                        "task_id": short_dep_id,
+                        "depends_on_task_id": source_compact,
                         "error": format!("{e}"),
                     }));
                 }
@@ -305,15 +360,35 @@ impl TaskDepsBatch {
         for (i, result) in results.into_iter().enumerate() {
             match result {
                 Ok(()) => {
+                    let short_resolved = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&resolved)
+                        .unwrap_or_else(|_| resolved.clone());
+                    let short_dep = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&deps[i])
+                        .unwrap_or_else(|_| deps[i].clone());
                     succeeded.push(json!({
-                        "task_id": resolved,
-                        "depends_on_task_id": deps[i],
+                        "task_id": short_resolved,
+                        "depends_on_task_id": short_dep,
                     }));
                 }
                 Err(e) => {
+                    let short_resolved = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&resolved)
+                        .unwrap_or_else(|_| resolved.clone());
+                    let short_dep = ctx
+                        .stores
+                        .tasks
+                        .compact_id(&deps[i])
+                        .unwrap_or_else(|_| deps[i].clone());
                     failed.push(json!({
-                        "task_id": resolved,
-                        "depends_on_task_id": deps[i],
+                        "task_id": short_resolved,
+                        "depends_on_task_id": short_dep,
                         "error": format!("{e}"),
                     }));
                 }

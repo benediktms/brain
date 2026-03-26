@@ -238,17 +238,11 @@ impl TaskList {
         let (mut tasks_json, ready_count, blocked_count) =
             enrich_task_list(store, capped, &labels_map);
 
-        // Replace task_id with shortest unique prefix for compact display and add uri
+        // Add uri and optionally strip description
         for task_val in &mut tasks_json {
             if let Some(obj) = task_val.as_object_mut() {
-                if let Some(tid) = obj
-                    .get("task_id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                {
-                    let short = store.compact_id(&tid).unwrap_or_else(|_| tid.clone());
-                    let uri = SynapseUri::for_task(brain_name, &short).to_string();
-                    obj.insert("task_id".into(), json!(short));
+                if let Some(tid) = obj.get("task_id").and_then(|v| v.as_str()) {
+                    let uri = SynapseUri::for_task(brain_name, tid).to_string();
                     obj.insert("uri".into(), json!(uri));
                 }
                 if !include_description {

@@ -10,7 +10,9 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
-use crate::tasks::enrichment::{comments_to_json, dep_summary_to_json, note_links_to_json};
+use crate::tasks::enrichment::{
+    comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
+};
 use crate::tasks::queries::TaskRow;
 use crate::uri::{SynapseUri, resolve_id};
 use crate::utils::task_row_to_compact_json;
@@ -47,8 +49,11 @@ struct Params {
 }
 
 /// Build a compact stub: `{task_id, title}`.
-fn task_stub(task_id: &str, title: &str) -> Value {
-    json!({ "task_id": task_id, "title": title })
+fn task_stub(store: &TaskStore, task_id: &str, title: &str) -> Value {
+    let short = store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
+    json!({ "task_id": short, "title": title })
 }
 
 /// Build a full task JSON with labels but without description (expanded relations
@@ -188,7 +193,7 @@ impl TaskGet {
                     let Some(parent) =
                         store_or_warn(store.get_task(pid), "get_task", &mut warnings)
                     else {
-                        return task_stub(pid, "(not found)");
+                        return task_stub(store, pid, "(not found)");
                     };
                     let parent_labels =
                         store_or_warn(store.get_task_labels(pid), "get_task_labels", &mut warnings);
@@ -203,8 +208,8 @@ impl TaskGet {
                         .get_task(pid)
                         .ok()
                         .flatten()
-                        .map(|t| task_stub(&t.task_id, &t.title))
-                        .unwrap_or_else(|| task_stub(pid, "(not found)"))
+                        .map(|t| task_stub(store, &t.task_id, &t.title))
+                        .unwrap_or_else(|| task_stub(store, pid, "(not found)"))
                 })
                 .unwrap_or(Value::Null)
         };
@@ -229,7 +234,7 @@ impl TaskGet {
         } else {
             children
                 .iter()
-                .map(|c| task_stub(&c.task_id, &c.title))
+                .map(|c| task_stub(store, &c.task_id, &c.title))
                 .collect()
         };
 
@@ -242,7 +247,7 @@ impl TaskGet {
                     let Some(blocking_task) =
                         store_or_warn(store.get_task(id), "get_task", &mut warnings)
                     else {
-                        return task_stub(id, "(not found)");
+                        return task_stub(store, id, "(not found)");
                     };
                     let blocking_labels =
                         store_or_warn(store.get_task_labels(id), "get_task_labels", &mut warnings);
@@ -258,7 +263,7 @@ impl TaskGet {
                         .get_task(id)
                         .ok()
                         .flatten()
-                        .map(|t| task_stub(&t.task_id, &t.title))
+                        .map(|t| task_stub(store, &t.task_id, &t.title))
                 })
                 .collect()
         };
@@ -283,7 +288,7 @@ impl TaskGet {
         } else {
             blocks
                 .iter()
-                .map(|b| task_stub(&b.task_id, &b.title))
+                .map(|b| task_stub(store, &b.task_id, &b.title))
                 .collect()
         };
 
@@ -293,7 +298,6 @@ impl TaskGet {
             .unwrap_or_else(|_| task_id.to_string());
         let mut task_json = task_row_to_compact_json(store, &task, labels);
         if let Some(obj) = task_json.as_object_mut() {
-            obj.insert("task_id".into(), json!(short_id));
             obj.insert("parent".into(), parent_json);
             obj.insert("children".into(), json!(children_json));
             obj.insert("blocked_by".into(), json!(blocked_by_json));
@@ -316,7 +320,7 @@ impl TaskGet {
             );
             obj.insert(
                 "dependency_summary".into(),
-                dep_summary_to_json(&dep_summary),
+                dep_summary_to_json_with_blocking(store, &dep_summary),
             );
         }
 
@@ -431,10 +435,12 @@ mod tests {
         assert_eq!(parsed["title"], "Parent");
         // parent field is null (no parent)
         assert!(parsed["parent"].is_null());
-        // children as stubs — stubs use raw task_id, not compact ID
         let children = parsed["children"].as_array().unwrap();
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0]["task_id"], "child");
+        assert_eq!(
+            children[0]["task_id"],
+            format!("{}.1", compact_id_for("parent"))
+        );
         assert_eq!(children[0]["title"], "Child");
         // No status field in stub
         assert!(children[0].get("status").is_none());
@@ -492,7 +498,7 @@ mod tests {
             .await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         // Expanded parent has full fields
-        assert_eq!(parsed["parent"]["task_id"], "p1");
+        assert_eq!(parsed["parent"]["task_id"], compact_id_for("p1"));
         assert_eq!(parsed["parent"]["status"], "open");
     }
 
@@ -533,7 +539,10 @@ mod tests {
         let children = parsed["children"].as_array().unwrap();
         assert_eq!(children.len(), 1);
         // Expanded child has full fields
-        assert_eq!(children[0]["task_id"], "c1");
+        assert_eq!(
+            children[0]["task_id"],
+            format!("{}.1", compact_id_for("p1"))
+        );
         assert_eq!(children[0]["status"], "open");
     }
 
@@ -583,7 +592,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let blocked_by = parsed["blocked_by"].as_array().unwrap();
         assert_eq!(blocked_by.len(), 1);
-        assert_eq!(blocked_by[0]["task_id"], "blocker");
+        assert_eq!(blocked_by[0]["task_id"], compact_id_for("blocker"));
         assert_eq!(blocked_by[0]["status"], "open");
     }
 
@@ -724,7 +733,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let blocks = parsed["blocks"].as_array().unwrap();
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0]["task_id"], "waiting");
+        assert_eq!(blocks[0]["task_id"], compact_id_for("waiting"));
         assert_eq!(blocks[0]["title"], "Waiting");
     }
 

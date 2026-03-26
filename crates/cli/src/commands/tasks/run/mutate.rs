@@ -10,6 +10,10 @@ use super::{TaskCtx, UpdateParams, priority_label};
 
 pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
     params.id = ctx.store.resolve_task_id(&params.id)?;
+    let display_id = ctx
+        .store
+        .compact_id(&params.id)
+        .unwrap_or_else(|_| params.id.clone());
     let has_status = params.status.is_some();
     let has_field_updates = params.title.is_some()
         || params.description.is_some()
@@ -57,7 +61,7 @@ pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
         let out = json!({ "task": task_row_to_compact_json(&ctx.store, &task, labels) });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Updated task {}", params.id);
+        println!("Updated task {display_id}");
         println!("  Title: {}", task.title);
         println!("  Status: {}", task.status);
         println!("  Priority: {}", priority_label(task.priority));
@@ -74,6 +78,7 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
 
     for raw_id in ids {
         let id = ctx.store.resolve_task_id(raw_id)?;
+        let display_id = ctx.store.compact_id(&id).unwrap_or_else(|_| id.clone());
         let event = TaskEvent::from_payload(
             &id,
             "cli",
@@ -90,7 +95,11 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
                 Default::default()
             }
         };
-        all_unblocked.extend(unblocked.clone());
+        let display_unblocked: Vec<String> = unblocked
+            .iter()
+            .map(|u| ctx.store.compact_id(u).unwrap_or_else(|_| u.clone()))
+            .collect();
+        all_unblocked.extend(display_unblocked.clone());
 
         if ctx.json {
             let task = ctx
@@ -100,11 +109,11 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
             let labels = ctx.store.get_task_labels(&id)?;
             closed.push(json!({
                 "task": task_row_to_compact_json(&ctx.store, &task, labels),
-                "unblocked": unblocked,
+                "unblocked": display_unblocked,
             }));
         } else {
-            println!("Closed task {id}");
-            for u in &unblocked {
+            println!("Closed task {display_id}");
+            for u in &display_unblocked {
                 println!("  Unblocked: {u}");
             }
         }
@@ -161,6 +170,10 @@ pub fn stats(ctx: &TaskCtx) -> Result<()> {
 
 pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let display_id = ctx
+        .store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -174,13 +187,13 @@ pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     if ctx.json {
         let out = json!({
             "event_id": event.event_id,
-            "task_id": task_id,
+            "task_id": display_id,
             "chunk_id": chunk_id,
             "action": "linked",
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Linked note {chunk_id} to task {task_id}");
+        println!("Linked note {chunk_id} to task {display_id}");
     }
 
     Ok(())
@@ -188,6 +201,10 @@ pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
 
 pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let display_id = ctx
+        .store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -201,13 +218,13 @@ pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     if ctx.json {
         let out = json!({
             "event_id": event.event_id,
-            "task_id": task_id,
+            "task_id": display_id,
             "chunk_id": chunk_id,
             "action": "unlinked",
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Unlinked note {chunk_id} from task {task_id}");
+        println!("Unlinked note {chunk_id} from task {display_id}");
     }
 
     Ok(())
@@ -223,6 +240,10 @@ pub fn ext_link_add(
     url: Option<&str>,
 ) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let display_id = ctx
+        .store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -238,7 +259,7 @@ pub fn ext_link_add(
     if ctx.json {
         let out = serde_json::json!({
             "event_id": event.event_id,
-            "task_id": task_id,
+            "task_id": display_id,
             "source": source,
             "external_id": id,
             "external_url": url,
@@ -246,7 +267,7 @@ pub fn ext_link_add(
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Added external reference [{source}:{id}] to task {task_id}");
+        println!("Added external reference [{source}:{id}] to task {display_id}");
     }
 
     Ok(())
@@ -254,6 +275,10 @@ pub fn ext_link_add(
 
 pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let display_id = ctx
+        .store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -269,14 +294,14 @@ pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> 
     if ctx.json {
         let out = serde_json::json!({
             "event_id": event.event_id,
-            "task_id": task_id,
+            "task_id": display_id,
             "source": source,
             "external_id": id,
             "action": "ext_link_removed",
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Removed external reference [{source}:{id}] from task {task_id}");
+        println!("Removed external reference [{source}:{id}] from task {display_id}");
     }
 
     Ok(())
@@ -284,6 +309,10 @@ pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> 
 
 pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let display_id = ctx
+        .store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let refs = ctx.store.get_external_ids(task_id)?;
 
     if ctx.json {
@@ -299,7 +328,7 @@ pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
             .collect();
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else if refs.is_empty() {
-        println!("No external references for task {task_id}");
+        println!("No external references for task {display_id}");
     } else {
         for r in &refs {
             if let Some(ref u) = r.external_url {
@@ -317,6 +346,10 @@ pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
 
 pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
+    let display_id = ctx
+        .store
+        .compact_id(task_id)
+        .unwrap_or_else(|_| task_id.to_string());
     let event = TaskEvent::from_payload(
         task_id.as_str(),
         "cli",
@@ -329,12 +362,12 @@ pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {
     if ctx.json {
         let out = json!({
             "event_id": event.event_id,
-            "task_id": task_id,
+            "task_id": display_id,
             "body": body,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Added comment to task {task_id}");
+        println!("Added comment to task {display_id}");
     }
 
     Ok(())
