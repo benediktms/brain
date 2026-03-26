@@ -20,6 +20,8 @@
 
 use std::collections::HashMap;
 
+use rusqlite::OptionalExtension;
+
 use crate::db::chunks::ChunkRow;
 use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::error::Result;
@@ -982,44 +984,99 @@ impl DerivedSummaryStore for Db {
         let scope_value_owned = scope_value.to_string();
         let scope_type_clone = scope_type.clone();
 
-        let contents: Vec<String> = self.with_read_conn(|conn| {
-            let rows: Vec<String> = match scope_type_clone {
+        // Fetch source content + IDs for lineage tracking.
+        let sources: Vec<(String, String)> = self.with_read_conn(|conn| {
+            let rows: Vec<(String, String)> = match scope_type_clone {
                 ScopeType::Directory => {
                     let pattern = format!("{}%", scope_value_owned);
                     let mut stmt = conn.prepare(
-                        "SELECT c.content
+                        "SELECT c.chunk_id, c.content
                          FROM chunks c
                          JOIN files f ON c.file_id = f.file_id
                          WHERE f.path LIKE ?1
                          ORDER BY f.path, c.chunk_ord",
                     )?;
-                    stmt.query_map(params![pattern], |row| row.get(0))
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                        .collect::<std::result::Result<Vec<String>, _>>()
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    stmt.query_map(params![pattern], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
                 }
                 ScopeType::Tag => {
                     let pattern = format!("%{}%", scope_value_owned);
                     let mut stmt = conn.prepare(
-                        "SELECT content
+                        "SELECT summary_id, content
                          FROM summaries
                          WHERE tags LIKE ?1
                          ORDER BY created_at",
                     )?;
-                    stmt.query_map(params![pattern], |row| row.get(0))
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                        .collect::<std::result::Result<Vec<String>, _>>()
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    stmt.query_map(params![pattern], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
                 }
             };
             Ok(rows)
         })?;
 
+        let source_ids: Vec<&str> = sources.iter().map(|(id, _)| id.as_str()).collect();
+        let contents: Vec<&str> = sources.iter().map(|(_, c)| c.as_str()).collect();
         let source_content = contents.join("\n\n");
+
+        // Compute blake3 hash of source content for change detection.
+        let new_hash = blake3::hash(source_content.as_bytes()).to_hex().to_string();
+
+        // Check if existing summary already has this hash — skip if unchanged.
+        let scope_value_check = scope_value.to_string();
+        let hash_check = new_hash.clone();
+        let existing_hash: Option<String> = self
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT source_content_hash FROM derived_summaries
+                     WHERE scope_type = ?1 AND scope_value = ?2",
+                    params![scope_type_str, scope_value_check],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map(|opt| opt.flatten())
+                .map_err(|e| BrainCoreError::Database(e.to_string()))
+            })
+            .unwrap_or(None);
+
+        if existing_hash.as_deref() == Some(&hash_check) {
+            // Content unchanged — clear stale flag without regenerating.
+            let sv = scope_value.to_string();
+            self.with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE derived_summaries SET stale = 0
+                     WHERE scope_type = ?1 AND scope_value = ?2",
+                    params![scope_type_str, sv],
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                Ok(())
+            })?;
+
+            // Return the existing ID.
+            let sv2 = scope_value.to_string();
+            let id: String = self.with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT id FROM derived_summaries
+                     WHERE scope_type = ?1 AND scope_value = ?2",
+                    params![scope_type_str, sv2],
+                    |row| row.get(0),
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))
+            })?;
+
+            return Ok(GeneratedScopeSummary { id, source_content });
+        }
 
         let summary_content: String = contents
             .iter()
-            .map(|c| c.get(..200).unwrap_or(c.as_str()))
+            .map(|c| c.get(..200).unwrap_or(c))
             .collect::<Vec<&str>>()
             .join("\n");
 
@@ -1032,21 +1089,47 @@ impl DerivedSummaryStore for Db {
         let id_clone = id.clone();
         let content_clone = summary_content.clone();
         let scope_value_clone = scope_value.to_string();
+        let hash_clone = new_hash;
+        let source_ids_owned: Vec<String> = source_ids.iter().map(|s| s.to_string()).collect();
+        let source_type = match scope_type {
+            ScopeType::Directory => "chunk",
+            ScopeType::Tag => "episode",
+        };
 
-        self.with_write_conn(|conn| {
+        self.with_write_conn(move |conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO derived_summaries
-                     (id, scope_type, scope_value, content, stale, generated_at)
-                 VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+                     (id, scope_type, scope_value, content, stale, generated_at, source_content_hash)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
                 params![
                     id_clone,
                     scope_type_str,
                     scope_value_clone,
                     content_clone,
-                    now
+                    now,
+                    hash_clone
                 ],
             )
             .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+
+            // Populate source lineage: replace old links, insert new ones.
+            conn.execute(
+                "DELETE FROM summary_sources WHERE summary_id = ?1",
+                params![id_clone],
+            )
+            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+
+            let mut stmt = conn
+                .prepare_cached(
+                    "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            for src_id in &source_ids_owned {
+                stmt.execute(params![id_clone, src_id, source_type, now])
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            }
+
             Ok(())
         })?;
 
