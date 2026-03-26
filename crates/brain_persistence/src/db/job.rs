@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 // ─── JobStatus ───────────────────────────────────────────────────
 
 /// Job status values. Stored as lowercase strings in SQLite.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobStatus {
     /// Waiting to be claimed by the runner.
@@ -61,7 +61,7 @@ impl std::str::FromStr for JobStatus {
 
 /// Retry policy for a job. Serialized as JSON into the `retry_config` column.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum RetryStrategy {
     /// Never retry. The job is side-effectful or non-idempotent.
     #[default]
@@ -135,6 +135,16 @@ pub enum JobPayload {
 }
 
 impl JobPayload {
+    /// Human-readable reference identifier for status displays and logs.
+    pub fn ref_id(&self) -> &str {
+        match self {
+            JobPayload::SummarizeScope { summary_id, .. } => summary_id,
+            JobPayload::ConsolidateCluster {
+                suggested_title, ..
+            } => suggested_title,
+        }
+    }
+
     /// The kind discriminant as stored in the `kind` DB column.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -238,7 +248,7 @@ mod tests {
     fn test_retry_strategy_serialization() {
         assert_eq!(
             serde_json::to_string(&RetryStrategy::NoRetry).unwrap(),
-            r#"{"type":"noRetry"}"#
+            r#"{"type":"no_retry"}"#
         );
         assert_eq!(
             serde_json::to_string(&RetryStrategy::Fixed { attempts: 3 }).unwrap(),
@@ -296,6 +306,25 @@ mod tests {
         assert!(json.contains(r#""kind":"summarize_scope""#));
         let deserialized: JobPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.kind(), "summarize_scope");
+    }
+
+    #[test]
+    fn test_payload_ref_id() {
+        let scope = JobPayload::SummarizeScope {
+            summary_id: "sum-1".into(),
+            scope_type: "directory".into(),
+            scope_value: "src/".into(),
+            content: "".into(),
+        };
+        assert_eq!(scope.ref_id(), "sum-1");
+
+        let cluster = JobPayload::ConsolidateCluster {
+            cluster_index: 0,
+            suggested_title: "Weekly".into(),
+            episode_ids: vec![],
+            episodes: "".into(),
+        };
+        assert_eq!(cluster.ref_id(), "Weekly");
     }
 
     #[test]

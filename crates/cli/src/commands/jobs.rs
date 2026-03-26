@@ -22,18 +22,10 @@ pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Resu
         let recent_failures_json: Vec<serde_json::Value> = recent_jobs
             .iter()
             .map(|j| {
-                let ref_id = match &j.payload {
-                    brain_lib::db::job::JobPayload::SummarizeScope { summary_id, .. } => {
-                        summary_id.clone()
-                    }
-                    brain_lib::db::job::JobPayload::ConsolidateCluster {
-                        suggested_title, ..
-                    } => suggested_title.clone(),
-                };
                 serde_json::json!({
                     "job_id": j.job_id,
                     "kind": j.kind(),
-                    "ref_id": ref_id,
+                    "ref_id": j.payload.ref_id(),
                     "attempts": j.attempts,
                     "last_error": j.last_error,
                     "updated_at": j.updated_at,
@@ -76,20 +68,12 @@ pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Resu
         if !recent_jobs.is_empty() {
             println!("Recent Failures");
             for job in &recent_jobs {
-                let ref_id = match &job.payload {
-                    brain_lib::db::job::JobPayload::SummarizeScope { summary_id, .. } => {
-                        summary_id.as_str()
-                    }
-                    brain_lib::db::job::JobPayload::ConsolidateCluster {
-                        suggested_title, ..
-                    } => suggested_title.as_str(),
-                };
                 println!(
                     "  [{:>3} attempts] {} — {}: {}",
                     job.attempts,
                     job.job_id,
                     job.kind(),
-                    ref_id
+                    job.payload.ref_id()
                 );
                 if let Some(ref err) = job.last_error {
                     println!("    Error: {}", err);

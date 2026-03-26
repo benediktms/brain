@@ -30,7 +30,7 @@ pub fn migrate_v32_to_v33(conn: &Connection) -> Result<()> {
                                 CHECK (status IN ('ready', 'pending', 'in_progress', 'done', 'failed')),
             priority            INTEGER NOT NULL DEFAULT 100,
             payload             TEXT NOT NULL DEFAULT '{}',
-            retry_config        TEXT NOT NULL DEFAULT '{\"type\":\"noRetry\"}',
+            retry_config        TEXT NOT NULL DEFAULT '{\"type\":\"no_retry\"}',
             stuck_threshold_secs INTEGER NOT NULL DEFAULT 300,
             result              TEXT,
             attempts            INTEGER NOT NULL DEFAULT 0,

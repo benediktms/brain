@@ -37,7 +37,9 @@ fn now_secs() -> i64 {
 /// Map a row (selected via `JOB_COLUMNS`) to a [`Job`].
 fn row_to_job(row: &rusqlite::Row) -> rusqlite::Result<Job> {
     let status_str: String = row.get(2)?;
-    let status: JobStatus = status_str.parse().unwrap_or(JobStatus::Ready);
+    let status: JobStatus = status_str.parse().map_err(|e: String| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into())
+    })?;
 
     let payload_str: String = row.get(4)?;
     let payload: JobPayload = serde_json::from_str(&payload_str).map_err(|e| {
@@ -45,12 +47,14 @@ fn row_to_job(row: &rusqlite::Row) -> rusqlite::Result<Job> {
     })?;
 
     let retry_config_str: String = row.get(5)?;
-    let retry_config: RetryStrategy =
-        serde_json::from_str(&retry_config_str).unwrap_or(RetryStrategy::NoRetry);
+    let retry_config: RetryStrategy = serde_json::from_str(&retry_config_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e))
+    })?;
 
     let metadata_str: String = row.get(10)?;
-    let metadata: serde_json::Value =
-        serde_json::from_str(&metadata_str).unwrap_or_else(|_| serde_json::json!({}));
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(e))
+    })?;
 
     Ok(Job {
         job_id: row.get(0)?,
@@ -244,30 +248,33 @@ pub fn fail_job(conn: &Connection, job_id: &str, error_msg: &str) -> Result<()> 
 /// Reap stuck jobs: reset in_progress/pending jobs that exceeded their
 /// `stuck_threshold_secs` back to `ready`. Only reaps retryable jobs.
 pub fn reap_stuck_jobs(conn: &Connection) -> Result<usize> {
+    let stuck = list_stuck_jobs(conn)?;
+
+    let retryable_ids: Vec<&str> = stuck
+        .iter()
+        .filter(|j| j.retry_config.is_retryable())
+        .map(|j| j.job_id.as_str())
+        .collect();
+
+    if retryable_ids.is_empty() {
+        return Ok(0);
+    }
+
     let now = now_secs();
+    let mut count = 0;
 
-    let r1 = conn.execute(
-        "UPDATE jobs SET status = 'ready',
-                          started_at = NULL,
-                          updated_at = ?1
-         WHERE status = 'in_progress'
-           AND processed_at IS NULL
-           AND started_at < ?1 - stuck_threshold_secs
-           AND retry_config != '{\"type\":\"noRetry\"}'",
-        params![now],
-    )?;
+    for job_id in &retryable_ids {
+        count += conn.execute(
+            "UPDATE jobs SET status = 'ready',
+                              started_at = NULL,
+                              updated_at = ?1
+             WHERE job_id = ?2
+               AND status IN ('in_progress', 'pending')",
+            params![now, job_id],
+        )?;
+    }
 
-    let r2 = conn.execute(
-        "UPDATE jobs SET status = 'ready',
-                          updated_at = ?1
-         WHERE status = 'pending'
-           AND started_at IS NULL
-           AND updated_at < ?1 - stuck_threshold_secs
-           AND retry_config != '{\"type\":\"noRetry\"}'",
-        params![now],
-    )?;
-
-    Ok(r1 + r2)
+    Ok(count)
 }
 
 /// Delete old completed jobs older than `age_secs`.
@@ -405,7 +412,7 @@ mod tests {
                                      CHECK (status IN ('ready', 'pending', 'in_progress', 'done', 'failed')),
                  priority            INTEGER NOT NULL DEFAULT 100,
                  payload             TEXT NOT NULL DEFAULT '{}',
-                 retry_config        TEXT NOT NULL DEFAULT '{\"type\":\"noRetry\"}',
+                 retry_config        TEXT NOT NULL DEFAULT '{\"type\":\"no_retry\"}',
                  stuck_threshold_secs INTEGER NOT NULL DEFAULT 300,
                  result              TEXT,
                  attempts            INTEGER NOT NULL DEFAULT 0,
@@ -634,7 +641,7 @@ mod tests {
             "INSERT INTO jobs (job_id, kind, status, priority, payload, attempts,
                                retry_config, metadata, created_at, scheduled_at, updated_at)
              VALUES ('J1', 'summarize_scope', 'pending', 100, ?1, 1,
-                     '{\"type\":\"noRetry\"}', '{}', 1000, 1000, 1000)",
+                     '{\"type\":\"no_retry\"}', '{}', 1000, 1000, 1000)",
             [&payload],
         )
         .unwrap();
@@ -699,7 +706,7 @@ mod tests {
             "INSERT INTO jobs (job_id, kind, status, started_at, priority, payload, attempts,
                                retry_config, metadata, created_at, scheduled_at, updated_at)
              VALUES ('J-NORETRY', 'summarize_scope', 'in_progress', ?1, 100, ?2, 1,
-                     '{\"type\":\"noRetry\"}', '{}', ?1, ?1, ?1)",
+                     '{\"type\":\"no_retry\"}', '{}', ?1, ?1, ?1)",
             params![old, payload],
         )
         .unwrap();

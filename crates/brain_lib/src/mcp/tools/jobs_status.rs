@@ -45,7 +45,7 @@ impl JobsStatus {
             None
         };
 
-        let listing_status = status_filter.clone().unwrap_or(JobStatus::Failed);
+        let listing_status = status_filter.unwrap_or(JobStatus::Failed);
         let kind_filter = params.kind.as_deref().map(|s| s.to_string());
 
         let pending = match db.count_jobs_by_status(&JobStatus::Pending) {
@@ -89,18 +89,10 @@ impl JobsStatus {
         let jobs_json: Vec<serde_json::Value> = jobs
             .into_iter()
             .map(|j| {
-                let ref_id = match &j.payload {
-                    crate::db::job::JobPayload::SummarizeScope { summary_id, .. } => {
-                        summary_id.clone()
-                    }
-                    crate::db::job::JobPayload::ConsolidateCluster {
-                        suggested_title, ..
-                    } => suggested_title.clone(),
-                };
                 json!({
                     "job_id": j.job_id,
                     "kind": j.kind(),
-                    "ref_id": ref_id,
+                    "ref_id": j.payload.ref_id(),
                     "attempts": j.attempts,
                     "last_error": j.last_error,
                     "status": j.status,
