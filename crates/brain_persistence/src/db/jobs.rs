@@ -278,12 +278,42 @@ pub fn reap_stuck_jobs(conn: &Connection) -> Result<usize> {
 }
 
 /// Delete old completed jobs older than `age_secs`.
-pub fn gc_completed_jobs(conn: &Connection, age_secs: i64) -> Result<usize> {
+///
+/// Excludes recurring singleton kinds (listed in `protected_kinds`) from
+/// deletion — those rows are recycled via `reschedule_terminal_job`, not GC'd.
+pub fn gc_completed_jobs(
+    conn: &Connection,
+    age_secs: i64,
+    protected_kinds: &[&str],
+) -> Result<usize> {
     let cutoff = now_secs() - age_secs;
-    let count = conn.execute(
-        "DELETE FROM jobs WHERE status = 'done' AND processed_at < ?1",
-        [cutoff],
-    )?;
+
+    if protected_kinds.is_empty() {
+        let count = conn.execute(
+            "DELETE FROM jobs WHERE status IN ('done', 'failed') AND processed_at < ?1",
+            [cutoff],
+        )?;
+        return Ok(count);
+    }
+
+    // Build a NOT IN clause for protected kinds.
+    let placeholders: Vec<String> = (0..protected_kinds.len())
+        .map(|i| format!("?{}", i + 2))
+        .collect();
+    let sql = format!(
+        "DELETE FROM jobs WHERE status IN ('done', 'failed') AND processed_at < ?1 AND kind NOT IN ({})",
+        placeholders.join(", ")
+    );
+
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    params_vec.push(Box::new(cutoff));
+    for kind in protected_kinds {
+        params_vec.push(Box::new(kind.to_string()));
+    }
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params_vec.iter().map(|p| p.as_ref()).collect();
+
+    let count = conn.execute(&sql, param_refs.as_slice())?;
     Ok(count)
 }
 
@@ -392,6 +422,187 @@ pub fn retry_failed_job(conn: &Connection, job_id: &str) -> Result<bool> {
         params![now, job_id],
     )?;
     Ok(rows > 0)
+}
+
+// ─── Singleton / dedup ──────────────────────────────────────────
+
+/// Get a job by its `kind` column. Prefers active (non-terminal) jobs;
+/// falls back to the most recently updated row.
+pub fn get_job_by_kind(conn: &Connection, kind: &str) -> Result<Option<Job>> {
+    let job = conn
+        .query_row(
+            &format!(
+                "SELECT {JOB_COLUMNS} FROM jobs WHERE kind = ?1
+                 ORDER BY CASE WHEN status IN ('done', 'failed') THEN 1 ELSE 0 END,
+                          updated_at DESC
+                 LIMIT 1"
+            ),
+            [kind],
+            row_to_job,
+        )
+        .optional()?;
+    Ok(job)
+}
+
+/// If no job of this `kind` exists, insert one in `ready` state.
+/// Returns `Some(job_id)` if inserted, `None` if a row already exists.
+///
+/// Uses a single INSERT ... WHERE NOT EXISTS for atomicity under
+/// SQLite's single-writer serialization.
+pub fn ensure_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Result<Option<String>> {
+    let job_id = ulid::Ulid::new().to_string();
+    let now = now_secs();
+    let scheduled_at = if input.scheduled_at == 0 {
+        now
+    } else {
+        input.scheduled_at
+    };
+
+    let kind = input.payload.kind();
+    let retry_config = input
+        .retry_config
+        .clone()
+        .unwrap_or_else(|| input.payload.default_retry_strategy());
+    let stuck_threshold = input
+        .stuck_threshold_secs
+        .unwrap_or_else(|| input.payload.default_stuck_threshold_secs());
+
+    let payload_json = serde_json::to_string(&input.payload)
+        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize payload: {e}")))?;
+    let retry_json = serde_json::to_string(&retry_config).map_err(|e| {
+        crate::error::BrainCoreError::Internal(format!("serialize retry_config: {e}"))
+    })?;
+    let metadata_json = serde_json::to_string(&input.metadata)
+        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize metadata: {e}")))?;
+
+    let rows = conn.execute(
+        "INSERT INTO jobs (job_id, kind, status, priority, payload,
+                            retry_config, stuck_threshold_secs,
+                            attempts, metadata, created_at, scheduled_at, updated_at)
+         SELECT ?1, ?2, 'ready', ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10
+         WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE kind = ?2)",
+        params![
+            job_id,
+            kind,
+            input.priority,
+            payload_json,
+            retry_json,
+            stuck_threshold,
+            metadata_json,
+            now,
+            scheduled_at,
+            now,
+        ],
+    )?;
+
+    if rows > 0 { Ok(Some(job_id)) } else { Ok(None) }
+}
+
+/// Ensure a singleton job exists and is schedulable. Combines
+/// `ensure_singleton_job` + `reschedule_terminal_job` into one call
+/// so both can run under a single `with_write_conn` mutex acquisition.
+///
+/// 1. If no row exists for this kind → insert as `ready`.
+/// 2. If a row exists in terminal state → reset to `ready`.
+/// 3. If a row exists and is active → no-op.
+pub fn reconcile_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Result<()> {
+    let inserted = ensure_singleton_job(conn, input)?;
+    if inserted.is_none() {
+        // Row already exists — try to reschedule if terminal.
+        reschedule_terminal_job(conn, input.payload.kind())?;
+    }
+    Ok(())
+}
+
+/// If the singleton job for `kind` is in a terminal state (done/failed),
+/// reset it to `ready`. Returns `true` if a row was reset.
+///
+/// Uses `UPDATE ... WHERE status IN ('done','failed')` as the mutex —
+/// concurrent callers get `rows_affected=0` and skip.
+/// `in_progress` jobs are never touched.
+pub fn reschedule_terminal_job(conn: &Connection, kind: &str) -> Result<bool> {
+    let now = now_secs();
+    let rows = conn.execute(
+        "UPDATE jobs SET status = 'ready',
+                          attempts = 0,
+                          result = NULL,
+                          last_error = NULL,
+                          started_at = NULL,
+                          processed_at = NULL,
+                          scheduled_at = ?1,
+                          updated_at = ?1
+         WHERE kind = ?2 AND status IN ('done', 'failed')",
+        params![now, kind],
+    )?;
+    Ok(rows > 0)
+}
+
+/// Enqueue an on-demand singleton job. If a non-terminal job of the same
+/// `kind` already exists, returns its `job_id` instead of inserting.
+/// Returns `(job_id, was_created)`.
+///
+/// Uses `INSERT ... SELECT ... WHERE NOT EXISTS` for atomicity under
+/// SQLite's single-writer serialization, then falls back to a SELECT
+/// if the INSERT matched zero rows (another writer won the race).
+pub fn enqueue_dedup_job(conn: &Connection, input: &EnqueueJobInput) -> Result<(String, bool)> {
+    let job_id = ulid::Ulid::new().to_string();
+    let now = now_secs();
+    let scheduled_at = if input.scheduled_at == 0 {
+        now
+    } else {
+        input.scheduled_at
+    };
+
+    let kind = input.payload.kind();
+    let retry_config = input
+        .retry_config
+        .clone()
+        .unwrap_or_else(|| input.payload.default_retry_strategy());
+    let stuck_threshold = input
+        .stuck_threshold_secs
+        .unwrap_or_else(|| input.payload.default_stuck_threshold_secs());
+
+    let payload_json = serde_json::to_string(&input.payload)
+        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize payload: {e}")))?;
+    let retry_json = serde_json::to_string(&retry_config).map_err(|e| {
+        crate::error::BrainCoreError::Internal(format!("serialize retry_config: {e}"))
+    })?;
+    let metadata_json = serde_json::to_string(&input.metadata)
+        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize metadata: {e}")))?;
+
+    let rows = conn.execute(
+        "INSERT INTO jobs (job_id, kind, status, priority, payload,
+                            retry_config, stuck_threshold_secs,
+                            attempts, metadata, created_at, scheduled_at, updated_at)
+         SELECT ?1, ?2, 'ready', ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10
+         WHERE NOT EXISTS (
+             SELECT 1 FROM jobs WHERE kind = ?2 AND status NOT IN ('done', 'failed')
+         )",
+        params![
+            job_id,
+            kind,
+            input.priority,
+            payload_json,
+            retry_json,
+            stuck_threshold,
+            metadata_json,
+            now,
+            scheduled_at,
+            now,
+        ],
+    )?;
+
+    if rows > 0 {
+        return Ok((job_id, true));
+    }
+
+    // Another job of this kind is active — return it.
+    let existing: String = conn.query_row(
+        "SELECT job_id FROM jobs WHERE kind = ?1 AND status NOT IN ('done', 'failed') LIMIT 1",
+        [kind],
+        |row| row.get(0),
+    )?;
+    Ok((existing, false))
 }
 
 // ─── Tests ───────────────────────────────────────────────────────
@@ -742,7 +953,7 @@ mod tests {
         )
         .unwrap();
 
-        let deleted = gc_completed_jobs(&conn, 86400).unwrap();
+        let deleted = gc_completed_jobs(&conn, 86400, &[]).unwrap();
         assert_eq!(deleted, 1);
         assert!(get_job(&conn, "J-OLD").unwrap().is_none());
         assert!(get_job(&conn, "J-RECENT").unwrap().is_some());
@@ -800,5 +1011,147 @@ mod tests {
             }
             _ => panic!("unexpected payload variant"),
         }
+    }
+
+    // ─── Singleton / dedup tests ─────────────────────────────────
+
+    #[test]
+    fn test_get_job_by_kind() {
+        let conn = setup_db();
+        assert!(get_job_by_kind(&conn, "summarize_scope").unwrap().is_none());
+
+        enq(&conn, make_payload(), priority::NORMAL);
+        let job = get_job_by_kind(&conn, "summarize_scope").unwrap().unwrap();
+        assert_eq!(job.kind(), "summarize_scope");
+    }
+
+    #[test]
+    fn test_ensure_singleton_job_inserts_first_time() {
+        let conn = setup_db();
+        let input = EnqueueJobInput {
+            payload: make_payload(),
+            priority: priority::NORMAL,
+            retry_config: None,
+            stuck_threshold_secs: None,
+            metadata: serde_json::json!({}),
+            scheduled_at: 0,
+        };
+
+        let result = ensure_singleton_job(&conn, &input).unwrap();
+        assert!(result.is_some(), "should insert on first call");
+
+        let result2 = ensure_singleton_job(&conn, &input).unwrap();
+        assert!(result2.is_none(), "should skip on second call");
+    }
+
+    #[test]
+    fn test_ensure_singleton_job_skips_even_when_terminal() {
+        let conn = setup_db();
+        let input = EnqueueJobInput {
+            payload: make_payload(),
+            priority: priority::NORMAL,
+            retry_config: None,
+            stuck_threshold_secs: None,
+            metadata: serde_json::json!({}),
+            scheduled_at: 0,
+        };
+
+        let job_id = ensure_singleton_job(&conn, &input).unwrap().unwrap();
+        set_status(&conn, &job_id, "done");
+
+        // Still skips — singleton checks for ANY row of this kind
+        let result = ensure_singleton_job(&conn, &input).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_reschedule_terminal_job_resets_done() {
+        let conn = setup_db();
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
+        set_status(&conn, &job_id, "done");
+
+        let reset = reschedule_terminal_job(&conn, "summarize_scope").unwrap();
+        assert!(reset);
+
+        let job = get_job(&conn, &job_id).unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Ready);
+        assert_eq!(job.attempts, 0);
+        assert!(job.result.is_none());
+        assert!(job.last_error.is_none());
+    }
+
+    #[test]
+    fn test_reschedule_terminal_job_resets_failed() {
+        let conn = setup_db();
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
+        set_status(&conn, &job_id, "failed");
+
+        let reset = reschedule_terminal_job(&conn, "summarize_scope").unwrap();
+        assert!(reset);
+
+        let job = get_job(&conn, &job_id).unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Ready);
+    }
+
+    #[test]
+    fn test_reschedule_terminal_job_ignores_in_progress() {
+        let conn = setup_db();
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
+        set_status(&conn, &job_id, "in_progress");
+
+        let reset = reschedule_terminal_job(&conn, "summarize_scope").unwrap();
+        assert!(!reset, "should not reset in_progress job");
+
+        let job = get_job(&conn, &job_id).unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::InProgress);
+    }
+
+    #[test]
+    fn test_reschedule_terminal_job_ignores_ready() {
+        let conn = setup_db();
+        enq(&conn, make_payload(), priority::NORMAL);
+
+        let reset = reschedule_terminal_job(&conn, "summarize_scope").unwrap();
+        assert!(!reset, "should not reset already-ready job");
+    }
+
+    #[test]
+    fn test_enqueue_dedup_job_returns_existing_active() {
+        let conn = setup_db();
+        let input = EnqueueJobInput {
+            payload: make_payload(),
+            priority: priority::NORMAL,
+            retry_config: None,
+            stuck_threshold_secs: None,
+            metadata: serde_json::json!({}),
+            scheduled_at: 0,
+        };
+
+        let (id1, created1) = enqueue_dedup_job(&conn, &input).unwrap();
+        assert!(created1);
+
+        let (id2, created2) = enqueue_dedup_job(&conn, &input).unwrap();
+        assert!(!created2);
+        assert_eq!(id1, id2, "should return existing active job");
+    }
+
+    #[test]
+    fn test_enqueue_dedup_job_creates_after_terminal() {
+        let conn = setup_db();
+        let input = EnqueueJobInput {
+            payload: make_payload(),
+            priority: priority::NORMAL,
+            retry_config: None,
+            stuck_threshold_secs: None,
+            metadata: serde_json::json!({}),
+            scheduled_at: 0,
+        };
+
+        let (id1, _) = enqueue_dedup_job(&conn, &input).unwrap();
+        set_status(&conn, &id1, "done");
+
+        let (id2, created) = enqueue_dedup_job(&conn, &input).unwrap();
+        assert!(created, "should create new job after terminal");
+        assert_ne!(id1, id2);
     }
 }

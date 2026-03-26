@@ -135,7 +135,8 @@ pub fn run_gc(sqlite_db: &Path, lance_db: Option<&Path>, older_than_days: u32) -
     let db = stores.db();
 
     let age_secs = older_than_days as i64 * 86400;
-    let deleted = db.gc_completed_jobs(age_secs)?;
+    let protected = brain_lib::pipeline::recurring_jobs::protected_kinds();
+    let deleted = db.gc_completed_jobs(age_secs, &protected)?;
 
     println!(
         "Deleted {deleted} completed job{} older than {} day{}.",
