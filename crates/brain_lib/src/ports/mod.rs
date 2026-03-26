@@ -1071,7 +1071,11 @@ impl DerivedSummaryStore for Db {
                 .map_err(|e| BrainCoreError::Database(e.to_string()))
             })?;
 
-            return Ok(GeneratedScopeSummary { id, source_content });
+            return Ok(GeneratedScopeSummary {
+                id,
+                source_content,
+                content_changed: false,
+            });
         }
 
         let summary_content: String = contents
@@ -1080,11 +1084,25 @@ impl DerivedSummaryStore for Db {
             .collect::<Vec<&str>>()
             .join("\n");
 
-        let id = Ulid::new().to_string();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
+
+        // Reuse existing ID to avoid orphaning summary_sources rows.
+        let existing_id: Option<String> = self
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT id FROM derived_summaries WHERE scope_type = ?1 AND scope_value = ?2",
+                    params![scope_type_str, scope_value],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| BrainCoreError::Database(e.to_string()))
+            })
+            .unwrap_or(None);
+
+        let id = existing_id.unwrap_or_else(|| Ulid::new().to_string());
 
         let id_clone = id.clone();
         let content_clone = summary_content.clone();
@@ -1097,22 +1115,35 @@ impl DerivedSummaryStore for Db {
         };
 
         self.with_write_conn(move |conn| {
-            conn.execute(
-                "INSERT OR REPLACE INTO derived_summaries
-                     (id, scope_type, scope_value, content, stale, generated_at, source_content_hash)
-                 VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
-                params![
-                    id_clone,
-                    scope_type_str,
-                    scope_value_clone,
-                    content_clone,
-                    now,
-                    hash_clone
-                ],
-            )
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            // Use UPDATE if row exists, INSERT if new — avoids DELETE+INSERT
+            // from INSERT OR REPLACE which would change the rowid.
+            let updated = conn
+                .execute(
+                    "UPDATE derived_summaries
+                     SET content = ?1, stale = 0, generated_at = ?2, source_content_hash = ?3
+                     WHERE id = ?4",
+                    params![content_clone, now, hash_clone, id_clone],
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
 
-            // Populate source lineage: replace old links, insert new ones.
+            if updated == 0 {
+                conn.execute(
+                    "INSERT INTO derived_summaries
+                         (id, scope_type, scope_value, content, stale, generated_at, source_content_hash)
+                     VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+                    params![
+                        id_clone,
+                        scope_type_str,
+                        scope_value_clone,
+                        content_clone,
+                        now,
+                        hash_clone
+                    ],
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            }
+
+            // Replace source lineage for this summary.
             conn.execute(
                 "DELETE FROM summary_sources WHERE summary_id = ?1",
                 params![id_clone],
@@ -1133,7 +1164,11 @@ impl DerivedSummaryStore for Db {
             Ok(())
         })?;
 
-        Ok(GeneratedScopeSummary { id, source_content })
+        Ok(GeneratedScopeSummary {
+            id,
+            source_content,
+            content_changed: true,
+        })
     }
 
     fn get_scope_summary(
