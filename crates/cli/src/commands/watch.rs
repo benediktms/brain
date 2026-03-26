@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -67,38 +66,9 @@ pub async fn run(
         pipeline.set_summarizer(Arc::from(provider));
     }
 
-    // Spawn full scan in the background so the event loop starts immediately.
-    // The scan catches offline changes; any file events during the scan are
-    // queued by the watcher and processed once the event loop is running.
-    {
-        let db = pipeline.db().clone();
-        let store = pipeline.store().clone();
-        let embedder = pipeline.embedder().clone();
-        let dirs = note_dirs.clone();
-        tokio::spawn(async move {
-            // Build a lightweight pipeline clone for the scan.
-            match brain_lib::pipeline::IndexPipeline::with_store(db.clone(), store.clone(), embedder).await {
-                Ok(scan_pipeline) => {
-                    match scan_pipeline.full_scan(&dirs).await {
-                        Ok(stats) => {
-                            info!(
-                                indexed = stats.indexed,
-                                skipped = stats.skipped,
-                                deleted = stats.deleted,
-                                "startup scan complete"
-                            );
-                        }
-                        Err(e) => warn!(error = %e, "startup scan failed"),
-                    }
-                    // Compact fragments created during full scan
-                    store.optimizer().force_optimize().await;
-                    // Self-heal: reset embedded_at if LanceDB is missing
-                    embed_poll::self_heal_if_lance_missing(&db, &store).await;
-                }
-                Err(e) => warn!(error = %e, "failed to create scan pipeline"),
-            }
-        });
-    }
+    // Startup self-heal: if LanceDB is missing, reset embedded_at so all
+    // tasks and chunks will be re-embedded on the next EmbedPollSweep job.
+    embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.store()).await;
 
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -114,9 +84,7 @@ pub async fn run(
     // threshold is evaluated inside should_optimize().
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
-    // Embedding poll: catches tasks/chunks that missed inline embedding
-    // (e.g. written directly to SQLite, or failed during MCP handler).
-    let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
+    // Embedding is now handled by the EmbedPollSweep recurring job.
 
     // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
     let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
@@ -128,9 +96,6 @@ pub async fn run(
     // SIGUSR1 handler — dump metrics snapshot to stderr
     let mut sigusr1 = tokio::signal::unix::signal(SignalKind::user_defined1())
         .expect("failed to register SIGUSR1 handler");
-
-    // Guard: skip embed poll tick if a previous one is still running.
-    let embed_running = Arc::new(AtomicBool::new(false));
 
     // Event loop: batch-drain, coalesce, and dispatch
     let shutdown_reason = loop {
@@ -213,23 +178,6 @@ pub async fn run(
                 let protected = recurring_jobs::protected_kinds();
                 if let Err(e) = pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
                     tracing::warn!(error = %e, "gc_completed_jobs failed");
-                }
-            }
-            _ = embed_poll_interval.tick() => {
-                if embed_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                    let db = pipeline.db().clone();
-                    let store = pipeline.store().clone();
-                    let embedder = pipeline.embedder().clone();
-                    let guard = embed_running.clone();
-                    tokio::spawn(async move {
-                        let n_tasks = embed_poll::poll_stale_tasks(&db, &store, &embedder, "").await;
-                        let n_chunks = embed_poll::poll_stale_chunks(&db, &store, &embedder).await;
-                        let n_records = embed_poll::poll_stale_records(&db, &store, &embedder, "").await;
-                        if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
-                            tracing::debug!(tasks = n_tasks, chunks = n_chunks, records = n_records, "embed_poll cycle complete");
-                        }
-                        guard.store(false, Ordering::SeqCst);
-                    });
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -614,18 +562,12 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Periodic optimization tick (same as single-brain run())
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
-    // Embedding poll: catches tasks/chunks that missed inline embedding.
-    let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
-
-    // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
+    // Job poll: reconcile recurring jobs, process ready jobs, GC old ones.
     let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
 
     // Root validation tick: checks that registered roots still exist on disk,
     // prunes stale roots, and archives brains whose all roots are gone.
     let mut root_validation_tick = tokio::time::interval(Duration::from_secs(60));
-
-    // Guard: skip embed poll tick if a previous one is still running.
-    let embed_running = Arc::new(AtomicBool::new(false));
 
     // ── 7. Event loop ─────────────────────────────────────────────────────
     let shutdown_reason = loop {
@@ -717,37 +659,6 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                     if let Err(e) = instance.pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
                         tracing::warn!(brain = %instance.name, error = %e, "gc_completed_jobs failed");
                     }
-                }
-            }
-            _ = embed_poll_interval.tick() => {
-                if embed_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                    let work: Vec<_> = brains.values().map(|instance| {
-                        (
-                            instance.name.clone(),
-                            instance.pipeline.db().clone(),
-                            instance.pipeline.store().clone(),
-                            instance.pipeline.embedder().clone(),
-                            instance.mcp_context.brain_id().to_string(),
-                        )
-                    }).collect();
-                    let guard = embed_running.clone();
-                    tokio::spawn(async move {
-                        for (name, db, store, embedder, brain_id) in work {
-                            let n_tasks = embed_poll::poll_stale_tasks(&db, &store, &embedder, &brain_id).await;
-                            let n_chunks = embed_poll::poll_stale_chunks(&db, &store, &embedder).await;
-                            let n_records = embed_poll::poll_stale_records(&db, &store, &embedder, &brain_id).await;
-                            if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
-                                tracing::debug!(
-                                    brain = %name,
-                                    tasks = n_tasks,
-                                    chunks = n_chunks,
-                                    records = n_records,
-                                    "embed_poll cycle complete"
-                                );
-                            }
-                        }
-                        guard.store(false, Ordering::SeqCst);
-                    });
                 }
             }
             _ = root_validation_tick.tick() => {

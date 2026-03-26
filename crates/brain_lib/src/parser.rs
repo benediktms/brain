@@ -101,16 +101,18 @@ fn build_sections(text: &str, headings: &[HeadingInfo], body_start: usize) -> Ve
     let mut sections = Vec::new();
     let mut heading_stack: Vec<(HeadingLevel, &str)> = Vec::new();
 
-    // Content between body_start and first heading
+    // Content between body_start and first heading.
+    // Clamp body_start to avoid panics when frontmatter parsing overshoots.
     let first_heading_start = headings.first().map(|h| h.byte_start).unwrap_or(text.len());
-    let pre_raw = &text[body_start..first_heading_start];
+    let safe_start = body_start.min(first_heading_start);
+    let pre_raw = &text[safe_start..first_heading_start];
     let pre_content = pre_raw.trim();
     if !pre_content.is_empty() {
         let leading = pre_raw.len() - pre_raw.trim_start().len();
         sections.push(Section {
             heading_path: String::new(),
             content: pre_content.to_string(),
-            byte_start: body_start,
+            byte_start: safe_start,
             byte_end: first_heading_start,
             content_byte_start: body_start + leading,
         });
