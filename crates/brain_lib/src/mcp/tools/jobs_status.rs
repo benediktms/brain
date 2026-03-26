@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use std::str::FromStr;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -16,7 +18,6 @@ fn default_limit() -> u64 {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct Params {
     kind: Option<String>,
     status: Option<String>,
@@ -35,85 +36,109 @@ impl JobsStatus {
 
         let db = ctx.db();
 
-        let pending = db
-            .count_jobs_by_status(&JobStatus::Pending)
-            .map_err(|e| format!("failed to count pending: {e}"));
-        let running = db
-            .count_jobs_by_status(&JobStatus::InProgress)
-            .map_err(|e| format!("failed to count in_progress: {e}"));
-        let done = db
-            .count_jobs_by_status(&JobStatus::Done)
-            .map_err(|e| format!("failed to count done: {e}"));
-        let failed = db
-            .count_jobs_by_status(&JobStatus::Failed)
-            .map_err(|e| format!("failed to count failed: {e}"));
-        let ready = db
-            .count_jobs_by_status(&JobStatus::Ready)
-            .map_err(|e| format!("failed to count ready: {e}"));
-
-        let recent_failures = db
-            .list_jobs_by_status(&JobStatus::Failed, params.limit as i32)
-            .map_err(|e| format!("failed to list recent failures: {e}"));
-        let stuck_jobs = db
-            .list_stuck_jobs()
-            .map_err(|e| format!("failed to list stuck jobs: {e}"));
-
-        match (pending, running, done, failed, ready) {
-            (Ok(pending), Ok(running), Ok(done), Ok(failed), Ok(ready)) => {
-                let recent_failures_json: Vec<serde_json::Value> = recent_failures
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|j| {
-                        let ref_id = match &j.payload {
-                            crate::db::job::JobPayload::SummarizeScope { summary_id, .. } => {
-                                summary_id.clone()
-                            }
-                            crate::db::job::JobPayload::ConsolidateCluster {
-                                suggested_title,
-                                ..
-                            } => suggested_title.clone(),
-                        };
-                        json!({
-                            "job_id": j.job_id,
-                            "kind": j.kind(),
-                            "ref_id": ref_id,
-                            "attempts": j.attempts,
-                            "last_error": j.last_error,
-                            "updated_at": j.updated_at,
-                        })
-                    })
-                    .collect();
-
-                let stuck_jobs_json: Vec<serde_json::Value> = stuck_jobs
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|j| {
-                        json!({
-                            "job_id": j.job_id,
-                            "kind": j.kind(),
-                            "started_at": j.started_at,
-                        })
-                    })
-                    .collect();
-
-                let response = json!({
-                    "counts": {
-                        "pending": pending,
-                        "running": running,
-                        "completed": done,
-                        "failed": failed,
-                        "ready": ready,
-                    },
-                    "recent_failures": recent_failures_json,
-                    "stuck_jobs": stuck_jobs_json,
-                });
-
-                json_response(&response)
+        let status_filter = if let Some(status_str) = params.status.as_deref() {
+            match JobStatus::from_str(status_str) {
+                Ok(status) => Some(status),
+                Err(err) => return ToolCallResult::error(err),
             }
-            _ => ToolCallResult::error(
-                "Failed to retrieve job counts. See individual errors above.".to_string(),
-            ),
+        } else {
+            None
+        };
+
+        let listing_status = status_filter.clone().unwrap_or(JobStatus::Failed);
+        let kind_filter = params.kind.as_deref().map(|s| s.to_string());
+
+        let pending = match db.count_jobs_by_status(&JobStatus::Pending) {
+            Ok(v) => v,
+            Err(e) => return ToolCallResult::error(format!("failed to count pending: {e}")),
+        };
+        let running = match db.count_jobs_by_status(&JobStatus::InProgress) {
+            Ok(v) => v,
+            Err(e) => return ToolCallResult::error(format!("failed to count in_progress: {e}")),
+        };
+        let done = match db.count_jobs_by_status(&JobStatus::Done) {
+            Ok(v) => v,
+            Err(e) => return ToolCallResult::error(format!("failed to count done: {e}")),
+        };
+        let failed = match db.count_jobs_by_status(&JobStatus::Failed) {
+            Ok(v) => v,
+            Err(e) => return ToolCallResult::error(format!("failed to count failed: {e}")),
+        };
+        let ready = match db.count_jobs_by_status(&JobStatus::Ready) {
+            Ok(v) => v,
+            Err(e) => return ToolCallResult::error(format!("failed to count ready: {e}")),
+        };
+
+        let mut jobs = match db.list_jobs_by_status(&listing_status, params.limit as i32) {
+            Ok(list) => list,
+            Err(e) => return ToolCallResult::error(format!("failed to list jobs: {e}")),
+        };
+
+        if let Some(kind) = kind_filter.as_deref() {
+            jobs.retain(|job| job.kind() == kind);
         }
+
+        let mut stuck_jobs = match db.list_stuck_jobs() {
+            Ok(list) => list,
+            Err(e) => return ToolCallResult::error(format!("failed to list stuck jobs: {e}")),
+        };
+        if let Some(kind) = kind_filter.as_deref() {
+            stuck_jobs.retain(|job| job.kind() == kind);
+        }
+
+        let jobs_json: Vec<serde_json::Value> = jobs
+            .into_iter()
+            .map(|j| {
+                let ref_id = match &j.payload {
+                    crate::db::job::JobPayload::SummarizeScope { summary_id, .. } => {
+                        summary_id.clone()
+                    }
+                    crate::db::job::JobPayload::ConsolidateCluster {
+                        suggested_title, ..
+                    } => suggested_title.clone(),
+                };
+                json!({
+                    "job_id": j.job_id,
+                    "kind": j.kind(),
+                    "ref_id": ref_id,
+                    "attempts": j.attempts,
+                    "last_error": j.last_error,
+                    "status": j.status,
+                    "updated_at": j.updated_at,
+                })
+            })
+            .collect();
+
+        let stuck_jobs_json: Vec<serde_json::Value> = stuck_jobs
+            .into_iter()
+            .map(|j| {
+                json!({
+                    "job_id": j.job_id,
+                    "kind": j.kind(),
+                    "status": j.status,
+                    "started_at": j.started_at,
+                })
+            })
+            .collect();
+
+        let response = json!({
+            "filters": {
+                "status": listing_status.as_ref(),
+                "kind": kind_filter,
+                "limit": params.limit,
+            },
+            "counts": {
+                "pending": pending,
+                "running": running,
+                "completed": done,
+                "failed": failed,
+                "ready": ready,
+            },
+            "jobs": jobs_json,
+            "stuck_jobs": stuck_jobs_json,
+        });
+
+        json_response(&response)
     }
 }
 
@@ -182,7 +207,7 @@ mod tests {
         assert!(counts.get("completed").is_some());
         assert!(counts.get("failed").is_some());
         assert!(counts.get("ready").is_some());
-        assert!(parsed.get("recent_failures").is_some());
+        assert!(parsed.get("jobs").is_some());
         assert!(parsed.get("stuck_jobs").is_some());
     }
 
@@ -194,5 +219,65 @@ mod tests {
             .dispatch("jobs.status", json!({ "limit": 5 }), &ctx)
             .await;
         assert!(result.is_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_jobs_status_filters_by_status_and_kind() {
+        use crate::db::job::{JobPayload, JobStatus};
+        use crate::db::jobs::EnqueueJobInput;
+        use crate::ports::JobQueue;
+
+        let (_dir, ctx) = create_test_context().await;
+        let db = ctx.db();
+
+        let payload = JobPayload::SummarizeScope {
+            summary_id: "sum-123".into(),
+            scope_type: "directory".into(),
+            scope_value: "src".into(),
+            content: "hello".into(),
+        };
+        let input = EnqueueJobInput {
+            payload,
+            priority: 10,
+            retry_config: None,
+            stuck_threshold_secs: None,
+            metadata: serde_json::json!({}),
+            scheduled_at: 0,
+        };
+        let job_id = db.enqueue_job(&input).unwrap();
+        db.with_write_conn(|conn| {
+            conn.execute(
+                "UPDATE jobs SET status = 'failed', updated_at = 0 WHERE job_id = ?1",
+                rusqlite::params![job_id],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "jobs.status",
+                json!({
+                    "status": JobStatus::Failed.as_ref(),
+                    "kind": "summarize_scope",
+                    "limit": 5,
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "unexpected error: {:?}",
+            result.is_error
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let jobs = parsed["jobs"].as_array().expect("jobs array");
+        assert_eq!(jobs.len(), 1, "expected exactly one filtered job");
+        assert_eq!(jobs[0]["job_id"], job_id);
+        assert_eq!(parsed["filters"]["status"], JobStatus::Failed.as_ref());
+        assert_eq!(parsed["filters"]["kind"], "summarize_scope");
     }
 }

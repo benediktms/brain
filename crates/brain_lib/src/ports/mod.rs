@@ -1223,6 +1223,9 @@ pub trait JobQueue: Send + Sync {
 
     /// List stuck jobs (in_progress/pending past their threshold) that are retryable.
     fn list_stuck_jobs(&self) -> Result<Vec<Job>>;
+
+    /// Reset a failed job back to `ready`. Returns true if the job was updated.
+    fn retry_failed_job(&self, job_id: &str) -> Result<bool>;
 }
 
 // -- JobQueue for Db -------------------------------------------------------
@@ -1269,6 +1272,11 @@ impl JobQueue for Db {
 
     fn list_stuck_jobs(&self) -> Result<Vec<Job>> {
         self.with_read_conn(crate::db::jobs::list_stuck_jobs)
+    }
+
+    fn retry_failed_job(&self, job_id: &str) -> Result<bool> {
+        let id = job_id.to_string();
+        self.with_write_conn(move |conn| crate::db::jobs::retry_failed_job(conn, &id))
     }
 }
 

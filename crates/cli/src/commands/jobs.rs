@@ -15,11 +15,11 @@ pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Resu
     let failed = db.count_jobs_by_status(&JobStatus::Failed)?;
     let ready = db.count_jobs_by_status(&JobStatus::Ready)?;
 
-    let recent_failures = db.list_jobs_by_status(&JobStatus::Failed, 10)?;
+    let recent_jobs = db.list_jobs_by_status(&JobStatus::Failed, 10)?;
     let stuck_jobs = db.list_stuck_jobs()?;
 
     if json {
-        let recent_failures_json: Vec<serde_json::Value> = recent_failures
+        let recent_failures_json: Vec<serde_json::Value> = recent_jobs
             .iter()
             .map(|j| {
                 let ref_id = match &j.payload {
@@ -73,9 +73,9 @@ pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Resu
         println!("  failed:    {failed}");
         println!();
 
-        if !recent_failures.is_empty() {
+        if !recent_jobs.is_empty() {
             println!("Recent Failures");
-            for job in &recent_failures {
+            for job in &recent_jobs {
                 let ref_id = match &job.payload {
                     brain_lib::db::job::JobPayload::SummarizeScope { summary_id, .. } => {
                         summary_id.as_str()
@@ -111,7 +111,7 @@ pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Resu
             println!();
         }
 
-        if recent_failures.is_empty() && stuck_jobs.is_empty() {
+        if recent_jobs.is_empty() && stuck_jobs.is_empty() {
             println!("No recent failures or stuck jobs.");
         }
     }
@@ -128,28 +128,18 @@ pub fn run_retry(sqlite_db: &Path, lance_db: Option<&Path>, job_id: &str) -> Res
         .map_err(|e| anyhow::anyhow!("failed to get job: {e}"))?
         .ok_or_else(|| anyhow::anyhow!("job not found: {job_id}"))?;
 
-    if job.status == JobStatus::Ready || job.status == JobStatus::Pending {
+    if job.status != JobStatus::Failed {
         anyhow::bail!(
-            "job {} is already in {} state — no retry needed",
+            "job {} is in '{}' state — only failed jobs can be retried",
             job_id,
             job.status
         );
     }
 
-    db.with_write_conn(|conn| {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX epoch")
-            .as_secs() as i64;
-        conn.execute(
-            "UPDATE jobs SET status = 'ready', last_error = NULL, started_at = NULL, \
-             scheduled_at = ?1, updated_at = ?1 WHERE job_id = ?2",
-            rusqlite::params![now, job_id],
-        )
-        .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))?;
-        Ok(())
-    })?;
+    let reset = db.retry_failed_job(job_id)?;
+    if !reset {
+        anyhow::bail!("job {job_id} was not reset; it may have changed state concurrently");
+    }
 
     println!("Retried job {job_id} — it has been reset to pending.");
 

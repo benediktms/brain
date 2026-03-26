@@ -369,6 +369,24 @@ pub fn list_stuck_jobs(conn: &Connection) -> Result<Vec<Job>> {
     Ok(jobs)
 }
 
+/// Reset a failed job back to `ready`. Returns `true` if a row was updated.
+pub fn retry_failed_job(conn: &Connection, job_id: &str) -> Result<bool> {
+    let now = now_secs();
+    let rows = conn.execute(
+        "UPDATE jobs
+             SET status = 'ready',
+                 last_error = NULL,
+                 result = NULL,
+                 started_at = NULL,
+                 processed_at = NULL,
+                 scheduled_at = ?1,
+                 updated_at = ?1
+         WHERE job_id = ?2 AND status = 'failed'",
+        params![now, job_id],
+    )?;
+    Ok(rows > 0)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -426,6 +444,14 @@ mod tests {
             scheduled_at: 0,
         };
         enqueue_job(conn, &input).unwrap()
+    }
+
+    fn set_status(conn: &Connection, job_id: &str, status: &str) {
+        conn.execute(
+            "UPDATE jobs SET status = ?1, updated_at = 0 WHERE job_id = ?2",
+            params![status, job_id],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -501,6 +527,34 @@ mod tests {
 
         let claimed = claim_ready_jobs(&conn, 10).unwrap();
         assert!(claimed.is_empty());
+    }
+
+    #[test]
+    fn test_retry_failed_job_resets_state() {
+        let conn = setup_db();
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
+        set_status(&conn, &job_id, "failed");
+
+        let reset = retry_failed_job(&conn, &job_id).unwrap();
+        assert!(reset);
+
+        let job = get_job(&conn, &job_id).unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Ready);
+        assert!(job.last_error.is_none());
+        assert!(job.processed_at.is_none());
+    }
+
+    #[test]
+    fn test_retry_failed_job_noop_for_non_failed() {
+        let conn = setup_db();
+        let job_id = enq(&conn, make_payload(), priority::NORMAL);
+        set_status(&conn, &job_id, "in_progress");
+
+        let reset = retry_failed_job(&conn, &job_id).unwrap();
+        assert!(!reset);
+
+        let job = get_job(&conn, &job_id).unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::InProgress);
     }
 
     #[test]
