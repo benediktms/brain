@@ -201,8 +201,28 @@ async fn process_stale_scope_sweep(db: &Db) -> JobResult {
 }
 
 /// Find unclustered episodes and enqueue ConsolidateCluster child jobs.
+///
+/// Skips enqueuing if there are already active (non-terminal) consolidation
+/// jobs — prevents re-sending the same episodes to the LLM.
 async fn process_consolidation_sweep(db: &Db) -> JobResult {
     use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
+
+    // Don't enqueue new clusters if previous ones are still being processed.
+    let active_count: i64 = db.with_read_conn(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE kind = 'consolidate_cluster'
+             AND status NOT IN ('done', 'failed')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+    })?;
+
+    if active_count > 0 {
+        return Ok(Some(format!(
+            r#"{{"skipped":true,"active_jobs":{active_count}}}"#
+        )));
+    }
 
     let episodes =
         db.with_read_conn(|conn| brain_persistence::db::summaries::list_episodes(conn, 100, ""))?;
