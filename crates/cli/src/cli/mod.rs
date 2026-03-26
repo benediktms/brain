@@ -586,6 +586,8 @@ pub enum McpTarget {
     Cursor,
     /// VS Code (.vscode/settings.json)
     Vscode,
+    /// Claude Code plugin (skills, commands, agents)
+    ClaudePlugin,
 }
 
 #[derive(Subcommand)]

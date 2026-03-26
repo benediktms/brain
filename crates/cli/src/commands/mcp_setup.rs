@@ -231,7 +231,184 @@ pub fn run(target: McpTarget, dry_run: bool) -> Result<()> {
         McpTarget::Claude => register_claude(&brain_bin, dry_run),
         McpTarget::Cursor => setup_cursor(&brain_bin, dry_run),
         McpTarget::Vscode => setup_vscode(&brain_bin, dry_run),
+        McpTarget::ClaudePlugin => setup_claude_plugin(dry_run),
     }
+}
+
+struct TemplateFile {
+    content: &'static str,
+    output_path: &'static str,
+}
+
+fn render(template: &str) -> String {
+    let result = template.replace("{{version}}", env!("CARGO_PKG_VERSION"));
+    debug_assert!(
+        !result.contains("{{"),
+        "unresolved template placeholder in output"
+    );
+    result
+}
+
+fn setup_claude_plugin(dry_run: bool) -> Result<()> {
+    let home = dirs::home_dir().context("cannot determine home directory")?;
+    let plugin_root = home
+        .join(".claude")
+        .join("plugins")
+        .join("marketplaces")
+        .join("brain-marketplace")
+        .join("claude-plugin");
+
+    let templates: &[TemplateFile] = &[
+        TemplateFile {
+            content: include_str!("../templates/plugin/plugin.json"),
+            output_path: ".claude-plugin/plugin.json",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/ready.md"),
+            output_path: "commands/ready.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/create.md"),
+            output_path: "commands/create.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/show.md"),
+            output_path: "commands/show.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/list.md"),
+            output_path: "commands/list.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/close.md"),
+            output_path: "commands/close.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/update.md"),
+            output_path: "commands/update.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/stats.md"),
+            output_path: "commands/stats.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/blocked.md"),
+            output_path: "commands/blocked.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/dep.md"),
+            output_path: "commands/dep.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/label.md"),
+            output_path: "commands/label.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/search.md"),
+            output_path: "commands/search.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/expand.md"),
+            output_path: "commands/expand.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/write-episode.md"),
+            output_path: "commands/write-episode.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/reflect.md"),
+            output_path: "commands/reflect.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/artifact.md"),
+            output_path: "commands/artifact.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/snapshot.md"),
+            output_path: "commands/snapshot.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/records.md"),
+            output_path: "commands/records.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/status.md"),
+            output_path: "commands/status.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/brains.md"),
+            output_path: "commands/brains.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/procedure.md"),
+            output_path: "commands/procedure.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/consolidate.md"),
+            output_path: "commands/consolidate.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/summarize.md"),
+            output_path: "commands/summarize.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/commands/jobs.md"),
+            output_path: "commands/jobs.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/agents/task-agent.md"),
+            output_path: "agents/task-agent.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/skills/brain/SKILL.md"),
+            output_path: "skills/brain/SKILL.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/skills/brain/resources/TASK_WORKFLOW.md"),
+            output_path: "skills/brain/resources/TASK_WORKFLOW.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/skills/brain/resources/MEMORY_PATTERNS.md"),
+            output_path: "skills/brain/resources/MEMORY_PATTERNS.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/skills/brain/resources/RECORDS_GUIDE.md"),
+            output_path: "skills/brain/resources/RECORDS_GUIDE.md",
+        },
+        TemplateFile {
+            content: include_str!("../templates/plugin/skills/brain/resources/TROUBLESHOOTING.md"),
+            output_path: "skills/brain/resources/TROUBLESHOOTING.md",
+        },
+    ];
+
+    if dry_run {
+        println!(
+            "Would write {} files to {}",
+            templates.len(),
+            plugin_root.display()
+        );
+        for t in templates {
+            println!("  {}", t.output_path);
+        }
+        return Ok(());
+    }
+
+    for t in templates {
+        let target = plugin_root.join(t.output_path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        }
+        let rendered = render(t.content);
+        fs::write(&target, rendered)
+            .with_context(|| format!("failed to write {}", target.display()))?;
+    }
+
+    println!("Installed brain Claude Code plugin ({} files)", templates.len());
+    println!("  Location: {}", plugin_root.display());
+    println!("  To uninstall: rm -rf {}", plugin_root.display());
+    println!("\nRestart Claude Code to load the new plugin.");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -285,6 +462,24 @@ mod tests {
     fn falls_back_to_bare_name_when_nothing_available() {
         let result = resolve_brain_bin(None, None);
         assert_eq!(result, "brain");
+    }
+
+    #[test]
+    fn render_replaces_version_placeholder() {
+        let result = render("brain v{{version}} is great");
+        assert!(result.contains(env!("CARGO_PKG_VERSION")));
+        assert!(!result.contains("{{"));
+    }
+
+    #[test]
+    fn render_passes_through_text_without_placeholders() {
+        let result = render("no placeholders here");
+        assert_eq!(result, "no placeholders here");
+    }
+
+    #[test]
+    fn setup_claude_plugin_dry_run_succeeds() {
+        assert!(setup_claude_plugin(true).is_ok());
     }
 
     #[test]
