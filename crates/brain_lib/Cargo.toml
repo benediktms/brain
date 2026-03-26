@@ -54,6 +54,7 @@ rusqlite = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 ulid = { workspace = true }
+wiremock = "0.6"
 
 [[bench]]
 name = "latency"

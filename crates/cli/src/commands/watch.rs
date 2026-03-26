@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -16,8 +15,9 @@ use brain_lib::ipc::router::BrainRouter;
 use brain_lib::ipc::server::IpcServer;
 use brain_lib::mcp::McpContext;
 use brain_lib::pipeline::IndexPipeline;
-use brain_lib::pipeline::consolidation::ConsolidationScheduler;
 use brain_lib::pipeline::embed_poll;
+use brain_lib::pipeline::job_worker;
+use brain_lib::ports::JobQueue;
 use brain_lib::prelude::*;
 use brain_lib::store::Store;
 use tracing::{debug, info, warn};
@@ -94,16 +94,12 @@ pub async fn run(
     // threshold is evaluated inside should_optimize().
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
-    // Consolidation scheduler: runs ML summarization when the system has been
-    // idle for 5 minutes. The tick is cheap (atomic load); actual work only
-    // happens when a summarizer is configured and idle threshold is met.
-    let last_event_ts = Arc::new(AtomicU64::new(0));
-    let consolidator = ConsolidationScheduler::new(last_event_ts.clone());
-    let mut consolidation_tick = tokio::time::interval(Duration::from_secs(30));
-
     // Embedding poll: catches tasks/chunks that missed inline embedding
     // (e.g. written directly to SQLite, or failed during MCP handler).
     let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
+
+    // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
+    let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
 
     // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -158,9 +154,6 @@ pub async fn run(
 
                         // 6. Check row-count trigger after each batch
                         pipeline.store().optimizer().maybe_optimize().await;
-
-                        // 7. Stamp the last-event timestamp for idle detection
-                        consolidator.record_file_event();
                     }
                     None => {
                         info!("watcher channel closed, shutting down");
@@ -172,11 +165,22 @@ pub async fn run(
                 // Check time-elapsed trigger during quiet periods
                 pipeline.store().optimizer().maybe_optimize().await;
             }
-            _ = consolidation_tick.tick() => {
-                if let Some(summarizer) = pipeline.summarizer()
-                    && let Err(e) = consolidator.maybe_consolidate(pipeline.db(), summarizer).await
-                {
-                    tracing::warn!("consolidation error: {e}");
+            _ = summarize_poll_interval.tick() => {
+                if let Some(summarizer) = pipeline.summarizer() {
+                    if let Err(e) = pipeline.db().reap_stuck_jobs() {
+                        tracing::warn!(error = %e, "reap_stuck_jobs failed");
+                    }
+                    let n = job_worker::process_jobs(
+                        pipeline.db(),
+                        summarizer.as_ref(),
+                        20,
+                    ).await;
+                    if n > 0 {
+                        info!(processed = n, "summarization jobs completed");
+                    }
+                }
+                if let Err(e) = pipeline.db().gc_completed_jobs(7 * 86400) {
+                    tracing::warn!(error = %e, "gc_completed_jobs failed");
                 }
             }
             _ = embed_poll_interval.tick() => {
@@ -350,7 +354,6 @@ struct BrainInstance {
     pipeline: IndexPipeline,
     work_queue: WorkQueue,
     note_dirs: Vec<PathBuf>,
-    consolidator: ConsolidationScheduler,
     mcp_context: Arc<McpContext>,
 }
 
@@ -584,12 +587,11 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Periodic optimization tick (same as single-brain run())
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
-    // Consolidation tick: cheap idle check every 30s; actual work gated on
-    // per-brain idle threshold (5min) and summarizer being configured.
-    let mut consolidation_tick = tokio::time::interval(Duration::from_secs(30));
-
     // Embedding poll: catches tasks/chunks that missed inline embedding.
     let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
+
+    // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
+    let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
 
     // Root validation tick: checks that registered roots still exist on disk,
     // prunes stale roots, and archives brains whose all roots are gone.
@@ -614,7 +616,6 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                             if let Some(brain_name) = lookup_brain(&prefix_map, &event_path) {
                                 if let Some(instance) = brains.get_mut(&brain_name) {
                                     instance.work_queue.push(evt);
-                                    instance.consolidator.record_file_event();
                                 }
                             } else {
                                 debug!(path = %event_path.display(), "event path matches no brain, dropping");
@@ -659,15 +660,23 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                     instance.pipeline.store().optimizer().maybe_optimize().await;
                 }
             }
-            _ = consolidation_tick.tick() => {
+            _ = summarize_poll_interval.tick() => {
                 for instance in brains.values() {
-                    if let Some(summarizer) = instance.pipeline.summarizer()
-                        && let Err(e) = instance.consolidator.maybe_consolidate(
+                    if let Some(summarizer) = instance.pipeline.summarizer() {
+                        if let Err(e) = instance.pipeline.db().reap_stuck_jobs() {
+                            tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
+                        }
+                        let n = job_worker::process_jobs(
                             instance.pipeline.db(),
-                            summarizer,
-                        ).await
-                    {
-                        tracing::warn!(brain = %instance.name, "consolidation error: {e}");
+                            summarizer.as_ref(),
+                            20,
+                        ).await;
+                        if n > 0 {
+                            info!(brain = %instance.name, processed = n, "summarization jobs completed");
+                        }
+                    }
+                    if let Err(e) = instance.pipeline.db().gc_completed_jobs(7 * 86400) {
+                        tracing::warn!(brain = %instance.name, error = %e, "gc_completed_jobs failed");
                     }
                 }
             }
@@ -915,9 +924,6 @@ async fn init_brain_instance(
         }
     }
 
-    let last_event_ts = Arc::new(AtomicU64::new(0));
-    let consolidator = ConsolidationScheduler::new(last_event_ts);
-
     // Build MCP context from the pipeline's stores + task/record/object stores.
     // Derive brain_data_dir from the LanceDB path (per-brain), not sqlite_db
     // (which now points to the unified ~/.brain/brain.db).
@@ -948,7 +954,6 @@ async fn init_brain_instance(
         pipeline,
         work_queue: WorkQueue::default(),
         note_dirs,
-        consolidator,
         mcp_context,
     })
 }

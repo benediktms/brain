@@ -6,7 +6,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Result;
 
@@ -46,7 +46,7 @@ fn row_to_job(row: &rusqlite::Row) -> rusqlite::Result<Job> {
 
     let retry_config_str: String = row.get(5)?;
     let retry_config: RetryStrategy =
-        serde_json::from_str(&retry_config_str).unwrap_or_else(|_| RetryStrategy::NoRetry);
+        serde_json::from_str(&retry_config_str).unwrap_or(RetryStrategy::NoRetry);
 
     let metadata_str: String = row.get(10)?;
     let metadata: serde_json::Value =
@@ -221,10 +221,8 @@ pub fn fail_job(conn: &Connection, job_id: &str, error_msg: &str) -> Result<()> 
         )?;
     } else {
         // Reschedule with exponential backoff: 30s, 60s, 120s, ... capped at 1h.
-        let backoff = std::cmp::min(
-            30_i64 * (1_i64 << (attempts - 1).max(0).min(6) as u32),
-            3600,
-        );
+        let exponent = (attempts - 1).clamp(0, 6) as u32;
+        let backoff = std::cmp::min(30_i64 * (1_i64 << exponent), 3600);
         let next_scheduled = now + backoff;
 
         conn.execute(

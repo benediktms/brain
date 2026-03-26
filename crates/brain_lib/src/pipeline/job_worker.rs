@@ -4,7 +4,7 @@
 use tracing::{debug, info, warn};
 
 use crate::db::jobs::{self, EnqueueJobInput, JobPayload};
-use crate::db::Db;
+use crate::ports::JobQueue;
 use crate::summarizer::Summarize;
 
 const SUMMARIZE_SCOPE_PROMPT: &str = "\
@@ -19,8 +19,8 @@ No markdown formatting.\n\nEpisodes:\n";
 /// Process pending jobs. Claims up to `limit` ready jobs, dispatches each
 /// to the appropriate handler based on its payload variant, and marks them
 /// as completed or failed. Returns the number of successfully processed jobs.
-pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> usize {
-    let claimed = match db.with_write_conn(|conn| jobs::claim_ready_jobs(conn, limit)) {
+pub async fn process_jobs(queue: &dyn JobQueue, summarizer: &dyn Summarize, limit: i32) -> usize {
+    let claimed = match queue.claim_ready_jobs(limit) {
         Ok(jobs) => jobs,
         Err(e) => {
             warn!(error = %e, "failed to claim ready jobs");
@@ -41,9 +41,7 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
 
         match summarizer.summarize(&prompt).await {
             Ok(result) => {
-                if let Err(e) =
-                    db.with_write_conn(|conn| jobs::complete_job(conn, &job.job_id, Some(&result)))
-                {
+                if let Err(e) = queue.complete_job(&job.job_id, Some(&result)) {
                     warn!(job_id = %job.job_id, error = %e, "failed to mark job as completed");
                 } else {
                     success_count += 1;
@@ -52,9 +50,7 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                if let Err(fail_err) =
-                    db.with_write_conn(|conn| jobs::fail_job(conn, &job.job_id, &error_msg))
-                {
+                if let Err(fail_err) = queue.fail_job(&job.job_id, &error_msg) {
                     warn!(
                         job_id = %job.job_id,
                         original_error = %error_msg,
@@ -93,7 +89,7 @@ fn build_prompt(payload: &JobPayload) -> String {
 
 /// Enqueue a scope summarization job.
 pub fn enqueue_scope_summary(
-    db: &Db,
+    queue: &dyn JobQueue,
     scope_type: &str,
     scope_value: &str,
     content: &str,
@@ -110,12 +106,13 @@ pub fn enqueue_scope_summary(
         metadata: serde_json::json!({}),
         scheduled_at: 0,
     };
-    db.with_write_conn(|conn| jobs::enqueue_job(conn, &input))
+    queue.enqueue_job(&input)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Db;
     use crate::db::jobs::JobStatus;
     use crate::summarizer::MockSummarizer;
 
@@ -136,9 +133,13 @@ mod tests {
         let db = setup_db();
         let summarizer = MockSummarizer;
 
-        let job_id =
-            enqueue_scope_summary(&db, "directory", "src/", "fn main() { println!(\"hello\"); }")
-                .unwrap();
+        let job_id = enqueue_scope_summary(
+            &db,
+            "directory",
+            "src/",
+            "fn main() { println!(\"hello\"); }",
+        )
+        .unwrap();
 
         let count = process_jobs(&db, &summarizer, 10).await;
         assert_eq!(count, 1);
@@ -207,5 +208,83 @@ mod tests {
         let prompt = build_prompt(&payload);
         assert!(prompt.contains("episode data"));
         assert!(prompt.starts_with("Synthesize these episodes"));
+    }
+
+    #[tokio::test]
+    async fn test_process_jobs_http_round_trip() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "content": [{ "type": "text", "text": "Mock summary result" }],
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                            "cache_creation_input_tokens": null,
+                            "cache_read_input_tokens": null
+                        }
+                    })),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let provider = crate::llm::AnthropicProvider::new(
+            "test-key".to_string(),
+            mock_server.uri(),
+            "claude-haiku-4-5-20251001".to_string(),
+        );
+
+        let db = setup_db();
+        let job_id = enqueue_scope_summary(&db, "directory", "src/", "some content").unwrap();
+
+        let count = process_jobs(&db, &provider, 10).await;
+        assert_eq!(count, 1, "expected 1 successful job");
+
+        let job = db
+            .with_read_conn(|conn| jobs::get_job(conn, &job_id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.status, JobStatus::Done);
+        assert_eq!(job.result.as_deref(), Some("Mock summary result"));
+    }
+
+    #[tokio::test]
+    async fn test_process_jobs_http_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(500).set_body_raw("Internal error", "text/plain"))
+            .mount(&mock_server)
+            .await;
+
+        let provider = crate::llm::AnthropicProvider::new(
+            "test-key".to_string(),
+            mock_server.uri(),
+            "claude-haiku-4-5-20251001".to_string(),
+        );
+
+        let db = setup_db();
+        let job_id = enqueue_scope_summary(&db, "directory", "src/", "some content").unwrap();
+
+        let count = process_jobs(&db, &provider, 10).await;
+        assert_eq!(count, 0, "expected 0 successes on HTTP failure");
+
+        let job = db
+            .with_read_conn(|conn| jobs::get_job(conn, &job_id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.status, JobStatus::Ready, "job should be rescheduled for retry");
+        assert!(job.last_error.is_some(), "error should be recorded");
+        assert_eq!(job.attempts, 1);
     }
 }

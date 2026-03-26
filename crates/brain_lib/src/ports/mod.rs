@@ -1176,6 +1176,75 @@ impl DerivedSummaryStore for Db {
 }
 
 // ---------------------------------------------------------------------------
+// Job queue operations — used by job_worker and daemon event loop
+// ---------------------------------------------------------------------------
+
+use crate::db::job::Job;
+use crate::db::jobs::EnqueueJobInput;
+
+/// Job queue operations required by the daemon event loop and job worker.
+///
+/// Consumers: `pipeline::job_worker::process_jobs`, daemon watch loop
+/// (job tick + reaper).
+pub trait JobQueue: Send + Sync {
+    /// Atomically claim up to `limit` ready jobs. Sets status to `pending`,
+    /// increments attempts, records `started_at`.
+    fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>>;
+
+    /// Mark a job as done with an optional result. Sets `processed_at`.
+    fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()>;
+
+    /// Handle a job failure. If retries remain, reschedule to `ready` with
+    /// backoff. If exhausted, mark as `failed`.
+    fn fail_job(&self, job_id: &str, error_msg: &str) -> Result<()>;
+
+    /// Reset stuck `in_progress`/`pending` jobs that exceeded their
+    /// `stuck_threshold_secs` back to `ready`. Returns the count of reaped jobs.
+    fn reap_stuck_jobs(&self) -> Result<usize>;
+
+    /// Enqueue a new job. Returns the `job_id`.
+    fn enqueue_job(&self, input: &EnqueueJobInput) -> Result<String>;
+
+    /// Delete old completed jobs older than `age_secs`. Returns deleted count.
+    fn gc_completed_jobs(&self, age_secs: i64) -> Result<usize>;
+}
+
+// -- JobQueue for Db -------------------------------------------------------
+
+impl JobQueue for Db {
+    fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>> {
+        self.with_write_conn(|conn| crate::db::jobs::claim_ready_jobs(conn, limit))
+    }
+
+    fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()> {
+        let job_id = job_id.to_string();
+        let result = result.map(|s| s.to_string());
+        self.with_write_conn(move |conn| {
+            crate::db::jobs::complete_job(conn, &job_id, result.as_deref())
+        })
+    }
+
+    fn fail_job(&self, job_id: &str, error_msg: &str) -> Result<()> {
+        let job_id = job_id.to_string();
+        let error_msg = error_msg.to_string();
+        self.with_write_conn(move |conn| crate::db::jobs::fail_job(conn, &job_id, &error_msg))
+    }
+
+    fn reap_stuck_jobs(&self) -> Result<usize> {
+        self.with_write_conn(crate::db::jobs::reap_stuck_jobs)
+    }
+
+    fn enqueue_job(&self, input: &EnqueueJobInput) -> Result<String> {
+        let input = input.clone();
+        self.with_write_conn(move |conn| crate::db::jobs::enqueue_job(conn, &input))
+    }
+
+    fn gc_completed_jobs(&self, age_secs: i64) -> Result<usize> {
+        self.with_write_conn(move |conn| crate::db::jobs::gc_completed_jobs(conn, age_secs))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock implementations for testing
 // ---------------------------------------------------------------------------
 

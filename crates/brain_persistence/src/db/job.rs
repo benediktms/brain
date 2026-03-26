@@ -60,21 +60,16 @@ impl std::str::FromStr for JobStatus {
 // ─── RetryStrategy ───────────────────────────────────────────────
 
 /// Retry policy for a job. Serialized as JSON into the `retry_config` column.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum RetryStrategy {
     /// Never retry. The job is side-effectful or non-idempotent.
+    #[default]
     NoRetry,
     /// Retry up to a fixed number of times.
     Fixed { attempts: u32 },
     /// Retry indefinitely until success or explicit cancellation.
     Infinite,
-}
-
-impl Default for RetryStrategy {
-    fn default() -> Self {
-        RetryStrategy::NoRetry
-    }
 }
 
 impl RetryStrategy {
