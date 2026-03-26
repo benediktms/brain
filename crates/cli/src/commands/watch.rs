@@ -358,9 +358,9 @@ struct BrainInstance {
 /// re-index incrementally.
 ///
 /// Reads `~/.brain/config.toml`, creates a separate [`IndexPipeline`] for
-/// each registered brain (sharing a single embedder), and routes file events
-/// to the correct pipeline via longest-prefix matching.  Handles SIGHUP to
-/// reload the brain registry without restarting.
+/// each registered brain (sharing a single embedder and a single `Db` handle),
+/// and routes file events to the correct pipeline via longest-prefix matching.
+/// Handles SIGHUP to reload the brain registry without restarting.
 pub async fn run_multi() -> Result<ShutdownOutcome> {
     // ── 1. Load global config ────────────────────────────────────────────
     let global_cfg = load_global_config()?;
@@ -376,11 +376,18 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // global registry. Best-effort: failures are logged but not fatal.
     sync_brain_ids(&global_cfg);
 
-    // ── 2. Load embedder once (model_dir is the same for all brains) ─────
-    // Use the first registered brain to derive model_dir.
+    // ── 2. Load shared resources once ────────────────────────────────────
+    // All brains share a single Db handle (unified ~/.brain/brain.db) and
+    // a single embedder. Db is Clone (Arc-backed) — cloning shares the
+    // same connection pool.
     let first_name = global_cfg.brains.keys().next().expect("non-empty map");
     let first_paths = resolve_paths_for_brain(first_name)?;
     let model_dir = first_paths.model_dir.clone();
+
+    let sqlite_path = first_paths.sqlite_db.clone();
+    let shared_db: Db = tokio::task::spawn_blocking(move || Db::open(&sqlite_path))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking Db::open: {e}"))??;
 
     let embedder: Arc<dyn Embed> = {
         let model_dir_clone = model_dir.clone();
@@ -401,7 +408,14 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                 continue;
             }
         };
-        match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder), &brain_id).await
+        match init_brain_instance(
+            name,
+            entry.notes.clone(),
+            Arc::clone(&embedder),
+            &brain_id,
+            shared_db.clone(),
+        )
+        .await
         {
             Ok(instance) => {
                 brains.insert(name.clone(), instance);
@@ -695,7 +709,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = config_rx.recv() => {
                 info!("config.toml changed, reloading brain registry");
-                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
+                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder), &shared_db).await {
                     Ok(()) => {
                         prefix_map = build_prefix_map(&brains);
                         info!(brains = brains.len(), "brain registry re-projected from config.toml");
@@ -707,7 +721,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = sighup.recv() => {
                 info!("received SIGHUP, reloading brain registry");
-                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder)).await {
+                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder), &shared_db).await {
                     Ok(()) => {
                         prefix_map = build_prefix_map(&brains);
                         info!(brains = brains.len(), "brain registry reloaded");
@@ -826,11 +840,14 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 }
 
 /// Initialise a single [`BrainInstance`] from a brain name and note directories.
+///
+/// Accepts a shared `Db` handle (all brains use the unified `~/.brain/brain.db`).
 async fn init_brain_instance(
     name: &str,
     notes: Vec<PathBuf>,
     embedder: Arc<dyn Embed>,
     brain_id: &str,
+    db: Db,
 ) -> Result<BrainInstance> {
     let paths = resolve_paths_for_brain(name)?;
 
@@ -846,12 +863,6 @@ async fn init_brain_instance(
             }
         })
         .collect();
-
-    // Open the SQLite database (sync, needs spawn_blocking)
-    let sqlite_path = paths.sqlite_db.clone();
-    let db = tokio::task::spawn_blocking(move || Db::open(&sqlite_path))
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking Db::open: {e}"))??;
 
     // Open or create the LanceDB store
     let store = Store::open_or_create(&paths.lance_db).await?;
@@ -1007,52 +1018,58 @@ async fn reload_and_project(
     brains: &mut HashMap<String, BrainInstance>,
     watcher: &mut BrainWatcher,
     embedder: Arc<dyn Embed>,
+    shared_db: &Db,
 ) -> Result<()> {
-    reload_brains(brains, watcher, Arc::clone(&embedder)).await?;
+    reload_brains(brains, watcher, Arc::clone(&embedder), shared_db).await?;
 
     // Load the freshest config after reload to build projections.
     let cfg = load_global_config()?;
 
-    if let Some(db) = brains.values().next().map(|inst| inst.mcp_context.db()) {
-        // Read existing prefixes from DB to preserve manual overrides.
-        let existing_prefixes: std::collections::HashMap<String, String> = db
-            .list_brains(false)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|row| row.prefix.map(|p| (row.brain_id, p)))
-            .collect();
+    let db = brains
+        .values()
+        .next()
+        .map(|inst| inst.mcp_context.db())
+        .unwrap_or(shared_db);
 
-        let projections: Vec<BrainProjection> = brains
-            .iter()
-            .filter_map(|(name, inst)| {
-                let bid = inst.mcp_context.brain_id().to_string();
-                cfg.brains.get(name).map(|entry| {
-                    let prefix = existing_prefixes
-                        .get(&bid)
-                        .cloned()
-                        .unwrap_or_else(|| generate_prefix(name));
-                    BrainProjection {
-                        brain_id: bid,
-                        name: name.clone(),
-                        prefix,
-                        roots_json: serde_json::to_string(&entry.roots)
-                            .unwrap_or_else(|_| "[]".to_string()),
-                        notes_json: serde_json::to_string(&entry.notes)
-                            .unwrap_or_else(|_| "[]".to_string()),
-                        aliases_json: serde_json::to_string(&entry.aliases)
-                            .unwrap_or_else(|_| "[]".to_string()),
-                        archived: entry.archived,
-                    }
-                })
+    // Read existing prefixes from DB to preserve manual overrides.
+    let existing_prefixes: std::collections::HashMap<String, String> = db
+        .list_brains(false)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|row| row.prefix.map(|p| (row.brain_id, p)))
+        .collect();
+
+    let projections: Vec<BrainProjection> = brains
+        .iter()
+        .filter_map(|(name, inst)| {
+            let bid = inst.mcp_context.brain_id().to_string();
+            cfg.brains.get(name).map(|entry| {
+                let prefix = existing_prefixes
+                    .get(&bid)
+                    .cloned()
+                    .unwrap_or_else(|| generate_prefix(name));
+                BrainProjection {
+                    brain_id: bid,
+                    name: name.clone(),
+                    prefix,
+                    roots_json: serde_json::to_string(&entry.roots)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    notes_json: serde_json::to_string(&entry.notes)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    aliases_json: serde_json::to_string(&entry.aliases)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                    archived: entry.archived,
+                }
             })
-            .collect();
-        if let Err(e) = db.project_config_to_brains(&projections) {
-            warn!(error = %e, "failed to re-sync brains into DB");
-        }
+        })
+        .collect();
 
-        // Sync prefixes from DB back to config.toml.
-        sync_prefixes_to_config(db, brains);
+    if let Err(e) = db.project_config_to_brains(&projections) {
+        warn!(error = %e, "failed to re-sync brains into DB");
     }
+
+    // Sync prefixes from DB back to config.toml.
+    sync_prefixes_to_config(db, brains);
 
     Ok(())
 }
@@ -1066,6 +1083,7 @@ async fn reload_brains(
     brains: &mut HashMap<String, BrainInstance>,
     watcher: &mut BrainWatcher,
     embedder: Arc<dyn Embed>,
+    shared_db: &Db,
 ) -> Result<()> {
     let new_cfg = load_global_config()?;
 
@@ -1099,8 +1117,14 @@ async fn reload_brains(
                     continue;
                 }
             };
-            match init_brain_instance(name, entry.notes.clone(), Arc::clone(&embedder), &brain_id)
-                .await
+            match init_brain_instance(
+                name,
+                entry.notes.clone(),
+                Arc::clone(&embedder),
+                &brain_id,
+                shared_db.clone(),
+            )
+            .await
             {
                 Ok(instance) => {
                     for dir in &instance.note_dirs {
