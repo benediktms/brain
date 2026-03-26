@@ -1045,6 +1045,7 @@ mod tests {
                 suggested_title: "Episodes".into(),
                 episode_ids: vec!["ep1".into()],
                 episodes: "ep1".into(),
+                brain_id: "brain-1".into(),
             },
             priority::NORMAL,
         );

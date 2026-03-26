@@ -484,7 +484,7 @@ pub async fn consolidate(
 
     let result = consolidate_episodes(episodes, gap_seconds);
     let jobs_enqueued = if auto_summarize {
-        enqueue_cluster_summarization(ctx.stores.db(), &result.clusters)?
+        enqueue_cluster_summarization(ctx.stores.db(), &result.clusters, &ctx.stores.brain_id)?
     } else {
         0
     };

@@ -131,20 +131,17 @@ pub enum JobPayload {
         episode_ids: Vec<String>,
         /// Newline-separated episode content.
         episodes: String,
+        /// Brain that owns the episodes.
+        brain_id: String,
     },
     /// Sweep: find stale derived summaries and enqueue SummarizeScope jobs.
     StaleScopeSweep,
     /// Sweep: find unclustered episodes and enqueue ConsolidateCluster jobs.
     ConsolidationSweep,
     /// Scan note directories for new/changed files and index them.
-    FullScanSweep {
-        brain_id: String,
-        dirs: Vec<String>,
-    },
+    FullScanSweep { brain_id: String, dirs: Vec<String> },
     /// Embed stale chunks, tasks, and records for a specific brain.
-    EmbedPollSweep {
-        brain_id: String,
-    },
+    EmbedPollSweep { brain_id: String },
 }
 
 impl JobPayload {
@@ -178,7 +175,8 @@ impl JobPayload {
     pub fn brain_id(&self) -> Option<&str> {
         match self {
             JobPayload::FullScanSweep { brain_id, .. }
-            | JobPayload::EmbedPollSweep { brain_id } => Some(brain_id),
+            | JobPayload::EmbedPollSweep { brain_id }
+            | JobPayload::ConsolidateCluster { brain_id, .. } => Some(brain_id),
             _ => None,
         }
     }
@@ -330,6 +328,7 @@ mod tests {
             suggested_title: "Episodes".into(),
             episode_ids: vec!["ep1".into(), "ep2".into()],
             episodes: "ep1\nep2".into(),
+            brain_id: "brain-1".into(),
         };
         assert_eq!(p.kind(), "consolidate_cluster");
     }
@@ -363,6 +362,7 @@ mod tests {
             suggested_title: "Weekly".into(),
             episode_ids: vec![],
             episodes: "".into(),
+            brain_id: "brain-1".into(),
         };
         assert_eq!(cluster.ref_id(), "Weekly");
     }

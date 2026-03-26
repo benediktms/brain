@@ -103,7 +103,8 @@ impl McpTool for MemConsolidate {
 
             let result = consolidate_episodes(episodes, params.gap_seconds);
             let jobs_enqueued = if params.auto_summarize {
-                match enqueue_cluster_summarization(ctx.db(), &result.clusters) {
+                match enqueue_cluster_summarization(ctx.db(), &result.clusters, effective_brain_id)
+                {
                     Ok(count) => count,
                     Err(e) => {
                         return ToolCallResult::error(format!(

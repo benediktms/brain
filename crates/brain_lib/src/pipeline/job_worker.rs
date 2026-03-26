@@ -265,6 +265,51 @@ fn persist_job_result(db: &Db, payload: &JobPayload, result: &str) -> crate::err
                 Ok(())
             })
         }
+        JobPayload::ConsolidateCluster {
+            suggested_title,
+            episode_ids,
+            brain_id,
+            ..
+        } => {
+            let title = suggested_title.clone();
+            let result = result.to_string();
+            let episode_ids = episode_ids.clone();
+            let brain_id = brain_id.clone();
+
+            db.with_write_conn(move |conn| {
+                // 1. Store the LLM output as a reflection.
+                let reflection_id = brain_persistence::db::summaries::store_reflection(
+                    conn,
+                    &title,
+                    &result,
+                    &episode_ids,
+                    &[],  // no tags
+                    1.0,  // default importance
+                    &brain_id,
+                )?;
+
+                // 2. Record source lineage in summary_sources.
+                let mut stmt = conn.prepare_cached(
+                    "INSERT OR IGNORE INTO summary_sources (summary_id, source_id, source_type, created_at)
+                     VALUES (?1, ?2, 'episode', ?3)",
+                )?;
+                let now = crate::utils::now_ts();
+                for ep_id in &episode_ids {
+                    stmt.execute(params![reflection_id, ep_id, now])?;
+                }
+                drop(stmt);
+
+                // 3. Mark source episodes as consolidated.
+                let mut mark = conn.prepare_cached(
+                    "UPDATE summaries SET consolidated_by = ?1 WHERE summary_id = ?2",
+                )?;
+                for ep_id in &episode_ids {
+                    mark.execute(params![reflection_id, ep_id])?;
+                }
+
+                Ok(())
+            })
+        }
         _ => Ok(()),
     }
 }
@@ -304,50 +349,49 @@ async fn process_stale_scope_sweep(db: &Db) -> JobResult {
     )))
 }
 
-/// Find unclustered episodes and enqueue ConsolidateCluster child jobs.
+/// Find unclustered episodes per brain and enqueue ConsolidateCluster jobs.
 ///
-/// Skips enqueuing if there are already active (non-terminal) consolidation
-/// jobs — prevents re-sending the same episodes to the LLM.
+/// Iterates each brain that has unconsolidated episodes. The `consolidated_by`
+/// column (v35) prevents re-processing already-consolidated episodes.
 async fn process_consolidation_sweep(db: &Db) -> JobResult {
     use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 
-    // Don't enqueue new clusters if previous ones are still being processed.
-    // Use write conn to avoid stale WAL snapshots.
-    let active_count: i64 = db.with_write_conn(|conn| {
-        conn.query_row(
-            "SELECT COUNT(*) FROM jobs WHERE kind = 'consolidate_cluster'
-             AND status NOT IN ('done', 'failed')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+    let brain_ids = db.with_read_conn(|conn| {
+        brain_persistence::db::summaries::list_unconsolidated_brain_ids(conn)
     })?;
 
-    if active_count > 0 {
-        return Ok(Some(format!(
-            r#"{{"skipped":true,"active_jobs":{active_count}}}"#
-        )));
+    if brain_ids.is_empty() {
+        return Ok(Some(
+            r#"{"brains":0,"clusters":0,"enqueued":0}"#.to_string(),
+        ));
     }
 
-    let episodes =
-        db.with_read_conn(|conn| brain_persistence::db::summaries::list_episodes(conn, 100, ""))?;
+    let mut total_clusters = 0;
+    let mut total_enqueued = 0;
 
-    if episodes.is_empty() {
-        return Ok(Some(r#"{"clusters":0,"enqueued":0}"#.to_string()));
-    }
+    for brain_id in &brain_ids {
+        let episodes = db.with_read_conn(|conn| {
+            brain_persistence::db::summaries::list_unconsolidated_episodes(conn, 100, brain_id)
+        })?;
 
-    let result = consolidate_episodes(episodes, 7200);
-    let enqueued = match enqueue_cluster_summarization(db, &result.clusters) {
-        Ok(n) => n,
-        Err(e) => {
-            warn!(error = %e, "failed to enqueue consolidation clusters");
-            0
+        if episodes.is_empty() {
+            continue;
         }
-    };
+
+        let result = consolidate_episodes(episodes, 7200);
+        total_clusters += result.clusters.len();
+
+        match enqueue_cluster_summarization(db, &result.clusters, brain_id) {
+            Ok(n) => total_enqueued += n,
+            Err(e) => {
+                warn!(brain_id = %brain_id, error = %e, "failed to enqueue consolidation clusters");
+            }
+        }
+    }
 
     Ok(Some(format!(
-        r#"{{"clusters":{},"enqueued":{enqueued}}}"#,
-        result.clusters.len()
+        r#"{{"brains":{},"clusters":{total_clusters},"enqueued":{total_enqueued}}}"#,
+        brain_ids.len()
     )))
 }
 
@@ -437,6 +481,7 @@ pub fn enqueue_cluster_summary(
     suggested_title: &str,
     episode_ids: &[String],
     episodes: &str,
+    brain_id: &str,
 ) -> crate::error::Result<String> {
     let input = EnqueueJobInput {
         payload: JobPayload::ConsolidateCluster {
@@ -444,6 +489,7 @@ pub fn enqueue_cluster_summary(
             suggested_title: suggested_title.to_string(),
             episode_ids: episode_ids.to_vec(),
             episodes: episodes.to_string(),
+            brain_id: brain_id.to_string(),
         },
         priority: jobs::priority::NORMAL,
         retry_config: None, // uses payload default (Fixed{3})
@@ -497,6 +543,7 @@ mod tests {
             suggested_title: "Episodes".into(),
             episode_ids: vec!["ep-1".into()],
             episodes: "episode data".into(),
+            brain_id: "brain-1".into(),
         };
         let prompt = build_prompt(&payload);
         assert!(prompt.contains("episode data"));
@@ -564,7 +611,10 @@ mod tests {
         drop(guard);
 
         let reaped = reap_stuck_jobs_filtered(&db, &active).unwrap();
-        assert_eq!(reaped, 1, "reaper must process jobs no longer in active set");
+        assert_eq!(
+            reaped, 1,
+            "reaper must process jobs no longer in active set"
+        );
     }
 
     #[test]
