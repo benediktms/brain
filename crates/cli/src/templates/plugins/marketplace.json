@@ -1,0 +1,33 @@
+{
+  "name": "brain-marketplace",
+  "description": "Local marketplace for brain plugins",
+  "owner": {
+    "name": "Benedikt Schnatterbeck"
+  },
+  "plugins": [
+    {
+      "name": "tasks",
+      "source": "./tasks-plugin",
+      "description": "Task management with dependencies, priorities, and labels.",
+      "version": "{{version}}"
+    },
+    {
+      "name": "mem",
+      "source": "./mem-plugin",
+      "description": "Semantic memory — search, episodes, reflections, and procedures.",
+      "version": "{{version}}"
+    },
+    {
+      "name": "records",
+      "source": "./records-plugin",
+      "description": "Work products — artifacts, snapshots, and record search.",
+      "version": "{{version}}"
+    },
+    {
+      "name": "brain",
+      "source": "./brain-plugin",
+      "description": "Brain administration — health, registry, job queue, and the overview guide.",
+      "version": "{{version}}"
+    }
+  ]
+}

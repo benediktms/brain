@@ -46,6 +46,12 @@ const PLUGIN_DIRS: &[&str] = &[
 pub fn install(dry_run: bool) -> Result<()> {
     let marketplace = marketplace_root()?;
 
+    // ─── marketplace manifest ────────────────────────────────
+    let marketplace_manifest = TemplateFile {
+        content: include_str!("../templates/plugins/marketplace.json"),
+        output_path: ".claude-plugin/marketplace.json",
+    };
+
     // ─── tasks plugin (/tasks:next, /tasks:create, …) ────────
     let tasks_templates: &[TemplateFile] = &[
         TemplateFile {
@@ -214,10 +220,11 @@ pub fn install(dry_run: bool) -> Result<()> {
     if dry_run {
         println!(
             "Would write {} files across {} plugins to {}",
-            total_files,
+            total_files + 1, // +1 for marketplace.json
             plugins.len(),
             marketplace.display()
         );
+        println!("  {}", marketplace_manifest.output_path);
         for (dir, templates) in plugins {
             println!("  {dir}/");
             for t in *templates {
@@ -227,6 +234,16 @@ pub fn install(dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Write marketplace manifest.
+    let manifest_target = marketplace.join(marketplace_manifest.output_path);
+    if let Some(parent) = manifest_target.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+    }
+    fs::write(&manifest_target, render(marketplace_manifest.content))
+        .with_context(|| format!("failed to write {}", manifest_target.display()))?;
+
+    // Write plugin files.
     for (dir, templates) in plugins {
         let plugin_root = marketplace.join(dir);
         for t in *templates {
