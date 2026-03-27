@@ -684,9 +684,7 @@ mod tests {
             .filter_map(|r| r.ok())
             .collect();
         assert!(
-            indexes
-                .iter()
-                .any(|i| i.contains("summary_sources_source")),
+            indexes.iter().any(|i| i.contains("summary_sources_source")),
             "summary_sources missing reverse-lookup index"
         );
     }

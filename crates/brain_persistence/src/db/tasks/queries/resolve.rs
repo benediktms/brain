@@ -140,9 +140,8 @@ pub fn resolve_task_id_scoped(
         {
             // Exact match on display_id column — must also scope by brain
             // to avoid silently picking one row when multiple brains share the same display_id.
-            let sql = format!(
-                "SELECT task_id, title FROM tasks WHERE display_id = ?1{brain_clause}"
-            );
+            let sql =
+                format!("SELECT task_id, title FROM tasks WHERE display_id = ?1{brain_clause}");
             let exact_matches: Vec<(String, String)> = match effective_brain_id {
                 Some(bid) => {
                     let mut stmt = conn.prepare(&sql)?;
@@ -516,7 +515,10 @@ mod tests {
 
         // Unscoped: ambiguous (two tasks with same display_id across brains)
         let err = resolve_task_id_scoped(&conn, "ebd", None).unwrap_err();
-        assert!(err.to_string().contains("ambiguous"), "expected ambiguous error, got: {err}");
+        assert!(
+            err.to_string().contains("ambiguous"),
+            "expected ambiguous error, got: {err}"
+        );
 
         // Scoped to brain-aaa: resolves to alpha task
         let resolved = resolve_task_id_scoped(&conn, "ebd", Some("brain-aaa")).unwrap();
@@ -533,7 +535,10 @@ mod tests {
 
         // Prefix "ebd" should be ambiguous unscoped (matches both brains)
         let err = resolve_task_id_scoped(&conn, "ebd", None).unwrap_err();
-        assert!(err.to_string().contains("ambiguous"), "expected ambiguous error, got: {err}");
+        assert!(
+            err.to_string().contains("ambiguous"),
+            "expected ambiguous error, got: {err}"
+        );
 
         // Scoped: unique within each brain
         let resolved = resolve_task_id_scoped(&conn, "ebd", Some("brain-aaa")).unwrap();
