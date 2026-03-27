@@ -393,7 +393,7 @@ pub fn list_episodes_multi_brain(
 pub fn list_unconsolidated_brain_ids(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT brain_id FROM summaries
-         WHERE kind = 'episode' AND consolidated_by IS NULL AND brain_id != ''
+         WHERE kind = 'episode' AND consolidated_by IS NULL
          ORDER BY brain_id",
     )?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;

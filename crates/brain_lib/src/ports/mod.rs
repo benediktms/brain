@@ -1048,12 +1048,15 @@ impl DerivedSummaryStore for Db {
 
         if existing_hash.as_deref() == Some(&hash_check) {
             // Content unchanged — clear stale flag without regenerating.
+            // Use atomic CAS to avoid clobbering a concurrent stale=1 set by
+            // the indexing pipeline (TOCTOU guard: only clear if hash still matches).
             let sv = scope_value.to_string();
+            let hash_cas = hash_check.clone();
             self.with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE derived_summaries SET stale = 0
-                     WHERE scope_type = ?1 AND scope_value = ?2",
-                    params![scope_type_str, sv],
+                     WHERE scope_type = ?1 AND scope_value = ?2 AND source_content_hash = ?3",
+                    params![scope_type_str, sv, hash_cas],
                 )
                 .map_err(|e| BrainCoreError::Database(e.to_string()))?;
                 Ok(())

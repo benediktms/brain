@@ -105,12 +105,16 @@ pub async fn process_jobs(
     debug!(count = claimed.len(), "claimed ready jobs");
 
     let count = claimed.len();
-    for job in claimed {
+    // Collect ALL guards before spawning to close the acquisition gap between
+    // claim and spawn — a concurrent reaper must not reset a claimed job.
+    let guards: Vec<_> = claimed
+        .iter()
+        .map(|j| active.acquire(j.job_id.clone()))
+        .collect();
+    for (job, _guard) in claimed.into_iter().zip(guards) {
         let db = db.clone();
         let store = store.clone();
         let embedder = embedder.clone();
-        // Acquire the lock before spawning — the guard lives inside the task.
-        let _guard = active.acquire(job.job_id.clone());
 
         tokio::spawn(async move {
             // _guard is moved into this future and dropped when the task ends
@@ -119,6 +123,15 @@ pub async fn process_jobs(
 
             if let Err(e) = db.advance_to_in_progress(&job.job_id) {
                 warn!(job_id = %job.job_id, error = %e, "failed to advance to in_progress");
+                if let Err(fail_err) =
+                    db.fail_job(&job.job_id, &format!("advance_to_in_progress failed: {e}"))
+                {
+                    warn!(
+                        job_id = %job.job_id,
+                        fail_error = %fail_err,
+                        "failed to record advance_to_in_progress failure"
+                    );
+                }
                 return;
             }
 
@@ -172,13 +185,12 @@ pub fn reap_stuck_jobs_filtered(db: &Db, active: &ActiveJobs) -> crate::error::R
 
     let mut count = 0;
     for job in &truly_stuck {
-        if job.retry_config.is_retryable() {
-            // Reset to ready for re-claim.
-            match db.fail_job(&job.job_id, "reaped: exceeded stuck threshold") {
-                Ok(()) => count += 1,
-                Err(e) => {
-                    warn!(job_id = %job.job_id, error = %e, "failed to reap stuck job");
-                }
+        // Call fail_job for ALL stuck jobs — it handles retryable vs exhausted
+        // internally (reschedules if attempts remain, marks failed otherwise).
+        match db.fail_job(&job.job_id, "reaped: exceeded stuck threshold") {
+            Ok(()) => count += 1,
+            Err(e) => {
+                warn!(job_id = %job.job_id, error = %e, "failed to reap stuck job");
             }
         }
     }
