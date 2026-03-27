@@ -36,10 +36,49 @@ pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> Result<i64> {
 }
 
 pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
+    resolve_task_id_scoped(conn, input, None)
+}
+
+/// Resolve a task ID with optional brain_id scoping.
+///
+/// When `brain_id` is `Some(id)`, all lookups are filtered to tasks belonging
+/// to that brain, preventing cross-brain collisions on short hashes / prefixes.
+/// When `None`, resolves globally (legacy / single-brain mode).
+pub fn resolve_task_id_scoped(
+    conn: &Connection,
+    input: &str,
+    brain_id: Option<&str>,
+) -> Result<String> {
     // Fast path: exact match
     if task_exists(conn, input)? {
         return Ok(input.to_string());
     }
+
+    // Defense-in-depth: if the input has a prefix like "ckt-ebd", derive
+    // the brain_id from the prefix when no explicit scope was provided.
+    // This ensures the prefix in the ID itself always provides scoping.
+    let derived_brain_id: Option<String> = if brain_id.is_none() {
+        match input.find('-') {
+            Some(dash_pos) if dash_pos <= 4 && dash_pos > 0 => {
+                let prefix = input[..dash_pos].to_ascii_uppercase();
+                conn.query_row(
+                    "SELECT brain_id FROM brains WHERE UPPER(prefix) = ?1",
+                    [&prefix],
+                    |row| row.get(0),
+                )
+                .optional()?
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let effective_brain_id = brain_id.or(derived_brain_id.as_deref());
+
+    let brain_clause = match effective_brain_id {
+        Some(_) => " AND brain_id = ?",
+        None => "",
+    };
 
     // Check for hierarchical display ID: "PREFIX.N" where N is child_seq
     if let Some(dot_pos) = input.rfind('.') {
@@ -47,7 +86,7 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
         let seq_part = &input[dot_pos + 1..];
         if let Ok(seq) = seq_part.parse::<i64>() {
             // Resolve the parent prefix first (recursive)
-            if let Ok(parent_id) = resolve_task_id(conn, parent_part) {
+            if let Ok(parent_id) = resolve_task_id_scoped(conn, parent_part, effective_brain_id) {
                 let child: Option<String> = conn
                     .query_row(
                         "SELECT task_id FROM tasks WHERE parent_task_id = ?1 AND child_seq = ?2",
@@ -78,28 +117,63 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
                 .chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         {
-            // Exact match on display_id column
-            let exact: Option<String> = conn
-                .query_row(
-                    "SELECT task_id FROM tasks WHERE display_id = ?1",
-                    [hex_part],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if let Some(tid) = exact {
-                return Ok(tid);
+            // Exact match on display_id column — must also scope by brain
+            // to avoid silently picking one row when multiple brains share the same display_id.
+            let sql = format!(
+                "SELECT task_id, title FROM tasks WHERE display_id = ?1{brain_clause}"
+            );
+            let exact_matches: Vec<(String, String)> = match effective_brain_id {
+                Some(bid) => {
+                    let mut stmt = conn.prepare(&sql)?;
+                    stmt.query_map(rusqlite::params![hex_part, bid], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                }
+                None => {
+                    let mut stmt = conn.prepare(&sql)?;
+                    stmt.query_map(rusqlite::params![hex_part], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                }
+            };
+            match exact_matches.len() {
+                1 => return Ok(exact_matches.into_iter().next().unwrap().0),
+                n if n > 1 => {
+                    let candidates: Vec<String> = exact_matches
+                        .iter()
+                        .map(|(id, title)| format!("  {id} — {title}"))
+                        .collect();
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "ambiguous short hash '{input}': matches {n} tasks:\n{}",
+                        candidates.join("\n")
+                    )));
+                }
+                _ => {} // 0 matches — fall through to prefix path
             }
 
             // Prefix match on display_id column (range scan)
             let upper = increment_string(hex_part);
-            let mut stmt = conn.prepare(
-                "SELECT task_id, title FROM tasks WHERE display_id >= ?1 AND display_id < ?2",
-            )?;
-            let matches: Vec<(String, String)> = stmt
-                .query_map(rusqlite::params![hex_part, upper], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let sql = format!(
+                "SELECT task_id, title FROM tasks WHERE display_id >= ?1 AND display_id < ?2{brain_clause}"
+            );
+            let matches: Vec<(String, String)> = match effective_brain_id {
+                Some(bid) => {
+                    let mut stmt = conn.prepare(&sql)?;
+                    stmt.query_map(rusqlite::params![hex_part, upper, bid], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                }
+                None => {
+                    let mut stmt = conn.prepare(&sql)?;
+                    stmt.query_map(rusqlite::params![hex_part, upper], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                }
+            };
 
             match matches.len() {
                 1 => return Ok(matches.into_iter().next().unwrap().0),
@@ -154,13 +228,25 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
 
     // Range scan on PRIMARY KEY B-tree
     let upper_bound = increment_string(&search_prefix);
-    let mut stmt =
-        conn.prepare("SELECT task_id, title FROM tasks WHERE task_id >= ?1 AND task_id < ?2")?;
-    let matches: Vec<(String, String)> = stmt
-        .query_map(rusqlite::params![search_prefix, upper_bound], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let sql = format!(
+        "SELECT task_id, title FROM tasks WHERE task_id >= ?1 AND task_id < ?2{brain_clause}"
+    );
+    let matches: Vec<(String, String)> = match effective_brain_id {
+        Some(bid) => {
+            let mut stmt = conn.prepare(&sql)?;
+            stmt.query_map(rusqlite::params![search_prefix, upper_bound, bid], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+        }
+        None => {
+            let mut stmt = conn.prepare(&sql)?;
+            stmt.query_map(rusqlite::params![search_prefix, upper_bound], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+        }
+    };
 
     match matches.len() {
         0 => Err(BrainCoreError::TaskEvent(format!(
@@ -376,6 +462,124 @@ fn common_prefix_len(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::schema::{ensure_brain_registered, init_schema};
+
+    /// Set up an in-memory DB with two brains and insert tasks with controlled display_ids.
+    /// Returns (conn, task_id_brain_a, task_id_brain_b) where both tasks share the same display_id.
+    fn setup_cross_brain(display_id: &str) -> (Connection, String, String) {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        ensure_brain_registered(&conn, "brain-aaa", "alpha").unwrap();
+        ensure_brain_registered(&conn, "brain-bbb", "bravo").unwrap();
+
+        let tid_a = "ALP-01JTEST00000000000000AA";
+        let tid_b = "BRV-01JTEST00000000000000BB";
+
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-aaa', 'Alpha task', 'open', 2, strftime('%s','now'), strftime('%s','now'), ?2)",
+            rusqlite::params![tid_a, display_id],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-bbb', 'Bravo task', 'open', 2, strftime('%s','now'), strftime('%s','now'), ?2)",
+            rusqlite::params![tid_b, display_id],
+        ).unwrap();
+
+        (conn, tid_a.to_string(), tid_b.to_string())
+    }
+
+    #[test]
+    fn test_resolve_scoped_exact_hash_match() {
+        let (conn, tid_a, tid_b) = setup_cross_brain("ebd");
+
+        // Unscoped: ambiguous (two tasks with same display_id across brains)
+        let err = resolve_task_id_scoped(&conn, "ebd", None).unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "expected ambiguous error, got: {err}");
+
+        // Scoped to brain-aaa: resolves to alpha task
+        let resolved = resolve_task_id_scoped(&conn, "ebd", Some("brain-aaa")).unwrap();
+        assert_eq!(resolved, tid_a);
+
+        // Scoped to brain-bbb: resolves to bravo task
+        let resolved = resolve_task_id_scoped(&conn, "ebd", Some("brain-bbb")).unwrap();
+        assert_eq!(resolved, tid_b);
+    }
+
+    #[test]
+    fn test_resolve_scoped_prefix_hash_match() {
+        let (conn, tid_a, tid_b) = setup_cross_brain("ebd42f");
+
+        // Prefix "ebd" should be ambiguous unscoped (matches both brains)
+        let err = resolve_task_id_scoped(&conn, "ebd", None).unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "expected ambiguous error, got: {err}");
+
+        // Scoped: unique within each brain
+        let resolved = resolve_task_id_scoped(&conn, "ebd", Some("brain-aaa")).unwrap();
+        assert_eq!(resolved, tid_a);
+
+        let resolved = resolve_task_id_scoped(&conn, "ebd", Some("brain-bbb")).unwrap();
+        assert_eq!(resolved, tid_b);
+    }
+
+    #[test]
+    fn test_resolve_scoped_with_prefix_stripped() {
+        // Simulates "alp-ebd" where "alp-" is stripped to get "ebd"
+        let (conn, tid_a, _tid_b) = setup_cross_brain("ebd");
+
+        let resolved = resolve_task_id_scoped(&conn, "alp-ebd", Some("brain-aaa")).unwrap();
+        assert_eq!(resolved, tid_a);
+    }
+
+    #[test]
+    fn test_resolve_scoped_not_found() {
+        let (conn, _tid_a, _tid_b) = setup_cross_brain("ebd42f");
+
+        // Non-existent brain should find nothing via hash path,
+        // then fall through to ULID path and fail
+        let err = resolve_task_id_scoped(&conn, "alp-ebd42f", Some("brain-zzz")).unwrap_err();
+        assert!(
+            err.to_string().contains("no task found"),
+            "expected not-found error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_unscoped_backwards_compatible() {
+        // Single task, no collision — unscoped should still work
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        ensure_brain_registered(&conn, "brain-aaa", "alpha").unwrap();
+
+        let tid = "ALP-01JTEST00000000000000AA";
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-aaa', 'Solo task', 'open', 2, strftime('%s','now'), strftime('%s','now'), 'abc')",
+            [tid],
+        ).unwrap();
+
+        // Both scoped and unscoped should resolve
+        let resolved = resolve_task_id_scoped(&conn, "abc", None).unwrap();
+        assert_eq!(resolved, tid);
+
+        let resolved = resolve_task_id_scoped(&conn, "abc", Some("brain-aaa")).unwrap();
+        assert_eq!(resolved, tid);
+    }
+
+    #[test]
+    fn test_resolve_prefix_derived_brain_scoping() {
+        // Even without explicit brain_id, the prefix in the input ("alp-" / "brv-")
+        // should derive the correct brain and scope resolution automatically.
+        let (conn, tid_a, tid_b) = setup_cross_brain("ebd");
+
+        // "alp-ebd" → derives brain-aaa from "ALP" prefix → resolves to alpha task
+        let resolved = resolve_task_id_scoped(&conn, "alp-ebd", None).unwrap();
+        assert_eq!(resolved, tid_a);
+
+        // "brv-ebd" → derives brain-bbb from "BRV" prefix → resolves to bravo task
+        let resolved = resolve_task_id_scoped(&conn, "brv-ebd", None).unwrap();
+        assert_eq!(resolved, tid_b);
+    }
 
     #[test]
     fn test_increment_string_basic() {

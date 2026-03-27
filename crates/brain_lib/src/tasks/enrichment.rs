@@ -25,7 +25,6 @@ pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
         "defer_until": ts_to_json(row.defer_until),
         "parent_task_id": row.parent_task_id,
         "child_seq": row.child_seq,
-        "id": row.display_id,
         "labels": labels,
         "created_at": ts_to_json(Some(row.created_at)),
         "updated_at": ts_to_json(Some(row.updated_at)),

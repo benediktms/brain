@@ -300,9 +300,19 @@ impl TaskStore {
     }
 
     /// Resolve a task ID from an exact match or unique prefix.
+    ///
+    /// When the store is scoped to a brain, resolution is filtered to that
+    /// brain's tasks — preventing cross-brain collisions on short hashes.
     pub fn resolve_task_id(&self, input: &str) -> Result<String> {
-        self.db
-            .with_read_conn(|conn| queries::resolve_task_id(conn, input))
+        let brain_id = self.brain_id.clone();
+        self.db.with_read_conn(move |conn| {
+            let filter = if brain_id.is_empty() {
+                None
+            } else {
+                Some(brain_id.as_str())
+            };
+            queries::resolve_task_id_scoped(conn, input, filter)
+        })
     }
 
     /// Compute compact display IDs for all tasks (batch).
