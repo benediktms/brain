@@ -18,7 +18,7 @@ Notes, tasks, and records are parallel subsystems that can cross-reference each 
 
 ```
 ~/.brain/                                  # Central registry
-  config.toml                              # Global config + registered brains
+  state_projection.toml                     # Read-only projection of DB state
   brain.db                                 # Unified SQLite (all brains partitioned by brain_id)
   objects/                                 # Shared content-addressed object store (BLAKE3-keyed)
     <2-char prefix>/
@@ -42,7 +42,7 @@ name = "my-project"
 notes = ["docs", "notes"]                  # Relative paths to index
 ```
 
-**Central registry** (`~/.brain/config.toml`):
+**Central registry** (`~/.brain/state_projection.toml` — read-only projection of DB):
 ```toml
 [brains.my-project]
 root = "~/code/my-project"

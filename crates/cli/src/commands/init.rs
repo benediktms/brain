@@ -57,7 +57,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
                             aliases_json: brain_row.aliases_json.as_deref().unwrap_or("[]"),
                             archived: brain_row.archived,
                         })?;
-                        // Project to config.toml.
+                        // Project to state_projection.toml.
                         let entry = global.brains.get_mut(&brain_name).unwrap();
                         if !entry.roots.contains(&cwd) {
                             entry.roots.push(cwd.clone());
@@ -198,7 +198,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         })?;
     }
 
-    // 4c. Project to config.toml (read-only projection for human readability).
+    // 4c. Project to state_projection.toml (read-only projection for human readability).
     {
         let mut global = load_global_config()?;
         global.brains.insert(
@@ -457,7 +457,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 **Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
 
 **Brain tools:**
-- `brains.list` — List all brain projects registered in `~/.brain/config.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Also callable as `brains_list`.
+- `brains.list` — List all brain projects registered in `~/.brain/state_projection.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Also callable as `brains_list`.
 
 **Memory tools:**
 - `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is `"note"` for indexed documents, `"task"` for active task capsules, or `"task-outcome"` for completed task outcomes. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain.

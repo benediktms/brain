@@ -62,7 +62,7 @@ pub fn run_set(
         api_key_hash: &key_hash,
     })?;
 
-    // Project to config.toml
+    // Project to state_projection.toml
     project_providers_to_config(db)?;
 
     println!("Provider '{name}' configured (id: {id})");
@@ -124,7 +124,7 @@ pub fn run_remove(sqlite_db: &Path, lance_db: Option<&Path>, target: &str) -> Re
     Ok(())
 }
 
-/// Sync the providers list from DB to config.toml (metadata only).
+/// Sync the providers list from DB to state_projection.toml (metadata only).
 fn project_providers_to_config(db: &brain_lib::db::Db) -> Result<()> {
     let providers = db.list_providers()?;
     let entries: Vec<ProviderEntry> = providers

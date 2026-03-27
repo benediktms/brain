@@ -224,7 +224,7 @@ Brain uses a **unified single-database model** where all brains share a centrali
 
 ```
 ~/.brain/                                  # Central registry
-  config.toml                              # Global config + registered brains
+  state_projection.toml                              # Global config + registered brains
   brain.db                                 # Unified SQLite (all brains, sole source of truth)
   brain.sock                               # Daemon Unix socket
   brain.pid                                # Daemon PID file
@@ -236,7 +236,7 @@ Brain uses a **unified single-database model** where all brains share a centrali
       <full 64-char BLAKE3 hex>            # Immutable payload bytes
   brains/
     <brain-name>/
-      config.toml                          # Per-brain config (overrides global)
+      state_projection.toml                          # Per-brain config (overrides global)
       lancedb/                             # Per-brain vector index (semantic space is distinct)
 ```
 
@@ -266,7 +266,7 @@ This command:
 - Merges all per-brain `brain.db` databases into the central `~/.brain/brain.db`
 - Migrates object stores from per-brain to unified `~/.brain/objects/`
 - Preserves all task/record metadata
-- Registers all brains in the central `~/.brain/config.toml`
+- Registers all brains in the central `~/.brain/state_projection.toml`
 
 ### Relationship to Notes, Tasks, and Records
 

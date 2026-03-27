@@ -86,7 +86,7 @@ This re-scans all Markdown files, re-chunks, re-embeds, and repopulates both SQL
 
 ### Global Config
 
-The brain registry at `~/.brain/config.toml` is small and worth backing up. It stores registered brain names, root paths, and note directories.
+The brain registry at `~/.brain/state_projection.toml` is a read-only projection of DB state. The DB (`~/.brain/brain.db`) is the source of truth and worth backing up.
 
 ---
 

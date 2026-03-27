@@ -2,7 +2,7 @@
 ///
 /// These tests exercise the compiled `brain` binary through `assert_cmd`.
 /// Each test gets its own isolated `BRAIN_HOME` via a `TempDir` so that
-/// global state (the registry in `~/.brain/config.toml`) is never touched.
+/// global state (the registry in `~/.brain/state_projection.toml`) is never touched.
 ///
 /// Tests that require model weights (index, query, watch, doctor) are
 /// explicitly excluded — they would fail in CI without the BGE model.
@@ -185,7 +185,7 @@ fn init_registers_brain_in_global_config() {
 
     init_cmd(project.path(), home.path()).assert().success();
 
-    let config_path = home.path().join("config.toml");
+    let config_path = home.path().join("state_projection.toml");
     assert!(config_path.is_file(), "global config should be created");
     let config_text = std::fs::read_to_string(config_path).unwrap();
     assert!(
@@ -547,7 +547,7 @@ fn init_reregister_adds_extra_root() {
         .success();
 
     // Read the brain ID from the config created in A
-    let config_text = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+    let config_text = std::fs::read_to_string(home.path().join("state_projection.toml")).unwrap();
     let global: serde_json::Value = {
         // Parse via toml first then use brain_id
         let cfg: toml::Value = toml::from_str(&config_text).unwrap();

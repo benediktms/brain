@@ -8,7 +8,7 @@ use crate::error::Result;
 /// - `roots TEXT` — JSON array of root paths (nullable); populated by `project_config_to_brains`
 /// - `aliases TEXT` — JSON array of alias strings (nullable); populated by `project_config_to_brains`
 /// - `notes TEXT` — JSON array of note dir paths (nullable); populated by `project_config_to_brains`
-/// - `projected INTEGER NOT NULL DEFAULT 0` — 1 = row is current in config.toml; 0 = stale/ensure_brain_registered only
+/// - `projected INTEGER NOT NULL DEFAULT 0` — 1 = row is current in state projection; 0 = stale/ensure_brain_registered only
 ///
 /// All new columns are nullable except `projected` (which defaults to 0 for existing rows).
 /// `ensure_brain_registered` does not populate roots/aliases/notes/projected.
