@@ -2,6 +2,91 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.3] - 2026-03-27
+
+### Bug Fixes
+
+- Cross-brain prefix resolution at TaskStore level
+- Brain-scoped task ID resolution — prevent cross-brain collisions (#brn-889)
+- Update migration harness for v35 — add snapshot, tables, indexes
+- Wrap scope summary upsert + lineage in single transaction
+- 5 issues from adversarial review — guard gap, stuck jobs, hash CAS
+- 4 bugs from deep review — hash bypass, transaction atomicity, dedup guard, ID reuse
+- Persist LLM results + per-brain episode tracking
+- In-memory lock set + status guards to prevent race conditions
+- Prevent duplicate consolidation by checking active jobs
+- Graceful handling of brain entries with empty roots
+- Remove blocking full_scan from multi-brain init
+- Remove redundant embed poll + fix parser panic on dual frontmatter
+- Non-blocking embed poll (brn-e18)
+- Non-blocking embed poll prevents starving select loop
+- Ensure all MCP tools and CLI commands emit compact task IDs
+- DB as source of truth, prefix preservation (#89)
+- Normalize tasks.close inputs and parent IDs
+- Resolve all clippy warnings for CI compliance
+- Use remote brain name for URI in cross-brain record_get
+- Restore missing partial unique index in v27→v28 + wire migration harness
+- Address compliance matrix findings (C1, M1, M9, m2, m3, m8, n1)
+- Align write_procedure embed format + add federated explain TODO
+- Address compliance matrix minor findings
+- Flip hierarchy tests from stub assertions to green-phase
+- Update tool count assertion 28→29 for summarize_scope
+- Use safe UTF-8 truncation in episode summary
+- Handle FTS5 + reflection_sources FK in v28 migration
+- Add tracing::warn for graph expansion errors
+- Align signal field names with MCP (sim_vector/bm25)
+- Update tool count assertion for records.search addition
+
+### Documentation
+
+- Add compact parent ID invariant and regression tests
+- Clean up docs — consolidate ADRs, remove implemented plans, rename roadmap
+- Mark hierarchy summaries + consolidation as WIP
+
+### Features
+
+- Content hash optimization + source lineage in scope summaries
+- Propagate staleness to directory scopes on file re-index
+- V35 migration — source lineage + staleness detection
+- Per-kind reschedule delays + parser panic fix
+- Job-based daemon architecture with per-brain scheduling
+- Spawn startup scan as background task
+- .gitignore support + non-blocking daemon prep (brn-45e, brn-d7c)
+- Respect .gitignore during file scanning
+- Stale scope sweep and consolidation sweep recurring jobs
+- Add stale scope sweep and consolidation sweep recurring jobs
+- Recurring job scheduling with singleton concurrency safety (#f0a)
+- Recurring job scheduling with singleton concurrency safety
+- Embed git SHA as version for local just installs
+- Stable BLAKE3 hash-based short IDs for tasks (#88)
+- L0 extractive abstract for record embeddings
+- Hierarchy summaries — derived_summaries table + summarize_scope
+- Brain:// URI output on 16 tools + input on 11 tools
+- BrainUri module + v29 object_links migration + URI MCP tests
+- Consolidation + dedup implementation + CLI
+- Add brain memory write-procedure subcommand
+- Memory.write_procedure MCP tool + summary_kind enrichment
+- V28 migration + store_procedure + TDD tests
+- 1-hop graph expansion + set_db lifecycle fix
+- Add --explain flag to memory search + records search subcommand
+- Implement explain mode + records.search MCP tool
+
+### Refactoring
+
+- Use named SQL params in ensure_singleton_job
+- Rename tasks.id column to display_id for clarity
+- Centralize compact parent ID formatting across MCP and CLI
+- Rename brain:// → synapse:// + extend URI coverage to memory tools + CLI
+- Address compliance matrix major findings
+
+### Testing
+
+- Add full migration harness test
+- Integration tests for reaper-vs-active-lock invariant
+- TDD for episode consolidation + vector dedup
+- TDD for PageRank lifecycle + 1-hop graph expansion
+- TDD integration tests for expand record:*, explain mode, records.search
+
 ## [0.3.2] - 2026-03-19
 
 ### Bug Fixes
