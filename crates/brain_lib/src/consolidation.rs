@@ -37,6 +37,7 @@ pub struct ConsolidateResult {
 pub fn enqueue_cluster_summarization(
     queue: &dyn JobQueue,
     clusters: &[ConsolidationCluster],
+    brain_id: &str,
 ) -> crate::error::Result<usize> {
     let mut count = 0;
 
@@ -58,6 +59,7 @@ pub fn enqueue_cluster_summarization(
             &cluster.suggested_title,
             &cluster.episode_ids,
             &episodes,
+            brain_id,
         )?;
         count += 1;
     }

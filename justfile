@@ -157,6 +157,10 @@ reindex notes_path=".": ensure-binary
 reindex-file path: ensure-binary
     {{bin}} reindex --file {{path}}
 
+[group('maintenance')]
+logs:
+    tail -f ~/.brain/brain.log
+
 # ── Architecture ──────────────────────────────────────────────────────────
 
 # Verify brain-lib has no direct rusqlite/lancedb deps (persistence boundary check)

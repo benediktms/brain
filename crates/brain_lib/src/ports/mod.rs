@@ -20,6 +20,8 @@
 
 use std::collections::HashMap;
 
+use rusqlite::OptionalExtension;
+
 use crate::db::chunks::ChunkRow;
 use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::error::Result;
@@ -982,75 +984,204 @@ impl DerivedSummaryStore for Db {
         let scope_value_owned = scope_value.to_string();
         let scope_type_clone = scope_type.clone();
 
-        let contents: Vec<String> = self.with_read_conn(|conn| {
-            let rows: Vec<String> = match scope_type_clone {
+        // Fetch source content + IDs for lineage tracking.
+        let sources: Vec<(String, String)> = self.with_read_conn(|conn| {
+            let rows: Vec<(String, String)> = match scope_type_clone {
                 ScopeType::Directory => {
                     let pattern = format!("{}%", scope_value_owned);
                     let mut stmt = conn.prepare(
-                        "SELECT c.content
+                        "SELECT c.chunk_id, c.content
                          FROM chunks c
                          JOIN files f ON c.file_id = f.file_id
                          WHERE f.path LIKE ?1
                          ORDER BY f.path, c.chunk_ord",
                     )?;
-                    stmt.query_map(params![pattern], |row| row.get(0))
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                        .collect::<std::result::Result<Vec<String>, _>>()
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    stmt.query_map(params![pattern], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
                 }
                 ScopeType::Tag => {
                     let pattern = format!("%{}%", scope_value_owned);
                     let mut stmt = conn.prepare(
-                        "SELECT content
+                        "SELECT summary_id, content
                          FROM summaries
                          WHERE tags LIKE ?1
                          ORDER BY created_at",
                     )?;
-                    stmt.query_map(params![pattern], |row| row.get(0))
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                        .collect::<std::result::Result<Vec<String>, _>>()
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    stmt.query_map(params![pattern], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
                 }
             };
             Ok(rows)
         })?;
 
+        let source_ids: Vec<&str> = sources.iter().map(|(id, _)| id.as_str()).collect();
+        let contents: Vec<&str> = sources.iter().map(|(_, c)| c.as_str()).collect();
         let source_content = contents.join("\n\n");
+
+        // Compute blake3 hash of source content for change detection.
+        let new_hash = blake3::hash(source_content.as_bytes()).to_hex().to_string();
+
+        // Check if existing summary already has this hash — skip if unchanged.
+        let scope_value_check = scope_value.to_string();
+        let hash_check = new_hash.clone();
+        let existing_hash: Option<String> = self
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT source_content_hash FROM derived_summaries
+                     WHERE scope_type = ?1 AND scope_value = ?2",
+                    params![scope_type_str, scope_value_check],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map(|opt| opt.flatten())
+                .map_err(|e| BrainCoreError::Database(e.to_string()))
+            })
+            .unwrap_or(None);
+
+        if existing_hash.as_deref() == Some(&hash_check) {
+            // Content unchanged — clear stale flag without regenerating.
+            // Use atomic CAS to avoid clobbering a concurrent stale=1 set by
+            // the indexing pipeline (TOCTOU guard: only clear if hash still matches).
+            let sv = scope_value.to_string();
+            let hash_cas = hash_check.clone();
+            self.with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE derived_summaries SET stale = 0
+                     WHERE scope_type = ?1 AND scope_value = ?2 AND source_content_hash = ?3",
+                    params![scope_type_str, sv, hash_cas],
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                Ok(())
+            })?;
+
+            // Return the existing ID.
+            let sv2 = scope_value.to_string();
+            let id: String = self.with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT id FROM derived_summaries
+                     WHERE scope_type = ?1 AND scope_value = ?2",
+                    params![scope_type_str, sv2],
+                    |row| row.get(0),
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))
+            })?;
+
+            return Ok(GeneratedScopeSummary {
+                id,
+                source_content,
+                content_changed: false,
+            });
+        }
 
         let summary_content: String = contents
             .iter()
-            .map(|c| c.get(..200).unwrap_or(c.as_str()))
+            .map(|c| c.get(..200).unwrap_or(c))
             .collect::<Vec<&str>>()
             .join("\n");
 
-        let id = Ulid::new().to_string();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
+        // Reuse existing ID to avoid orphaning summary_sources rows.
+        let existing_id: Option<String> = self
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT id FROM derived_summaries WHERE scope_type = ?1 AND scope_value = ?2",
+                    params![scope_type_str, scope_value],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| BrainCoreError::Database(e.to_string()))
+            })
+            .unwrap_or(None);
+
+        let id = existing_id.unwrap_or_else(|| Ulid::new().to_string());
+
         let id_clone = id.clone();
         let content_clone = summary_content.clone();
         let scope_value_clone = scope_value.to_string();
+        let hash_clone = new_hash;
+        let source_ids_owned: Vec<String> = source_ids.iter().map(|s| s.to_string()).collect();
+        let source_type = match scope_type {
+            ScopeType::Directory => "chunk",
+            ScopeType::Tag => "episode",
+        };
 
-        self.with_write_conn(|conn| {
-            conn.execute(
-                "INSERT OR REPLACE INTO derived_summaries
-                     (id, scope_type, scope_value, content, stale, generated_at)
-                 VALUES (?1, ?2, ?3, ?4, 0, ?5)",
-                params![
-                    id_clone,
-                    scope_type_str,
-                    scope_value_clone,
-                    content_clone,
-                    now
-                ],
+        self.with_write_conn(move |conn| {
+            // Wrap all writes in a single transaction so a crash can't leave
+            // summary_sources empty while the summary row has stale=0.
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+
+            // Use UPDATE if row exists, INSERT if new — avoids DELETE+INSERT
+            // from INSERT OR REPLACE which would change the rowid.
+            let updated = tx
+                .execute(
+                    "UPDATE derived_summaries
+                     SET content = ?1, stale = 0, generated_at = ?2, source_content_hash = ?3
+                     WHERE id = ?4",
+                    params![content_clone, now, hash_clone, id_clone],
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+
+            if updated == 0 {
+                tx.execute(
+                    "INSERT INTO derived_summaries
+                         (id, scope_type, scope_value, content, stale, generated_at, source_content_hash)
+                     VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+                    params![
+                        id_clone,
+                        scope_type_str,
+                        scope_value_clone,
+                        content_clone,
+                        now,
+                        hash_clone
+                    ],
+                )
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            }
+
+            // Replace source lineage for this summary.
+            tx.execute(
+                "DELETE FROM summary_sources WHERE summary_id = ?1",
+                params![id_clone],
             )
             .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+
+            {
+                let mut stmt = tx
+                    .prepare_cached(
+                        "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
+                         VALUES (?1, ?2, ?3, ?4)",
+                    )
+                    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                for src_id in &source_ids_owned {
+                    stmt.execute(params![id_clone, src_id, source_type, now])
+                        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                }
+            }
+
+            tx.commit()
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
             Ok(())
         })?;
 
-        Ok(GeneratedScopeSummary { id, source_content })
+        Ok(GeneratedScopeSummary {
+            id,
+            source_content,
+            content_changed: true,
+        })
     }
 
     fn get_scope_summary(
@@ -1229,6 +1360,9 @@ pub trait JobQueue: Send + Sync {
     /// increments attempts, records `started_at`.
     fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>>;
 
+    /// Advance a job from `pending` to `in_progress`. No-op if already past that state.
+    fn advance_to_in_progress(&self, job_id: &str) -> Result<()>;
+
     /// Mark a job as done with an optional result. Sets `processed_at`.
     fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()>;
 
@@ -1268,7 +1402,7 @@ pub trait JobQueue: Send + Sync {
 
     /// If the singleton job for `kind` is terminal (done/failed), reset to ready.
     /// Returns `true` if reset, `false` if active or missing.
-    fn reschedule_terminal_job(&self, kind: &str) -> Result<bool>;
+    fn reschedule_terminal_job(&self, kind: &str, brain_id: Option<&str>) -> Result<bool>;
 
     /// Enqueue a dedup job. If a non-terminal job of the same kind exists,
     /// returns its job_id. Returns `(job_id, was_created)`.
@@ -1277,6 +1411,13 @@ pub trait JobQueue: Send + Sync {
     /// Ensure a singleton job exists and is schedulable (combined
     /// ensure + reschedule in one write transaction).
     fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()>;
+
+    /// Like `reconcile_singleton_job` but reschedules with a delay (seconds).
+    fn reconcile_singleton_job_with_delay(
+        &self,
+        input: &EnqueueJobInput,
+        delay_secs: i64,
+    ) -> Result<()>;
 }
 
 // -- JobQueue for Db -------------------------------------------------------
@@ -1284,6 +1425,11 @@ pub trait JobQueue: Send + Sync {
 impl JobQueue for Db {
     fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>> {
         self.with_write_conn(|conn| crate::db::jobs::claim_ready_jobs(conn, limit))
+    }
+
+    fn advance_to_in_progress(&self, job_id: &str) -> Result<()> {
+        let job_id = job_id.to_string();
+        self.with_write_conn(move |conn| crate::db::jobs::advance_to_in_progress(conn, &job_id))
     }
 
     fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()> {
@@ -1344,9 +1490,12 @@ impl JobQueue for Db {
         self.with_write_conn(move |conn| crate::db::jobs::ensure_singleton_job(conn, &input))
     }
 
-    fn reschedule_terminal_job(&self, kind: &str) -> Result<bool> {
+    fn reschedule_terminal_job(&self, kind: &str, brain_id: Option<&str>) -> Result<bool> {
         let kind = kind.to_string();
-        self.with_write_conn(move |conn| crate::db::jobs::reschedule_terminal_job(conn, &kind))
+        let brain_id = brain_id.map(|s| s.to_string());
+        self.with_write_conn(move |conn| {
+            crate::db::jobs::reschedule_terminal_job(conn, &kind, brain_id.as_deref(), 0)
+        })
     }
 
     fn enqueue_dedup_job(&self, input: &EnqueueJobInput) -> Result<(String, bool)> {
@@ -1357,6 +1506,17 @@ impl JobQueue for Db {
     fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()> {
         let input = input.clone();
         self.with_write_conn(move |conn| crate::db::jobs::reconcile_singleton_job(conn, &input))
+    }
+
+    fn reconcile_singleton_job_with_delay(
+        &self,
+        input: &EnqueueJobInput,
+        delay_secs: i64,
+    ) -> Result<()> {
+        let input = input.clone();
+        self.with_write_conn(move |conn| {
+            crate::db::jobs::reconcile_singleton_job_with_delay(conn, &input, delay_secs)
+        })
     }
 }
 

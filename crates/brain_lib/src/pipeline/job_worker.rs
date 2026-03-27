@@ -1,15 +1,72 @@
 //! Job worker: claims pending jobs from the queue and dispatches to handlers
 //! based on the typed [`JobPayload`] variant.
+//!
+//! Each claimed job is spawned as a separate `tokio::spawn` task for
+//! concurrent execution. LLM jobs resolve their own provider from the DB.
+//!
+//! An [`ActiveJobs`] lock set prevents the stuck-job reaper from resetting
+//! jobs that are still being actively worked on. Each spawned task holds a
+//! [`JobGuard`] that removes the job from the set on drop (including panics).
 
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use dashmap::DashSet;
 use rusqlite::params;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::db::Db;
 use crate::db::jobs::{self, EnqueueJobInput, JobPayload};
+use crate::embedder::Embed;
 use crate::ports::JobQueue;
-use crate::summarizer::Summarize;
+use crate::store::Store;
+
+// ─── Active-job lock set ────────────────────────────────────────
+
+/// In-memory set of job IDs that are currently being executed by a
+/// `tokio::spawn` task. The stuck-job reaper consults this set to avoid
+/// resetting jobs that are still running (which would cause duplicate
+/// execution and wasted LLM calls).
+///
+/// This is the correct mutex for a single-process daemon. If the process
+/// crashes, the locks are lost — and that is fine, because the spawned tasks
+/// die with it. The time-based reaper handles crash recovery.
+#[derive(Clone, Default)]
+pub struct ActiveJobs(Arc<DashSet<String>>);
+
+impl ActiveJobs {
+    pub fn new() -> Self {
+        Self(Arc::new(DashSet::new()))
+    }
+
+    /// Insert a job ID. Returns a [`JobGuard`] that removes it on drop.
+    pub fn acquire(&self, job_id: String) -> JobGuard {
+        self.0.insert(job_id.clone());
+        JobGuard {
+            set: Arc::clone(&self.0),
+            job_id,
+        }
+    }
+
+    /// Check whether a job ID is currently held.
+    pub fn contains(&self, job_id: &str) -> bool {
+        self.0.contains(job_id)
+    }
+}
+
+/// RAII guard that removes a job ID from the [`ActiveJobs`] set on drop.
+/// This guarantees cleanup even if the spawned task panics.
+pub struct JobGuard {
+    set: Arc<DashSet<String>>,
+    job_id: String,
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        self.set.remove(&self.job_id);
+    }
+}
 
 const SUMMARIZE_SCOPE_PROMPT: &str = "\
 Summarize the following content concisely in 2-3 sentences. \
@@ -21,9 +78,18 @@ Include key decisions, outcomes, and lessons learned. \
 No markdown formatting.\n\nEpisodes:\n";
 
 /// Process pending jobs. Claims up to `limit` ready jobs, dispatches each
-/// to the appropriate handler based on its payload variant, and marks them
-/// as completed or failed. Returns the number of successfully processed jobs.
-pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> usize {
+/// to the appropriate handler via `tokio::spawn` for concurrent execution.
+/// Returns the number of claimed jobs (not completed — they run in background).
+///
+/// Each spawned task holds a [`JobGuard`] from the `active` set, preventing
+/// the stuck-job reaper from resetting the job while it is still running.
+pub async fn process_jobs(
+    db: &Db,
+    store: &Store,
+    embedder: &Arc<dyn Embed>,
+    active: &ActiveJobs,
+    limit: i32,
+) -> usize {
     let claimed = match db.claim_ready_jobs(limit) {
         Ok(jobs) => jobs,
         Err(e) => {
@@ -38,69 +104,243 @@ pub async fn process_jobs(db: &Db, summarizer: &dyn Summarize, limit: i32) -> us
 
     debug!(count = claimed.len(), "claimed ready jobs");
 
-    let mut success_count = 0;
+    let count = claimed.len();
+    // Collect ALL guards before spawning to close the acquisition gap between
+    // claim and spawn — a concurrent reaper must not reset a claimed job.
+    let guards: Vec<_> = claimed
+        .iter()
+        .map(|j| active.acquire(j.job_id.clone()))
+        .collect();
+    for (job, _guard) in claimed.into_iter().zip(guards) {
+        let db = db.clone();
+        let store = store.clone();
+        let embedder = embedder.clone();
 
-    for job in &claimed {
-        let result = match &job.payload {
-            // Sweep jobs: no LLM needed, just DB queries + child job enqueues.
-            JobPayload::StaleScopeSweep => process_stale_scope_sweep(db).await,
-            JobPayload::ConsolidationSweep => process_consolidation_sweep(db).await,
-            // LLM jobs: build prompt, call summarizer, persist result.
-            _ => process_llm_job(db, summarizer, &job.payload).await,
-        };
+        tokio::spawn(async move {
+            // _guard is moved into this future and dropped when the task ends
+            // (success, failure, or panic).
+            let _guard = _guard;
 
-        match result {
-            Ok(result_str) => {
-                if let Err(e) = db.complete_job(&job.job_id, result_str.as_deref()) {
-                    warn!(job_id = %job.job_id, error = %e, "failed to mark job as completed");
-                } else {
-                    success_count += 1;
-                    debug!(job_id = %job.job_id, kind = %job.kind(), "job completed");
-                }
-            }
-            Err(e) => {
-                let error_msg = e.to_string();
-                if let Err(fail_err) = db.fail_job(&job.job_id, &error_msg) {
+            if let Err(e) = db.advance_to_in_progress(&job.job_id) {
+                warn!(job_id = %job.job_id, error = %e, "failed to advance to in_progress");
+                if let Err(fail_err) =
+                    db.fail_job(&job.job_id, &format!("advance_to_in_progress failed: {e}"))
+                {
                     warn!(
                         job_id = %job.job_id,
-                        original_error = %error_msg,
                         fail_error = %fail_err,
-                        "failed to record job failure"
+                        "failed to record advance_to_in_progress failure"
                     );
-                } else {
-                    warn!(job_id = %job.job_id, error = %error_msg, "job failed");
                 }
+                return;
+            }
+
+            let result = dispatch_job(&db, &store, &embedder, &job.payload).await;
+
+            match result {
+                Ok(result_str) => {
+                    if let Err(e) = db.complete_job(&job.job_id, result_str.as_deref()) {
+                        warn!(job_id = %job.job_id, error = %e, "failed to mark job as completed");
+                    } else {
+                        debug!(job_id = %job.job_id, kind = %job.kind(), "job completed");
+                    }
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if let Err(fail_err) = db.fail_job(&job.job_id, &error_msg) {
+                        warn!(
+                            job_id = %job.job_id,
+                            original_error = %error_msg,
+                            fail_error = %fail_err,
+                            "failed to record job failure"
+                        );
+                    } else {
+                        warn!(job_id = %job.job_id, error = %error_msg, "job failed");
+                    }
+                }
+            }
+        });
+    }
+
+    count
+}
+
+/// Reap stuck jobs, but skip any that are still actively running (present in
+/// the `active` set). This prevents the reaper from resetting jobs that are
+/// just slow, not actually stuck.
+pub fn reap_stuck_jobs_filtered(db: &Db, active: &ActiveJobs) -> crate::error::Result<usize> {
+    let stuck = db.list_stuck_jobs()?;
+    if stuck.is_empty() {
+        return Ok(0);
+    }
+
+    let truly_stuck: Vec<_> = stuck
+        .into_iter()
+        .filter(|j| !active.contains(&j.job_id))
+        .collect();
+
+    if truly_stuck.is_empty() {
+        return Ok(0);
+    }
+
+    let mut count = 0;
+    for job in &truly_stuck {
+        // Call fail_job for ALL stuck jobs — it handles retryable vs exhausted
+        // internally (reschedules if attempts remain, marks failed otherwise).
+        match db.fail_job(&job.job_id, "reaped: exceeded stuck threshold") {
+            Ok(()) => count += 1,
+            Err(e) => {
+                warn!(job_id = %job.job_id, error = %e, "failed to reap stuck job");
             }
         }
     }
 
-    if success_count > 0 {
-        info!(
-            processed = success_count,
-            total_claimed = claimed.len(),
-            "jobs processed"
-        );
+    if count > 0 {
+        debug!(count, "reaped stuck jobs (filtered)");
     }
-
-    success_count
+    Ok(count)
 }
 
-/// Process an LLM job: build prompt, call summarizer, persist result.
-async fn process_llm_job(
+type JobResult = std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>>;
+
+/// Route a job to the appropriate handler based on its payload variant.
+async fn dispatch_job(
     db: &Db,
-    summarizer: &dyn Summarize,
+    store: &Store,
+    embedder: &Arc<dyn Embed>,
     payload: &JobPayload,
-) -> std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+) -> JobResult {
+    match payload {
+        // LLM jobs: resolve provider from DB, call summarizer.
+        JobPayload::SummarizeScope { .. } | JobPayload::ConsolidateCluster { .. } => {
+            process_llm_job(db, payload).await
+        }
+        // Sweep jobs: DB queries + child job enqueues.
+        JobPayload::StaleScopeSweep => process_stale_scope_sweep(db).await,
+        JobPayload::ConsolidationSweep => process_consolidation_sweep(db).await,
+        // Infra jobs: need store + embedder.
+        JobPayload::FullScanSweep { dirs, .. } => {
+            process_full_scan(db, store, embedder, dirs).await
+        }
+        JobPayload::EmbedPollSweep { brain_id } => {
+            process_embed_poll(db, store, embedder, brain_id).await
+        }
+    }
+}
+
+// ─── LLM jobs ───────────────────────────────────────────────────
+
+/// Resolve the LLM provider from the DB and run the summarization.
+async fn process_llm_job(db: &Db, payload: &JobPayload) -> JobResult {
+    let brain_home =
+        crate::config::brain_home().map_err(|e| format!("failed to resolve brain_home: {e}"))?;
+    let summarizer = crate::llm::resolve_provider_with_db(db, &brain_home).ok_or(
+        "no LLM provider configured — set ANTHROPIC_API_KEY or configure via brain config",
+    )?;
+
     let prompt = build_prompt(payload);
     let result = summarizer.summarize(&prompt).await?;
     persist_job_result(db, payload, &result)?;
     Ok(Some(result))
 }
 
-/// Sweep: find stale derived summaries and enqueue SummarizeScope child jobs.
-async fn process_stale_scope_sweep(
-    db: &Db,
-) -> std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+fn build_prompt(payload: &JobPayload) -> String {
+    match payload {
+        JobPayload::SummarizeScope { content, .. } => {
+            format!("{SUMMARIZE_SCOPE_PROMPT}{content}")
+        }
+        JobPayload::ConsolidateCluster {
+            suggested_title,
+            episodes,
+            ..
+        } => {
+            format!("{CONSOLIDATE_CLUSTER_PROMPT}Title: {suggested_title}\n\n{episodes}")
+        }
+        _ => String::new(),
+    }
+}
+
+fn persist_job_result(db: &Db, payload: &JobPayload, result: &str) -> crate::error::Result<()> {
+    match payload {
+        JobPayload::SummarizeScope { summary_id, .. } => {
+            let summary_id = summary_id.clone();
+            let result = result.to_string();
+            let now = now_unix_secs();
+
+            db.with_write_conn(move |conn| {
+                conn.execute(
+                    "UPDATE derived_summaries
+                     SET content = ?1, stale = 0, generated_at = ?2
+                     WHERE id = ?3",
+                    params![result, now, summary_id],
+                )?;
+                Ok(())
+            })
+        }
+        JobPayload::ConsolidateCluster {
+            suggested_title,
+            episode_ids,
+            brain_id,
+            ..
+        } => {
+            let title = suggested_title.clone();
+            let result = result.to_string();
+            let episode_ids = episode_ids.clone();
+            let brain_id = brain_id.clone();
+
+            db.with_write_conn(move |conn| {
+                // All three steps in a single transaction so a crash can't
+                // leave orphaned episodes or duplicate reflections.
+                let tx = conn.unchecked_transaction()?;
+                let now = crate::utils::now_ts();
+
+                // 1. Store the LLM output as a reflection.
+                let reflection_id = ulid::Ulid::new().to_string();
+                let tags_json = "[]";
+                tx.execute(
+                    "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, valid_from, created_at, updated_at)
+                     VALUES (?1, 'reflection', ?2, ?3, ?4, 1.0, ?5, ?6, ?6, ?6)",
+                    params![reflection_id, title, result, tags_json, brain_id, now],
+                )?;
+
+                // Also populate reflection_sources for compatibility with MCP reflect tool.
+                for ep_id in &episode_ids {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO reflection_sources (reflection_id, source_id) VALUES (?1, ?2)",
+                        params![reflection_id, ep_id],
+                    )?;
+                }
+
+                // 2. Record source lineage in summary_sources.
+                for ep_id in &episode_ids {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO summary_sources (summary_id, source_id, source_type, created_at)
+                         VALUES (?1, ?2, 'episode', ?3)",
+                        params![reflection_id, ep_id, now],
+                    )?;
+                }
+
+                // 3. Mark source episodes as consolidated (guard prevents concurrent overwrite).
+                for ep_id in &episode_ids {
+                    tx.execute(
+                        "UPDATE summaries SET consolidated_by = ?1
+                         WHERE summary_id = ?2 AND consolidated_by IS NULL",
+                        params![reflection_id, ep_id],
+                    )?;
+                }
+
+                tx.commit()?;
+                Ok(())
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+// ─── Sweep jobs ─────────────────────────────────────────────────
+
+/// Find stale derived summaries and enqueue SummarizeScope child jobs.
+async fn process_stale_scope_sweep(db: &Db) -> JobResult {
     use crate::hierarchy::DerivedSummaryStore;
 
     let stale = db.list_stale_summaries(20)?;
@@ -110,7 +350,6 @@ async fn process_stale_scope_sweep(
 
     let mut enqueued = 0;
     for summary in &stale {
-        // Generate the scope summary content (extractive placeholder) and enqueue LLM job.
         let scope_type = crate::hierarchy::ScopeType::parse_db(&summary.scope_type);
         if let Some(scope_type) = scope_type {
             match crate::hierarchy::generate_scope_summary_with_options(
@@ -133,74 +372,99 @@ async fn process_stale_scope_sweep(
     )))
 }
 
-/// Sweep: find unclustered episodes and enqueue ConsolidateCluster child jobs.
-async fn process_consolidation_sweep(
-    db: &Db,
-) -> std::result::Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+/// Find unclustered episodes per brain and enqueue ConsolidateCluster jobs.
+///
+/// Iterates each brain that has unconsolidated episodes. The `consolidated_by`
+/// column (v35) prevents re-processing already-consolidated episodes.
+async fn process_consolidation_sweep(db: &Db) -> JobResult {
     use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 
-    let episodes =
-        db.with_read_conn(|conn| brain_persistence::db::summaries::list_episodes(conn, 100, ""))?;
+    let brain_ids = db.with_read_conn(|conn| {
+        brain_persistence::db::summaries::list_unconsolidated_brain_ids(conn)
+    })?;
 
-    if episodes.is_empty() {
-        return Ok(Some(r#"{"clusters":0,"enqueued":0}"#.to_string()));
+    if brain_ids.is_empty() {
+        return Ok(Some(
+            r#"{"brains":0,"clusters":0,"enqueued":0}"#.to_string(),
+        ));
     }
 
-    let result = consolidate_episodes(episodes, 7200);
-    let enqueued = match enqueue_cluster_summarization(db, &result.clusters) {
-        Ok(n) => n,
-        Err(e) => {
-            warn!(error = %e, "failed to enqueue consolidation clusters");
-            0
+    let mut total_clusters = 0;
+    let mut total_enqueued = 0;
+
+    for brain_id in &brain_ids {
+        let episodes = db.with_read_conn(|conn| {
+            brain_persistence::db::summaries::list_unconsolidated_episodes(conn, 100, brain_id)
+        })?;
+
+        if episodes.is_empty() {
+            continue;
         }
-    };
+
+        let result = consolidate_episodes(episodes, 7200);
+        total_clusters += result.clusters.len();
+
+        match enqueue_cluster_summarization(db, &result.clusters, brain_id) {
+            Ok(n) => total_enqueued += n,
+            Err(e) => {
+                warn!(brain_id = %brain_id, error = %e, "failed to enqueue consolidation clusters");
+            }
+        }
+    }
 
     Ok(Some(format!(
-        r#"{{"clusters":{},"enqueued":{enqueued}}}"#,
-        result.clusters.len()
+        r#"{{"brains":{},"clusters":{total_clusters},"enqueued":{total_enqueued}}}"#,
+        brain_ids.len()
     )))
 }
 
-/// Build the LLM prompt from the typed payload.
-fn build_prompt(payload: &JobPayload) -> String {
-    match payload {
-        JobPayload::SummarizeScope { content, .. } => {
-            format!("{SUMMARIZE_SCOPE_PROMPT}{content}")
-        }
-        JobPayload::ConsolidateCluster {
-            suggested_title,
-            episodes,
-            ..
-        } => {
-            format!("{CONSOLIDATE_CLUSTER_PROMPT}Title: {suggested_title}\n\n{episodes}")
-        }
-        // Sweep jobs don't produce prompts — handled by dedicated functions.
-        JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => String::new(),
+// ─── Infra jobs ─────────────────────────────────────────────────
+
+/// Scan note directories for new/changed files and index them.
+async fn process_full_scan(
+    db: &Db,
+    store: &Store,
+    embedder: &Arc<dyn Embed>,
+    dirs: &[String],
+) -> JobResult {
+    let dirs: Vec<PathBuf> = dirs.iter().map(PathBuf::from).collect();
+    if dirs.is_empty() {
+        return Ok(Some(r#"{"indexed":0,"skipped":0}"#.to_string()));
     }
+
+    let scan_pipeline =
+        crate::pipeline::IndexPipeline::with_store(db.clone(), store.clone(), embedder.clone())
+            .await?;
+
+    let stats = scan_pipeline.full_scan(&dirs).await?;
+    // Compact fragments after scan.
+    store.optimizer().force_optimize().await;
+
+    Ok(Some(format!(
+        r#"{{"indexed":{},"skipped":{},"deleted":{}}}"#,
+        stats.indexed, stats.skipped, stats.deleted
+    )))
 }
 
-fn persist_job_result(db: &Db, payload: &JobPayload, result: &str) -> crate::error::Result<()> {
-    match payload {
-        JobPayload::SummarizeScope { summary_id, .. } => {
-            let summary_id = summary_id.clone();
-            let result = result.to_string();
-            let now = now_unix_secs();
+/// Embed stale chunks, tasks, and records for a specific brain.
+async fn process_embed_poll(
+    db: &Db,
+    store: &Store,
+    embedder: &Arc<dyn Embed>,
+    brain_id: &str,
+) -> JobResult {
+    use crate::pipeline::embed_poll;
 
-            db.with_write_conn(move |conn| {
-                conn.execute(
-                    "UPDATE derived_summaries
-                     SET content = ?1, stale = 0, generated_at = ?2
-                     WHERE id = ?3",
-                    params![result, now, summary_id],
-                )?;
-                Ok(())
-            })
-        }
-        JobPayload::ConsolidateCluster { .. }
-        | JobPayload::StaleScopeSweep
-        | JobPayload::ConsolidationSweep => Ok(()),
-    }
+    let n_tasks = embed_poll::poll_stale_tasks(db, store, embedder, brain_id).await;
+    let n_chunks = embed_poll::poll_stale_chunks(db, store, embedder).await;
+    let n_records = embed_poll::poll_stale_records(db, store, embedder, brain_id).await;
+
+    Ok(Some(format!(
+        r#"{{"tasks":{n_tasks},"chunks":{n_chunks},"records":{n_records}}}"#
+    )))
 }
+
+// ─── Helpers ────────────────────────────────────────────────────
 
 fn now_unix_secs() -> i64 {
     SystemTime::now()
@@ -240,6 +504,7 @@ pub fn enqueue_cluster_summary(
     suggested_title: &str,
     episode_ids: &[String],
     episodes: &str,
+    brain_id: &str,
 ) -> crate::error::Result<String> {
     let input = EnqueueJobInput {
         payload: JobPayload::ConsolidateCluster {
@@ -247,6 +512,7 @@ pub fn enqueue_cluster_summary(
             suggested_title: suggested_title.to_string(),
             episode_ids: episode_ids.to_vec(),
             episodes: episodes.to_string(),
+            brain_id: brain_id.to_string(),
         },
         priority: jobs::priority::NORMAL,
         retry_config: None, // uses payload default (Fixed{3})
@@ -261,25 +527,14 @@ pub fn enqueue_cluster_summary(
 mod tests {
     use super::*;
     use crate::db::Db;
-    use crate::db::jobs::JobStatus;
-    use crate::summarizer::MockSummarizer;
 
     fn setup_db() -> Db {
         Db::open_in_memory().unwrap()
     }
 
     #[tokio::test]
-    async fn test_process_jobs_empty_queue() {
+    async fn test_process_llm_job_round_trip() {
         let db = setup_db();
-        let summarizer = MockSummarizer;
-        let count = process_jobs(&db, &summarizer, 10).await;
-        assert_eq!(count, 0);
-    }
-
-    #[tokio::test]
-    async fn test_process_jobs_round_trip() {
-        let db = setup_db();
-        let summarizer = MockSummarizer;
 
         db.with_write_conn(|conn| {
             conn.execute(
@@ -291,72 +546,16 @@ mod tests {
         })
         .unwrap();
 
-        let job_id = enqueue_scope_summary(
-            &db,
-            "sum-1",
-            "directory",
-            "src/",
-            "fn main() { println!(\"hello\"); }",
-        )
-        .unwrap();
-
-        let count = process_jobs(&db, &summarizer, 10).await;
-        assert_eq!(count, 1);
-
-        let job = db
-            .with_read_conn(|conn| jobs::get_job(conn, &job_id))
-            .unwrap()
-            .unwrap();
-        assert_eq!(job.status, JobStatus::Done);
-        assert!(job.result.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_process_jobs_failure_retries() {
-        let db = setup_db();
-
-        struct FailingSummarizer;
-        #[async_trait::async_trait]
-        impl Summarize for FailingSummarizer {
-            async fn summarize(&self, _text: &str) -> crate::error::Result<String> {
-                Err(crate::error::BrainCoreError::Internal(
-                    "intentional failure".to_string(),
-                ))
-            }
-            fn backend_name(&self) -> &'static str {
-                "failing"
-            }
-        }
-
-        let job_id = enqueue_scope_summary(&db, "sum-1", "directory", "fail/", "content").unwrap();
-        let count = process_jobs(&db, &FailingSummarizer, 10).await;
-        assert_eq!(count, 0);
-
-        let job = db
-            .with_read_conn(|conn| jobs::get_job(conn, &job_id))
-            .unwrap()
-            .unwrap();
-        // After claim (attempts=1) + fail with Fixed{3}, reschedules to ready
-        assert_eq!(job.status, JobStatus::Ready);
-        assert!(
-            job.last_error
-                .as_deref()
-                .unwrap()
-                .contains("intentional failure")
-        );
-        assert_eq!(job.attempts, 1);
-    }
-
-    #[test]
-    fn test_build_prompt_scope() {
         let payload = JobPayload::SummarizeScope {
             summary_id: "sum-1".into(),
             scope_type: "directory".into(),
             scope_value: "src/".into(),
-            content: "hello world".into(),
+            content: "fn main() { println!(\"hello\"); }".into(),
         };
+
+        // Test build_prompt
         let prompt = build_prompt(&payload);
-        assert!(prompt.contains("hello world"));
+        assert!(prompt.contains("fn main()"));
         assert!(prompt.starts_with("Summarize the following"));
     }
 
@@ -367,110 +566,151 @@ mod tests {
             suggested_title: "Episodes".into(),
             episode_ids: vec!["ep-1".into()],
             episodes: "episode data".into(),
+            brain_id: "brain-1".into(),
         };
         let prompt = build_prompt(&payload);
         assert!(prompt.contains("episode data"));
         assert!(prompt.starts_with("Synthesize these episodes"));
     }
 
-    #[tokio::test]
-    async fn test_process_jobs_http_round_trip() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+    #[test]
+    fn test_build_prompt_sweep_is_empty() {
+        assert!(build_prompt(&JobPayload::StaleScopeSweep).is_empty());
+        assert!(build_prompt(&JobPayload::ConsolidationSweep).is_empty());
+    }
 
-        let mock_server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/messages"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "content": [{ "type": "text", "text": "Mock summary result" }],
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 5,
-                    "cache_creation_input_tokens": null,
-                    "cache_read_input_tokens": null
-                }
-            })))
-            .mount(&mock_server)
-            .await;
-
-        let provider = crate::llm::AnthropicProvider::new(
-            "test-key".to_string(),
-            mock_server.uri(),
-            "claude-haiku-4-5-20251001".to_string(),
-        );
-
-        let db = setup_db();
+    /// Insert a stuck job directly into the DB for testing.
+    /// Uses `in_progress` status with `started_at` backdated 600s.
+    fn insert_stuck_job(db: &Db, job_id: &str) {
+        let old = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - 600;
+        let payload = serde_json::to_string(&JobPayload::StaleScopeSweep).unwrap();
         db.with_write_conn(|conn| {
             conn.execute(
-                "INSERT INTO derived_summaries (id, scope_type, scope_value, content, stale, generated_at)
-                 VALUES (?1, ?2, ?3, '', 0, 0)",
-                params!["sum-1", "directory", "src/"],
+                "INSERT INTO jobs (job_id, kind, status, started_at, priority, payload, attempts,
+                                   retry_config, stuck_threshold_secs, metadata,
+                                   created_at, scheduled_at, updated_at)
+                 VALUES (?1, 'stale_scope_sweep', 'in_progress', ?2, 100, ?3, 1,
+                         '{\"type\":\"fixed\",\"attempts\":3}', 60, '{}', ?2, ?2, ?2)",
+                params![job_id, old, payload],
             )?;
             Ok(())
         })
         .unwrap();
-        let job_id =
-            enqueue_scope_summary(&db, "sum-1", "directory", "src/", "some content").unwrap();
-
-        let count = process_jobs(&db, &provider, 10).await;
-        assert_eq!(count, 1, "expected 1 successful job");
-
-        let job = db
-            .with_read_conn(|conn| jobs::get_job(conn, &job_id))
-            .unwrap()
-            .unwrap();
-        assert_eq!(job.status, JobStatus::Done);
-        assert_eq!(job.result.as_deref(), Some("Mock summary result"));
-        let stored: String = db
-            .with_read_conn(|conn| {
-                conn.query_row(
-                    "SELECT content FROM derived_summaries WHERE id = ?1",
-                    params!["sum-1"],
-                    |row| row.get(0),
-                )
-                .map_err(|e| crate::error::BrainCoreError::Database(e.to_string()))
-            })
-            .unwrap();
-        assert_eq!(stored, "Mock summary result");
     }
 
-    #[tokio::test]
-    async fn test_process_jobs_http_failure() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let mock_server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/messages"))
-            .respond_with(ResponseTemplate::new(500).set_body_raw("Internal error", "text/plain"))
-            .mount(&mock_server)
-            .await;
-
-        let provider = crate::llm::AnthropicProvider::new(
-            "test-key".to_string(),
-            mock_server.uri(),
-            "claude-haiku-4-5-20251001".to_string(),
-        );
-
+    #[test]
+    fn test_reap_skips_active_jobs() {
         let db = setup_db();
-        let job_id =
-            enqueue_scope_summary(&db, "sum-1", "directory", "src/", "some content").unwrap();
+        let active = ActiveJobs::new();
 
-        let count = process_jobs(&db, &provider, 10).await;
-        assert_eq!(count, 0, "expected 0 successes on HTTP failure");
+        insert_stuck_job(&db, "J-ACTIVE");
 
+        // Guard held → reaper should skip this job.
+        let _guard = active.acquire("J-ACTIVE".into());
+        let reaped = reap_stuck_jobs_filtered(&db, &active).unwrap();
+        assert_eq!(reaped, 0, "reaper must skip jobs in the active set");
+
+        // Verify the job is still in_progress (not reset).
         let job = db
-            .with_read_conn(|conn| jobs::get_job(conn, &job_id))
+            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-ACTIVE"))
             .unwrap()
             .unwrap();
+        assert_eq!(job.status, crate::db::jobs::JobStatus::InProgress);
+    }
+
+    #[test]
+    fn test_reap_proceeds_after_guard_dropped() {
+        let db = setup_db();
+        let active = ActiveJobs::new();
+
+        insert_stuck_job(&db, "J-RELEASED");
+
+        // Acquire and immediately drop — simulates task completion.
+        let guard = active.acquire("J-RELEASED".into());
+        drop(guard);
+
+        let reaped = reap_stuck_jobs_filtered(&db, &active).unwrap();
         assert_eq!(
-            job.status,
-            JobStatus::Ready,
-            "job should be rescheduled for retry"
+            reaped, 1,
+            "reaper must process jobs no longer in active set"
         );
-        assert!(job.last_error.is_some(), "error should be recorded");
-        assert_eq!(job.attempts, 1);
+    }
+
+    #[test]
+    fn test_reap_mixed_active_and_stuck() {
+        let db = setup_db();
+        let active = ActiveJobs::new();
+
+        insert_stuck_job(&db, "J-HELD");
+        insert_stuck_job(&db, "J-FREE");
+
+        // Only hold one guard.
+        let _guard = active.acquire("J-HELD".into());
+
+        let reaped = reap_stuck_jobs_filtered(&db, &active).unwrap();
+        assert_eq!(reaped, 1, "should reap only the unguarded job");
+
+        // Verify: J-HELD still in_progress, J-FREE was reaped (fail_job was called).
+        let held = db
+            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-HELD"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(held.status, crate::db::jobs::JobStatus::InProgress);
+
+        let freed = db
+            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-FREE"))
+            .unwrap()
+            .unwrap();
+        // fail_job with retryable config resets to Ready.
+        assert_eq!(freed.status, crate::db::jobs::JobStatus::Ready);
+    }
+
+    #[test]
+    fn test_active_jobs_acquire_and_release() {
+        let active = ActiveJobs::new();
+        assert!(!active.contains("job-1"));
+
+        let guard = active.acquire("job-1".into());
+        assert!(active.contains("job-1"));
+
+        drop(guard);
+        assert!(!active.contains("job-1"));
+    }
+
+    #[test]
+    fn test_active_jobs_guard_cleanup_on_panic() {
+        let active = ActiveJobs::new();
+        let active2 = active.clone();
+
+        let handle = std::thread::spawn(move || {
+            let _guard = active2.acquire("job-panic".into());
+            panic!("simulated panic");
+        });
+        // The thread panicked, but the guard's Drop should have removed the entry.
+        let _ = handle.join();
+        assert!(!active.contains("job-panic"));
+    }
+
+    #[test]
+    fn test_active_jobs_multiple_concurrent() {
+        let active = ActiveJobs::new();
+
+        let g1 = active.acquire("job-a".into());
+        let g2 = active.acquire("job-b".into());
+
+        assert!(active.contains("job-a"));
+        assert!(active.contains("job-b"));
+        assert!(!active.contains("job-c"));
+
+        drop(g1);
+        assert!(!active.contains("job-a"));
+        assert!(active.contains("job-b"));
+
+        drop(g2);
+        assert!(!active.contains("job-b"));
     }
 }

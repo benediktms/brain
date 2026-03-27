@@ -3,8 +3,12 @@
 //! Defines which job kinds are managed as singletons by the daemon.
 //! The reconciliation loop ensures each registered kind has exactly one
 //! row in the jobs table and reschedules it when it reaches a terminal state.
+//!
+//! Global jobs (stale_scope_sweep, consolidation_sweep) have one row each.
+//! Per-brain jobs (full_scan_sweep, embed_poll_sweep) have one row per brain,
+//! disambiguated by `brain_id` in the payload.
 
-use crate::db::jobs::{EnqueueJobInput, JobPayload, RetryStrategy};
+use crate::db::jobs::{self, EnqueueJobInput, JobPayload, RetryStrategy};
 use crate::error::Result;
 use crate::ports::JobQueue;
 
@@ -20,36 +24,42 @@ pub struct RecurringJobSpec {
     pub retry_strategy: RetryStrategy,
     /// How long before a running job is considered stuck (seconds).
     pub stuck_threshold_secs: i64,
+    /// Delay (seconds) before rescheduling after completion. 0 = immediate.
+    pub reschedule_delay_secs: i64,
 }
 
-/// All recurring jobs the daemon should maintain.
-pub const RECURRING_JOBS: &[RecurringJobSpec] = &[
+/// Global recurring jobs (not brain-scoped).
+pub const GLOBAL_RECURRING_JOBS: &[RecurringJobSpec] = &[
     RecurringJobSpec {
         kind: "stale_scope_sweep",
         make_payload: || JobPayload::StaleScopeSweep,
-        priority: crate::db::jobs::priority::BACKGROUND,
+        priority: jobs::priority::BACKGROUND,
         retry_strategy: RetryStrategy::Infinite,
         stuck_threshold_secs: 60,
+        reschedule_delay_secs: 300, // 5 minutes
     },
     RecurringJobSpec {
         kind: "consolidation_sweep",
         make_payload: || JobPayload::ConsolidationSweep,
-        priority: crate::db::jobs::priority::BACKGROUND,
+        priority: jobs::priority::BACKGROUND,
         retry_strategy: RetryStrategy::Infinite,
         stuck_threshold_secs: 60,
+        reschedule_delay_secs: 300, // 5 minutes
     },
 ];
 
-/// Reconcile recurring singleton jobs. Called once per daemon tick.
+/// A registered brain with its note directories.
+pub struct BrainInfo {
+    pub brain_id: String,
+    pub note_dirs: Vec<String>,
+}
+
+/// Reconcile all recurring singleton jobs. Called once per daemon tick.
 ///
-/// For each spec in [`RECURRING_JOBS`]:
-/// 1. If no job of this kind exists → enqueue one as `ready`.
-/// 2. If a job exists in a terminal state (done/failed) → reset to `ready`.
-/// 3. If a job exists and is active (ready/pending/in_progress) → skip.
-///
-/// Each spec is reconciled in a single `with_write_conn` call for atomicity.
-pub fn reconcile_recurring_jobs(queue: &dyn JobQueue) -> Result<()> {
-    for spec in RECURRING_JOBS {
+/// Creates/reschedules global jobs and per-brain jobs.
+pub fn reconcile_recurring_jobs(queue: &dyn JobQueue, brains: &[BrainInfo]) -> Result<()> {
+    // Global jobs
+    for spec in GLOBAL_RECURRING_JOBS {
         let input = EnqueueJobInput {
             payload: (spec.make_payload)(),
             priority: spec.priority,
@@ -58,8 +68,37 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue) -> Result<()> {
             metadata: serde_json::json!({}),
             scheduled_at: 0,
         };
+        queue.reconcile_singleton_job_with_delay(&input, spec.reschedule_delay_secs)?;
+    }
 
-        queue.reconcile_singleton_job(&input)?;
+    // Per-brain jobs
+    for brain in brains {
+        // Full scan sweep — every 5 minutes
+        let input = EnqueueJobInput {
+            payload: JobPayload::FullScanSweep {
+                brain_id: brain.brain_id.clone(),
+                dirs: brain.note_dirs.clone(),
+            },
+            priority: jobs::priority::BACKGROUND,
+            retry_config: Some(RetryStrategy::Infinite),
+            stuck_threshold_secs: Some(600),
+            metadata: serde_json::json!({}),
+            scheduled_at: 0,
+        };
+        queue.reconcile_singleton_job_with_delay(&input, 300)?;
+
+        // Embed poll sweep — every 10 seconds
+        let input = EnqueueJobInput {
+            payload: JobPayload::EmbedPollSweep {
+                brain_id: brain.brain_id.clone(),
+            },
+            priority: jobs::priority::BACKGROUND,
+            retry_config: Some(RetryStrategy::Infinite),
+            stuck_threshold_secs: Some(600),
+            metadata: serde_json::json!({}),
+            scheduled_at: 0,
+        };
+        queue.reconcile_singleton_job_with_delay(&input, 10)?;
     }
 
     Ok(())
@@ -67,12 +106,20 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue) -> Result<()> {
 
 /// Returns `true` if the given `kind` is a registered recurring singleton.
 pub fn is_recurring_kind(kind: &str) -> bool {
-    RECURRING_JOBS.iter().any(|spec| spec.kind == kind)
+    matches!(
+        kind,
+        "stale_scope_sweep" | "consolidation_sweep" | "full_scan_sweep" | "embed_poll_sweep"
+    )
 }
 
 /// Returns the list of recurring job kinds (for GC exclusion).
 pub fn protected_kinds() -> Vec<&'static str> {
-    RECURRING_JOBS.iter().map(|spec| spec.kind).collect()
+    vec![
+        "stale_scope_sweep",
+        "consolidation_sweep",
+        "full_scan_sweep",
+        "embed_poll_sweep",
+    ]
 }
 
 #[cfg(test)]
@@ -81,15 +128,17 @@ mod tests {
     use crate::db::Db;
 
     #[test]
-    fn test_reconcile_empty_registry_is_noop() {
+    fn test_reconcile_no_brains() {
         let db = Db::open_in_memory().unwrap();
-        reconcile_recurring_jobs(&db).unwrap();
+        reconcile_recurring_jobs(&db, &[]).unwrap();
     }
 
     #[test]
     fn test_is_recurring_kind() {
         assert!(is_recurring_kind("stale_scope_sweep"));
         assert!(is_recurring_kind("consolidation_sweep"));
+        assert!(is_recurring_kind("full_scan_sweep"));
+        assert!(is_recurring_kind("embed_poll_sweep"));
         assert!(!is_recurring_kind("summarize_scope"));
         assert!(!is_recurring_kind("consolidate_cluster"));
     }
@@ -97,7 +146,8 @@ mod tests {
     #[test]
     fn test_protected_kinds() {
         let protected = protected_kinds();
-        assert!(protected.contains(&"stale_scope_sweep"));
-        assert!(protected.contains(&"consolidation_sweep"));
+        assert_eq!(protected.len(), 4);
+        assert!(protected.contains(&"full_scan_sweep"));
+        assert!(protected.contains(&"embed_poll_sweep"));
     }
 }

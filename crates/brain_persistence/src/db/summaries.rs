@@ -389,6 +389,36 @@ pub fn list_episodes_multi_brain(
     super::collect_rows(rows)
 }
 
+/// List distinct brain_ids that have unconsolidated episodes.
+pub fn list_unconsolidated_brain_ids(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT brain_id FROM summaries
+         WHERE kind = 'episode' AND consolidated_by IS NULL
+         ORDER BY brain_id",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| crate::error::BrainCoreError::Database(e.to_string()))
+}
+
+/// List unconsolidated episodes for a specific brain (consolidated_by IS NULL).
+pub fn list_unconsolidated_episodes(
+    conn: &Connection,
+    limit: usize,
+    brain_id: &str,
+) -> Result<Vec<SummaryRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                brain_id, parent_id, source_hash, confidence, valid_from
+         FROM summaries
+         WHERE kind = 'episode' AND consolidated_by IS NULL AND brain_id = ?2
+         ORDER BY created_at DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![limit as i64, brain_id], map_summary_row)?;
+    super::collect_rows(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -67,20 +66,8 @@ pub async fn run(
         pipeline.set_summarizer(Arc::from(provider));
     }
 
-    // Full scan on startup to catch offline changes
-    let stats = pipeline.full_scan(&note_dirs).await?;
-    info!(
-        indexed = stats.indexed,
-        skipped = stats.skipped,
-        deleted = stats.deleted,
-        "startup scan complete"
-    );
-
-    // Compact fragments created during full scan
-    pipeline.store().optimizer().force_optimize().await;
-
     // Startup self-heal: if LanceDB is missing, reset embedded_at so all
-    // tasks and chunks will be re-embedded on the next poll cycle.
+    // tasks and chunks will be re-embedded on the next EmbedPollSweep job.
     embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.store()).await;
 
     // Set up file watcher
@@ -97,12 +84,14 @@ pub async fn run(
     // threshold is evaluated inside should_optimize().
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
-    // Embedding poll: catches tasks/chunks that missed inline embedding
-    // (e.g. written directly to SQLite, or failed during MCP handler).
-    let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
+    // Embedding is now handled by the EmbedPollSweep recurring job.
 
     // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
     let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
+
+    // In-memory lock set: prevents the reaper from resetting jobs that are
+    // still actively running in a tokio::spawn task.
+    let active_jobs = job_worker::ActiveJobs::new();
 
     // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -111,9 +100,6 @@ pub async fn run(
     // SIGUSR1 handler — dump metrics snapshot to stderr
     let mut sigusr1 = tokio::signal::unix::signal(SignalKind::user_defined1())
         .expect("failed to register SIGUSR1 handler");
-
-    // Guard: skip embed poll tick if a previous one is still running.
-    let embed_running = Arc::new(AtomicBool::new(false));
 
     // Event loop: batch-drain, coalesce, and dispatch
     let shutdown_reason = loop {
@@ -173,43 +159,30 @@ pub async fn run(
             }
             _ = summarize_poll_interval.tick() => {
                 // Reconcile recurring singleton jobs (idempotent).
-                if let Err(e) = recurring_jobs::reconcile_recurring_jobs(pipeline.db()) {
+                let brain_infos = vec![recurring_jobs::BrainInfo {
+                    brain_id: String::new(),
+                    note_dirs: note_dirs.iter().map(|p| p.display().to_string()).collect(),
+                }];
+                if let Err(e) = recurring_jobs::reconcile_recurring_jobs(pipeline.db(), &brain_infos) {
                     tracing::warn!(error = %e, "reconcile_recurring_jobs failed");
                 }
 
-                if let Some(summarizer) = pipeline.summarizer() {
-                    if let Err(e) = pipeline.db().reap_stuck_jobs() {
-                        tracing::warn!(error = %e, "reap_stuck_jobs failed");
-                    }
-                    let n = job_worker::process_jobs(
-                        pipeline.db(),
-                        summarizer.as_ref(),
-                        20,
-                    ).await;
-                    if n > 0 {
-                        info!(processed = n, "summarization jobs completed");
-                    }
+                if let Err(e) = job_worker::reap_stuck_jobs_filtered(pipeline.db(), &active_jobs) {
+                    tracing::warn!(error = %e, "reap_stuck_jobs failed");
+                }
+                let n = job_worker::process_jobs(
+                    pipeline.db(),
+                    pipeline.store(),
+                    pipeline.embedder(),
+                    &active_jobs,
+                    20,
+                ).await;
+                if n > 0 {
+                    info!(processed = n, "jobs dispatched");
                 }
                 let protected = recurring_jobs::protected_kinds();
                 if let Err(e) = pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
                     tracing::warn!(error = %e, "gc_completed_jobs failed");
-                }
-            }
-            _ = embed_poll_interval.tick() => {
-                if embed_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                    let db = pipeline.db().clone();
-                    let store = pipeline.store().clone();
-                    let embedder = pipeline.embedder().clone();
-                    let guard = embed_running.clone();
-                    tokio::spawn(async move {
-                        let n_tasks = embed_poll::poll_stale_tasks(&db, &store, &embedder, "").await;
-                        let n_chunks = embed_poll::poll_stale_chunks(&db, &store, &embedder).await;
-                        let n_records = embed_poll::poll_stale_records(&db, &store, &embedder, "").await;
-                        if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
-                            tracing::debug!(tasks = n_tasks, chunks = n_chunks, records = n_records, "embed_poll cycle complete");
-                        }
-                        guard.store(false, Ordering::SeqCst);
-                    });
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -594,18 +567,16 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Periodic optimization tick (same as single-brain run())
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
-    // Embedding poll: catches tasks/chunks that missed inline embedding.
-    let mut embed_poll_interval = tokio::time::interval(Duration::from_secs(10));
-
-    // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
+    // Job poll: reconcile recurring jobs, process ready jobs, GC old ones.
     let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
+
+    // In-memory lock set shared across all brains — prevents the reaper from
+    // resetting jobs that are still actively running in a tokio::spawn task.
+    let active_jobs = job_worker::ActiveJobs::new();
 
     // Root validation tick: checks that registered roots still exist on disk,
     // prunes stale roots, and archives brains whose all roots are gone.
     let mut root_validation_tick = tokio::time::interval(Duration::from_secs(60));
-
-    // Guard: skip embed poll tick if a previous one is still running.
-    let embed_running = Arc::new(AtomicBool::new(false));
 
     // ── 7. Event loop ─────────────────────────────────────────────────────
     let shutdown_reason = loop {
@@ -673,58 +644,31 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             _ = summarize_poll_interval.tick() => {
                 for instance in brains.values() {
                     // Reconcile recurring singleton jobs (idempotent).
-                    if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.db()) {
+                    let brain_infos = vec![recurring_jobs::BrainInfo {
+                        brain_id: instance.mcp_context.brain_id().to_string(),
+                        note_dirs: instance.note_dirs.iter().map(|p| p.display().to_string()).collect(),
+                    }];
+                    if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.db(), &brain_infos) {
                         tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
                     }
 
-                    if let Some(summarizer) = instance.pipeline.summarizer() {
-                        if let Err(e) = instance.pipeline.db().reap_stuck_jobs() {
-                            tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
-                        }
-                        let n = job_worker::process_jobs(
-                            instance.pipeline.db(),
-                            summarizer.as_ref(),
-                            20,
-                        ).await;
-                        if n > 0 {
-                            info!(brain = %instance.name, processed = n, "summarization jobs completed");
-                        }
+                    if let Err(e) = job_worker::reap_stuck_jobs_filtered(instance.pipeline.db(), &active_jobs) {
+                        tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
+                    }
+                    let n = job_worker::process_jobs(
+                        instance.pipeline.db(),
+                        instance.pipeline.store(),
+                        instance.pipeline.embedder(),
+                        &active_jobs,
+                        20,
+                    ).await;
+                    if n > 0 {
+                        info!(brain = %instance.name, processed = n, "jobs dispatched");
                     }
                     let protected = recurring_jobs::protected_kinds();
                     if let Err(e) = instance.pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
                         tracing::warn!(brain = %instance.name, error = %e, "gc_completed_jobs failed");
                     }
-                }
-            }
-            _ = embed_poll_interval.tick() => {
-                if embed_running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                    let work: Vec<_> = brains.values().map(|instance| {
-                        (
-                            instance.name.clone(),
-                            instance.pipeline.db().clone(),
-                            instance.pipeline.store().clone(),
-                            instance.pipeline.embedder().clone(),
-                            instance.mcp_context.brain_id().to_string(),
-                        )
-                    }).collect();
-                    let guard = embed_running.clone();
-                    tokio::spawn(async move {
-                        for (name, db, store, embedder, brain_id) in work {
-                            let n_tasks = embed_poll::poll_stale_tasks(&db, &store, &embedder, &brain_id).await;
-                            let n_chunks = embed_poll::poll_stale_chunks(&db, &store, &embedder).await;
-                            let n_records = embed_poll::poll_stale_records(&db, &store, &embedder, &brain_id).await;
-                            if n_tasks > 0 || n_chunks > 0 || n_records > 0 {
-                                tracing::debug!(
-                                    brain = %name,
-                                    tasks = n_tasks,
-                                    chunks = n_chunks,
-                                    records = n_records,
-                                    "embed_poll cycle complete"
-                                );
-                            }
-                        }
-                        guard.store(false, Ordering::SeqCst);
-                    });
                 }
             }
             _ = root_validation_tick.tick() => {
@@ -902,45 +846,10 @@ async fn init_brain_instance(
         pipeline.set_summarizer(Arc::from(provider));
     }
 
-    // Run initial full scan with self-healing on failure
-    if !note_dirs.is_empty() {
-        match pipeline.full_scan(&note_dirs).await {
-            Ok(stats) => {
-                info!(
-                    brain = %name,
-                    indexed = stats.indexed,
-                    skipped = stats.skipped,
-                    deleted = stats.deleted,
-                    "startup scan complete"
-                );
-            }
-            Err(e) => {
-                warn!(brain = %name, error = %e, "startup scan failed, attempting repair");
-                match pipeline.repair().await {
-                    Ok(()) => {
-                        info!(brain = %name, "repair complete, retrying scan");
-                        match pipeline.full_scan(&note_dirs).await {
-                            Ok(stats) => {
-                                info!(
-                                    brain = %name,
-                                    indexed = stats.indexed,
-                                    skipped = stats.skipped,
-                                    deleted = stats.deleted,
-                                    "post-repair scan complete"
-                                );
-                            }
-                            Err(e2) => {
-                                warn!(brain = %name, error = %e2, "scan failed even after repair");
-                            }
-                        }
-                    }
-                    Err(re) => {
-                        warn!(brain = %name, error = %re, "repair failed");
-                    }
-                }
-            }
-        }
-    }
+    // Startup scan is handled by the FullScanSweep recurring job.
+    // Self-heal: reset embedded_at if LanceDB is missing so the
+    // EmbedPollSweep job will re-embed everything.
+    embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.store()).await;
 
     // Build MCP context from the pipeline's stores + task/record/object stores.
     // Derive brain_data_dir from the LanceDB path (per-brain), not sqlite_db
@@ -1018,7 +927,10 @@ fn event_primary_path(event: &FileEvent) -> PathBuf {
 /// `brain.toml` and the global registry. Generates missing IDs on the fly.
 fn sync_brain_ids(global_cfg: &brain_lib::config::GlobalConfig) {
     for (name, entry) in &global_cfg.brains {
-        let brain_dir = entry.primary_root().join(".brain");
+        let Some(root) = entry.primary_root() else {
+            continue;
+        };
+        let brain_dir = root.join(".brain");
         match get_or_generate_brain_id(&brain_dir) {
             Ok(id) => {
                 if entry.id.as_deref() != Some(&id) {
