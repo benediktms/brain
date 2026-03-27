@@ -39,6 +39,27 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
     resolve_task_id_scoped(conn, input, None)
 }
 
+/// Resolve a brain_id from a task ID prefix (e.g. "ckt-ebd" → brain_id for CKT).
+///
+/// Returns `Some(brain_id)` if the input has a short prefix (1-4 chars before dash)
+/// that matches a registered brain's prefix. Returns `None` otherwise.
+pub fn resolve_brain_from_prefix(conn: &Connection, input: &str) -> Result<Option<String>> {
+    match input.find('-') {
+        Some(dash_pos) if dash_pos > 0 && dash_pos <= 4 => {
+            let prefix = input[..dash_pos].to_ascii_uppercase();
+            let brain_id: Option<String> = conn
+                .query_row(
+                    "SELECT brain_id FROM brains WHERE UPPER(prefix) = ?1",
+                    [&prefix],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(brain_id)
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Resolve a task ID with optional brain_id scoping.
 ///
 /// When `brain_id` is `Some(id)`, all lookups are filtered to tasks belonging

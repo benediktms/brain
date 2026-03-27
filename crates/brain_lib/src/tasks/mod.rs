@@ -303,14 +303,22 @@ impl TaskStore {
     ///
     /// When the store is scoped to a brain, resolution is filtered to that
     /// brain's tasks — preventing cross-brain collisions on short hashes.
+    ///
+    /// If the input has a prefix (e.g. "ckt-ebd") that maps to a different
+    /// brain, resolution automatically switches to that brain's scope. This
+    /// ensures cross-brain task references work from any store context.
     pub fn resolve_task_id(&self, input: &str) -> Result<String> {
         let brain_id = self.brain_id.clone();
         self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
+            // If input has a prefix pointing to a different brain, use that brain's scope.
+            let effective_brain_id = if !brain_id.is_empty() {
+                queries::resolve_brain_from_prefix(conn, input)
+                    .unwrap_or(Some(brain_id))
             } else {
-                Some(brain_id.as_str())
+                // Unscoped — let resolve_task_id_scoped handle prefix derivation
+                None
             };
+            let filter = effective_brain_id.as_deref();
             queries::resolve_task_id_scoped(conn, input, filter)
         })
     }
