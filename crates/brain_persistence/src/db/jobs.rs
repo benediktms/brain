@@ -479,41 +479,39 @@ pub fn ensure_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Resul
     let metadata_json = serde_json::to_string(&input.metadata)
         .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize metadata: {e}")))?;
 
-    let (exists_sql, exists_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-        if let Some(bid) = brain_id {
-            (
-                "SELECT 1 FROM jobs WHERE kind = ?2 AND json_extract(payload, '$.brain_id') = ?11"
-                    .to_string(),
-                vec![Box::new(bid.to_string()) as Box<dyn rusqlite::types::ToSql>],
-            )
-        } else {
-            ("SELECT 1 FROM jobs WHERE kind = ?2".to_string(), vec![])
-        };
+    // Use named parameter :brain_scope for the NOT EXISTS subquery so it
+    // doesn't depend on the positional parameter count of the INSERT.
+    let exists_sql = if brain_id.is_some() {
+        "SELECT 1 FROM jobs WHERE kind = :kind AND json_extract(payload, '$.brain_id') = :brain_scope"
+    } else {
+        "SELECT 1 FROM jobs WHERE kind = :kind"
+    };
 
     let sql = format!(
         "INSERT INTO jobs (job_id, kind, status, priority, payload,
                             retry_config, stuck_threshold_secs,
                             attempts, metadata, created_at, scheduled_at, updated_at)
-         SELECT ?1, ?2, 'ready', ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10
+         SELECT :job_id, :kind, 'ready', :priority, :payload, :retry, :stuck, 0, :meta, :now, :sched, :now
          WHERE NOT EXISTS ({exists_sql})"
     );
 
-    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-        Box::new(job_id.clone()),
-        Box::new(kind.to_string()),
-        Box::new(input.priority),
-        Box::new(payload_json),
-        Box::new(retry_json),
-        Box::new(stuck_threshold),
-        Box::new(metadata_json),
-        Box::new(now),
-        Box::new(scheduled_at),
-        Box::new(now),
+    let mut named_params: Vec<(&str, Box<dyn rusqlite::types::ToSql>)> = vec![
+        (":job_id", Box::new(job_id.clone())),
+        (":kind", Box::new(kind.to_string())),
+        (":priority", Box::new(input.priority)),
+        (":payload", Box::new(payload_json)),
+        (":retry", Box::new(retry_json)),
+        (":stuck", Box::new(stuck_threshold)),
+        (":meta", Box::new(metadata_json)),
+        (":now", Box::new(now)),
+        (":sched", Box::new(scheduled_at)),
     ];
-    param_values.extend(exists_params);
+    if let Some(bid) = brain_id {
+        named_params.push((":brain_scope", Box::new(bid.to_string())));
+    }
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<(&str, &dyn rusqlite::types::ToSql)> =
+        named_params.iter().map(|(k, v)| (*k, v.as_ref())).collect();
     let rows = conn.execute(&sql, param_refs.as_slice())?;
 
     if rows > 0 { Ok(Some(job_id)) } else { Ok(None) }
