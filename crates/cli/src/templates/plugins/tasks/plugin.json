@@ -1,0 +1,7 @@
+{
+  "name": "tasks",
+  "description": "Task management with dependencies, priorities, and labels.",
+  "version": "{{version}}",
+  "author": { "name": "Benedikt Schnatterbeck" },
+  "license": "MIT"
+}

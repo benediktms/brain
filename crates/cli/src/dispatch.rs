@@ -151,10 +151,10 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         },
         Command::Plugin { action } => match action {
             PluginAction::Install { dry_run } => {
-                commands::mcp_setup::install_claude_plugin(dry_run)?;
+                commands::plugin::install(dry_run)?;
             }
             PluginAction::Uninstall => {
-                commands::mcp_setup::uninstall_claude_plugin()?;
+                commands::plugin::uninstall()?;
             }
         },
         Command::Hooks { action } => match action {

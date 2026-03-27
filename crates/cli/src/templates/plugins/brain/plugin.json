@@ -1,0 +1,21 @@
+{
+  "name": "brain",
+  "description": "Brain administration — health, registry, job queue, and the overview guide.",
+  "version": "{{version}}",
+  "author": { "name": "Benedikt Schnatterbeck" },
+  "license": "MIT",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "brain tasks stats --json 2>/dev/null" }]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "brain tasks stats --json 2>/dev/null" }]
+      }
+    ]
+  }
+}
