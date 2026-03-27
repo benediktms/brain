@@ -28,7 +28,7 @@ pub fn run(args: MigrateArgs) -> Result<()> {
     let config = load_global_config()?;
 
     if config.brains.is_empty() {
-        println!("No brains registered in ~/.brain/config.toml. Nothing to migrate.");
+        println!("No brains registered in ~/.brain/state_projection.toml. Nothing to migrate.");
         return Ok(());
     }
 

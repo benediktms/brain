@@ -94,7 +94,7 @@ pub fn run_list(db_path: &Path, json: bool, all: bool, archived_only: bool) -> R
     Ok(())
 }
 
-/// Remove a registered brain from the DB (source of truth) and config.toml (projection).
+/// Remove a registered brain from the DB (source of truth) and state_projection.toml (projection).
 pub fn run_remove(name: &str, purge: bool) -> Result<()> {
     // Delete from DB (source of truth).
     let home = brain_home()?;
@@ -104,7 +104,7 @@ pub fn run_remove(name: &str, purge: bool) -> Result<()> {
         anyhow::bail!("brain \"{name}\" is not registered");
     }
 
-    // Project removal to config.toml.
+    // Project removal to state_projection.toml.
     if let Ok(mut global) = load_global_config() {
         global.brains.remove(name);
         let _ = save_global_config(&global);

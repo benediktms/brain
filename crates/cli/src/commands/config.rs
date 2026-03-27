@@ -97,7 +97,7 @@ pub fn run_config_set(
             } else {
                 println!("Prefix updated: {old_prefix} → {new_prefix}");
                 println!("Note: existing task IDs retain their original prefix.");
-                // Project to config.toml (read-only projection).
+                // Project to state_projection.toml (read-only projection).
                 if let Ok(mut global) = load_global_config() {
                     if let Some(entry) = global.brains.get_mut(brain_name) {
                         entry.prefix = Some(new_prefix);

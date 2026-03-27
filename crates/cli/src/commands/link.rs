@@ -104,7 +104,7 @@ pub fn run(name: &str) -> Result<()> {
         archived: false, // unarchive if linking
     })?;
 
-    // Project to config.toml (read-only projection).
+    // Project to state_projection.toml (read-only projection).
     if let Ok(mut config) = load_global_config() {
         if let Some(entry) = config.brains.get_mut(&brain_name) {
             entry.roots.push(cwd.clone());

@@ -627,7 +627,7 @@ pub(crate) enum DaemonAction {
         writes its PID to ~/.brain/brain.pid. The child process runs the watcher \
         loop, logging to ~/.brain/brain.log.\n\n\
         When no path is given, watches all brain projects registered in \
-        ~/.brain/config.toml. When a path is given, watches only that directory \
+        ~/.brain/state_projection.toml. When a path is given, watches only that directory \
         (legacy single-brain mode).")]
     Start {
         /// Path to notes directory. When omitted, watches all registered brains from the global registry.

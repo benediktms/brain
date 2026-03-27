@@ -215,7 +215,7 @@ brain daemon status                      # Check daemon state
 Brains are named containers with independent notes, indexes, and config. Managed via a central registry at `~/.brain/`:
 
 ```toml
-# ~/.brain/config.toml
+# ~/.brain/state_projection.toml
 [brains.personal]
 root = "~/notes"
 notes = ["~/notes"]

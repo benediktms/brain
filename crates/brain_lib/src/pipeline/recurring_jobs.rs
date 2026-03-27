@@ -48,10 +48,9 @@ pub const GLOBAL_RECURRING_JOBS: &[RecurringJobSpec] = &[
     },
 ];
 
-/// A registered brain with its note directories.
+/// A registered brain for recurring job reconciliation.
 pub struct BrainInfo {
     pub brain_id: String,
-    pub note_dirs: Vec<String>,
 }
 
 /// Reconcile all recurring singleton jobs. Called once per daemon tick.
@@ -77,7 +76,6 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue, brains: &[BrainInfo]) -> R
         let input = EnqueueJobInput {
             payload: JobPayload::FullScanSweep {
                 brain_id: brain.brain_id.clone(),
-                dirs: brain.note_dirs.clone(),
             },
             priority: jobs::priority::BACKGROUND,
             retry_config: Some(RetryStrategy::Infinite),

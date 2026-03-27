@@ -219,8 +219,8 @@ async fn dispatch_job(
         JobPayload::StaleScopeSweep => process_stale_scope_sweep(db).await,
         JobPayload::ConsolidationSweep => process_consolidation_sweep(db).await,
         // Infra jobs: need store + embedder.
-        JobPayload::FullScanSweep { dirs, .. } => {
-            process_full_scan(db, store, embedder, dirs).await
+        JobPayload::FullScanSweep { brain_id } => {
+            process_full_scan(db, store, embedder, brain_id).await
         }
         JobPayload::EmbedPollSweep { brain_id } => {
             process_embed_poll(db, store, embedder, brain_id).await
@@ -421,13 +421,45 @@ async fn process_consolidation_sweep(db: &Db) -> JobResult {
 // ─── Infra jobs ─────────────────────────────────────────────────
 
 /// Scan note directories for new/changed files and index them.
+///
+/// Dirs are resolved from the DB at execution time (not baked into the job
+/// payload), so config changes take effect on the next sweep without needing
+/// to update existing singleton job rows.
 async fn process_full_scan(
     db: &Db,
     store: &Store,
     embedder: &Arc<dyn Embed>,
-    dirs: &[String],
+    brain_id: &str,
 ) -> JobResult {
-    let dirs: Vec<PathBuf> = dirs.iter().map(PathBuf::from).collect();
+    if brain_id.is_empty() {
+        warn!("FullScanSweep has empty brain_id, skipping");
+        return Ok(Some(r#"{"skipped":"empty_brain_id"}"#.to_string()));
+    }
+
+    let dirs: Vec<PathBuf> = db.with_read_conn(|conn| {
+        use crate::db::schema::get_brain;
+        let row = get_brain(conn, brain_id)?;
+        let mut dirs = Vec::new();
+        if let Some(ref row) = row {
+            if let Some(ref roots_json) = row.roots_json {
+                match serde_json::from_str::<Vec<String>>(roots_json) {
+                    Ok(roots) => dirs.extend(roots.into_iter().map(PathBuf::from)),
+                    Err(e) => {
+                        warn!(brain_id = %brain_id, error = %e, "malformed roots_json, skipping")
+                    }
+                }
+            }
+            if let Some(ref notes_json) = row.notes_json {
+                match serde_json::from_str::<Vec<String>>(notes_json) {
+                    Ok(notes) => dirs.extend(notes.into_iter().map(PathBuf::from)),
+                    Err(e) => {
+                        warn!(brain_id = %brain_id, error = %e, "malformed notes_json, skipping")
+                    }
+                }
+            }
+        }
+        Ok(dirs)
+    })?;
     if dirs.is_empty() {
         return Ok(Some(r#"{"indexed":0,"skipped":0}"#.to_string()));
     }

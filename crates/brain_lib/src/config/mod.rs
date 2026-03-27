@@ -11,16 +11,22 @@ use crate::error::{BrainCoreError, Result};
 use crate::store::{Store, StoreReader};
 
 // ---------------------------------------------------------------------------
-// Global config (~/.brain/config.toml)
+// State projection (~/.brain/state_projection.toml)
 // ---------------------------------------------------------------------------
 
-/// Top-level global configuration stored at `$BRAIN_HOME/config.toml`.
+/// Top-level state projection stored at `$BRAIN_HOME/state_projection.toml`.
+///
+/// This file is an auto-generated projection of the DB state.
+/// Manual edits will be overwritten by the daemon.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GlobalConfig {
     /// Default model directory (optional override).
     pub model_dir: Option<PathBuf>,
     /// Default log level.
     pub log_level: Option<String>,
+    /// ISO-8601 timestamp of the last DB → state_projection.toml projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_projected_at: Option<String>,
     /// Registered brains keyed by name.
     #[serde(default)]
     pub brains: HashMap<String, BrainEntry>,
@@ -30,7 +36,7 @@ pub struct GlobalConfig {
     pub providers: Vec<ProviderEntry>,
 }
 
-/// A projected provider entry in config.toml (metadata only, no secrets).
+/// A projected provider entry in state_projection.toml (metadata only, no secrets).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderEntry {
     /// Provider UUID.
@@ -159,9 +165,30 @@ pub fn brain_home() -> Result<PathBuf> {
         .ok_or_else(|| BrainCoreError::Config("cannot determine home directory".into()))
 }
 
-/// Load the global config, returning a default if the file does not exist.
+/// The projection filename. DB is the source of truth; this file is a
+/// read-only projection that the daemon overwrites on every change.
+pub const PROJECTION_FILENAME: &str = "state_projection.toml";
+
+/// Load the state projection, returning a default if the file does not exist.
+///
+/// Migrates from the legacy `config.toml` name on first access.
 pub fn load_global_config() -> Result<GlobalConfig> {
-    let path = brain_home()?.join("config.toml");
+    let home = brain_home()?;
+    let path = home.join(PROJECTION_FILENAME);
+
+    // One-time migration: rename legacy config.toml → state_projection.toml.
+    let legacy = home.join("config.toml");
+    if !path.exists() && legacy.exists() {
+        if let Err(e) = std::fs::rename(&legacy, &path) {
+            tracing::warn!(error = %e, "failed to rename config.toml → state_projection.toml, reading legacy");
+            // Fall back to reading the legacy file.
+            let text = std::fs::read_to_string(&legacy).map_err(BrainCoreError::Io)?;
+            return toml::from_str(&text).map_err(|e| {
+                BrainCoreError::Config(format!("failed to parse {}: {e}", legacy.display()))
+            });
+        }
+    }
+
     if !path.exists() {
         return Ok(GlobalConfig::default());
     }
@@ -170,13 +197,16 @@ pub fn load_global_config() -> Result<GlobalConfig> {
         .map_err(|e| BrainCoreError::Config(format!("failed to parse {}: {e}", path.display())))
 }
 
-/// Persist the global config to disk, creating parent directories as needed.
+/// Persist the state projection to disk, creating parent directories as needed.
 pub fn save_global_config(cfg: &GlobalConfig) -> Result<()> {
     let home = brain_home()?;
     crate::fs_permissions::ensure_private_dir(&home)?;
-    let path = home.join("config.toml");
-    let text = toml::to_string_pretty(cfg)
+    let path = home.join(PROJECTION_FILENAME);
+    let body = toml::to_string_pretty(cfg)
         .map_err(|e| BrainCoreError::Config(format!("failed to serialize config: {e}")))?;
+    let text = format!(
+        "# Auto-generated projection of DB state. Manual edits will be overwritten.\n\n{body}"
+    );
     std::fs::write(&path, text).map_err(BrainCoreError::Io)?;
     Ok(())
 }
@@ -214,7 +244,7 @@ pub fn generate_brain_id() -> String {
 }
 
 /// Get or lazily generate a brain ID, persisting it to brain.toml
-/// and syncing it to the global registry (`~/.brain/config.toml`).
+/// and syncing it to the global registry (`~/.brain/state_projection.toml`).
 pub fn get_or_generate_brain_id(brain_dir: &Path) -> Result<String> {
     let mut toml = load_brain_toml(brain_dir)?;
     if let Some(ref id) = toml.id {
@@ -309,7 +339,7 @@ pub fn resolve_brain_id(entry: &BrainEntry, _name: &str) -> Result<String> {
 /// Resolve a brain by any identifier, trying DB first then TOML fallback.
 ///
 /// Used by CLI commands that may run without a daemon. When the daemon has
-/// projected config.toml into the brains table, DB resolution is fast and
+/// projected state into the brains table, DB resolution is fast and
 /// supports aliases/roots. Falls back to TOML parsing on cold start.
 pub fn resolve_brain_with_fallback(
     db: Option<&crate::db::Db>,
@@ -387,7 +417,7 @@ pub async fn open_remote_search_context(
     _model_dir: &Path,
     _embedder: &Arc<dyn Embed>,
 ) -> Result<Option<RemoteSearchContext>> {
-    // Resolve brain from DB (source of truth), fallback to config.toml for
+    // Resolve brain from DB (source of truth), fallback to state_projection.toml for
     // backward compatibility with installs that haven't run the daemon yet.
     let db_path = brain_home.join("brain.db");
     let (name, brain_id) = if db_path.exists() {
@@ -399,7 +429,7 @@ pub async fn open_remote_search_context(
     } else {
         // Fallback for first-run before daemon has created brain.db.
         let config = {
-            let path = brain_home.join("config.toml");
+            let path = brain_home.join(PROJECTION_FILENAME);
             if !path.exists() {
                 return Ok(None);
             }
@@ -928,7 +958,7 @@ mod tests {
         let home = fake_home.path();
 
         // Write an empty config so the file exists but has no brains
-        fs::write(home.join("config.toml"), "[brains]\n").unwrap();
+        fs::write(home.join(PROJECTION_FILENAME), "[brains]\n").unwrap();
 
         // Dummy embedder
         let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
@@ -959,7 +989,7 @@ mod tests {
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
-        fs::write(home.join("config.toml"), text).unwrap();
+        fs::write(home.join(PROJECTION_FILENAME), text).unwrap();
 
         let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
         let model_dir = home.join("models");
@@ -993,7 +1023,7 @@ mod tests {
             },
         );
         let text = toml::to_string_pretty(&cfg).unwrap();
-        fs::write(home.join("config.toml"), text).unwrap();
+        fs::write(home.join(PROJECTION_FILENAME), text).unwrap();
 
         let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
         let model_dir = home.join("models");

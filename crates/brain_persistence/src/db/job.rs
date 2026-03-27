@@ -139,7 +139,8 @@ pub enum JobPayload {
     /// Sweep: find unclustered episodes and enqueue ConsolidateCluster jobs.
     ConsolidationSweep,
     /// Scan note directories for new/changed files and index them.
-    FullScanSweep { brain_id: String, dirs: Vec<String> },
+    /// Dirs are resolved from the DB at execution time (not baked into the payload).
+    FullScanSweep { brain_id: String },
     /// Embed stale chunks, tasks, and records for a specific brain.
     EmbedPollSweep { brain_id: String },
 }

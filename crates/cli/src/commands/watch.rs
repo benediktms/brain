@@ -161,7 +161,6 @@ pub async fn run(
                 // Reconcile recurring singleton jobs (idempotent).
                 let brain_infos = vec![recurring_jobs::BrainInfo {
                     brain_id: String::new(),
-                    note_dirs: note_dirs.iter().map(|p| p.display().to_string()).collect(),
                 }];
                 if let Err(e) = recurring_jobs::reconcile_recurring_jobs(pipeline.db(), &brain_infos) {
                     tracing::warn!(error = %e, "reconcile_recurring_jobs failed");
@@ -340,7 +339,7 @@ struct BrainInstance {
 /// Watch all registered brains from the global config for changes and
 /// re-index incrementally.
 ///
-/// Reads `~/.brain/config.toml`, creates a separate [`IndexPipeline`] for
+/// Reads `~/.brain/state_projection.toml`, creates a separate [`IndexPipeline`] for
 /// each registered brain (sharing a single embedder and a single `Db` handle),
 /// and routes file events to the correct pipeline via longest-prefix matching.
 /// Handles SIGHUP to reload the brain registry without restarting.
@@ -465,7 +464,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             info!(brains = projections.len(), "brain registry synced to DB");
         }
 
-        // Sync prefixes from DB back to config.toml (read-only projection).
+        // Sync prefixes from DB back to state_projection.toml (read-only projection).
         sync_prefixes_to_config(shared_db, &brains);
     }
 
@@ -518,25 +517,25 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         }
     }
 
-    // ── 5b. Separate notify watcher for config.toml ───────────────────────
-    // BrainWatcher filters for .md files only (is_markdown()), so config.toml
+    // ── 5b. Separate notify watcher for state_projection.toml ─────────────
+    // BrainWatcher filters for .md files only (is_markdown()), so projection
     // events would be silently dropped. A separate watcher is required.
-    let config_path = brain_home()?.join("config.toml");
-    let config_dir = config_path.parent().unwrap().to_path_buf();
+    let projection_path = brain_home()?.join(brain_lib::config::PROJECTION_FILENAME);
+    let projection_dir = projection_path.parent().unwrap().to_path_buf();
     let (config_tx, mut config_rx) = tokio::sync::mpsc::channel::<()>(4);
 
     let _config_watcher = {
         let config_tx = config_tx.clone();
-        let config_file = config_path.file_name().unwrap().to_owned();
+        let projection_file = projection_path.file_name().unwrap().to_owned();
         notify_debouncer_full::new_debouncer(
             Duration::from_millis(500),
             None,
             move |result: notify_debouncer_full::DebounceEventResult| {
                 if let Ok(events) = result {
-                    let is_config = events
+                    let is_projection = events
                         .iter()
-                        .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&config_file)));
-                    if is_config {
+                        .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&projection_file)));
+                    if is_projection {
                         let _ = config_tx.blocking_send(());
                     }
                 }
@@ -544,13 +543,13 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         )
         .and_then(|mut w| {
             w.watch(
-                &config_dir,
+                &projection_dir,
                 notify_debouncer_full::notify::RecursiveMode::NonRecursive,
             )?;
-            info!(path = %config_dir.display(), "watching config.toml for changes");
+            info!(path = %projection_dir.display(), "watching state_projection.toml for changes");
             Ok(w)
         })
-        .map_err(|e| warn!(error = %e, "failed to watch config.toml; changes won't auto-reload"))
+        .map_err(|e| warn!(error = %e, "failed to watch state_projection.toml; changes won't auto-reload"))
         .ok()
     };
 
@@ -646,7 +645,6 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                     // Reconcile recurring singleton jobs (idempotent).
                     let brain_infos = vec![recurring_jobs::BrainInfo {
                         brain_id: instance.mcp_context.brain_id().to_string(),
-                        note_dirs: instance.note_dirs.iter().map(|p| p.display().to_string()).collect(),
                     }];
                     if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.db(), &brain_infos) {
                         tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
@@ -672,21 +670,16 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                 }
             }
             _ = root_validation_tick.tick() => {
-                if validate_roots(&mut brains, &mut watcher) {
+                if validate_roots(&mut brains, &mut watcher, &shared_db) {
                     prefix_map = build_prefix_map(&brains);
                 }
             }
             _ = config_rx.recv() => {
-                info!("config.toml changed, reloading brain registry");
-                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder), &shared_db).await {
-                    Ok(()) => {
-                        prefix_map = build_prefix_map(&brains);
-                        info!(brains = brains.len(), "brain registry re-projected from config.toml");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "config.toml reload failed");
-                    }
-                }
+                // Config.toml is a projection of DB state. If it was edited
+                // manually, overwrite it with DB state. If we wrote it ourselves
+                // (via project_db_to_config), this is a harmless no-op.
+                info!("state_projection.toml changed, re-projecting from DB");
+                project_db_to_config(&shared_db);
             }
             _ = sighup.recv() => {
                 info!("received SIGHUP, reloading brain registry");
@@ -948,7 +941,7 @@ fn sync_brain_ids(global_cfg: &brain_lib::config::GlobalConfig) {
 ///
 /// Combines `reload_brains()` with a fresh projection so that SQL-based brain
 /// resolution stays in sync after any config change or SIGHUP. Called by both
-/// the config.toml watcher and the SIGHUP handler.
+/// the state_projection.toml watcher and the SIGHUP handler.
 async fn reload_and_project(
     brains: &mut HashMap<String, BrainInstance>,
     watcher: &mut BrainWatcher,
@@ -1003,7 +996,7 @@ async fn reload_and_project(
         warn!(error = %e, "failed to re-sync brains into DB");
     }
 
-    // Sync prefixes from DB back to config.toml.
+    // Sync prefixes from DB back to state_projection.toml.
     sync_prefixes_to_config(db, brains);
 
     Ok(())
@@ -1138,77 +1131,84 @@ async fn reload_brains(
 ///   unwatches all its note directories, and removes it from the map.
 /// - If a brain retains some roots, unwatches note dirs that fall under
 ///   removed roots and updates `instance.note_dirs`.
-/// - Saves the config if any changes occurred.
+/// - Projects the updated DB state to state_projection.toml.
+///
+/// The DB is the source of truth. Config.toml is a projection.
 ///
 /// Returns `true` if the prefix map needs rebuilding (any brain changed).
-fn validate_roots(brains: &mut HashMap<String, BrainInstance>, watcher: &mut BrainWatcher) -> bool {
-    let mut global_cfg = match load_global_config() {
-        Ok(cfg) => cfg,
+fn validate_roots(
+    brains: &mut HashMap<String, BrainInstance>,
+    watcher: &mut BrainWatcher,
+    db: &brain_lib::db::Db,
+) -> bool {
+    // Read active brains from DB (source of truth).
+    let db_brains = match db.list_brains(true) {
+        Ok(rows) => rows,
         Err(e) => {
-            warn!(error = %e, "root validation: failed to load global config, skipping");
+            warn!(error = %e, "root validation: failed to read brains from DB, skipping");
             return false;
         }
     };
 
-    let mut config_changed = false;
+    let mut db_changed = false;
     let mut prefix_map_dirty = false;
 
-    // Collect names to process to avoid borrow conflicts.
-    let brain_names: Vec<String> = brains.keys().cloned().collect();
-
-    for name in brain_names {
-        let entry = match global_cfg.brains.get_mut(&name) {
-            Some(e) => e,
-            None => continue, // brain not in config — nothing to prune
-        };
-
-        let stale_roots: Vec<std::path::PathBuf> = entry
-            .roots
-            .iter()
-            .filter(|r| !r.exists())
-            .cloned()
+    for row in &db_brains {
+        let roots: Vec<std::path::PathBuf> = row
+            .roots_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
             .collect();
+
+        let stale_roots: Vec<&std::path::PathBuf> = roots.iter().filter(|r| !r.exists()).collect();
 
         if stale_roots.is_empty() {
             continue;
         }
 
         for root in &stale_roots {
-            info!(brain = %name, root = %root.display(), "removing stale root from config");
-            entry.roots.retain(|r| r != root);
+            info!(brain = %row.name, root = %root.display(), "removing stale root (DB source of truth)");
         }
-        config_changed = true;
 
-        if entry.roots.is_empty() {
-            // All roots gone — archive this brain.
-            info!(brain = %name, "all roots gone; archiving brain");
-            entry.archived = true;
+        let remaining_roots: Vec<&std::path::PathBuf> =
+            roots.iter().filter(|r| !stale_roots.contains(r)).collect();
 
-            if let Some(instance) = brains.remove(&name) {
-                // Unwatch all note dirs.
+        if remaining_roots.is_empty() {
+            // All roots gone — atomically archive + clear roots in DB.
+            info!(brain = %row.name, "all roots gone; archiving brain in DB");
+            if let Err(e) = db.archive_and_clear_roots(&row.brain_id) {
+                warn!(brain = %row.name, error = %e, "failed to archive brain in DB");
+                continue;
+            }
+            db_changed = true;
+
+            // Remove from in-memory map and unwatch.
+            if let Some(instance) = brains.remove(&row.name) {
                 for dir in &instance.note_dirs {
                     if let Err(e) = watcher.unwatch_path(dir) {
-                        warn!(brain = %name, dir = %dir.display(), error = %e, "failed to unwatch dir during archival");
+                        warn!(brain = %row.name, dir = %dir.display(), error = %e, "failed to unwatch dir during archival");
                     }
                 }
-
-                // Mark archived in the DB.
-                let brain_id = instance.mcp_context.brain_id();
-                if let Err(e) = instance.pipeline.db().with_write_conn(|conn| {
-                    conn.execute(
-                        "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
-                        rusqlite::params![brain_id],
-                    )?;
-                    Ok(())
-                }) {
-                    warn!(brain = %name, error = %e, "failed to mark brain archived in DB");
-                }
             }
-
             prefix_map_dirty = true;
         } else {
-            // Some roots remain — prune note dirs under stale roots.
-            if let Some(instance) = brains.get_mut(&name) {
+            // Some roots remain — update DB with surviving roots.
+            let remaining_strs: Vec<&str> =
+                remaining_roots.iter().filter_map(|r| r.to_str()).collect();
+            let new_roots_json =
+                serde_json::to_string(&remaining_strs).unwrap_or_else(|_| "[]".to_string());
+
+            if let Err(e) = db.update_brain_roots(&row.brain_id, &new_roots_json) {
+                warn!(brain = %row.name, error = %e, "failed to update roots in DB");
+                continue;
+            }
+            db_changed = true;
+
+            // Prune note dirs under stale roots from in-memory map.
+            if let Some(instance) = brains.get_mut(&row.name) {
                 let removed_note_dirs: Vec<std::path::PathBuf> = instance
                     .note_dirs
                     .iter()
@@ -1217,9 +1217,9 @@ fn validate_roots(brains: &mut HashMap<String, BrainInstance>, watcher: &mut Bra
                     .collect();
 
                 for dir in &removed_note_dirs {
-                    info!(brain = %name, dir = %dir.display(), "unwatching note dir under stale root");
+                    info!(brain = %row.name, dir = %dir.display(), "unwatching note dir under stale root");
                     if let Err(e) = watcher.unwatch_path(dir) {
-                        warn!(brain = %name, dir = %dir.display(), error = %e, "failed to unwatch dir");
+                        warn!(brain = %row.name, dir = %dir.display(), error = %e, "failed to unwatch dir");
                     }
                 }
 
@@ -1233,14 +1233,72 @@ fn validate_roots(brains: &mut HashMap<String, BrainInstance>, watcher: &mut Bra
         }
     }
 
-    if config_changed && let Err(e) = save_global_config(&global_cfg) {
-        warn!(error = %e, "root validation: failed to save global config");
+    // Project DB state → state_projection.toml (config is a read-only projection).
+    if db_changed {
+        project_db_to_config(db);
     }
 
     prefix_map_dirty
 }
 
-/// Sync prefixes from the DB (source of truth) back to config.toml (projection).
+/// Project DB brain state to state_projection.toml.
+///
+/// Reads all brains from the DB and overwrites state_projection.toml roots, notes,
+/// aliases, and archived status. Config.toml is a projection, not a source.
+fn project_db_to_config(db: &brain_lib::db::Db) {
+    let mut cfg = match load_global_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            warn!(error = %e, "project_db_to_config: failed to load config");
+            return;
+        }
+    };
+
+    let db_brains = match db.list_brains(false) {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(error = %e, "project_db_to_config: failed to read brains from DB");
+            return;
+        }
+    };
+
+    let mut changed = false;
+    for row in &db_brains {
+        let entry = match cfg.brains.get_mut(&row.name) {
+            Some(e) => e,
+            None => continue,
+        };
+
+        // Project roots from DB.
+        let db_roots: Vec<std::path::PathBuf> = row
+            .roots_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+
+        if entry.roots != db_roots {
+            entry.roots = db_roots;
+            changed = true;
+        }
+
+        if entry.archived != row.archived {
+            entry.archived = row.archived;
+            changed = true;
+        }
+    }
+
+    if changed {
+        cfg.last_projected_at = Some(chrono::Utc::now().to_rfc3339());
+        if let Err(e) = save_global_config(&cfg) {
+            warn!(error = %e, "project_db_to_config: failed to save config");
+        }
+    }
+}
+
+/// Sync prefixes from the DB (source of truth) back to state_projection.toml (projection).
 ///
 /// Only writes if any prefix actually changed, to avoid triggering the config
 /// watcher unnecessarily.
@@ -1261,9 +1319,9 @@ fn sync_prefixes_to_config(db: &brain_lib::db::Db, brains: &HashMap<String, Brai
     }
     if changed {
         if let Err(e) = save_global_config(&cfg) {
-            warn!(error = %e, "failed to sync prefix to config.toml");
+            warn!(error = %e, "failed to sync prefix to state_projection.toml");
         } else {
-            debug!("synced prefixes from DB to config.toml");
+            debug!("synced prefixes from DB to state_projection.toml");
         }
     }
 }

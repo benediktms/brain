@@ -62,7 +62,7 @@ pub fn run_add(brain: &str, alias: &str) -> Result<()> {
         archived: brain_row.archived,
     })?;
 
-    // Project to config.toml.
+    // Project to state_projection.toml.
     if let Ok(mut global) = load_global_config() {
         if let Some(entry) = global.brains.get_mut(&brain_name) {
             entry.aliases = aliases;
@@ -118,7 +118,7 @@ pub fn run_remove(brain: &str, alias: &str) -> Result<()> {
         archived: brain_row.archived,
     })?;
 
-    // Project to config.toml.
+    // Project to state_projection.toml.
     if let Ok(mut global) = load_global_config() {
         if let Some(entry) = global.brains.get_mut(&brain_name) {
             entry.aliases = aliases;

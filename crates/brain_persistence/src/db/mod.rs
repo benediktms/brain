@@ -132,7 +132,7 @@ impl Db {
         self.with_write_conn(|conn| schema::ensure_brain_registered(conn, brain_id, brain_name))
     }
 
-    /// Project config.toml brain entries into the brains table.
+    /// Project state_projection.toml brain entries into the brains table.
     ///
     /// Sets projected=1 for all provided brains. Stale projected rows (no longer
     /// in config) are cleared to projected=0. Preserves existing prefix values.
@@ -170,6 +170,21 @@ impl Db {
     /// Read a full brain row by name.
     pub fn get_brain_by_name(&self, name: &str) -> Result<Option<schema::BrainRow>> {
         self.with_read_conn(|conn| schema::get_brain_by_name(conn, name))
+    }
+
+    /// Update roots JSON for a brain.
+    pub fn update_brain_roots(&self, brain_id: &str, roots_json: &str) -> Result<()> {
+        self.with_write_conn(|conn| schema::update_brain_roots(conn, brain_id, roots_json))
+    }
+
+    /// Mark a brain as archived.
+    pub fn archive_brain(&self, brain_id: &str) -> Result<()> {
+        self.with_write_conn(|conn| schema::archive_brain(conn, brain_id))
+    }
+
+    /// Atomically archive a brain and clear its roots.
+    pub fn archive_and_clear_roots(&self, brain_id: &str) -> Result<()> {
+        self.with_write_conn(|conn| schema::archive_and_clear_roots(conn, brain_id))
     }
 
     /// Delete a brain by name.

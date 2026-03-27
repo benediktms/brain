@@ -122,7 +122,7 @@ pub fn ensure_brain_registered(conn: &Connection, brain_id: &str, brain_name: &s
     Ok(())
 }
 
-/// DTO for projecting config.toml brain entries into the brains table.
+/// DTO for projecting state_projection.toml brain entries into the brains table.
 pub struct BrainProjection {
     pub brain_id: String,
     pub name: String,
@@ -274,13 +274,40 @@ pub fn get_brain_by_name(conn: &Connection, name: &str) -> Result<Option<BrainRo
     Ok(row)
 }
 
+/// Update the roots JSON for a brain by brain_id.
+pub fn update_brain_roots(conn: &Connection, brain_id: &str, roots_json: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE brains SET roots = ?2 WHERE brain_id = ?1",
+        rusqlite::params![brain_id, roots_json],
+    )?;
+    Ok(())
+}
+
+/// Mark a brain as archived in the DB.
+pub fn archive_brain(conn: &Connection, brain_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
+        rusqlite::params![brain_id],
+    )?;
+    Ok(())
+}
+
+/// Atomically archive a brain and clear its roots in a single transaction.
+pub fn archive_and_clear_roots(conn: &Connection, brain_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE brains SET archived = 1, roots = '[]' WHERE brain_id = ?1",
+        rusqlite::params![brain_id],
+    )?;
+    Ok(())
+}
+
 /// Delete a brain by name from the `brains` table.
 pub fn delete_brain(conn: &Connection, name: &str) -> Result<bool> {
     let rows = conn.execute("DELETE FROM brains WHERE name = ?1", [name])?;
     Ok(rows > 0)
 }
 
-/// Sync config.toml brain entries into the brains table.
+/// Sync state_projection.toml brain entries into the brains table.
 ///
 /// Uses UPSERT (not DELETE+INSERT) to preserve existing data, especially
 /// manually-set prefixes. Existing prefix is preserved via COALESCE —
