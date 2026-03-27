@@ -240,24 +240,13 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    /// Before the fix, MCP config used `current_exe()` directly. When running
-    /// from a worktree debug build (e.g. `target/debug/brain`), the config
-    /// would point to that transient binary — which may auto-migrate the shared
-    /// database with an incompatible schema version.
-    ///
-    /// This test reproduces the bugged behavior: when no canonical install
-    /// exists, `resolve_brain_bin` falls back to whatever `current_exe` is,
-    /// which could be a worktree build path.
     #[test]
     fn old_behavior_uses_worktree_binary_when_no_canonical_install() {
         let worktree_bin = PathBuf::from("/tmp/worktree/target/debug/brain");
-        // No canonical path exists → falls back to current_exe (the worktree binary).
         let result = resolve_brain_bin(None, Some(&worktree_bin));
         assert_eq!(result, "/tmp/worktree/target/debug/brain");
     }
 
-    /// With the fix: when the canonical install path exists on disk,
-    /// `resolve_brain_bin` returns it regardless of what `current_exe` is.
     #[test]
     fn prefers_canonical_install_over_current_exe() {
         let tmp = TempDir::new().unwrap();
@@ -270,8 +259,6 @@ mod tests {
         assert_eq!(result, canonical.to_string_lossy());
     }
 
-    /// When the canonical path is provided but doesn't exist on disk,
-    /// falls back to current_exe.
     #[test]
     fn falls_back_to_current_exe_when_canonical_missing() {
         let missing = PathBuf::from("/nonexistent/bin/brain");
@@ -280,7 +267,6 @@ mod tests {
         assert_eq!(result, "/usr/local/bin/brain");
     }
 
-    /// When neither canonical nor current_exe is available, returns bare "brain".
     #[test]
     fn falls_back_to_bare_name_when_nothing_available() {
         let result = resolve_brain_bin(None, None);

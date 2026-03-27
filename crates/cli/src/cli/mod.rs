@@ -369,6 +369,12 @@ pub(crate) enum Command {
         action: HooksAction,
     },
 
+    /// Manage the brain Claude Code plugin (skills, commands, agents)
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+
     /// Manage brain tasks
     #[command(visible_alias = "task")]
     Tasks {
@@ -586,6 +592,18 @@ pub enum McpTarget {
     Cursor,
     /// VS Code (.vscode/settings.json)
     Vscode,
+}
+
+#[derive(Subcommand)]
+pub enum PluginAction {
+    /// Install the brain Claude Code plugin (skills, commands, agents)
+    Install {
+        /// Print what would be written without actually writing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Uninstall the brain Claude Code plugin
+    Uninstall,
 }
 
 #[derive(Subcommand)]

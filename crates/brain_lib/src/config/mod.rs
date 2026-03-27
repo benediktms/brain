@@ -178,15 +178,16 @@ pub fn load_global_config() -> Result<GlobalConfig> {
 
     // One-time migration: rename legacy config.toml → state_projection.toml.
     let legacy = home.join("config.toml");
-    if !path.exists() && legacy.exists() {
-        if let Err(e) = std::fs::rename(&legacy, &path) {
-            tracing::warn!(error = %e, "failed to rename config.toml → state_projection.toml, reading legacy");
-            // Fall back to reading the legacy file.
-            let text = std::fs::read_to_string(&legacy).map_err(BrainCoreError::Io)?;
-            return toml::from_str(&text).map_err(|e| {
-                BrainCoreError::Config(format!("failed to parse {}: {e}", legacy.display()))
-            });
-        }
+    if !path.exists()
+        && legacy.exists()
+        && let Err(e) = std::fs::rename(&legacy, &path)
+    {
+        tracing::warn!(error = %e, "failed to rename config.toml → state_projection.toml, reading legacy");
+        // Fall back to reading the legacy file.
+        let text = std::fs::read_to_string(&legacy).map_err(BrainCoreError::Io)?;
+        return toml::from_str(&text).map_err(|e| {
+            BrainCoreError::Config(format!("failed to parse {}: {e}", legacy.display()))
+        });
     }
 
     if !path.exists() {
