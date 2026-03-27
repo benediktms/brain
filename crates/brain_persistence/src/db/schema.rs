@@ -591,6 +591,106 @@ mod tests {
         init_schema(&conn).unwrap(); // second call should not fail
     }
 
+    /// Full migration harness: run all migrations from scratch and verify
+    /// the final schema has all expected tables, columns, and version.
+    #[test]
+    fn test_full_migration_harness() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        // Verify final version
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // Verify all expected tables exist
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for expected in &[
+            "files",
+            "chunks",
+            "links",
+            "summaries",
+            "reflection_sources",
+            "derived_summaries",
+            "jobs",
+            "providers",
+            "summary_sources",
+            "brains",
+            "records",
+        ] {
+            assert!(
+                tables.contains(&expected.to_string()),
+                "missing table: {expected}"
+            );
+        }
+
+        // v35: summary_sources has expected columns
+        let ss_cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('summary_sources')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for col in &["summary_id", "source_id", "source_type", "created_at"] {
+            assert!(
+                ss_cols.contains(&col.to_string()),
+                "summary_sources missing column: {col}"
+            );
+        }
+
+        // v35: summaries.consolidated_by column exists
+        let sum_cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('summaries')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            sum_cols.contains(&"consolidated_by".to_string()),
+            "summaries missing column: consolidated_by"
+        );
+
+        // v35: derived_summaries.source_content_hash column exists
+        let ds_cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('derived_summaries')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            ds_cols.contains(&"source_content_hash".to_string()),
+            "derived_summaries missing column: source_content_hash"
+        );
+
+        // v35: reverse-lookup index on summary_sources.source_id
+        let indexes: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='summary_sources'",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            indexes
+                .iter()
+                .any(|i| i.contains("summary_sources_source")),
+            "summary_sources missing reverse-lookup index"
+        );
+    }
+
     #[test]
     fn test_fts5_table_exists() {
         let conn = Connection::open_in_memory().unwrap();
