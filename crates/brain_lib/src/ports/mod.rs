@@ -1118,9 +1118,15 @@ impl DerivedSummaryStore for Db {
         };
 
         self.with_write_conn(move |conn| {
+            // Wrap all writes in a single transaction so a crash can't leave
+            // summary_sources empty while the summary row has stale=0.
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+
             // Use UPDATE if row exists, INSERT if new — avoids DELETE+INSERT
             // from INSERT OR REPLACE which would change the rowid.
-            let updated = conn
+            let updated = tx
                 .execute(
                     "UPDATE derived_summaries
                      SET content = ?1, stale = 0, generated_at = ?2, source_content_hash = ?3
@@ -1130,7 +1136,7 @@ impl DerivedSummaryStore for Db {
                 .map_err(|e| BrainCoreError::Database(e.to_string()))?;
 
             if updated == 0 {
-                conn.execute(
+                tx.execute(
                     "INSERT INTO derived_summaries
                          (id, scope_type, scope_value, content, stale, generated_at, source_content_hash)
                      VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
@@ -1147,23 +1153,27 @@ impl DerivedSummaryStore for Db {
             }
 
             // Replace source lineage for this summary.
-            conn.execute(
+            tx.execute(
                 "DELETE FROM summary_sources WHERE summary_id = ?1",
                 params![id_clone],
             )
             .map_err(|e| BrainCoreError::Database(e.to_string()))?;
 
-            let mut stmt = conn
-                .prepare_cached(
-                    "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                )
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-            for src_id in &source_ids_owned {
-                stmt.execute(params![id_clone, src_id, source_type, now])
+            {
+                let mut stmt = tx
+                    .prepare_cached(
+                        "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
+                         VALUES (?1, ?2, ?3, ?4)",
+                    )
                     .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                for src_id in &source_ids_owned {
+                    stmt.execute(params![id_clone, src_id, source_type, now])
+                        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                }
             }
 
+            tx.commit()
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
             Ok(())
         })?;
 
