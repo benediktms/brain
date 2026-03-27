@@ -24,8 +24,8 @@ install:
     BRAIN_FROM_SOURCE=true cargo build --release
     @mkdir -p ~/bin
     @ln -sf "{{justfile_directory()}}/target/release/brain" ~/bin/brain
-    {{bin}} daemon install
-    @echo "==> Installed brain to ~/bin/brain with daemon service"
+    {{bin}} daemon start
+    @echo "==> Started brain daemon and symlinked binary to ~/bin/brain"
 
 # Download all ML models (embedder + summarizer)
 [group('setup')]
