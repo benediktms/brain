@@ -34,6 +34,9 @@ commit_preprocessors = [
   # Regular merges — extract type from branch name, skip plain merges
   { pattern = "^Merge branch '?(feat|fix|refactor|perf|docs|test|ci|chore)[/-](.+?)'?.*", replace = "${1}: ${2}" },
   { pattern = "^Merge branch '.+'.*", replace = "chore: merge" },
+  # Custom merge format: "Merge feat/branch-name: description (#ref)"
+  { pattern = "^Merge (feat|fix|refactor|perf|docs|test|ci|chore)[/-][^:]+:\\s*(.+)", replace = "${1}: ${2}" },
+  { pattern = "^Merge [^:]+:\\s*(.+)", replace = "feat: ${1}" },
   # Crate-scoped commits (e.g. "brain_lib: add chunker") → feat(crate):
   { pattern = "^(brain_lib|cli|brain-lib): (.+)", replace = "feat(${1}): ${2}" },
   # Beads bookkeeping
