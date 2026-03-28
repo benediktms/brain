@@ -40,12 +40,11 @@ uninstall:
     cargo clean
     @echo "==> Uninstalled brain"
 
-# Install git hooks from scripts/
+# Point git at the versioned hooks/ directory (works across worktrees)
 [group('setup')]
 install-hooks:
-    @cp scripts/pre-commit .git/hooks/pre-commit
-    @chmod +x .git/hooks/pre-commit
-    @echo "==> Git hooks installed"
+    git config core.hooksPath hooks
+    @echo "==> Git hooks installed (core.hooksPath = hooks/)"
 
 # Regenerate AGENTS.md + bridge CLAUDE.md from template
 [group('dev')]
