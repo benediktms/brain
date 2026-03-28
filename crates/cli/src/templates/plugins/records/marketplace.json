@@ -1,0 +1,15 @@
+{
+  "name": "brain-records",
+  "description": "Work products \u2014 artifacts, snapshots, and record search.",
+  "owner": {
+    "name": "Benedikt Schnatterbeck"
+  },
+  "plugins": [
+    {
+      "name": "records",
+      "source": "./",
+      "description": "Work products \u2014 artifacts, snapshots, and record search.",
+      "version": "{{version}}"
+    }
+  ]
+}

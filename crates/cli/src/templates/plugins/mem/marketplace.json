@@ -1,0 +1,15 @@
+{
+  "name": "brain-mem",
+  "description": "Semantic memory \u2014 search, episodes, reflections, and procedures.",
+  "owner": {
+    "name": "Benedikt Schnatterbeck"
+  },
+  "plugins": [
+    {
+      "name": "mem",
+      "source": "./",
+      "description": "Semantic memory \u2014 search, episodes, reflections, and procedures.",
+      "version": "{{version}}"
+    }
+  ]
+}

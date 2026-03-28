@@ -1,0 +1,15 @@
+{
+  "name": "brain-brain",
+  "description": "Brain administration \u2014 health, registry, job queue, and the overview guide.",
+  "owner": {
+    "name": "Benedikt Schnatterbeck"
+  },
+  "plugins": [
+    {
+      "name": "brain",
+      "source": "./",
+      "description": "Brain administration \u2014 health, registry, job queue, and the overview guide.",
+      "version": "{{version}}"
+    }
+  ]
+}

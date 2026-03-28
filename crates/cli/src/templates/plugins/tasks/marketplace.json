@@ -1,0 +1,15 @@
+{
+  "name": "brain-tasks",
+  "description": "Task management with dependencies, priorities, and labels.",
+  "owner": {
+    "name": "Benedikt Schnatterbeck"
+  },
+  "plugins": [
+    {
+      "name": "tasks",
+      "source": "./",
+      "description": "Task management with dependencies, priorities, and labels.",
+      "version": "{{version}}"
+    }
+  ]
+}
