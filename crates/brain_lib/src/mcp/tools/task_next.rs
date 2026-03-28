@@ -103,7 +103,7 @@ impl TaskNext {
                             .stores
                             .tasks
                             .compact_id(&t.task_id)
-                            .unwrap_or_else(|_| t.task_id.clone());
+                            .unwrap_or(t.task_id.clone());
                         json!({
                             "task_id": short,
                             "title": t.title,

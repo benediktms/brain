@@ -65,7 +65,7 @@ impl RecordLinkAdd {
             .stores
             .records
             .compact_record_id(&record_id)
-            .unwrap_or_else(|_| record_id.clone());
+            .unwrap_or(record_id.clone());
 
         json_response(&json!({
             "record_id": compact_id,
@@ -162,7 +162,7 @@ impl RecordLinkRemove {
             .stores
             .records
             .compact_record_id(&record_id)
-            .unwrap_or_else(|_| record_id.clone());
+            .unwrap_or(record_id.clone());
 
         json_response(&json!({
             "record_id": compact_id,

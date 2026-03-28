@@ -93,13 +93,16 @@ impl McpTool for MemConsolidate {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            let effective_brain_id = params.brain_id.as_deref().unwrap_or_else(|| ctx.brain_id());
+            let effective_brain_id = match params.brain_id.as_deref() {
+                Some(brain_id) => brain_id,
+                None => ctx.brain_id(),
+            };
 
             let limit = params.limit.min(500);
-            let episodes = ctx
-                .db()
-                .list_episodes(limit, effective_brain_id)
-                .unwrap_or_default();
+            let episodes = match ctx.db().list_episodes(limit, effective_brain_id) {
+                Ok(rows) => rows,
+                Err(e) => return ToolCallResult::error(format!("Failed to list episodes: {e}")),
+            };
 
             let result = consolidate_episodes(episodes, params.gap_seconds);
             let jobs_enqueued = if params.auto_summarize {

@@ -69,9 +69,10 @@ impl RecordFetchContent {
             Err(e) => return ToolCallResult::error(format!("Failed to read content: {e}")),
         };
 
-        let compact_id = records
-            .compact_record_id(&record_id)
-            .unwrap_or_else(|_| record_id.clone());
+        let compact_id = match records.compact_record_id(&record_id) {
+            Ok(id) => id,
+            Err(_) => record_id.clone(),
+        };
 
         // Detect text-like content by media_type
         let is_text = record
@@ -126,9 +127,10 @@ impl RecordFetchContent {
             })
         };
 
-        let fetch_brain_name = remote_brain_name
-            .as_deref()
-            .unwrap_or_else(|| ctx.brain_name());
+        let fetch_brain_name = match remote_brain_name.as_deref() {
+            Some(name) => name,
+            None => ctx.brain_name(),
+        };
         let uri = SynapseUri::for_record(fetch_brain_name, &compact_id).to_string();
         result["uri"] = json!(uri);
 

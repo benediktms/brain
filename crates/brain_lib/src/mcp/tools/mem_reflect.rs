@@ -72,16 +72,29 @@ impl MemReflect {
         // The brains parameter is accepted but scoping is a no-op until
         // brain_persistence adds brain_id support to the summaries table.
         let episodes = if params.brains.is_empty() {
-            ctx.db()
-                .list_episodes(10, ctx.brain_id())
-                .unwrap_or_default()
+            match ctx.db().list_episodes(10, ctx.brain_id()) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to list episodes: {e}"));
+                }
+            }
         } else if params.brains.iter().any(|b| b == "all") {
-            ctx.db().list_episodes(10, "").unwrap_or_default()
+            match ctx.db().list_episodes(10, "") {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to list episodes: {e}"));
+                }
+            }
         } else {
             let brain_ids: Vec<String> = params.brains.clone();
-            ctx.db()
-                .list_episodes_multi_brain(10, &brain_ids)
-                .unwrap_or_default()
+            match ctx.db().list_episodes_multi_brain(10, &brain_ids) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return ToolCallResult::error(format!(
+                        "Failed to list episodes for requested brains: {e}"
+                    ));
+                }
+            }
         };
 
         let reflect_result = match pipeline

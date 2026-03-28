@@ -113,12 +113,12 @@ impl TaskDepsBatch {
                         .stores
                         .tasks
                         .compact_id(&task_id)
-                        .unwrap_or_else(|_| task_id.clone());
+                        .unwrap_or(task_id.clone());
                     let short_depends_on = ctx
                         .stores
                         .tasks
                         .compact_id(&depends_on)
-                        .unwrap_or_else(|_| depends_on.clone());
+                        .unwrap_or(depends_on.clone());
                     succeeded.push(json!({
                         "task_id": short_task_id,
                         "depends_on_task_id": short_depends_on,
@@ -129,12 +129,12 @@ impl TaskDepsBatch {
                         .stores
                         .tasks
                         .compact_id(&task_id)
-                        .unwrap_or_else(|_| task_id.clone());
+                        .unwrap_or(task_id.clone());
                     let short_depends_on = ctx
                         .stores
                         .tasks
                         .compact_id(&depends_on)
-                        .unwrap_or_else(|_| depends_on.clone());
+                        .unwrap_or(depends_on.clone());
                     failed.push(json!({
                         "task_id": short_task_id,
                         "depends_on_task_id": short_depends_on,
@@ -199,12 +199,12 @@ impl TaskDepsBatch {
                         .stores
                         .tasks
                         .compact_id(task_id)
-                        .unwrap_or_else(|_| task_id.to_string());
+                        .unwrap_or(task_id.to_string());
                     let short_depends_on = ctx
                         .stores
                         .tasks
                         .compact_id(depends_on)
-                        .unwrap_or_else(|_| depends_on.to_string());
+                        .unwrap_or(depends_on.to_string());
                     succeeded.push(json!({
                         "task_id": short_task_id,
                         "depends_on_task_id": short_depends_on,
@@ -215,12 +215,12 @@ impl TaskDepsBatch {
                         .stores
                         .tasks
                         .compact_id(task_id)
-                        .unwrap_or_else(|_| task_id.to_string());
+                        .unwrap_or(task_id.to_string());
                     let short_depends_on = ctx
                         .stores
                         .tasks
                         .compact_id(depends_on)
-                        .unwrap_or_else(|_| depends_on.to_string());
+                        .unwrap_or(depends_on.to_string());
                     failed.push(json!({
                         "task_id": short_task_id,
                         "depends_on_task_id": short_depends_on,
@@ -258,7 +258,7 @@ impl TaskDepsBatch {
             .stores
             .tasks
             .compact_id(&source_resolved)
-            .unwrap_or_else(|_| source_resolved.clone());
+            .unwrap_or(source_resolved.clone());
 
         let mut succeeded = Vec::new();
         let mut failed = Vec::new();
@@ -292,7 +292,7 @@ impl TaskDepsBatch {
                         .stores
                         .tasks
                         .compact_id(&dep_id)
-                        .unwrap_or_else(|_| dep_id.clone());
+                        .unwrap_or(dep_id.clone());
                     succeeded.push(json!({
                         "task_id": short_dep_id,
                         "depends_on_task_id": source_compact,
@@ -303,7 +303,7 @@ impl TaskDepsBatch {
                         .stores
                         .tasks
                         .compact_id(&dep_id)
-                        .unwrap_or_else(|_| dep_id.clone());
+                        .unwrap_or(dep_id.clone());
                     failed.push(json!({
                         "task_id": short_dep_id,
                         "depends_on_task_id": source_compact,
@@ -364,12 +364,12 @@ impl TaskDepsBatch {
                         .stores
                         .tasks
                         .compact_id(&resolved)
-                        .unwrap_or_else(|_| resolved.clone());
+                        .unwrap_or(resolved.clone());
                     let short_dep = ctx
                         .stores
                         .tasks
                         .compact_id(&deps[i])
-                        .unwrap_or_else(|_| deps[i].clone());
+                        .unwrap_or(deps[i].clone());
                     succeeded.push(json!({
                         "task_id": short_resolved,
                         "depends_on_task_id": short_dep,
@@ -380,12 +380,12 @@ impl TaskDepsBatch {
                         .stores
                         .tasks
                         .compact_id(&resolved)
-                        .unwrap_or_else(|_| resolved.clone());
+                        .unwrap_or(resolved.clone());
                     let short_dep = ctx
                         .stores
                         .tasks
                         .compact_id(&deps[i])
-                        .unwrap_or_else(|_| deps[i].clone());
+                        .unwrap_or(deps[i].clone());
                     failed.push(json!({
                         "task_id": short_resolved,
                         "depends_on_task_id": short_dep,

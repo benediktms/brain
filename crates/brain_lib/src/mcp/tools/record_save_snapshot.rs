@@ -90,14 +90,14 @@ impl RecordSaveSnapshot {
                 let mt = params
                     .media_type
                     .clone()
-                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                    .unwrap_or("application/octet-stream".to_string());
                 (bytes, mt)
             }
             (None, Some(t)) => {
                 let mt = params
                     .media_type
                     .clone()
-                    .unwrap_or_else(|| "text/plain".to_string());
+                    .unwrap_or("text/plain".to_string());
                 (t.as_bytes().to_vec(), mt)
             }
             (None, None) => {

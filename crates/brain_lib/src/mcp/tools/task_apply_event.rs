@@ -297,7 +297,16 @@ impl TaskApplyEvent {
         // For task_created, apply domain defaults via serde round-trip through TaskCreatedPayload
         let payload = if event_type == EventType::TaskCreated {
             match serde_json::from_value::<TaskCreatedPayload>(payload) {
-                Ok(typed) => serde_json::to_value(typed).unwrap(),
+                Ok(typed) => match serde_json::to_value(typed) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        return ExecuteResult {
+                            result: ToolCallResult::error(format!(
+                                "Failed to serialize task_created payload: {e}"
+                            )),
+                        };
+                    }
+                },
                 Err(e) => {
                     return ExecuteResult {
                         result: ToolCallResult::error(format!("Invalid task_created payload: {e}")),
@@ -356,22 +365,19 @@ impl TaskApplyEvent {
                 &mut warnings,
             )
             .iter()
-            .map(|id| {
-                ctx.stores
-                    .tasks
-                    .compact_id(id)
-                    .unwrap_or_else(|_| id.clone())
+            .map(|id| match ctx.stores.tasks.compact_id(id) {
+                Ok(short_id) => short_id,
+                Err(_) => id.clone(),
             })
             .collect()
         } else {
             vec![]
         };
 
-        let short_id = ctx
-            .stores
-            .tasks
-            .compact_id(&task_id)
-            .unwrap_or_else(|_| task_id.clone());
+        let short_id = match ctx.stores.tasks.compact_id(&task_id) {
+            Ok(id) => id,
+            Err(_) => task_id.clone(),
+        };
 
         let uri = SynapseUri::for_task(ctx.brain_name(), &short_id).to_string();
 

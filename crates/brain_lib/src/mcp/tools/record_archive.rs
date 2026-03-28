@@ -53,7 +53,7 @@ impl RecordArchive {
             .stores
             .records
             .compact_record_id(&record_id)
-            .unwrap_or_else(|_| record_id.clone());
+            .unwrap_or(record_id.clone());
 
         let uri = SynapseUri::for_record(ctx.brain_name(), &compact_id).to_string();
 

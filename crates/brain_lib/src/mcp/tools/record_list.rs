@@ -9,7 +9,7 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::queries::RecordFilter;
 use crate::uri::SynapseUri;
 
-use super::{McpTool, json_response};
+use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 #[derive(Deserialize)]
 struct Params {
@@ -78,18 +78,24 @@ impl RecordList {
             Err(e) => return ToolCallResult::error(format!("Failed to list records: {e}")),
         };
 
-        let compact_ids = records.compact_record_ids().unwrap_or_default();
-        let list_brain_name = remote_brain_name
-            .as_deref()
-            .unwrap_or_else(|| ctx.brain_name());
+        let mut warnings: Vec<Warning> = Vec::new();
+        let compact_ids = store_or_warn(
+            records.compact_record_ids(),
+            "compact_record_ids",
+            &mut warnings,
+        );
+        let list_brain_name = match remote_brain_name.as_deref() {
+            Some(name) => name,
+            None => ctx.brain_name(),
+        };
 
         let records_json: Vec<Value> = record_list
             .iter()
             .map(|r| {
-                let compact_id = compact_ids
-                    .get(&r.record_id)
-                    .cloned()
-                    .unwrap_or_else(|| r.record_id.clone());
+                let compact_id = match compact_ids.get(&r.record_id) {
+                    Some(id) => id.clone(),
+                    None => r.record_id.clone(),
+                };
                 let uri = SynapseUri::for_record(list_brain_name, &compact_id).to_string();
                 json!({
                     "record_id": compact_id,
@@ -115,6 +121,8 @@ impl RecordList {
         if let Some(name) = remote_brain_name {
             result["brain"] = json!(name);
         }
+
+        inject_warnings(&mut result, warnings);
 
         json_response(&result)
     }

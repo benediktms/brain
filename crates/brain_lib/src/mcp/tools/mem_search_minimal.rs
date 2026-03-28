@@ -669,11 +669,14 @@ mod tests {
         // populates signals from SignalScores when explain=true.
         let results = parsed["results"].as_array().expect("results must be array");
         for (i, r) in results.iter().enumerate() {
-            let signals = r.get("signals").unwrap_or_else(|| {
-                panic!(
-                    "result[{i}] missing 'signals' key (explain=true not yet wired through pipeline)"
-                )
-            });
+            let signals = match r.get("signals") {
+                Some(s) => s,
+                None => {
+                    panic!(
+                        "result[{i}] missing 'signals' key (explain=true not yet wired through pipeline)"
+                    )
+                }
+            };
             assert!(
                 signals.get("sim_vector").is_some(),
                 "result[{i}].signals missing 'sim_vector'"

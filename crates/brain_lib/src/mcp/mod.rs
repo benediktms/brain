@@ -334,11 +334,20 @@ fn resolve_brain_from_roots(roots: &Value, db: &crate::db::Db) -> Option<String>
     // For each registered brain, check whether any root_path starts with (or
     // equals) any of the brain's registered root paths.
     for row in &brain_rows {
-        let brain_roots: Vec<std::path::PathBuf> = row
-            .roots_json
-            .as_deref()
-            .and_then(|j| serde_json::from_str(j).ok())
-            .unwrap_or_default();
+        let brain_roots: Vec<std::path::PathBuf> = match row.roots_json.as_deref() {
+            Some(raw) => match serde_json::from_str(raw) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    warn!(
+                        brain = %row.name,
+                        error = %e,
+                        "failed to parse roots_json while resolving initialize roots"
+                    );
+                    continue;
+                }
+            },
+            None => Vec::new(),
+        };
         for brain_root in &brain_roots {
             for client_root in &root_paths {
                 if client_root.starts_with(brain_root) || client_root == brain_root {
@@ -394,10 +403,16 @@ async fn handle_request(
                 },
             };
 
-            serialize_response(&JsonRpcResponse::new(
-                id,
-                serde_json::to_value(result).unwrap(),
-            ))
+            match serde_json::to_value(result) {
+                Ok(value) => serialize_response(&JsonRpcResponse::new(id, value)),
+                Err(e) => {
+                    error!(error = %e, "failed to serialize initialize result");
+                    serialize_error(&JsonRpcError::internal_error(
+                        id,
+                        "Internal: initialize result serialization failed",
+                    ))
+                }
+            }
         }
         "notifications/initialized" => {
             // No response for notifications
@@ -408,10 +423,16 @@ async fn handle_request(
             let result = ToolsListResult {
                 tools: registry.definitions(),
             };
-            serialize_response(&JsonRpcResponse::new(
-                id,
-                serde_json::to_value(result).unwrap(),
-            ))
+            match serde_json::to_value(result) {
+                Ok(value) => serialize_response(&JsonRpcResponse::new(id, value)),
+                Err(e) => {
+                    error!(error = %e, "failed to serialize tools/list result");
+                    serialize_error(&JsonRpcError::internal_error(
+                        id,
+                        "Internal: tools/list result serialization failed",
+                    ))
+                }
+            }
         }
         "tools/call" => {
             let tool_name = req
@@ -507,30 +528,67 @@ async fn handle_request(
                                         brain_id = %bid,
                                         "local dispatch re-scoped to session brain"
                                     );
-                                    return serialize_response(&JsonRpcResponse::new(
-                                        id,
-                                        serde_json::to_value(
-                                            registry
-                                                .dispatch(tool_name, arguments, &scoped_ctx)
-                                                .await,
-                                        )
-                                        .unwrap(),
-                                    ));
+                                    let dispatch_result =
+                                        registry.dispatch(tool_name, arguments, &scoped_ctx).await;
+                                    return match serde_json::to_value(dispatch_result) {
+                                        Ok(value) => {
+                                            serialize_response(&JsonRpcResponse::new(id, value))
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                error = %e,
+                                                tool = tool_name,
+                                                "failed to serialize scoped tools/call result"
+                                            );
+                                            serialize_error(&JsonRpcError::internal_error(
+                                                id,
+                                                "Internal: tools/call result serialization failed",
+                                            ))
+                                        }
+                                    };
                                 }
                                 Err(e) => {
-                                    warn!(
+                                    error!(
                                         session_brain = %session,
                                         error = %e,
-                                        "failed to re-scope context, falling back to startup brain"
+                                        "failed to re-scope context for session brain"
                                     );
+                                    let err_result = protocol::ToolCallResult::error(format!(
+                                        "Failed to re-scope to session brain '{}': {e}",
+                                        session
+                                    ));
+                                    return match serde_json::to_value(err_result) {
+                                        Ok(value) => {
+                                            serialize_response(&JsonRpcResponse::new(id, value))
+                                        }
+                                        Err(ser_e) => {
+                                            serialize_error(&JsonRpcError::internal_error(
+                                                id,
+                                                &format!("Internal: {ser_e}"),
+                                            ))
+                                        }
+                                    };
                                 }
                             },
                             Err(e) => {
-                                warn!(
+                                error!(
                                     session_brain = %session,
                                     error = %e,
-                                    "failed to resolve session brain_id, falling back to startup brain"
+                                    "failed to resolve session brain_id"
                                 );
+                                let err_result = protocol::ToolCallResult::error(format!(
+                                    "Failed to resolve session brain '{}': {e}",
+                                    session
+                                ));
+                                return match serde_json::to_value(err_result) {
+                                    Ok(value) => {
+                                        serialize_response(&JsonRpcResponse::new(id, value))
+                                    }
+                                    Err(ser_e) => serialize_error(&JsonRpcError::internal_error(
+                                        id,
+                                        &format!("Internal: {ser_e}"),
+                                    )),
+                                };
                             }
                         }
                     }
@@ -544,10 +602,16 @@ async fn handle_request(
             ) {
                 ctx.metrics.record_query_latency(call_start.elapsed());
             }
-            serialize_response(&JsonRpcResponse::new(
-                id,
-                serde_json::to_value(result).unwrap(),
-            ))
+            match serde_json::to_value(result) {
+                Ok(value) => serialize_response(&JsonRpcResponse::new(id, value)),
+                Err(e) => {
+                    error!(error = %e, tool = tool_name, "failed to serialize tools/call result");
+                    serialize_error(&JsonRpcError::internal_error(
+                        id,
+                        "Internal: tools/call result serialization failed",
+                    ))
+                }
+            }
         }
         _ => serialize_error(&JsonRpcError::method_not_found(id, &req.method)),
     }

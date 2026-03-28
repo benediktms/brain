@@ -8,7 +8,7 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::uri::{SynapseUri, resolve_id};
 
-use super::{McpTool, json_response};
+use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 #[derive(Deserialize)]
 struct Params {
@@ -61,12 +61,22 @@ impl RecordGet {
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         };
 
-        let tags = records.get_record_tags(&record_id).unwrap_or_default();
-        let links = records.get_record_links(&record_id).unwrap_or_default();
+        let mut warnings: Vec<Warning> = Vec::new();
+        let tags = store_or_warn(
+            records.get_record_tags(&record_id),
+            "get_record_tags",
+            &mut warnings,
+        );
+        let links = store_or_warn(
+            records.get_record_links(&record_id),
+            "get_record_links",
+            &mut warnings,
+        );
 
-        let compact_id = records
-            .compact_record_id(&record_id)
-            .unwrap_or_else(|_| record_id.clone());
+        let compact_id = match records.compact_record_id(&record_id) {
+            Ok(id) => id,
+            Err(_) => record_id.clone(),
+        };
 
         let links_json: Vec<Value> = links
             .iter()
@@ -107,6 +117,8 @@ impl RecordGet {
         if let Some(obj) = result.as_object_mut() {
             obj.insert("uri".into(), json!(uri));
         }
+
+        inject_warnings(&mut result, warnings);
 
         json_response(&result)
     }

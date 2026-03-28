@@ -170,18 +170,13 @@ impl TaskClose {
                 &mut warnings,
             )
             .iter()
-            .map(|id| {
-                ctx.stores
-                    .tasks
-                    .compact_id(id)
-                    .unwrap_or_else(|_| id.clone())
-            })
+            .map(|id| ctx.stores.tasks.compact_id(id).unwrap_or(id.clone()))
             .collect();
             let short_id = ctx
                 .stores
                 .tasks
                 .compact_id(&resolved)
-                .unwrap_or_else(|_| resolved.clone());
+                .unwrap_or(resolved.clone());
 
             let uri = SynapseUri::for_task(ctx.brain_name(), &short_id).to_string();
             total_unblocked += unblocked.len();

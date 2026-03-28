@@ -50,9 +50,7 @@ struct Params {
 
 /// Build a compact stub: `{task_id, title}`.
 fn task_stub(store: &TaskStore, task_id: &str, title: &str) -> Value {
-    let short = store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let short = store.compact_id(task_id).unwrap_or(task_id.to_string());
     json!({ "task_id": short, "title": title })
 }
 
@@ -209,7 +207,7 @@ impl TaskGet {
                         .ok()
                         .flatten()
                         .map(|t| task_stub(store, &t.task_id, &t.title))
-                        .unwrap_or_else(|| task_stub(store, pid, "(not found)"))
+                        .unwrap_or(task_stub(store, pid, "(not found)"))
                 })
                 .unwrap_or(Value::Null)
         };
@@ -293,9 +291,7 @@ impl TaskGet {
         };
 
         // 8. Build base task JSON
-        let short_id = store
-            .compact_id(task_id)
-            .unwrap_or_else(|_| task_id.to_string());
+        let short_id = store.compact_id(task_id).unwrap_or(task_id.to_string());
         let mut task_json = task_row_to_compact_json(store, &task, labels);
         if let Some(obj) = task_json.as_object_mut() {
             obj.insert("parent".into(), parent_json);

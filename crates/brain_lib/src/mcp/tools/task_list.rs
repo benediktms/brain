@@ -175,7 +175,15 @@ impl TaskList {
             // Batch-fetch labels if label filter is active
             let labels_map = if filter.label.is_some() {
                 let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
-                store.get_labels_for_tasks(&task_ids).ok()
+                match store.get_labels_for_tasks(&task_ids) {
+                    Ok(map) => Some(map),
+                    Err(e) => {
+                        error!(error = %e, "failed to fetch labels for list filtering");
+                        return ToolCallResult::error(format!(
+                            "Failed to fetch labels for filtering: {e}"
+                        ));
+                    }
+                }
             } else {
                 None
             };

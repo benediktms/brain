@@ -3,11 +3,12 @@ use std::pin::Pin;
 
 use serde::Serialize;
 use serde_json::{Value, json};
+use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-use super::{McpTool, json_response};
+use super::{McpTool, Warning, inject_warnings, json_response};
 
 pub(super) struct BrainsList;
 
@@ -68,24 +69,54 @@ impl McpTool for BrainsList {
                 }
             };
 
+            let mut warnings: Vec<Warning> = Vec::new();
             let brains: Vec<BrainInfo> = rows
                 .into_iter()
-                .map(|row| {
-                    let roots: Vec<String> = row
-                        .roots_json
-                        .as_deref()
-                        .and_then(|s| serde_json::from_str(s).ok())
-                        .unwrap_or_default();
-                    let root = roots.first().cloned().unwrap_or_default();
+                .filter_map(|row| {
+                    let roots: Vec<String> = match row.roots_json.as_deref() {
+                        Some(raw) => match serde_json::from_str(raw) {
+                            Ok(parsed) => parsed,
+                            Err(e) => {
+                                warn!(
+                                    brain = %row.name,
+                                    error = %e,
+                                    "skipping brain with malformed roots_json"
+                                );
+                                warnings.push(Warning {
+                                    source: format!("roots_json({})", row.name),
+                                    error: e.to_string(),
+                                });
+                                return None;
+                            }
+                        },
+                        None => Vec::new(),
+                    };
+                    let root = match roots.first() {
+                        Some(first) => first.clone(),
+                        None => String::new(),
+                    };
                     let extra_roots = roots.into_iter().skip(1).collect();
 
-                    let aliases: Vec<String> = row
-                        .aliases_json
-                        .as_deref()
-                        .and_then(|s| serde_json::from_str(s).ok())
-                        .unwrap_or_default();
+                    let aliases: Vec<String> = match row.aliases_json.as_deref() {
+                        Some(raw) => match serde_json::from_str(raw) {
+                            Ok(parsed) => parsed,
+                            Err(e) => {
+                                warn!(
+                                    brain = %row.name,
+                                    error = %e,
+                                    "skipping brain with malformed aliases_json"
+                                );
+                                warnings.push(Warning {
+                                    source: format!("aliases_json({})", row.name),
+                                    error: e.to_string(),
+                                });
+                                return None;
+                            }
+                        },
+                        None => Vec::new(),
+                    };
 
-                    BrainInfo {
+                    Some(BrainInfo {
                         name: row.name,
                         id: Some(row.brain_id),
                         root,
@@ -93,12 +124,19 @@ impl McpTool for BrainsList {
                         extra_roots,
                         prefix: row.prefix,
                         archived: row.archived,
-                    }
+                    })
                 })
                 .collect();
 
             let count = brains.len();
-            json_response(&BrainsListResponse { brains, count })
+            let mut result = match serde_json::to_value(BrainsListResponse { brains, count }) {
+                Ok(v) => v,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Internal serialization error: {e}"));
+                }
+            };
+            inject_warnings(&mut result, warnings);
+            json_response(&result)
         })
     }
 }
