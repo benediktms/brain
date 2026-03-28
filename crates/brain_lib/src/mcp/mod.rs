@@ -564,7 +564,7 @@ async fn handle_request(
                                         Err(ser_e) => {
                                             serialize_error(&JsonRpcError::internal_error(
                                                 id,
-                                                &format!("Internal: {ser_e}"),
+                                                format!("Internal: {ser_e}"),
                                             ))
                                         }
                                     };
@@ -586,7 +586,7 @@ async fn handle_request(
                                     }
                                     Err(ser_e) => serialize_error(&JsonRpcError::internal_error(
                                         id,
-                                        &format!("Internal: {ser_e}"),
+                                        format!("Internal: {ser_e}"),
                                     )),
                                 };
                             }
