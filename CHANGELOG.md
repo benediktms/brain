@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.4] - 2026-03-28
+
+### Bug Fixes
+
+- Use per-marketplace layout for Claude Code discovery
+- DB is source of truth, rename config.toml → state_projection.toml (#brn-990)
+
+### Features
+
+- Domain-scoped Claude Code plugins with skills format (#91)
+
 ## [0.3.3] - 2026-03-27
 
 ### Bug Fixes
