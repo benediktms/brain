@@ -10,16 +10,14 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashSet;
-use rusqlite::params;
 use tracing::{debug, warn};
 
 use crate::db::Db;
 use crate::db::jobs::{self, EnqueueJobInput, JobPayload};
 use crate::embedder::Embed;
-use crate::ports::JobQueue;
+use crate::ports::{JobPersistence, JobQueue};
 use crate::store::Store;
 
 // ─── Active-job lock set ────────────────────────────────────────
@@ -260,79 +258,21 @@ fn build_prompt(payload: &JobPayload) -> String {
     }
 }
 
-fn persist_job_result(db: &Db, payload: &JobPayload, result: &str) -> crate::error::Result<()> {
+fn persist_job_result(
+    db: &dyn JobPersistence,
+    payload: &JobPayload,
+    result: &str,
+) -> crate::error::Result<()> {
     match payload {
         JobPayload::SummarizeScope { summary_id, .. } => {
-            let summary_id = summary_id.clone();
-            let result = result.to_string();
-            let now = now_unix_secs();
-
-            db.with_write_conn(move |conn| {
-                conn.execute(
-                    "UPDATE derived_summaries
-                     SET content = ?1, stale = 0, generated_at = ?2
-                     WHERE id = ?3",
-                    params![result, now, summary_id],
-                )?;
-                Ok(())
-            })
+            db.persist_scope_summary_result(summary_id, result)
         }
         JobPayload::ConsolidateCluster {
             suggested_title,
             episode_ids,
             brain_id,
             ..
-        } => {
-            let title = suggested_title.clone();
-            let result = result.to_string();
-            let episode_ids = episode_ids.clone();
-            let brain_id = brain_id.clone();
-
-            db.with_write_conn(move |conn| {
-                // All three steps in a single transaction so a crash can't
-                // leave orphaned episodes or duplicate reflections.
-                let tx = conn.unchecked_transaction()?;
-                let now = crate::utils::now_ts();
-
-                // 1. Store the LLM output as a reflection.
-                let reflection_id = ulid::Ulid::new().to_string();
-                let tags_json = "[]";
-                tx.execute(
-                    "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, valid_from, created_at, updated_at)
-                     VALUES (?1, 'reflection', ?2, ?3, ?4, 1.0, ?5, ?6, ?6, ?6)",
-                    params![reflection_id, title, result, tags_json, brain_id, now],
-                )?;
-
-                // Also populate reflection_sources for compatibility with MCP reflect tool.
-                for ep_id in &episode_ids {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO reflection_sources (reflection_id, source_id) VALUES (?1, ?2)",
-                        params![reflection_id, ep_id],
-                    )?;
-                }
-
-                // 2. Record source lineage in summary_sources.
-                for ep_id in &episode_ids {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO summary_sources (summary_id, source_id, source_type, created_at)
-                         VALUES (?1, ?2, 'episode', ?3)",
-                        params![reflection_id, ep_id, now],
-                    )?;
-                }
-
-                // 3. Mark source episodes as consolidated (guard prevents concurrent overwrite).
-                for ep_id in &episode_ids {
-                    tx.execute(
-                        "UPDATE summaries SET consolidated_by = ?1
-                         WHERE summary_id = ?2 AND consolidated_by IS NULL",
-                        params![reflection_id, ep_id],
-                    )?;
-                }
-
-                tx.commit()?;
-                Ok(())
-            })
-        }
+        } => db.persist_consolidation_result(suggested_title, result, episode_ids, brain_id),
         _ => Ok(()),
     }
 }
@@ -499,13 +439,6 @@ async fn process_embed_poll(
 
 // ─── Helpers ────────────────────────────────────────────────────
 
-fn now_unix_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
 /// Enqueue a scope summarization job.
 pub fn enqueue_scope_summary(
     queue: &dyn JobQueue,
@@ -560,6 +493,7 @@ pub fn enqueue_cluster_summary(
 mod tests {
     use super::*;
     use crate::db::Db;
+    use rusqlite::params;
 
     fn setup_db() -> Db {
         Db::open_in_memory().unwrap()

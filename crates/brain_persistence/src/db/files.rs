@@ -78,6 +78,15 @@ pub fn set_indexing_state(conn: &Connection, file_id: &str, state: &str) -> Resu
     Ok(())
 }
 
+pub fn reset_stuck_file_for_reindex(conn: &Connection, file_id: &str) -> Result<()> {
+    set_indexing_state(conn, file_id, "idle")?;
+    conn.execute(
+        "UPDATE files SET content_hash = NULL WHERE file_id = ?1",
+        [file_id],
+    )?;
+    Ok(())
+}
+
 /// Mark a file as fully indexed: update hash, chunker version, timestamp, and state.
 pub fn mark_indexed(
     conn: &Connection,
@@ -280,6 +289,27 @@ mod tests {
         mark_indexed(&conn, &file_id, "hash123", 1).unwrap();
         let stuck = find_stuck_files(&conn).unwrap();
         assert!(stuck.is_empty());
+    }
+
+    #[test]
+    fn test_reset_stuck_file_for_reindex() {
+        let conn = setup();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        mark_indexed(&conn, &file_id, "hash123", 1).unwrap();
+        set_indexing_state(&conn, &file_id, "indexing_started").unwrap();
+
+        reset_stuck_file_for_reindex(&conn, &file_id).unwrap();
+
+        let (state, hash): (String, Option<String>) = conn
+            .query_row(
+                "SELECT indexing_state, content_hash FROM files WHERE file_id = ?1",
+                [&file_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(state, "idle");
+        assert_eq!(hash, None);
     }
 
     #[test]

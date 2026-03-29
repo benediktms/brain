@@ -1,5 +1,7 @@
 pub mod db;
+pub mod derived_summaries;
 pub mod error;
+pub mod job_results;
 pub mod links;
 pub mod pagerank;
 pub mod store;

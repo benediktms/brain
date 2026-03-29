@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use tracing::{info, instrument, warn};
 
 use crate::chunker::CHUNKER_VERSION;
-use crate::db::files;
 use crate::ports::{ChunkIndexWriter, FileMetaReader, FileMetaWriter, SchemaMeta};
 use crate::scanner::scan_brain;
 
@@ -28,14 +27,7 @@ where
             );
         }
         for (file_id, path) in &stuck {
-            self.db.with_write_conn(|conn| {
-                files::set_indexing_state(conn, file_id, "idle")?;
-                conn.execute(
-                    "UPDATE files SET content_hash = NULL WHERE file_id = ?1",
-                    [file_id],
-                )?;
-                Ok(())
-            })?;
+            self.db.reset_stuck_file_for_reindex(file_id)?;
             info!(path, "reset stuck file for re-indexing");
             stats.stuck_recovered += 1;
         }

@@ -529,6 +529,15 @@ impl FileMetaWriter for MockFileMetaWriter {
     fn count_stale_chunker_version(&self, _current_version: u32) -> Result<usize> {
         Ok(0)
     }
+
+    fn reset_stuck_file_for_reindex(&self, file_id: &str) -> Result<()> {
+        // Remove content hash to force reindex; remove indexing state
+        let mut hashes = self.content_hashes.lock().unwrap();
+        hashes.remove(file_id);
+        let mut states = self.indexing_states.lock().unwrap();
+        states.remove(file_id);
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

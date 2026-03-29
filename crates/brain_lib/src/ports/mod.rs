@@ -368,6 +368,8 @@ pub trait FileMetaWriter: Send + Sync {
     /// Set the indexing state for a file (`idle` | `indexing_started` | `indexed`).
     fn set_indexing_state(&self, file_id: &str, state: &str) -> Result<()>;
 
+    fn reset_stuck_file_for_reindex(&self, file_id: &str) -> Result<()>;
+
     /// Mark a file as fully indexed: update hash, chunker version, timestamp, and state.
     fn mark_indexed(&self, file_id: &str, content_hash: &str, chunker_version: u32) -> Result<()>;
 
@@ -412,6 +414,13 @@ impl FileMetaWriter for Db {
         let state = state.to_string();
         self.with_write_conn(move |conn| {
             crate::db::files::set_indexing_state(conn, &file_id, &state)
+        })
+    }
+
+    fn reset_stuck_file_for_reindex(&self, file_id: &str) -> Result<()> {
+        let file_id = file_id.to_string();
+        self.with_write_conn(move |conn| {
+            crate::db::files::reset_stuck_file_for_reindex(conn, &file_id)
         })
     }
 
@@ -1018,6 +1027,38 @@ pub trait JobPersistence: Send + Sync {
     ) -> Result<()>;
 }
 
+impl JobPersistence for Db {
+    fn persist_scope_summary_result(&self, summary_id: &str, result: &str) -> Result<()> {
+        let summary_id = summary_id.to_string();
+        let result = result.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::job_results::persist_scope_summary_result(conn, &summary_id, &result)
+        })
+    }
+
+    fn persist_consolidation_result(
+        &self,
+        suggested_title: &str,
+        result: &str,
+        episode_ids: &[String],
+        brain_id: &str,
+    ) -> Result<()> {
+        let suggested_title = suggested_title.to_string();
+        let result = result.to_string();
+        let episode_ids = episode_ids.to_vec();
+        let brain_id = brain_id.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::job_results::persist_consolidation_result(
+                conn,
+                &suggested_title,
+                &result,
+                &episode_ids,
+                &brain_id,
+            )
+        })
+    }
+}
+
 impl<T: DerivedSummaryStore + ?Sized> DerivedSummaryWriter for T {
     fn generate_scope_summary(
         &self,
@@ -1058,212 +1099,20 @@ impl DerivedSummaryStore for Db {
         scope_type: &ScopeType,
         scope_value: &str,
     ) -> Result<GeneratedScopeSummary> {
-        use brain_persistence::error::BrainCoreError;
-        use rusqlite::params;
-        use std::time::{SystemTime, UNIX_EPOCH};
-        use ulid::Ulid;
-
-        let scope_type_str = scope_type.as_str();
-        let scope_value_owned = scope_value.to_string();
-        let scope_type_clone = scope_type.clone();
-
-        // Fetch source content + IDs for lineage tracking.
-        let sources: Vec<(String, String)> = self.with_read_conn(|conn| {
-            let rows: Vec<(String, String)> = match scope_type_clone {
-                ScopeType::Directory => {
-                    let pattern = format!("{}%", scope_value_owned);
-                    let mut stmt = conn.prepare(
-                        "SELECT c.chunk_id, c.content
-                         FROM chunks c
-                         JOIN files f ON c.file_id = f.file_id
-                         WHERE f.path LIKE ?1
-                         ORDER BY f.path, c.chunk_ord",
-                    )?;
-                    stmt.query_map(params![pattern], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    })
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                }
-                ScopeType::Tag => {
-                    let pattern = format!("%{}%", scope_value_owned);
-                    let mut stmt = conn.prepare(
-                        "SELECT summary_id, content
-                         FROM summaries
-                         WHERE tags LIKE ?1
-                         ORDER BY created_at",
-                    )?;
-                    stmt.query_map(params![pattern], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    })
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                }
-            };
-            Ok(rows)
-        })?;
-
-        let source_ids: Vec<&str> = sources.iter().map(|(id, _)| id.as_str()).collect();
-        let contents: Vec<&str> = sources.iter().map(|(_, c)| c.as_str()).collect();
-        let source_content = contents.join("\n\n");
-
-        // Compute blake3 hash of source content for change detection.
-        let new_hash = blake3::hash(source_content.as_bytes()).to_hex().to_string();
-
-        // Check if existing summary already has this hash — skip if unchanged.
-        let scope_value_check = scope_value.to_string();
-        let hash_check = new_hash.clone();
-        let existing_hash: Option<String> = self
-            .with_read_conn(|conn| {
-                conn.query_row(
-                    "SELECT source_content_hash FROM derived_summaries
-                     WHERE scope_type = ?1 AND scope_value = ?2",
-                    params![scope_type_str, scope_value_check],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .optional()
-                .map(|opt| opt.flatten())
-                .map_err(|e| BrainCoreError::Database(e.to_string()))
-            })
-            .unwrap_or(None);
-
-        if existing_hash.as_deref() == Some(&hash_check) {
-            // Content unchanged — clear stale flag without regenerating.
-            // Use atomic CAS to avoid clobbering a concurrent stale=1 set by
-            // the indexing pipeline (TOCTOU guard: only clear if hash still matches).
-            let sv = scope_value.to_string();
-            let hash_cas = hash_check.clone();
-            self.with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE derived_summaries SET stale = 0
-                     WHERE scope_type = ?1 AND scope_value = ?2 AND source_content_hash = ?3",
-                    params![scope_type_str, sv, hash_cas],
-                )
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-                Ok(())
-            })?;
-
-            // Return the existing ID.
-            let sv2 = scope_value.to_string();
-            let id: String = self.with_read_conn(|conn| {
-                conn.query_row(
-                    "SELECT id FROM derived_summaries
-                     WHERE scope_type = ?1 AND scope_value = ?2",
-                    params![scope_type_str, sv2],
-                    |row| row.get(0),
-                )
-                .map_err(|e| BrainCoreError::Database(e.to_string()))
-            })?;
-
-            return Ok(GeneratedScopeSummary {
-                id,
-                source_content,
-                content_changed: false,
-            });
-        }
-
-        let summary_content: String = contents
-            .iter()
-            .map(|c| c.get(..200).unwrap_or(c))
-            .collect::<Vec<&str>>()
-            .join("\n");
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        // Reuse existing ID to avoid orphaning summary_sources rows.
-        let existing_id: Option<String> = self
-            .with_read_conn(|conn| {
-                conn.query_row(
-                    "SELECT id FROM derived_summaries WHERE scope_type = ?1 AND scope_value = ?2",
-                    params![scope_type_str, scope_value],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| BrainCoreError::Database(e.to_string()))
-            })
-            .unwrap_or(None);
-
-        let id = existing_id.unwrap_or_else(|| Ulid::new().to_string());
-
-        let id_clone = id.clone();
-        let content_clone = summary_content.clone();
-        let scope_value_clone = scope_value.to_string();
-        let hash_clone = new_hash;
-        let source_ids_owned: Vec<String> = source_ids.iter().map(|s| s.to_string()).collect();
-        let source_type = match scope_type {
-            ScopeType::Directory => "chunk",
-            ScopeType::Tag => "episode",
-        };
-
-        self.with_write_conn(move |conn| {
-            // Wrap all writes in a single transaction so a crash can't leave
-            // summary_sources empty while the summary row has stale=0.
-            let tx = conn
-                .unchecked_transaction()
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-
-            // Use UPDATE if row exists, INSERT if new — avoids DELETE+INSERT
-            // from INSERT OR REPLACE which would change the rowid.
-            let updated = tx
-                .execute(
-                    "UPDATE derived_summaries
-                     SET content = ?1, stale = 0, generated_at = ?2, source_content_hash = ?3
-                     WHERE id = ?4",
-                    params![content_clone, now, hash_clone, id_clone],
-                )
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-
-            if updated == 0 {
-                tx.execute(
-                    "INSERT INTO derived_summaries
-                         (id, scope_type, scope_value, content, stale, generated_at, source_content_hash)
-                     VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
-                    params![
-                        id_clone,
-                        scope_type_str,
-                        scope_value_clone,
-                        content_clone,
-                        now,
-                        hash_clone
-                    ],
-                )
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-            }
-
-            // Replace source lineage for this summary.
-            tx.execute(
-                "DELETE FROM summary_sources WHERE summary_id = ?1",
-                params![id_clone],
+        let scope_type = scope_type.as_str().to_string();
+        let scope_value = scope_value.to_string();
+        let generated = self.with_write_conn(move |conn| {
+            brain_persistence::derived_summaries::generate_scope_summary(
+                conn,
+                &scope_type,
+                &scope_value,
             )
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-
-            {
-                let mut stmt = tx
-                    .prepare_cached(
-                        "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
-                         VALUES (?1, ?2, ?3, ?4)",
-                    )
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-                for src_id in &source_ids_owned {
-                    stmt.execute(params![id_clone, src_id, source_type, now])
-                        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-                }
-            }
-
-            tx.commit()
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-            Ok(())
         })?;
 
         Ok(GeneratedScopeSummary {
-            id,
-            source_content,
-            content_changed: true,
+            id: generated.id,
+            source_content: generated.source_content,
+            content_changed: generated.content_changed,
         })
     }
 
@@ -1272,157 +1121,65 @@ impl DerivedSummaryStore for Db {
         scope_type: &ScopeType,
         scope_value: &str,
     ) -> Result<Option<DerivedSummary>> {
-        use brain_persistence::error::BrainCoreError;
-        use rusqlite::params;
+        let scope_type = scope_type.as_str().to_string();
+        let scope_value = scope_value.to_string();
+        let row = self.with_read_conn(move |conn| {
+            brain_persistence::derived_summaries::get_scope_summary(conn, &scope_type, &scope_value)
+        })?;
 
-        let scope_type_str = scope_type.as_str().to_string();
-        let scope_value_owned = scope_value.to_string();
-
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, scope_type, scope_value, content, stale, generated_at
-                 FROM derived_summaries
-                 WHERE scope_type = ?1 AND scope_value = ?2",
-            )?;
-
-            let mut rows = stmt
-                .query_map(params![scope_type_str, scope_value_owned], |row| {
-                    Ok(DerivedSummary {
-                        id: row.get(0)?,
-                        scope_type: row.get(1)?,
-                        scope_value: row.get(2)?,
-                        content: row.get(3)?,
-                        stale: row.get::<_, i64>(4)? != 0,
-                        generated_at: row.get(5)?,
-                    })
-                })
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-
-            match rows.next() {
-                Some(Ok(summary)) => Ok(Some(summary)),
-                Some(Err(e)) => Err(BrainCoreError::Database(e.to_string())),
-                None => Ok(None),
-            }
-        })
+        Ok(row.map(|summary| DerivedSummary {
+            id: summary.id,
+            scope_type: summary.scope_type,
+            scope_value: summary.scope_value,
+            content: summary.content,
+            stale: summary.stale,
+            generated_at: summary.generated_at,
+        }))
     }
 
     fn mark_scope_stale(&self, scope_type: &ScopeType, scope_value: &str) -> Result<usize> {
-        use brain_persistence::error::BrainCoreError;
-        use rusqlite::params;
-
-        let scope_type_str = scope_type.as_str().to_string();
-        let scope_value_owned = scope_value.to_string();
-
-        self.with_write_conn(|conn| {
-            let n = conn
-                .execute(
-                    "UPDATE derived_summaries SET stale = 1
-                     WHERE scope_type = ?1 AND scope_value = ?2",
-                    params![scope_type_str, scope_value_owned],
-                )
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-            Ok(n)
+        let scope_type = scope_type.as_str().to_string();
+        let scope_value = scope_value.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::derived_summaries::mark_scope_stale(conn, &scope_type, &scope_value)
         })
     }
 
     fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>> {
-        use brain_persistence::error::BrainCoreError;
-        use rusqlite::params;
+        let query = query.to_string();
+        let rows = self.with_read_conn(move |conn| {
+            brain_persistence::derived_summaries::search_derived_summaries(conn, &query, limit)
+        })?;
 
-        let query_owned = query.to_string();
-        let limit_i64 = limit as i64;
-
-        self.with_read_conn(|conn| {
-            let fts_exists: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM sqlite_master
-                     WHERE type='table' AND name='fts_derived_summaries'",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map(|n| n > 0)
-                .unwrap_or(false);
-
-            if fts_exists {
-                let mut stmt = conn.prepare(
-                    "SELECT ds.id, ds.scope_type, ds.scope_value, ds.content,
-                            ds.stale, ds.generated_at
-                     FROM fts_derived_summaries fts
-                     JOIN derived_summaries ds ON ds.rowid = fts.rowid
-                     WHERE fts_derived_summaries MATCH ?1
-                     LIMIT ?2",
-                )?;
-                let summaries = stmt
-                    .query_map(params![query_owned, limit_i64], |row| {
-                        Ok(DerivedSummary {
-                            id: row.get(0)?,
-                            scope_type: row.get(1)?,
-                            scope_value: row.get(2)?,
-                            content: row.get(3)?,
-                            stale: row.get::<_, i64>(4)? != 0,
-                            generated_at: row.get(5)?,
-                        })
-                    })
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                    .collect::<std::result::Result<Vec<DerivedSummary>, _>>()
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-                Ok(summaries)
-            } else {
-                let pattern = format!("%{}%", query_owned);
-                let mut stmt = conn.prepare(
-                    "SELECT id, scope_type, scope_value, content, stale, generated_at
-                     FROM derived_summaries
-                     WHERE content LIKE ?1
-                     LIMIT ?2",
-                )?;
-                let summaries = stmt
-                    .query_map(params![pattern, limit_i64], |row| {
-                        Ok(DerivedSummary {
-                            id: row.get(0)?,
-                            scope_type: row.get(1)?,
-                            scope_value: row.get(2)?,
-                            content: row.get(3)?,
-                            stale: row.get::<_, i64>(4)? != 0,
-                            generated_at: row.get(5)?,
-                        })
-                    })
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                    .collect::<std::result::Result<Vec<DerivedSummary>, _>>()
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-                Ok(summaries)
-            }
-        })
+        Ok(rows
+            .into_iter()
+            .map(|summary| DerivedSummary {
+                id: summary.id,
+                scope_type: summary.scope_type,
+                scope_value: summary.scope_value,
+                content: summary.content,
+                stale: summary.stale,
+                generated_at: summary.generated_at,
+            })
+            .collect())
     }
 
     fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>> {
-        use brain_persistence::error::BrainCoreError;
-        use rusqlite::params;
+        let rows = self.with_read_conn(move |conn| {
+            brain_persistence::derived_summaries::list_stale_summaries(conn, limit)
+        })?;
 
-        let limit_i64 = limit as i64;
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, scope_type, scope_value, content, stale, generated_at
-                 FROM derived_summaries
-                 WHERE stale = 1
-                 ORDER BY generated_at ASC
-                 LIMIT ?1",
-            )?;
-            let summaries = stmt
-                .query_map(params![limit_i64], |row| {
-                    Ok(DerivedSummary {
-                        id: row.get(0)?,
-                        scope_type: row.get(1)?,
-                        scope_value: row.get(2)?,
-                        content: row.get(3)?,
-                        stale: row.get::<_, i64>(4)? != 0,
-                        generated_at: row.get(5)?,
-                    })
-                })
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?
-                .collect::<std::result::Result<Vec<DerivedSummary>, _>>()
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-            Ok(summaries)
-        })
+        Ok(rows
+            .into_iter()
+            .map(|summary| DerivedSummary {
+                id: summary.id,
+                scope_type: summary.scope_type,
+                scope_value: summary.scope_value,
+                content: summary.content,
+                stale: summary.stale,
+                generated_at: summary.generated_at,
+            })
+            .collect())
     }
 }
 

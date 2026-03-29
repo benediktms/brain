@@ -588,8 +588,9 @@ mod tests {
     /// Create `.brain/brain.toml` with `name = "<name>"` inside `dir`.
     fn make_brain_marker(dir: &Path, name: &str) {
         let brain_dir = dir.join(".brain");
-        fs::create_dir_all(&brain_dir).unwrap();
-        fs::write(brain_dir.join("brain.toml"), format!("name = \"{name}\"\n")).unwrap();
+        fs::create_dir_all(&brain_dir).expect("unwrap should not fail");
+        fs::write(brain_dir.join("brain.toml"), format!("name = \"{name}\"\n"))
+            .expect("unwrap should not fail");
     }
 
     // -----------------------------------------------------------------------
@@ -598,7 +599,7 @@ mod tests {
 
     #[test]
     fn find_brain_root_discovers_marker_at_start() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         make_brain_marker(tmp.path(), "test-brain");
 
         let result = find_brain_root(tmp.path());
@@ -607,12 +608,12 @@ mod tests {
 
     #[test]
     fn find_brain_root_walks_up_tree() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         make_brain_marker(tmp.path(), "test-brain");
 
         // Create a deeply nested subdirectory
         let deep = tmp.path().join("a").join("b").join("c");
-        fs::create_dir_all(&deep).unwrap();
+        fs::create_dir_all(&deep).expect("unwrap should not fail");
 
         let result = find_brain_root(&deep);
         assert_eq!(result, Some(tmp.path().to_path_buf()));
@@ -620,7 +621,7 @@ mod tests {
 
     #[test]
     fn find_brain_root_returns_none_when_no_marker() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         // No .brain/brain.toml created
 
         let result = find_brain_root(tmp.path());
@@ -629,18 +630,18 @@ mod tests {
 
     #[test]
     fn find_brain_root_nested_returns_nearest() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         // Outer brain at root
         make_brain_marker(tmp.path(), "outer");
 
         // Inner brain in a subdirectory
         let inner = tmp.path().join("sub").join("project");
-        fs::create_dir_all(&inner).unwrap();
+        fs::create_dir_all(&inner).expect("unwrap should not fail");
         make_brain_marker(&inner, "inner");
 
         // Starting from inside inner project — should find inner, not outer
         let deep = inner.join("src");
-        fs::create_dir_all(&deep).unwrap();
+        fs::create_dir_all(&deep).expect("unwrap should not fail");
 
         let result = find_brain_root(&deep);
         assert_eq!(result, Some(inner));
@@ -648,9 +649,9 @@ mod tests {
 
     #[test]
     fn find_brain_root_empty_dir_returns_none() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let empty = tmp.path().join("empty");
-        fs::create_dir_all(&empty).unwrap();
+        fs::create_dir_all(&empty).expect("unwrap should not fail");
 
         let result = find_brain_root(&empty);
         assert!(result.is_none());
@@ -658,9 +659,9 @@ mod tests {
 
     #[test]
     fn find_brain_root_dot_brain_dir_without_toml_is_ignored() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         // Create .brain dir but NOT the brain.toml inside it
-        fs::create_dir_all(tmp.path().join(".brain")).unwrap();
+        fs::create_dir_all(tmp.path().join(".brain")).expect("unwrap should not fail");
 
         let result = find_brain_root(tmp.path());
         assert!(result.is_none());
@@ -672,22 +673,23 @@ mod tests {
 
     #[test]
     fn resolve_brain_paths_returns_none_when_no_marker() {
-        let tmp = TempDir::new().unwrap();
-        let fake_home = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
+        let fake_home = TempDir::new().expect("unwrap should not fail");
 
-        let result = resolve_brain_paths_with_home(tmp.path(), fake_home.path()).unwrap();
+        let result = resolve_brain_paths_with_home(tmp.path(), fake_home.path())
+            .expect("unwrap should not fail");
         assert!(result.is_none());
     }
 
     #[test]
     fn resolve_brain_paths_returns_correct_paths() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         make_brain_marker(tmp.path(), "my-brain");
-        let fake_home = TempDir::new().unwrap();
+        let fake_home = TempDir::new().expect("unwrap should not fail");
 
         let result = resolve_brain_paths_with_home(tmp.path(), fake_home.path())
-            .unwrap()
-            .unwrap();
+            .expect("resolve_brain_paths_with_home should succeed")
+            .expect("brain root should resolve to paths");
 
         let home = fake_home.path();
         assert_eq!(
@@ -703,22 +705,22 @@ mod tests {
 
     #[test]
     fn resolve_brain_paths_uses_nearest_brain_root() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         // Outer brain at root
         make_brain_marker(tmp.path(), "outer");
 
         // Inner brain in a subdirectory
         let inner = tmp.path().join("inner");
-        fs::create_dir_all(&inner).unwrap();
+        fs::create_dir_all(&inner).expect("unwrap should not fail");
         make_brain_marker(&inner, "inner-brain");
 
         let deep = inner.join("src");
-        fs::create_dir_all(&deep).unwrap();
+        fs::create_dir_all(&deep).expect("unwrap should not fail");
 
-        let fake_home = TempDir::new().unwrap();
+        let fake_home = TempDir::new().expect("unwrap should not fail");
         let result = resolve_brain_paths_with_home(&deep, fake_home.path())
-            .unwrap()
-            .unwrap();
+            .expect("resolve_brain_paths_with_home should succeed")
+            .expect("brain root should resolve to paths");
 
         // Should use the inner brain name, not outer
         assert!(
@@ -734,7 +736,7 @@ mod tests {
 
     #[test]
     fn resolve_paths_for_brain_with_home_returns_correct_paths() {
-        let fake_home = TempDir::new().unwrap();
+        let fake_home = TempDir::new().expect("unwrap should not fail");
         let home = fake_home.path();
 
         let result = resolve_paths_for_brain_with_home("my-brain", home);
@@ -752,7 +754,7 @@ mod tests {
 
     #[test]
     fn resolve_paths_for_brain_with_home_different_names_produce_different_paths() {
-        let fake_home = TempDir::new().unwrap();
+        let fake_home = TempDir::new().expect("unwrap should not fail");
         let home = fake_home.path();
 
         let result_a = resolve_paths_for_brain_with_home("brain-a", home);
@@ -767,7 +769,7 @@ mod tests {
 
     #[test]
     fn resolve_paths_for_brain_with_home_name_is_in_paths() {
-        let fake_home = TempDir::new().unwrap();
+        let fake_home = TempDir::new().expect("unwrap should not fail");
         let home = fake_home.path();
 
         let result = resolve_paths_for_brain_with_home("special-brain", home);
@@ -807,28 +809,40 @@ mod tests {
 
     #[test]
     fn resolve_brain_entry_by_name() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let cfg = make_global_config_with_brain("infra", Some("abc12345"), tmp.path());
 
-        let (name, entry) = resolve_brain_entry_from_config("infra", &cfg).unwrap();
+        let (name, entry) =
+            resolve_brain_entry_from_config("infra", &cfg).expect("unwrap should not fail");
         assert_eq!(name, "infra");
-        assert_eq!(entry.primary_root().unwrap(), tmp.path());
+        assert_eq!(
+            entry
+                .primary_root()
+                .expect("brain entry should have a primary root"),
+            tmp.path()
+        );
         assert_eq!(entry.id, Some("abc12345".to_string()));
     }
 
     #[test]
     fn resolve_brain_entry_by_id() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let cfg = make_global_config_with_brain("infra", Some("abc12345"), tmp.path());
 
-        let (name, entry) = resolve_brain_entry_from_config("abc12345", &cfg).unwrap();
+        let (name, entry) =
+            resolve_brain_entry_from_config("abc12345", &cfg).expect("unwrap should not fail");
         assert_eq!(name, "infra");
-        assert_eq!(entry.primary_root().unwrap(), tmp.path());
+        assert_eq!(
+            entry
+                .primary_root()
+                .expect("brain entry should have a primary root"),
+            tmp.path()
+        );
     }
 
     #[test]
     fn resolve_brain_entry_not_found() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let cfg = make_global_config_with_brain("infra", Some("abc12345"), tmp.path());
 
         let err = resolve_brain_entry_from_config("nonexistent", &cfg).unwrap_err();
@@ -855,9 +869,9 @@ mod tests {
 
     #[test]
     fn brain_toml_round_trip_with_id() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let brain_dir = tmp.path().join(".brain");
-        fs::create_dir_all(&brain_dir).unwrap();
+        fs::create_dir_all(&brain_dir).expect("unwrap should not fail");
 
         let toml_cfg = BrainToml {
             name: "test-brain".to_string(),
@@ -865,16 +879,16 @@ mod tests {
             id: Some("abcd1234".to_string()),
             prefix: None,
         };
-        save_brain_toml(&brain_dir, &toml_cfg).unwrap();
-        let loaded = load_brain_toml(&brain_dir).unwrap();
+        save_brain_toml(&brain_dir, &toml_cfg).expect("unwrap should not fail");
+        let loaded = load_brain_toml(&brain_dir).expect("unwrap should not fail");
         assert_eq!(loaded.id, Some("abcd1234".to_string()));
     }
 
     #[test]
     fn brain_toml_round_trip_without_id() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let brain_dir = tmp.path().join(".brain");
-        fs::create_dir_all(&brain_dir).unwrap();
+        fs::create_dir_all(&brain_dir).expect("unwrap should not fail");
 
         let toml_cfg = BrainToml {
             name: "test-brain".to_string(),
@@ -882,22 +896,23 @@ mod tests {
             id: None,
             prefix: None,
         };
-        save_brain_toml(&brain_dir, &toml_cfg).unwrap();
-        let loaded = load_brain_toml(&brain_dir).unwrap();
+        save_brain_toml(&brain_dir, &toml_cfg).expect("unwrap should not fail");
+        let loaded = load_brain_toml(&brain_dir).expect("unwrap should not fail");
         assert_eq!(loaded.id, None);
     }
 
     #[test]
     fn get_or_generate_brain_id_is_idempotent() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let brain_dir = tmp.path().join(".brain");
-        fs::create_dir_all(&brain_dir).unwrap();
-        fs::write(brain_dir.join("brain.toml"), "name = \"test\"\n").unwrap();
+        fs::create_dir_all(&brain_dir).expect("unwrap should not fail");
+        fs::write(brain_dir.join("brain.toml"), "name = \"test\"\n")
+            .expect("unwrap should not fail");
 
-        let id1 = get_or_generate_brain_id(&brain_dir).unwrap();
+        let id1 = get_or_generate_brain_id(&brain_dir).expect("unwrap should not fail");
         assert_eq!(id1.len(), 8);
 
-        let id2 = get_or_generate_brain_id(&brain_dir).unwrap();
+        let id2 = get_or_generate_brain_id(&brain_dir).expect("unwrap should not fail");
         assert_eq!(id1, id2, "second call should return same ID");
     }
 
@@ -907,8 +922,8 @@ mod tests {
 
     #[test]
     fn list_brain_keys_empty_db() {
-        let db = crate::db::Db::open_in_memory().unwrap();
-        let keys = list_brain_keys(&db).unwrap();
+        let db = crate::db::Db::open_in_memory().expect("unwrap should not fail");
+        let keys = list_brain_keys(&db).expect("unwrap should not fail");
         // Only the (unscoped) sentinel from migration, filter to non-sentinel
         let real: Vec<_> = keys
             .into_iter()
@@ -920,7 +935,7 @@ mod tests {
     #[test]
     fn list_brain_keys_returns_name_and_id() {
         use crate::db::schema::BrainUpsert;
-        let db = crate::db::Db::open_in_memory().unwrap();
+        let db = crate::db::Db::open_in_memory().expect("unwrap should not fail");
         db.upsert_brain(&BrainUpsert {
             brain_id: "id000001",
             name: "alpha",
@@ -930,7 +945,7 @@ mod tests {
             aliases_json: "[]",
             archived: false,
         })
-        .unwrap();
+        .expect("unwrap should not fail");
         db.upsert_brain(&BrainUpsert {
             brain_id: "id000002",
             name: "beta",
@@ -940,12 +955,18 @@ mod tests {
             aliases_json: "[]",
             archived: false,
         })
-        .unwrap();
+        .expect("unwrap should not fail");
 
-        let keys = list_brain_keys(&db).unwrap();
-        let alpha = keys.iter().find(|(n, _)| n == "alpha").unwrap();
+        let keys = list_brain_keys(&db).expect("unwrap should not fail");
+        let alpha = keys
+            .iter()
+            .find(|(n, _)| n == "alpha")
+            .expect("unwrap should not fail");
         assert_eq!(alpha.1, "id000001");
-        let beta = keys.iter().find(|(n, _)| n == "beta").unwrap();
+        let beta = keys
+            .iter()
+            .find(|(n, _)| n == "beta")
+            .expect("unwrap should not fail");
         assert_eq!(beta.1, "id000002");
     }
 
@@ -955,11 +976,11 @@ mod tests {
 
     #[tokio::test]
     async fn open_remote_search_context_returns_none_when_not_found() {
-        let fake_home = TempDir::new().unwrap();
+        let fake_home = TempDir::new().expect("unwrap should not fail");
         let home = fake_home.path();
 
         // Write an empty config so the file exists but has no brains
-        fs::write(home.join(PROJECTION_FILENAME), "[brains]\n").unwrap();
+        fs::write(home.join(PROJECTION_FILENAME), "[brains]\n").expect("unwrap should not fail");
 
         // Dummy embedder
         let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
@@ -967,13 +988,13 @@ mod tests {
 
         let result = open_remote_search_context(home, "nonexistent", &model_dir, &embedder)
             .await
-            .unwrap();
+            .expect("unwrap should not fail");
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn open_remote_search_context_opens_db_without_lancedb() {
-        let fake_home = TempDir::new().unwrap();
+        let fake_home = TempDir::new().expect("unwrap should not fail");
         let home = fake_home.path();
 
         // Register "test-brain" in config
@@ -989,15 +1010,15 @@ mod tests {
                 archived: false,
             },
         );
-        let text = toml::to_string_pretty(&cfg).unwrap();
-        fs::write(home.join(PROJECTION_FILENAME), text).unwrap();
+        let text = toml::to_string_pretty(&cfg).expect("unwrap should not fail");
+        fs::write(home.join(PROJECTION_FILENAME), text).expect("unwrap should not fail");
 
         let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
         let model_dir = home.join("models");
 
         let ctx = open_remote_search_context(home, "test-brain", &model_dir, &embedder)
             .await
-            .unwrap()
+            .expect("unwrap should not fail")
             .expect("should find test-brain");
 
         assert_eq!(ctx.brain_name, "test-brain");
@@ -1008,7 +1029,7 @@ mod tests {
 
     #[tokio::test]
     async fn open_remote_search_context_lookup_by_id() {
-        let fake_home = TempDir::new().unwrap();
+        let fake_home = TempDir::new().expect("unwrap should not fail");
         let home = fake_home.path();
 
         let mut cfg = GlobalConfig::default();
@@ -1023,8 +1044,8 @@ mod tests {
                 archived: false,
             },
         );
-        let text = toml::to_string_pretty(&cfg).unwrap();
-        fs::write(home.join(PROJECTION_FILENAME), text).unwrap();
+        let text = toml::to_string_pretty(&cfg).expect("unwrap should not fail");
+        fs::write(home.join(PROJECTION_FILENAME), text).expect("unwrap should not fail");
 
         let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
         let model_dir = home.join("models");
@@ -1032,7 +1053,7 @@ mod tests {
         // Look up by ID instead of name
         let ctx = open_remote_search_context(home, "abc12345", &model_dir, &embedder)
             .await
-            .unwrap()
+            .expect("unwrap should not fail")
             .expect("should find brain by id");
 
         assert_eq!(ctx.brain_name, "my-brain");
@@ -1050,8 +1071,8 @@ mod tests {
 [brains.my-brain]
 root = "/some/path"
 "#;
-        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
-        let entry = cfg.brains.get("my-brain").unwrap();
+        let cfg: GlobalConfig = toml::from_str(toml_str).expect("unwrap should not fail");
+        let entry = cfg.brains.get("my-brain").expect("unwrap should not fail");
         assert_eq!(entry.roots, vec![PathBuf::from("/some/path")]);
     }
 
@@ -1062,8 +1083,8 @@ root = "/some/path"
 [brains.my-brain]
 roots = ["/path1", "/path2"]
 "#;
-        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
-        let entry = cfg.brains.get("my-brain").unwrap();
+        let cfg: GlobalConfig = toml::from_str(toml_str).expect("unwrap should not fail");
+        let entry = cfg.brains.get("my-brain").expect("unwrap should not fail");
         assert_eq!(
             entry.roots,
             vec![PathBuf::from("/path1"), PathBuf::from("/path2")]
@@ -1081,7 +1102,9 @@ roots = ["/path1", "/path2"]
             archived: false,
         };
         assert_eq!(
-            entry.primary_root().unwrap(),
+            entry
+                .primary_root()
+                .expect("brain entry should have a primary root"),
             PathBuf::from("/primary").as_path()
         );
     }
@@ -1100,7 +1123,7 @@ roots = ["/path1", "/path2"]
                 archived: false,
             },
         );
-        let serialized = toml::to_string_pretty(&cfg).unwrap();
+        let serialized = toml::to_string_pretty(&cfg).expect("unwrap should not fail");
         // Should use roots = [...] not root = "..."
         assert!(
             serialized.contains("roots"),
@@ -1127,8 +1150,8 @@ roots = ["/path1", "/path2"]
 [brains.my-brain]
 roots = ["/some/path"]
 "#;
-        let cfg: GlobalConfig = toml::from_str(toml_str).unwrap();
-        let entry = cfg.brains.get("my-brain").unwrap();
+        let cfg: GlobalConfig = toml::from_str(toml_str).expect("unwrap should not fail");
+        let entry = cfg.brains.get("my-brain").expect("unwrap should not fail");
         assert!(
             entry.aliases.is_empty(),
             "aliases should default to empty vec"
@@ -1141,7 +1164,7 @@ roots = ["/some/path"]
 
     #[test]
     fn resolve_brain_entry_by_alias() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let mut cfg = GlobalConfig::default();
         cfg.brains.insert(
             "infra".to_string(),
@@ -1155,17 +1178,24 @@ roots = ["/some/path"]
             },
         );
 
-        let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
+        let (name, entry) =
+            resolve_brain_entry_from_config("gateway", &cfg).expect("unwrap should not fail");
         assert_eq!(name, "infra");
-        assert_eq!(entry.primary_root().unwrap(), tmp.path());
+        assert_eq!(
+            entry
+                .primary_root()
+                .expect("brain entry should have a primary root"),
+            tmp.path()
+        );
 
-        let (name2, _) = resolve_brain_entry_from_config("infra-alias", &cfg).unwrap();
+        let (name2, _) =
+            resolve_brain_entry_from_config("infra-alias", &cfg).expect("unwrap should not fail");
         assert_eq!(name2, "infra");
     }
 
     #[test]
     fn resolve_brain_entry_alias_does_not_shadow_name() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let mut cfg = GlobalConfig::default();
         // "infra" registered with an alias that matches another brain's name "gateway"
         cfg.brains.insert(
@@ -1192,7 +1222,8 @@ roots = ["/some/path"]
         );
 
         // Name match wins over alias match.
-        let (name, entry) = resolve_brain_entry_from_config("gateway", &cfg).unwrap();
+        let (name, entry) =
+            resolve_brain_entry_from_config("gateway", &cfg).expect("unwrap should not fail");
         assert_eq!(name, "gateway");
         assert_eq!(entry.id, Some("bbbbbbbb".to_string()));
     }
@@ -1210,19 +1241,19 @@ roots = ["/some/path"]
 
     #[test]
     fn find_brain_by_path_finds_primary_root() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
 
         let result = find_brain_by_path(&cfg, tmp.path());
         assert!(result.is_some());
-        let (name, _entry) = result.unwrap();
+        let (name, _entry) = result.expect("unwrap should not fail");
         assert_eq!(name, "my-brain");
     }
 
     #[test]
     fn find_brain_by_path_finds_extra_root() {
-        let tmp = TempDir::new().unwrap();
-        let extra = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
+        let extra = TempDir::new().expect("unwrap should not fail");
         let mut cfg = GlobalConfig::default();
         cfg.brains.insert(
             "my-brain".to_string(),
@@ -1238,14 +1269,14 @@ roots = ["/some/path"]
 
         let result = find_brain_by_path(&cfg, extra.path());
         assert!(result.is_some());
-        let (name, _entry) = result.unwrap();
+        let (name, _entry) = result.expect("unwrap should not fail");
         assert_eq!(name, "my-brain");
     }
 
     #[test]
     fn find_brain_by_path_returns_none_for_unregistered_path() {
-        let tmp = TempDir::new().unwrap();
-        let other = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
+        let other = TempDir::new().expect("unwrap should not fail");
         let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
 
         let result = find_brain_by_path(&cfg, other.path());
@@ -1260,18 +1291,18 @@ roots = ["/some/path"]
 
     #[test]
     fn find_brain_by_id_finds_matching_entry() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
 
         let result = find_brain_by_id(&cfg, "abcd1234");
         assert!(result.is_some());
-        let (name, _entry) = result.unwrap();
+        let (name, _entry) = result.expect("unwrap should not fail");
         assert_eq!(name, "my-brain");
     }
 
     #[test]
     fn find_brain_by_id_returns_none_for_unknown_id() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("unwrap should not fail");
         let cfg = make_global_config_with_brain("my-brain", Some("abcd1234"), tmp.path());
 
         assert!(find_brain_by_id(&cfg, "xxxxxxxx").is_none());
@@ -1304,20 +1335,20 @@ roots = ["/some/path"]
             prefix: None,
             archived: true,
         };
-        let toml_str = toml::to_string_pretty(&entry).unwrap();
+        let toml_str = toml::to_string_pretty(&entry).expect("unwrap should not fail");
         assert!(
             toml_str.contains("archived = true"),
             "archived must be present in TOML when true"
         );
 
-        let decoded: BrainEntry = toml::from_str(&toml_str).unwrap();
+        let decoded: BrainEntry = toml::from_str(&toml_str).expect("unwrap should not fail");
         assert!(decoded.archived);
     }
 
     #[test]
     fn brain_entry_archived_defaults_to_false() {
         let toml_str = r#"roots = ["/tmp/brain"]"#;
-        let entry: BrainEntry = toml::from_str(toml_str).unwrap();
+        let entry: BrainEntry = toml::from_str(toml_str).expect("unwrap should not fail");
         assert!(
             !entry.archived,
             "archived must default to false when absent"
@@ -1334,7 +1365,7 @@ roots = ["/some/path"]
             prefix: None,
             archived: false,
         };
-        let toml_str = toml::to_string_pretty(&entry).unwrap();
+        let toml_str = toml::to_string_pretty(&entry).expect("unwrap should not fail");
         assert!(
             !toml_str.contains("archived"),
             "archived must be absent from TOML when false"
