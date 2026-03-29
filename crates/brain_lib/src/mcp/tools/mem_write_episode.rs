@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::db::summaries::Episode;
 use crate::mcp::McpContext;
@@ -82,12 +82,6 @@ impl McpTool for MemWriteEpisode {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            // Build the content string that SQLite will store (mirrors store_episode impl).
-            let embed_content = format!(
-                "Goal: {}\nActions: {}\nOutcome: {}",
-                params.goal, params.actions, params.outcome
-            );
-
             let episode = Episode {
                 brain_id: ctx.brain_id().to_string(),
                 goal: params.goal.clone(),
@@ -104,27 +98,6 @@ impl McpTool for MemWriteEpisode {
                     return ToolCallResult::error(format!("Failed to store episode: {e}"));
                 }
             };
-
-            // Best-effort: embed the episode into LanceDB for semantic search.
-            // Failure is non-fatal — the episode is still stored in SQLite.
-            if let (Some(embedder), Some(store)) = (ctx.embedder(), ctx.writable_store.as_ref()) {
-                match crate::embedder::embed_batch_async(embedder, vec![embed_content.clone()])
-                    .await
-                {
-                    Ok(vecs) => {
-                        if let Some(vec) = vecs.into_iter().next()
-                            && let Err(e) = store
-                                .upsert_summary(&summary_id, &embed_content, &vec)
-                                .await
-                        {
-                            warn!(error = %e, summary_id, "failed to embed episode (best-effort)");
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = %e, summary_id, "failed to generate embedding for episode (best-effort)");
-                    }
-                }
-            }
 
             let uri = SynapseUri::for_episode(ctx.brain_name(), &summary_id).to_string();
             let response = json!({

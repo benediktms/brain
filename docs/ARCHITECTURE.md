@@ -14,6 +14,15 @@ A **brain** is a named knowledge container with its own notes, tasks, indexes, a
 
 Notes, tasks, and records are parallel subsystems that can cross-reference each other (tasks link to note chunks, records link to tasks and note chunks) but have decoupled lifecycles and mutation patterns.
 
+## Scoping Model
+
+Brain uses mixed scoping by domain:
+
+- **Workspace-global**: notes/chunks (`files`, `chunks`, `links` and derived note retrieval) are shared across the workspace and do **not** carry `brain_id`.
+- **Brain-scoped**: tasks, records, summaries, and jobs are partitioned by `brain_id`.
+
+This is why `McpContext::with_brain_id()` only re-scopes brain-scoped domains (tasks/records and related metadata). It does not re-scope note/chunk retrieval, which is workspace-global by design.
+
 ## Directory Structure
 
 ```

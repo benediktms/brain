@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -77,8 +77,6 @@ impl McpTool for MemWriteProcedure {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            // Construct the embed text: title + steps.
-            let embed_content = format!("{}\n\n{}", params.title, params.steps);
             let importance = params.importance.clamp(0.0, 1.0);
 
             let summary_id = match ctx.db().store_procedure(
@@ -94,31 +92,6 @@ impl McpTool for MemWriteProcedure {
                     return ToolCallResult::error(format!("Failed to store procedure: {e}"));
                 }
             };
-
-            // Best-effort: embed the procedure into LanceDB for semantic search.
-            // Failure is non-fatal — the procedure is still stored in SQLite.
-            if let (Some(embedder), Some(store)) = (ctx.embedder(), ctx.writable_store.as_ref()) {
-                match crate::embedder::embed_batch_async(embedder, vec![embed_content.clone()])
-                    .await
-                {
-                    Ok(vecs) => {
-                        if let Some(vec) = vecs.into_iter().next()
-                            && let Err(e) = store
-                                .upsert_summary(&summary_id, &embed_content, &vec)
-                                .await
-                        {
-                            warn!(error = %e, summary_id, "failed to embed procedure (best-effort)");
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            summary_id,
-                            "failed to generate embedding for procedure (best-effort)"
-                        );
-                    }
-                }
-            }
 
             let uri = SynapseUri::for_procedure(ctx.brain_name(), &summary_id).to_string();
             let response = json!({

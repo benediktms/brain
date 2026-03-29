@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, types::ToSql};
 use ulid::Ulid;
 
 use crate::error::Result;
@@ -417,6 +417,58 @@ pub fn list_unconsolidated_episodes(
     )?;
     let rows = stmt.query_map(rusqlite::params![limit as i64, brain_id], map_summary_row)?;
     super::collect_rows(rows)
+}
+
+#[derive(Debug, Clone)]
+pub struct SummaryPollRow {
+    pub summary_id: String,
+    pub content: String,
+}
+
+pub fn find_stale_summaries_for_embedding(
+    conn: &Connection,
+    brain_id: &str,
+) -> Result<Vec<SummaryPollRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT summary_id, content
+         FROM summaries
+         WHERE kind IN ('episode', 'reflection', 'procedure')
+           AND updated_at > COALESCE(embedded_at, 0)
+           AND (brain_id = ?1 OR ?1 = '')
+         LIMIT 256",
+    )?;
+
+    let rows = stmt.query_map([brain_id], |row| {
+        Ok(SummaryPollRow {
+            summary_id: row.get(0)?,
+            content: row.get(1)?,
+        })
+    })?;
+
+    super::collect_rows(rows)
+}
+
+pub fn mark_summaries_embedded(conn: &Connection, summary_ids: &[&str]) -> Result<()> {
+    if summary_ids.is_empty() {
+        return Ok(());
+    }
+
+    let now = crate::utils::now_ts();
+    let placeholders: Vec<String> = (2..=summary_ids.len() + 1)
+        .map(|i| format!("?{i}"))
+        .collect();
+    let sql = format!(
+        "UPDATE summaries SET embedded_at = ?1 WHERE summary_id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut params: Vec<&dyn ToSql> = Vec::with_capacity(summary_ids.len() + 1);
+    params.push(&now as &dyn ToSql);
+    for id in summary_ids {
+        params.push(id as &dyn ToSql);
+    }
+
+    conn.execute(&sql, params.as_slice())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1160,5 +1212,70 @@ mod tests {
         );
         // valid_from should be set
         assert!(row.valid_from.is_some());
+    }
+
+    #[test]
+    fn test_find_stale_summaries_for_embedding_filters_kind_and_brain() {
+        let conn = setup();
+
+        let ep_id = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-a".into(),
+                goal: "Goal A".into(),
+                actions: "Actions A".into(),
+                outcome: "Outcome A".into(),
+                tags: vec![],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        let proc_id = store_procedure(&conn, "Procedure B", "step 1", &[], 1.0, "brain-b").unwrap();
+
+        conn.execute(
+            "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, valid_from, created_at, updated_at)
+             VALUES ('s-ml', 'summary', NULL, 'ml summary', '[]', 1.0, 'brain-a', 1000, 1000, 1000)",
+            [],
+        )
+        .unwrap();
+
+        let brain_a = find_stale_summaries_for_embedding(&conn, "brain-a").unwrap();
+        assert_eq!(brain_a.len(), 1);
+        assert_eq!(brain_a[0].summary_id, ep_id);
+
+        let all = find_stale_summaries_for_embedding(&conn, "").unwrap();
+        let ids: Vec<&str> = all.iter().map(|r| r.summary_id.as_str()).collect();
+        assert!(ids.contains(&ep_id.as_str()));
+        assert!(ids.contains(&proc_id.as_str()));
+        assert!(!ids.contains(&"s-ml"));
+    }
+
+    #[test]
+    fn test_mark_summaries_embedded_sets_timestamp() {
+        let conn = setup();
+        let summary_id = store_episode(
+            &conn,
+            &Episode {
+                brain_id: "brain-mark".into(),
+                goal: "Goal".into(),
+                actions: "Actions".into(),
+                outcome: "Outcome".into(),
+                tags: vec![],
+                importance: 1.0,
+            },
+        )
+        .unwrap();
+
+        mark_summaries_embedded(&conn, &[summary_id.as_str()]).unwrap();
+
+        let embedded_at: Option<i64> = conn
+            .query_row(
+                "SELECT embedded_at FROM summaries WHERE summary_id = ?1",
+                [summary_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(embedded_at.is_some());
     }
 }

@@ -11,6 +11,9 @@ use tracing::{debug, info, warn};
 
 use crate::db::Db;
 use crate::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
+use crate::db::summaries::{
+    SummaryPollRow, find_stale_summaries_for_embedding, mark_summaries_embedded,
+};
 use crate::embedder::{Embed, embed_batch_async};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
@@ -416,6 +419,74 @@ pub async fn poll_stale_records(
 
     let count = embedded_record_ids.len();
     info!(count, "embed_poll: records embedded");
+    count
+}
+
+pub async fn poll_stale_summaries(
+    db: &Db,
+    store: &impl crate::ports::SummaryStoreWriter,
+    embedder: &Arc<dyn Embed>,
+    brain_id: &str,
+) -> usize {
+    debug!("embed_poll: scanning stale summaries");
+
+    let brain_id_owned = brain_id.to_string();
+    let rows: Vec<SummaryPollRow> = match db
+        .with_read_conn(move |conn| find_stale_summaries_for_embedding(conn, &brain_id_owned))
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "embed_poll: failed to query stale summaries");
+            return 0;
+        }
+    };
+
+    if rows.is_empty() {
+        debug!("embed_poll: no stale summaries");
+        return 0;
+    }
+
+    info!(count = rows.len(), "embed_poll: embedding stale summaries");
+
+    let texts: Vec<String> = rows.iter().map(|r| r.content.clone()).collect();
+    let embeddings = match embed_batch_async(embedder, texts).await {
+        Ok(e) => e,
+        Err(e) => {
+            warn!(error = %e, "embed_poll: failed to embed summaries");
+            return 0;
+        }
+    };
+
+    let mut embedded_summary_ids: HashSet<String> = HashSet::new();
+
+    for (row, embedding) in rows.iter().zip(embeddings.iter()) {
+        if let Err(e) = store
+            .upsert_summary(&row.summary_id, &row.content, embedding)
+            .await
+        {
+            warn!(
+                summary_id = %row.summary_id,
+                error = %e,
+                "embed_poll: LanceDB upsert failed for summary"
+            );
+            continue;
+        }
+
+        embedded_summary_ids.insert(row.summary_id.clone());
+    }
+
+    if !embedded_summary_ids.is_empty() {
+        let ids_owned: Vec<String> = embedded_summary_ids.iter().cloned().collect();
+        if let Err(e) = db.with_write_conn(move |conn| {
+            let refs: Vec<&str> = ids_owned.iter().map(String::as_str).collect();
+            mark_summaries_embedded(conn, &refs)
+        }) {
+            warn!(error = %e, "embed_poll: failed to mark summaries as embedded");
+        }
+    }
+
+    let count = embedded_summary_ids.len();
+    info!(count, "embed_poll: summaries embedded");
     count
 }
 

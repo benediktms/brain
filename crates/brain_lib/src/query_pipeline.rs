@@ -306,6 +306,14 @@ where
                     candidate.byte_start = row.byte_start;
                     candidate.byte_end = row.byte_end;
                     candidate.pagerank_score = row.pagerank_score;
+                    candidate.tags = row
+                        .heading_path
+                        .split(" > ")
+                        .map(|segment| segment.trim_start_matches('#').trim())
+                        .filter(|segment| !segment.is_empty())
+                        .map(|segment| segment.to_lowercase())
+                        .collect();
+                    candidate.importance = candidate.pagerank_score;
 
                     if let Some(indexed_at) = row.last_indexed_at {
                         candidate.age_seconds = (now - indexed_at).max(0) as f64;
@@ -553,22 +561,10 @@ where
     /// prepare. The `episodes` slice is used as-is; no additional episode
     /// loading is performed.
     ///
-    /// # Finding 7 — brain_id post-filter
+    /// `brain_id` post-filter is intentionally absent here.
     ///
-    /// Once `brain_persistence` adds a `brain_id` column to the `summaries`
-    /// table and updates `SummaryRow` accordingly, add a post-filter here:
-    ///
-    /// ```ignore
-    /// let episodes: Vec<SummaryRow> = episodes
-    ///     .into_iter()
-    ///     .filter(|ep| ep.brain_id == target_brain_id)
-    ///     .collect();
-    /// ```
-    ///
-    /// For regular vector-search candidates enriched from the `chunks` table,
-    /// a similar `brain_id` filter belongs in `search_ranked` after the SQLite
-    /// enrichment step, following the same pattern as the vector-only filter.
-    /// That change also requires `brain_id` on `ChunkRow` from `brain_persistence`.
+    /// Note/chunk retrieval remains workspace-global by design. Brain scoping
+    /// applies to task/record domains and their related metadata.
     #[instrument(skip_all)]
     pub async fn reflect_with_episodes(
         &self,

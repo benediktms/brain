@@ -490,9 +490,10 @@ async fn process_embed_poll(
     let n_tasks = embed_poll::poll_stale_tasks(db, store, embedder, brain_id).await;
     let n_chunks = embed_poll::poll_stale_chunks(db, store, embedder).await;
     let n_records = embed_poll::poll_stale_records(db, store, embedder, brain_id).await;
+    let n_summaries = embed_poll::poll_stale_summaries(db, store, embedder, brain_id).await;
 
     Ok(Some(format!(
-        r#"{{"tasks":{n_tasks},"chunks":{n_chunks},"records":{n_records}}}"#
+        r#"{{"tasks":{n_tasks},"chunks":{n_chunks},"records":{n_records},"summaries":{n_summaries}}}"#
     )))
 }
 

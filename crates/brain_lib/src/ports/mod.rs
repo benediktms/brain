@@ -967,6 +967,89 @@ impl GraphLinkReader for Db {
 
 use crate::hierarchy::{DerivedSummary, DerivedSummaryStore, GeneratedScopeSummary, ScopeType};
 
+/// Write operations for derived scope summaries.
+///
+/// Consumers: hierarchy scope-summary generation paths.
+pub trait DerivedSummaryWriter: Send + Sync {
+    /// Generate or refresh a derived summary for a scope.
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<GeneratedScopeSummary>;
+
+    /// Read back the current summary for a scope.
+    fn get_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<Option<DerivedSummary>>;
+
+    /// Mark a scope summary stale so sweep/recompute can pick it up.
+    fn mark_scope_stale(&self, scope_type: &ScopeType, scope_value: &str) -> Result<usize>;
+}
+
+/// Read operations for querying derived scope summaries.
+///
+/// Consumers: MCP summary lookup/list paths and job sweeps.
+pub trait DerivedSummaryReader: Send + Sync {
+    /// Search derived summaries by query text.
+    fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>>;
+
+    /// List stale summaries in oldest-first order.
+    fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>>;
+}
+
+/// Persistence writes produced by async job execution.
+///
+/// Consumers: `pipeline::job_worker::persist_job_result` extraction.
+pub trait JobPersistence: Send + Sync {
+    /// Persist a generated scope summary payload into `derived_summaries`.
+    fn persist_scope_summary_result(&self, summary_id: &str, result: &str) -> Result<()>;
+
+    /// Persist a consolidation/reflection result and its lineage updates in
+    /// `summaries`, `summary_sources`, and related compatibility tables.
+    fn persist_consolidation_result(
+        &self,
+        suggested_title: &str,
+        result: &str,
+        episode_ids: &[String],
+        brain_id: &str,
+    ) -> Result<()>;
+}
+
+impl<T: DerivedSummaryStore + ?Sized> DerivedSummaryWriter for T {
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<GeneratedScopeSummary> {
+        DerivedSummaryStore::generate_scope_summary(self, scope_type, scope_value)
+    }
+
+    fn get_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<Option<DerivedSummary>> {
+        DerivedSummaryStore::get_scope_summary(self, scope_type, scope_value)
+    }
+
+    fn mark_scope_stale(&self, scope_type: &ScopeType, scope_value: &str) -> Result<usize> {
+        DerivedSummaryStore::mark_scope_stale(self, scope_type, scope_value)
+    }
+}
+
+impl<T: DerivedSummaryStore + ?Sized> DerivedSummaryReader for T {
+    fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>> {
+        DerivedSummaryStore::search_derived_summaries(self, query, limit)
+    }
+
+    fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>> {
+        DerivedSummaryStore::list_stale_summaries(self, limit)
+    }
+}
+
 // -- DerivedSummaryStore for Db --------------------------------------------
 
 impl DerivedSummaryStore for Db {

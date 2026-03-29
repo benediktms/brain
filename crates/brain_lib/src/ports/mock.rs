@@ -19,12 +19,14 @@ use crate::db::chunks::ChunkRow;
 use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::db::summaries::{Episode, SummaryRow};
 use crate::error::Result;
+use crate::hierarchy::{DerivedSummary, GeneratedScopeSummary, ScopeType};
 use crate::store::{QueryResult, VectorSearchMode};
 
 use super::{
-    ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, EmbeddingResetter,
-    EpisodeReader, EpisodeWriter, FileMetaReader, FileMetaWriter, FtsSearcher, GraphLinkReader,
-    SchemaMeta, SummaryReader, SummaryWriter,
+    ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, DerivedSummaryReader,
+    DerivedSummaryWriter, EmbeddingResetter, EpisodeReader, EpisodeWriter, FileMetaReader,
+    FileMetaWriter, FtsSearcher, GraphLinkReader, JobPersistence, SchemaMeta, SummaryReader,
+    SummaryWriter,
 };
 
 // ---------------------------------------------------------------------------
@@ -820,6 +822,158 @@ impl GraphLinkReader for MockGraphLinkReader {
             }
         }
         Ok(result)
+    }
+}
+
+#[derive(Default)]
+pub struct MockDerivedSummaryPersistence {
+    pub summaries: Mutex<HashMap<String, DerivedSummary>>,
+}
+
+impl MockDerivedSummaryPersistence {
+    fn scope_key(scope_type: &ScopeType, scope_value: &str) -> String {
+        format!("{}:{scope_value}", scope_type.as_str())
+    }
+
+    fn clone_summary(summary: &DerivedSummary) -> DerivedSummary {
+        DerivedSummary {
+            id: summary.id.clone(),
+            scope_type: summary.scope_type.clone(),
+            scope_value: summary.scope_value.clone(),
+            content: summary.content.clone(),
+            stale: summary.stale,
+            generated_at: summary.generated_at,
+        }
+    }
+}
+
+impl DerivedSummaryWriter for MockDerivedSummaryPersistence {
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<GeneratedScopeSummary> {
+        let mut summaries = self.summaries.lock().unwrap();
+        let key = Self::scope_key(scope_type, scope_value);
+        let source_content = format!("mock-source:{key}");
+
+        if let Some(existing) = summaries.get_mut(&key) {
+            existing.stale = false;
+            existing.generated_at = crate::utils::now_ts();
+            return Ok(GeneratedScopeSummary {
+                id: existing.id.clone(),
+                source_content,
+                content_changed: false,
+            });
+        }
+
+        let id = format!("mock-derived-{}", summaries.len() + 1);
+        summaries.insert(
+            key,
+            DerivedSummary {
+                id: id.clone(),
+                scope_type: scope_type.as_str().to_string(),
+                scope_value: scope_value.to_string(),
+                content: format!("mock summary for {}:{}", scope_type.as_str(), scope_value),
+                stale: false,
+                generated_at: crate::utils::now_ts(),
+            },
+        );
+
+        Ok(GeneratedScopeSummary {
+            id,
+            source_content,
+            content_changed: true,
+        })
+    }
+
+    fn get_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<Option<DerivedSummary>> {
+        let summaries = self.summaries.lock().unwrap();
+        let key = Self::scope_key(scope_type, scope_value);
+        Ok(summaries.get(&key).map(Self::clone_summary))
+    }
+
+    fn mark_scope_stale(&self, scope_type: &ScopeType, scope_value: &str) -> Result<usize> {
+        let mut summaries = self.summaries.lock().unwrap();
+        let key = Self::scope_key(scope_type, scope_value);
+        if let Some(summary) = summaries.get_mut(&key) {
+            summary.stale = true;
+            Ok(1)
+        } else {
+            Ok(0)
+        }
+    }
+}
+
+impl DerivedSummaryReader for MockDerivedSummaryPersistence {
+    fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>> {
+        let summaries = self.summaries.lock().unwrap();
+        Ok(summaries
+            .values()
+            .filter(|s| {
+                s.content.contains(query)
+                    || s.scope_value.contains(query)
+                    || s.scope_type.contains(query)
+            })
+            .take(limit)
+            .map(Self::clone_summary)
+            .collect())
+    }
+
+    fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>> {
+        let summaries = self.summaries.lock().unwrap();
+        let mut stale: Vec<DerivedSummary> = summaries
+            .values()
+            .filter(|s| s.stale)
+            .map(Self::clone_summary)
+            .collect();
+        stale.sort_by_key(|s| s.generated_at);
+        stale.truncate(limit);
+        Ok(stale)
+    }
+}
+
+#[derive(Default)]
+pub struct MockJobPersistence {
+    pub scope_results: Mutex<HashMap<String, (String, i64)>>,
+    pub consolidation_results: Mutex<HashMap<String, (String, String, Vec<String>, String, i64)>>,
+}
+
+impl JobPersistence for MockJobPersistence {
+    fn persist_scope_summary_result(&self, summary_id: &str, result: &str) -> Result<()> {
+        self.scope_results.lock().unwrap().insert(
+            summary_id.to_string(),
+            (result.to_string(), crate::utils::now_ts()),
+        );
+        Ok(())
+    }
+
+    fn persist_consolidation_result(
+        &self,
+        suggested_title: &str,
+        result: &str,
+        episode_ids: &[String],
+        brain_id: &str,
+    ) -> Result<()> {
+        let reflection_id = format!(
+            "mock-reflection-{}",
+            self.consolidation_results.lock().unwrap().len() + 1
+        );
+        self.consolidation_results.lock().unwrap().insert(
+            reflection_id,
+            (
+                suggested_title.to_string(),
+                result.to_string(),
+                episode_ids.to_vec(),
+                brain_id.to_string(),
+                crate::utils::now_ts(),
+            ),
+        );
+        Ok(())
     }
 }
 

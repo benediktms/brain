@@ -204,6 +204,10 @@ impl McpContext {
     ///
     /// Delegates store re-scoping to `BrainStores::with_brain_id()`.
     /// Search layer and metrics are shared.
+    ///
+    /// Note: this only re-scopes brain-scoped domains (tasks/records and
+    /// related metadata such as summaries/jobs). Notes/chunks are
+    /// workspace-global by design and are not re-scoped here.
     pub fn with_brain_id(
         &self,
         brain_id: &str,

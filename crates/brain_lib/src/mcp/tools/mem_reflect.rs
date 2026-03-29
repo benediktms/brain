@@ -4,7 +4,6 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -202,25 +201,6 @@ impl MemReflect {
                 return ToolCallResult::error(format!("Failed to store reflection: {e}"));
             }
         };
-
-        // Finding 2: best-effort LanceDB embedding.
-        if let (Some(embedder), Some(store)) = (ctx.embedder(), ctx.writable_store.as_ref()) {
-            let embed_content = params.content.clone();
-            match crate::embedder::embed_batch_async(embedder, vec![embed_content.clone()]).await {
-                Ok(vecs) => {
-                    if let Some(vec) = vecs.into_iter().next()
-                        && let Err(e) = store
-                            .upsert_summary(&summary_id, &embed_content, &vec)
-                            .await
-                    {
-                        warn!(error = %e, summary_id, "failed to embed reflection (best-effort)");
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, summary_id, "failed to generate embedding for reflection (best-effort)");
-                }
-            }
-        }
 
         let uri = SynapseUri::for_reflection(ctx.brain_name(), &summary_id).to_string();
         let response = json!({
