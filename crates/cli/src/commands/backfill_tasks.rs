@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use brain_lib::db::Db;
 use brain_lib::prelude::*;
 
 /// Backfill task capsule embeddings into the vector store for tasks

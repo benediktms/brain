@@ -71,10 +71,6 @@ impl McpContext {
     // ── Convenience accessors ────────────────────────────────────────────
     // Minimise churn in tool files — they keep using short paths.
 
-    pub fn db(&self) -> &Db {
-        self.stores.db()
-    }
-
     pub fn store(&self) -> Option<&StoreReader> {
         self.search.as_ref().map(|s| &s.store)
     }
@@ -390,7 +386,7 @@ async fn handle_request(
                 } => session_brain_name,
             };
             if let Some(roots) = req.params.get("roots")
-                && let Some(resolved) = resolve_brain_from_roots(roots, ctx.db())
+                && let Some(resolved) = resolve_brain_from_roots(roots, ctx.stores.db())
             {
                 info!(brain = %resolved, "session brain resolved from initialize roots");
                 *session_brain_name.write().await = resolved;

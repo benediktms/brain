@@ -529,6 +529,7 @@ async fn test_mcp_write_episode_and_retrieve() {
 
     // Verify episode is in the database
     let episode = ctx
+        .stores
         .db()
         .with_read_conn(|conn| get_summary(conn, summary_id))
         .unwrap();
@@ -653,6 +654,7 @@ async fn test_mcp_expand_returns_full_content() {
 
     // Get the chunk_id
     let chunk_ids: Vec<String> = ctx
+        .stores
         .db()
         .with_read_conn(|conn: &rusqlite::Connection| {
             let mut stmt = conn.prepare("SELECT chunk_id FROM chunks")?;

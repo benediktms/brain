@@ -200,7 +200,7 @@ impl TaskApplyEvent {
 
         // Reject task creation on archived brains (other event types pass through)
         if event_type == EventType::TaskCreated {
-            match super::is_brain_archived(ctx.db(), ctx.brain_id()) {
+            match super::is_brain_archived(ctx.stores.db(), ctx.brain_id()) {
                 Ok(true) => {
                     return ExecuteResult {
                         result: ToolCallResult::error(
@@ -1015,7 +1015,8 @@ mod tests {
     }
 
     fn mark_brain_archived(ctx: &crate::mcp::McpContext) {
-        ctx.db()
+        ctx.stores
+            .db()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE brains SET archived = 1 WHERE brain_id = ?1",

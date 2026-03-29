@@ -91,7 +91,7 @@ impl McpTool for MemWriteEpisode {
                 importance: params.importance,
             };
 
-            let summary_id = match ctx.db().store_episode(&episode) {
+            let summary_id = match ctx.stores.db().store_episode(&episode) {
                 Ok(id) => id,
                 Err(e) => {
                     error!(error = %e, "failed to store episode");

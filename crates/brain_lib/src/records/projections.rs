@@ -7,7 +7,7 @@ pub use brain_persistence::db::records::projections::*;
 /// This wrapper stays in brain_lib because it depends on file I/O
 /// (`read_all_events` lives here, not in brain_persistence).
 pub fn rebuild(
-    conn: &crate::db::Connection,
+    conn: &rusqlite::Connection,
     events_path: &std::path::Path,
 ) -> crate::error::Result<usize> {
     let events = super::events::read_all_events(events_path)?;

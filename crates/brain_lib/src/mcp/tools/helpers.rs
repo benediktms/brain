@@ -97,7 +97,7 @@ pub async fn build_federated_brains(
     brain_keys_input: &[String],
 ) -> Result<Vec<(String, Option<StoreReader>)>, String> {
     let brain_keys: Vec<String> = if brain_keys_input.iter().any(|b| b == "all") {
-        match crate::config::list_brain_keys(ctx.db()) {
+        match crate::config::list_brain_keys(ctx.stores.db()) {
             Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
             Err(e) => return Err(format!("Failed to list brains: {e}")),
         }

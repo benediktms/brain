@@ -108,7 +108,7 @@ pub(super) struct TaskCreate;
 impl TaskCreate {
     async fn execute(&self, raw_params: Value, ctx: &McpContext) -> ToolCallResult {
         // Reject task creation on archived brains
-        match super::is_brain_archived(ctx.db(), ctx.brain_id()) {
+        match super::is_brain_archived(ctx.stores.db(), ctx.brain_id()) {
             Ok(true) => {
                 return ToolCallResult::error(
                     "Cannot create tasks: brain is archived. Use `brain link` to add a root and unarchive.",
@@ -150,7 +150,7 @@ impl TaskCreate {
                 }
             };
             // Guard: reject writes to archived brains
-            match super::is_brain_archived(ctx.db(), &bid) {
+            match super::is_brain_archived(ctx.stores.db(), &bid) {
                 Ok(true) => {
                     return ToolCallResult::error(format!(
                         "Target brain '{remote_brain_name}' is archived"
@@ -161,12 +161,8 @@ impl TaskCreate {
                     return ToolCallResult::error(format!("Failed to check archived status: {e}"));
                 }
             }
-            let remote_tasks = match crate::tasks::TaskStore::with_brain_id(
-                ctx.db().clone(),
-                &bid,
-                &remote_brain_name,
-            ) {
-                Ok(t) => t,
+            let remote_tasks = match ctx.stores.with_brain_id(&bid, &remote_brain_name) {
+                Ok(s) => s.tasks,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
                 }
@@ -423,7 +419,8 @@ mod tests {
     use super::TaskCreate;
 
     fn mark_brain_archived(ctx: &crate::mcp::McpContext) {
-        ctx.db()
+        ctx.stores
+            .db()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE brains SET archived = 1 WHERE brain_id = ?1",

@@ -46,7 +46,7 @@ impl RecordSaveSnapshot {
                 Err(e) => return ToolCallResult::error(format!("Failed to resolve brain: {e}")),
             };
             // Guard: reject writes to archived brains
-            match super::is_brain_archived(ctx.db(), &bid) {
+            match super::is_brain_archived(ctx.stores.db(), &bid) {
                 Ok(true) => {
                     return ToolCallResult::error(format!(
                         "Target brain '{brain_name}' is archived"
@@ -61,12 +61,8 @@ impl RecordSaveSnapshot {
             if bid == ctx.brain_id() {
                 ctx.stores.records.clone()
             } else {
-                match crate::records::RecordStore::with_brain_id(
-                    ctx.db().clone(),
-                    &bid,
-                    &brain_name,
-                ) {
-                    Ok(s) => s,
+                match ctx.stores.with_brain_id(&bid, &brain_name) {
+                    Ok(s) => s.records,
                     Err(e) => {
                         return ToolCallResult::error(format!("Failed to open remote brain: {e}"));
                     }
@@ -157,7 +153,11 @@ impl RecordSaveSnapshot {
         let tag_refs: Vec<&str> = tags_for_abstract.iter().map(String::as_str).collect();
         let capsule = generate_l0_abstract(&title_for_abstract, &content_text, &tag_refs);
         let record_file_id = format!("record:{record_id}");
-        if let Err(e) = ctx.db().upsert_record_chunk(&record_file_id, &capsule) {
+        if let Err(e) = ctx
+            .stores
+            .db()
+            .upsert_record_chunk(&record_file_id, &capsule)
+        {
             tracing::warn!(
                 record_id = %record_id,
                 error = %e,

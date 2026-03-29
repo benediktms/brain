@@ -45,7 +45,7 @@ impl BrainRouter {
         let (brain_id, brain_name) = match brain {
             Some(input) => {
                 // DB lookup via resolve_brain (name, id, alias, or root path)
-                match self.ctx.db().resolve_brain(input) {
+                match self.ctx.stores.db().resolve_brain(input) {
                     Ok(pair) => pair,
                     Err(_) => {
                         return ToolCallResult::error(format!("Brain not found: {input}"));
@@ -54,7 +54,7 @@ impl BrainRouter {
             }
             None => {
                 // Default brain — resolve by ID
-                match self.ctx.db().resolve_brain(&self.default_brain_id) {
+                match self.ctx.stores.db().resolve_brain(&self.default_brain_id) {
                     Ok(pair) => pair,
                     Err(_) => (self.default_brain_id.clone(), String::new()),
                 }
@@ -88,7 +88,8 @@ mod tests {
         } else {
             ctx.brain_id().to_string()
         };
-        ctx.db()
+        ctx.stores
+            .db()
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);
@@ -105,7 +106,8 @@ mod tests {
         } else {
             ctx.brain_id().to_string()
         };
-        ctx.db()
+        ctx.stores
+            .db()
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);
@@ -129,7 +131,8 @@ mod tests {
         } else {
             ctx.brain_id().to_string()
         };
-        ctx.db()
+        ctx.stores
+            .db()
             .ensure_brain_registered(&brain_id, "my-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);

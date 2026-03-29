@@ -87,15 +87,14 @@ impl TaskGet {
                         ));
                     }
                 };
-                let remote_store =
-                    match TaskStore::with_brain_id(ctx.db().clone(), &bid, &remote_brain_name) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return ToolCallResult::error(format!(
-                                "Failed to open brain '{remote_brain_name}': {e}"
-                            ));
-                        }
-                    };
+                let remote_store = match ctx.stores.with_brain_id(&bid, &remote_brain_name) {
+                    Ok(s) => s.tasks,
+                    Err(e) => {
+                        return ToolCallResult::error(format!(
+                            "Failed to open brain '{remote_brain_name}': {e}"
+                        ));
+                    }
+                };
                 // Try resolving the task in this brain's store
                 if let Ok(resolved_id) = remote_store.resolve_task_id(&task_id_input)
                     && remote_store.get_task(&resolved_id).ok().flatten().is_some()

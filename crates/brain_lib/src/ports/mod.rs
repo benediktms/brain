@@ -20,8 +20,6 @@
 
 use std::collections::HashMap;
 
-use rusqlite::OptionalExtension;
-
 use crate::db::chunks::ChunkRow;
 use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::error::Result;

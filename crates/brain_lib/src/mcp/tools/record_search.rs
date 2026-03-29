@@ -113,7 +113,7 @@ impl McpTool for RecordSearch {
 
             let search_result = if params.brains.is_empty() {
                 // Single-brain path.
-                let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
+                let pipeline = QueryPipeline::new(ctx.stores.db(), store, embedder, &ctx.metrics);
                 match pipeline.search(&search_params).await {
                     Ok(r) => r,
                     Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),
@@ -133,7 +133,7 @@ impl McpTool for RecordSearch {
                 };
 
                 let federated = FederatedPipeline {
-                    db: ctx.db(),
+                    db: ctx.stores.db(),
                     brains,
                     embedder,
                     metrics: &ctx.metrics,

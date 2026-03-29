@@ -210,7 +210,8 @@ mod tests {
 
     async fn start_test_server(socket_path: &Path) -> CancellationToken {
         let (_dir, ctx) = create_test_context().await;
-        ctx.db()
+        ctx.stores
+            .db()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());

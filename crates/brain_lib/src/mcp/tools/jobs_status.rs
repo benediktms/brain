@@ -34,7 +34,7 @@ impl JobsStatus {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let db = ctx.db();
+        let db = ctx.stores.db();
 
         let status_filter = if let Some(status_str) = params.status.as_deref() {
             match JobStatus::from_str(status_str) {
@@ -220,7 +220,7 @@ mod tests {
         use crate::ports::JobQueue;
 
         let (_dir, ctx) = create_test_context().await;
-        let db = ctx.db();
+        let db = ctx.stores.db();
 
         let payload = JobPayload::SummarizeScope {
             summary_id: "sum-123".into(),

@@ -75,7 +75,7 @@ impl McpTool for MemExpand {
 
             let memory_ids: Vec<String> =
                 params.memory_ids.iter().map(|id| resolve_id(id)).collect();
-            let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
+            let pipeline = QueryPipeline::new(ctx.stores.db(), store, embedder, &ctx.metrics);
             let expand_result = match pipeline
                 .expand(&memory_ids, params.budget_tokens as usize)
                 .await
@@ -155,7 +155,8 @@ mod tests {
         // Chunk ID will be "record:BRN-TEST01:0" (chunk_ord 0).
         let record_file_id = "record:BRN-TEST01";
         let capsule_text = "This is the record capsule content for expand test.";
-        ctx.db()
+        ctx.stores
+            .db()
             .upsert_record_chunk(record_file_id, capsule_text)
             .expect("upsert_record_chunk must succeed");
 

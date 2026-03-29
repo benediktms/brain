@@ -99,15 +99,18 @@ impl McpTool for MemConsolidate {
             };
 
             let limit = params.limit.min(500);
-            let episodes = match ctx.db().list_episodes(limit, effective_brain_id) {
+            let episodes = match ctx.stores.db().list_episodes(limit, effective_brain_id) {
                 Ok(rows) => rows,
                 Err(e) => return ToolCallResult::error(format!("Failed to list episodes: {e}")),
             };
 
             let result = consolidate_episodes(episodes, params.gap_seconds);
             let jobs_enqueued = if params.auto_summarize {
-                match enqueue_cluster_summarization(ctx.db(), &result.clusters, effective_brain_id)
-                {
+                match enqueue_cluster_summarization(
+                    ctx.stores.db(),
+                    &result.clusters,
+                    effective_brain_id,
+                ) {
                     Ok(count) => count,
                     Err(e) => {
                         return ToolCallResult::error(format!(

@@ -43,13 +43,12 @@ impl TaskLabelsBatch {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            let remote_tasks =
-                match crate::tasks::TaskStore::with_brain_id(ctx.db().clone(), &bid, &brain_name) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
-                    }
-                };
+            let remote_tasks = match ctx.stores.with_brain_id(&bid, &brain_name) {
+                Ok(s) => s.tasks,
+                Err(e) => {
+                    return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
+                }
+            };
             return self.execute_with_store(params, &remote_tasks, &brain_name);
         }
 

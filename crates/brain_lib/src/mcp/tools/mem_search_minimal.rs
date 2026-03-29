@@ -141,7 +141,7 @@ impl McpTool for MemSearchMinimal {
 
             let search_result = if params.brains.is_empty() {
                 // Single-brain path.
-                let pipeline = QueryPipeline::new(ctx.db(), store, embedder, &ctx.metrics);
+                let pipeline = QueryPipeline::new(ctx.stores.db(), store, embedder, &ctx.metrics);
                 if params.explain {
                     match pipeline.search_with_scores(&search_params).await {
                         Ok(r) => r,
@@ -170,7 +170,7 @@ impl McpTool for MemSearchMinimal {
                 };
 
                 let federated = FederatedPipeline {
-                    db: ctx.db(),
+                    db: ctx.stores.db(),
                     brains,
                     embedder,
                     metrics: &ctx.metrics,

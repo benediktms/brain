@@ -102,7 +102,7 @@ impl McpTool for MemSummarizeScope {
                 }
             };
 
-            let db = ctx.db();
+            let db = ctx.stores.db();
 
             let mut llm_pending = false;
 
@@ -250,7 +250,7 @@ mod tests {
     #[tokio::test]
     async fn test_summarize_scope_async_llm_enqueues_job() {
         let (_dir, ctx) = create_test_context().await;
-        ctx.db()
+        ctx.stores.db()
             .with_write_conn(|conn| {
                 conn.execute(
                     "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?1, 'idle')",
@@ -284,6 +284,7 @@ mod tests {
         assert_eq!(parsed["llm_pending"], true);
 
         let jobs = ctx
+            .stores
             .db()
             .with_read_conn(|conn| crate::db::jobs::list_jobs(conn, None, 10))
             .unwrap();

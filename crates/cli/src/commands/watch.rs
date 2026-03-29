@@ -424,7 +424,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             .next()
             .expect("at least one brain")
             .mcp_context;
-        let shared_db = shared_ctx.db();
+        let shared_db = shared_ctx.stores.db();
 
         // Read existing prefixes from DB to preserve manual overrides.
         let existing_prefixes: std::collections::HashMap<String, String> = shared_db
@@ -956,7 +956,7 @@ async fn reload_and_project(
     let db = brains
         .values()
         .next()
-        .map(|inst| inst.mcp_context.db())
+        .map(|inst| inst.mcp_context.stores.db())
         .unwrap_or(shared_db);
 
     // Read existing prefixes from DB to preserve manual overrides.

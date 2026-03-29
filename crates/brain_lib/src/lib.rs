@@ -1,9 +1,11 @@
 pub mod capsule;
 pub mod chunker;
+pub mod db {
+    pub use brain_persistence::db::*;
+}
 pub mod config;
 pub mod consolidation;
 pub mod dedup;
-pub use brain_persistence::db;
 pub mod doctor;
 pub mod embedder;
 pub use brain_persistence::error;
@@ -26,7 +28,9 @@ pub mod records;
 pub mod retrieval;
 pub mod scanner;
 pub mod search_service;
-pub use brain_persistence::store;
+pub mod store {
+    pub use brain_persistence::store::*;
+}
 pub mod stores;
 pub mod summarizer;
 pub mod tasks;
@@ -38,7 +42,6 @@ pub mod work_queue;
 
 pub mod prelude {
     pub use crate::chunker::{Chunk, chunk_document, chunk_text};
-    pub use crate::db::Db;
     pub use crate::doctor::{CheckStatus, DoctorReport};
     pub use crate::embedder::{Embed, Embedder};
     pub use crate::error::{BrainCoreError, Result};

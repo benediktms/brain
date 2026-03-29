@@ -104,7 +104,7 @@ pub async fn seed_test_chunks(ctx: &TestHarnessContext) -> usize {
     )
     .expect("write seed markdown");
 
-    let db = ctx.ctx.db().clone();
+    let db = ctx.ctx.stores.db().clone();
     let store = Store::open_or_create(&ctx.lance_path)
         .await
         .expect("open LanceDB for indexing");

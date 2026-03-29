@@ -79,7 +79,7 @@ impl McpTool for MemWriteProcedure {
 
             let importance = params.importance.clamp(0.0, 1.0);
 
-            let summary_id = match ctx.db().store_procedure(
+            let summary_id = match ctx.stores.db().store_procedure(
                 &params.title,
                 &params.steps,
                 &params.tags,

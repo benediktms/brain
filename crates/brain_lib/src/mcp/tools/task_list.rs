@@ -82,12 +82,8 @@ impl TaskList {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
                 }
             };
-            let remote_tasks = match crate::tasks::TaskStore::with_brain_id(
-                ctx.db().clone(),
-                &bid,
-                &remote_brain_name,
-            ) {
-                Ok(t) => t,
+            let remote_tasks = match ctx.stores.with_brain_id(&bid, &remote_brain_name) {
+                Ok(s) => s.tasks,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
                 }
