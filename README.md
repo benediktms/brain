@@ -1,6 +1,6 @@
 # brain
 
-A local-first personal knowledge base daemon that indexes Markdown notes into a hybrid retrieval system and exposes token-budgeted memory tools to AI agents over MCP.
+A local-first personal knowledge base with task management and memory retrieval, exposing token-budgeted tools to AI agents over MCP.
 
 ---
 
@@ -20,13 +20,35 @@ brain takes a different position: run everything locally, combine all retrieval 
 
 ## Overview
 
-brain is a Rust daemon that watches a directory of Markdown files, incrementally indexes them into a dual-store system (SQLite for full-text search and metadata, LanceDB for 384-dim vector embeddings), and serves retrieval tools over MCP stdio JSON-RPC.
+brain is a Rust daemon that manages tasks, records, and Markdown notes. It incrementally indexes content into a dual-store system (SQLite for full-text search and metadata, LanceDB for 384-dim vector embeddings) and serves retrieval tools over MCP stdio JSON-RPC.
 
 **Token budgeting is a first-class constraint.** Instead of returning "top-k chunks" regardless of size, `memory.search_minimal` returns compact stubs within a declared token budget. The agent inspects the stubs, then calls `memory.expand` to fetch full content only for the chunks worth reading. This two-phase progressive retrieval lets agents spend context window space on reasoning rather than raw text.
 
 **Hybrid scoring combines six signals** — vector similarity, BM25 keyword ranking, recency decay, backlink count, tag match, and importance — into a single relevance score. An `intent` parameter shifts signal weights per query type: `lookup` upweights keyword precision; `planning` upweights recency and link structure; `synthesis` upweights semantic similarity.
 
 **Everything runs on-device.** No network calls, no API keys, no ongoing cost after the initial ~130MB model download. The entire index can be rebuilt from the Markdown files at any time.
+
+---
+
+## Features
+
+### Tasks
+An event-sourced task system with dependencies, labels, and comments. Tasks are automatically indexed into the memory system as they are created or updated, making them semantically searchable alongside notes.
+
+### Memory & Search
+Hybrid retrieval combining vector search (LanceDB) and keyword search (SQLite FTS5). Supports episodic memory (episodes), procedural memory (procedures), and reflective synthesis (reflections).
+
+### Records
+Content-addressed storage for artifacts and snapshots. Records can be linked to tasks or note chunks, providing a durable audit trail of work products.
+
+### Notes
+Markdown-based knowledge base. brain watches your note directories and incrementally indexes changes, extracting wiki-links, tags, and heading-aware chunks.
+
+### Jobs
+An internal job system for deferred and recurring work. Handles background tasks like embedding stale content, generating summaries, and consolidating episodic memories into reflections.
+
+### neural_link
+Real-time multi-agent coordination. Enables multiple agents to share a coordination room, exchange findings, and resolve blockers during complex multi-step tasks.
 
 ---
 
@@ -160,11 +182,17 @@ graph TB
 
         subgraph Server["MCP Server"]
             SM["memory.*"] ~~~ TA["tasks.*"]
+            TA ~~~ RC["records.*"]
+            RC ~~~ NL["neural_link.*"]
+        end
+
+        subgraph Jobs["Job System"]
+            JW[Job Worker] --> JS[Job Store]
         end
     end
 
     subgraph Storage["Dual Store"]
-        SQLite["SQLite<br/>FTS5 · metadata · links · tasks"]
+        SQLite["SQLite<br/>FTS5 · metadata · links · tasks · records · jobs"]
         LanceDB["LanceDB<br/>384-dim embeddings"]
     end
 
@@ -174,6 +202,7 @@ graph TB
     Server --> Query
     Query --> SQLite
     Query --> LanceDB
+    JW --> SQLite
 ```
 
 ### Memory Tiers
@@ -267,7 +296,7 @@ just clean-db     # Clean database (forces full reindex)
 
 ```
 brain/
-  brain_lib/      # Core library: indexing, retrieval, embedding, MCP, tasks, records
+  brain_lib/      # Core library: indexing, retrieval, embedding, MCP, tasks, records, jobs
   cli/            # Thin binary: wires CLI commands to library functions
   docs/
     ARCHITECTURE.md

@@ -1,27 +1,40 @@
 # Architecture Overview
 
-A local-first "Personal Second Brain" that indexes Markdown notes into a dual-store system (SQLite + LanceDB) and exposes token-budgeted retrieval tools to AI agents over MCP stdio JSON-RPC.
+A local-first personal knowledge base with task management and memory retrieval, exposing token-budgeted tools to AI agents over MCP.
 
 ## Concepts
 
 A **brain** is a named knowledge container with its own notes, tasks, indexes, and configuration. Multiple brains can coexist (e.g., `personal`, `work-project`, `research`), managed by a central **registry** at `~/.brain/`.
 
-**Core invariant**: Each domain has exactly one source of truth, and sync is always unidirectional:
+### Core Domains
 
-- **Notes**: Markdown files are the source of truth. SQLite metadata, LanceDB embeddings, and FTS indexes are derived projections, rebuildable from source.
-- **Tasks**: SQLite is the sole source of truth. All mutations go directly to SQLite — no event log. One-time `import_from_jsonl` exists for migrating legacy `.brain/tasks/events.jsonl` files into the database.
-- **Records**: SQLite is the sole source of truth. Payloads are stored out-of-line in a content-addressed object store (`~/.brain/objects/`). No event log — all mutations go directly to SQLite. See [docs/RECORDS.md](./RECORDS.md) for the full design.
+Brain manages three primary domains with decoupled lifecycles:
 
-Notes, tasks, and records are parallel subsystems that can cross-reference each other (tasks link to note chunks, records link to tasks and note chunks) but have decoupled lifecycles and mutation patterns.
+| Domain | Source of Truth | Derived State | Purpose |
+|--------|---|---|---|
+| **Notes** | Markdown files in repo | SQLite metadata + LanceDB embeddings | Semantic search, indexing |
+| **Tasks** | SQLite (`brain.db`) | LanceDB capsules (searchable via `memory_search_minimal`) | Intent, execution state, dependencies |
+| **Records** | SQLite (`brain.db`) + object store (`~/.brain/objects/`) | — | Work products, artifacts, snapshots |
+
+**Core invariant**: Each domain has exactly one source of truth, and sync is always unidirectional.
 
 ## Scoping Model
 
-Brain uses mixed scoping by domain:
+Brain uses mixed scoping by domain to balance workspace-wide discovery with brain-specific isolation:
 
-- **Workspace-global**: notes/chunks (`files`, `chunks`, `links` and derived note retrieval) are shared across the workspace and do **not** carry `brain_id`.
-- **Brain-scoped**: tasks, records, summaries, and jobs are partitioned by `brain_id`.
+- **Workspace-global**: Notes and chunks are shared across the entire workspace. They do **not** carry a `brain_id`. This allows any brain in the same workspace to discover and link to the same note content.
+- **Brain-scoped**: Tasks, records, summaries, and jobs are partitioned by `brain_id`. These are private to the specific brain that created them.
 
-This is why `McpContext::with_brain_id()` only re-scopes brain-scoped domains (tasks/records and related metadata). It does not re-scope note/chunk retrieval, which is workspace-global by design.
+This is why `McpContext::with_brain_id()` only re-scopes brain-scoped domains. Note retrieval remains workspace-global by design.
+
+## Repository Boundary
+
+The codebase is split into two primary crates to separate domain logic from persistence implementations:
+
+- **`brain_lib`**: Contains the core domain logic, traits (ports), and the MCP server implementation. It defines how indexing, retrieval, and task management should work without being tied to a specific database.
+- **`brain_persistence`**: Contains the concrete SQL implementations (adapters) for SQLite and LanceDB. It handles schema migrations, query execution, and the content-addressed object store.
+
+This boundary allows for easier testing via mocks and ensures that domain rules are not leaked into persistence code.
 
 ## Directory Structure
 
@@ -44,35 +57,6 @@ This is why `McpContext::with_brain_id()` only re-scopes brain-scoped domains (t
   notes/
     decisions.md                           # Indexed as notes
 ```
-
-**Brain marker** (`.brain/brain.toml` in a project):
-```toml
-name = "my-project"
-notes = ["docs", "notes"]                  # Relative paths to index
-```
-
-**Central registry** (`~/.brain/state_projection.toml` — read-only projection of DB):
-```toml
-[brains.my-project]
-root = "~/code/my-project"
-notes = ["~/code/my-project/docs", "~/code/my-project/notes"]
-
-[brains.personal]
-root = "~/notes"
-notes = ["~/notes"]
-```
-
-**Key design decisions:**
-- `brain init` in a project creates `.brain/brain.toml` and registers the brain centrally
-- **Unified SQLite** (`~/.brain/brain.db`) is shared by all brains. Tasks and records tables partition by `brain_id`.
-- Per-brain vector indexes (`~/.brain/brains/<name>/lancedb/`) maintain distinct semantic spaces — vectors from different brains are not comparable.
-- Object store (`~/.brain/objects/`) is shared globally — deduplication is across all brains.
-- SQLite is the sole source of truth for tasks and records — all mutations go directly to SQLite with no event log.
-- A brain can index multiple note directories (e.g., `docs/` and `notes/` from one project)
-- Moving a project just means updating the path in the registry
-- No symlinks — just paths in config files
-- Note links (`NoteLinked` events) are intentionally soft references — no chunk existence validation at write time. This enables future cross-brain chunk references without schema changes
-- Cross-brain task references use a `brain_id` field on dependency payloads. NULL = local brain (zero-cost common case), non-NULL = remote brain ID. Separate field enables efficient SQLite indexing and clean JOINs to filter by brain
 
 ## System Architecture
 
@@ -105,7 +89,13 @@ graph TB
             RF["memory.reflect"]
             TA["tasks.*"]
             RC["records.*"]
+            NL["neural_link.*"]
             BL["brains.list / status"]
+        end
+
+        subgraph Jobs["Job System"]
+            JW[Job Worker]
+            JS[Job Scheduler]
         end
     end
 
@@ -119,10 +109,12 @@ graph TB
             TL[task_note_links table<br/>cross-references]
             RT[records table<br/>artifacts + snapshots]
             ST[summaries table<br/>episodes + reflections]
+            JT[jobs table<br/>queue + status]
         end
 
         subgraph LanceDB["LanceDB (Data Plane)"]
             VT[chunks table<br/>content + 384-dim embeddings]
+            KT[task_capsules table<br/>task embeddings]
         end
 
     end
@@ -144,617 +136,116 @@ graph TB
     Server -->|task/record writes| SQLite
     Query --> SQLite
     Query --> LanceDB
+    JW --> SQLite
+    JS --> SQLite
+```
+
+## Job System Architecture
+
+Brain uses an internal job system for deferred and recurring work. Jobs are stored in the `jobs` table in SQLite and processed by a background worker.
+
+- **Enqueue**: Jobs are added to the queue with a `kind`, `payload`, and `priority`.
+- **Process**: The `JobWorker` claims ready jobs, dispatches them to specialized handlers, and updates their status (`pending`, `in_progress`, `done`, `failed`).
+- **Retry**: Failed jobs are automatically rescheduled using an exponential backoff strategy until they succeed or exhaust their retry limit.
+- **Recurring Jobs**: The `JobScheduler` ensures that singleton jobs (like `full_scan_sweep` or `embed_poll_sweep`) are reconciled and rescheduled after completion.
+
+## Sequence Diagrams
+
+### 1. Task Creation Flow
+
+```mermaid
+sequenceDiagram
+    participant Agent as AI Agent
+    participant MCP as MCP Server
+    participant DB as SQLite
+    participant Job as Job System
+    participant Vec as LanceDB
+    participant Emb as Embedder
+
+    Agent->>MCP: tasks.create(title, description, ...)
+    MCP->>DB: INSERT INTO tasks (task_id, brain_id, title, ...)
+    DB-->>MCP: task_id
+    MCP->>Job: Enqueue EmbedPollSweep (if not already active)
+    MCP-->>Agent: { task_id, task }
+
+    Note over Job,Vec: Background Processing
+    Job->>DB: Claim EmbedPollSweep
+    Job->>DB: SELECT * FROM tasks WHERE needs_embedding = 1
+    Job->>Emb: embed(task_capsule)
+    Emb-->>Job: 384-dim vector
+    Job->>Vec: Upsert task capsule embedding
+    Job->>DB: UPDATE tasks SET needs_embedding = 0
+```
+
+### 2. Record Storage Flow
+
+```mermaid
+sequenceDiagram
+    participant Agent as AI Agent
+    participant MCP as MCP Server
+    participant DB as SQLite
+    participant Obj as Object Store
+    participant Job as Job System
+
+    Agent->>MCP: records.create_artifact(title, text, ...)
+    MCP->>Obj: Compute BLAKE3 hash of text
+    MCP->>Obj: Write payload to ~/.brain/objects/<hash>
+    MCP->>DB: INSERT INTO records (record_id, brain_id, object_id, ...)
+    MCP->>Job: Enqueue EmbedPollSweep
+    MCP-->>Agent: { record_id, record }
+```
+
+### 3. Hybrid Query Flow
+
+```mermaid
+sequenceDiagram
+    participant Agent as AI Agent
+    participant MCP as MCP Server
+    participant HR as Hybrid Ranker
+    participant DB as SQLite
+    participant Vec as LanceDB
+
+    Agent->>MCP: memory.search_minimal(query, intent)
+    MCP->>HR: search_minimal(query, intent, brain_id)
+    
+    par Vector Search
+        HR->>Vec: vector_search(embed(query))
+        Vec-->>HR: top-k chunks (LanceDB)
+    and Keyword Search
+        HR->>DB: FTS5 query (BM25)
+        DB-->>HR: top-k chunks (SQLite)
+    and Task Search
+        HR->>Vec: vector_search_tasks(embed(query))
+        Vec-->>HR: top-k task capsules
+    end
+
+    HR->>HR: Fusion & Hybrid Scoring
+    HR->>HR: Token Budget Packing
+    HR-->>MCP: results[]
+    MCP-->>Agent: { results[] }
 ```
 
 ## Storage Role Separation
 
 | Concern | SQLite (Sole Source of Truth) | LanceDB (Per-Brain Data Plane) | Object Store (Global) |
 |---------|----------------------|---------------------|--------------|
-| **Role** | Transactional state for all domains — partitioned by brain_id, all writes go here directly | Per-brain vector similarity search — semantic spaces are independent | Global payload storage — deduplication across all brains |
-| **Stores** | File identity, content hashes, chunk metadata, links, tasks (partitioned by brain_id), records (partitioned by brain_id), FTS5 index, summaries, schema versions | Per-brain chunk text, 384-dim embeddings, tags, timestamps, scores | Immutable content-addressed blobs (BLAKE3-keyed, 2-char prefix sharding) |
-| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25. Queries filter by brain_id to isolate results. | Per-brain kNN vector search, batch upserts | Write-once keyed by hash, read by hash path. Shared across all brains. |
-| **Concurrency** | WAL mode (concurrent readers, single writer across all brains) | Arc\<Table\> per brain, shared across threads | Atomic rename on write; concurrent reads safe |
-| **Consistency anchor** | SQLite is authoritative for all state across all brains. LanceDB is a derived index; failures are non-fatal. | Derived per-brain from SQLite state; may lag during vector index failures | Hash is the identity. Deduplication is global. |
-
-## Sequence Diagrams
-
-### 1. Daemon Startup
-
-```mermaid
-sequenceDiagram
-    participant Main as main()
-    participant Config as Config
-    participant Model as Candle Embedder
-    participant DB as SQLite
-    participant Vec as LanceDB
-    participant Scanner as Brain Scanner
-    participant Watcher as File Watcher
-    participant MCP as MCP Server
-
-    Main->>Config: Load brain.toml / env vars / defaults
-    Main->>Config: Resolve brain_id from registry
-    Main->>DB: Open unified SQLite (~/.brain/brain.db, WAL mode, foreign keys)
-    Main->>DB: Run schema migrations (check schema_version)
-    Main->>Vec: Connect per-brain LanceDB
-    Main->>Vec: Check lancedb_schema_version vs expected
-    alt Schema mismatch
-        Vec-->>Main: Full rebuild required
-        Main->>DB: Clear all content_hash values for brain_id = ?
-        Note over DB: Forces full re-index on next brain scan
-    end
-    Main->>Model: Load BGE-small weights (mmap safetensors)
-    Main->>Model: Load tokenizer.json
-    Main->>Model: Validate hidden_size == 384
-    Note over Model: Model kept hot in RAM for session lifetime
-
-    Main->>Scanner: Full brain scan (catch offline changes, filtered by brain_id)
-    loop Each *.md file
-        Scanner->>DB: Check content_hash WHERE file_id = ? AND brain_id = ?
-        alt Hash changed or new file
-            Scanner->>Scanner: Queue for indexing
-        end
-        alt File in DB but not on disk
-            Scanner->>DB: Soft-delete (set deleted_at WHERE file_id = ? AND brain_id = ?)
-            Scanner->>Vec: Delete chunks for file_id from per-brain LanceDB
-        end
-    end
-    Scanner->>Main: Scan complete (X changed, Y deleted)
-    Note over Main: No rebuild on normal startup — reads hit SQLite directly<br/>Unified DB is queried by (file_id, brain_id) tuples
-
-    par Start concurrent services
-        Main->>Watcher: Start watching brain (recursive, 250ms debounce)
-        Main->>MCP: Start stdio JSON-RPC listener
-    end
-
-    Note over Main: tokio::select! multiplexes:<br/>- MCP stdin messages<br/>- Watcher file events<br/>- Shutdown signals (SIGTERM/SIGINT)
-```
-
-### 2. Indexing Pipeline (File Change to Indexed)
-
-```mermaid
-sequenceDiagram
-    participant Editor as Editor / Git
-    participant FW as File Watcher
-    participant HG as Hash Gate
-    participant Parser as Markdown Parser
-    participant Chunker as Chunker
-    participant Emb as Candle Embedder
-    participant DB as SQLite
-    participant Vec as LanceDB
-
-    Editor->>FW: File saved (possibly multiple events)
-    FW->>FW: Debounce (250ms window, coalesce by path)
-    FW->>HG: FileChanged(path)
-
-    HG->>HG: Read file, normalize whitespace
-    HG->>HG: Compute BLAKE3 hash
-    HG->>DB: SELECT content_hash FROM files WHERE path = ? AND brain_id = ?
-    alt Hash unchanged
-        HG-->>HG: Skip (log at debug level)
-    else Hash changed or new file
-        HG->>DB: SET indexing_state = 'indexing_started' WHERE brain_id = ?
-
-        HG->>Parser: Parse markdown content
-        Parser->>Parser: Extract YAML frontmatter
-        Parser->>Parser: Build heading hierarchy
-        Parser->>Parser: Identify block types (paragraph, code, list)
-
-        Parser->>Chunker: Structured AST
-        Chunker->>Chunker: Split on heading boundaries
-        Chunker->>Chunker: Enforce max ~400 tokens per chunk
-        Chunker->>Chunker: Track byte_start/byte_end offsets
-        Chunker->>Chunker: Compute chunk_hash per chunk
-
-        par SQLite metadata update
-            Chunker->>DB: BEGIN TRANSACTION
-            Chunker->>DB: Upsert files row (file_id, brain_id, path, hash)
-            Chunker->>DB: Delete old chunks for (file_id, brain_id)
-            Chunker->>DB: Insert new chunk metadata with brain_id
-            Chunker->>DB: Delete old links, insert new links (all partitioned by brain_id)
-            Chunker->>DB: Delete old tasks, insert new tasks (all partitioned by brain_id)
-            Chunker->>DB: COMMIT
-            Note over DB: FTS5 triggers auto-update fts_chunks<br/>All writes include brain_id partition key
-        and Embedding
-            Chunker->>Emb: embed_batch(chunk_contents)
-            Emb->>Emb: Tokenize (padding, attention masks)
-            Emb->>Emb: Forward pass: BertModel
-            Emb->>Emb: CLS pooling (first token hidden state)
-            Emb->>Emb: L2 normalize
-            Emb-->>Chunker: Vec<Vec<f32>> (batch_size x 384)
-        end
-
-        Chunker->>Vec: merge_insert(chunks + embeddings to per-brain LanceDB)
-        Note over Vec: Per-brain index:<br/>on chunk_id:<br/>matched → update_all<br/>not matched → insert_all<br/>not matched by source<br/>  WHERE file_id = ? → delete
-
-        alt merge_insert fails (CommitConflict)
-            Vec-->>Chunker: Retry (3x, exponential backoff)
-        end
-
-        Chunker->>DB: SET indexing_state = 'indexed'
-        Chunker->>DB: UPDATE content_hash, last_indexed_at
-    end
-
-    Note over Vec: Periodic: optimize()<br/>(compaction + pruning + index update)<br/>Triggered by N upserts or T elapsed
-```
-
-### 3. Agent Retrieval Flow (search_minimal + expand)
-
-```mermaid
-sequenceDiagram
-    participant LLM as Agent (LLM)
-    participant MCP as MCP Server
-    participant HR as Hybrid Ranker
-    participant DB as SQLite
-    participant Vec as LanceDB
-    participant TE as Token Estimator
-
-    LLM->>MCP: tools/call: memory.search_minimal
-    Note over LLM,MCP: { query, intent: "lookup", filters,<br/>budget_tokens: 600, k: 12 }
-
-    MCP->>HR: search_minimal(query, intent, filters, budget, brain_id=?)
-    HR->>HR: Resolve intent to weight profile
-
-    par Vector retrieval
-        HR->>Vec: vector_search(embed(query), limit=50, metric=dot, per-brain LanceDB)
-        Vec-->>HR: top-50 by vector similarity (chunk_id, sim_v)
-    and Keyword retrieval
-        HR->>DB: FTS5 query (BM25 ranking, limit=50) WHERE brain_id = ?
-        DB-->>HR: top-50 by BM25 (chunk_id, bm25_score)
-    end
-
-    HR->>HR: Union candidates, deduplicate by chunk_id
-
-    opt Graph expansion (1-hop, Phase 3+)
-        HR->>HR: Take top-10 seeds from initial fusion
-        HR->>DB: SELECT linked chunk_ids FROM links<br/>WHERE (src_chunk_id IN (seeds) OR dst_chunk_id IN (seeds))<br/>AND brain_id = ?
-        DB-->>HR: Neighbor chunk_ids (capped at 100)
-        HR->>HR: Add neighbors to candidate pool, deduplicate
-    end
-
-    HR->>DB: Batch enrich: SELECT backlink_count, tags,<br/>updated_at, importance<br/>WHERE chunk_id IN (...) AND brain_id = ?
-    DB-->>HR: Metadata for all candidates
-
-    loop Each candidate
-        HR->>HR: Compute hybrid score (weights from intent profile)
-        Note over HR: S = w_v*sim_v + w_k*bm25<br/>  + w_r*exp(-dt/tau)<br/>  + w_l*log(1+backlinks)<br/>  + w_t*tag_match<br/>  + w_i*importance
-    end
-
-    HR->>HR: Sort by hybrid score, take top-k
-    HR->>TE: Estimate tokens for each stub
-
-    loop Pack stubs within budget
-        HR->>HR: Add stub if within budget_tokens
-        Note over HR: Stub = { memory_id, kind, title,<br/>summary_2sent, scores, provenance,<br/>expand_hint }
-    end
-
-    HR-->>MCP: { budget_tokens, used_tokens_est, results[] }
-    MCP-->>LLM: JSON-RPC response
-
-    Note over LLM: Agent decides which stubs to expand
-
-    LLM->>MCP: tools/call: memory.expand
-    Note over LLM,MCP: { memory_ids: [...], budget_tokens: 2000 }
-
-    MCP->>Vec: Fetch full chunk content by IDs
-    Vec-->>MCP: Full text + byte offsets
-
-    MCP->>TE: Estimate tokens per chunk
-    loop Pack chunks within budget
-        MCP->>MCP: Add chunk if within budget
-        alt Last chunk exceeds budget
-            MCP->>MCP: Truncate with [truncated] marker
-        end
-    end
-
-    MCP-->>LLM: { budget_tokens, used_tokens_est,<br/>results[{ content, provenance: { file_path,<br/>byte_start, byte_end } }] }
-```
-
-### 4. Agent Memory Loop (Write + Reflect)
-
-```mermaid
-sequenceDiagram
-    participant LLM as Agent (LLM)
-    participant MCP as MCP Server
-    participant DB as SQLite
-    participant Vec as LanceDB
-    participant Emb as Candle Embedder
-
-    Note over LLM: Agent completes a task and wants to record what happened
-
-    LLM->>MCP: tools/call: memory.write_episode
-    Note over LLM,MCP: { goal: "Investigate indexing latency",<br/>actions: ["profiled embed_batch", "found bottleneck"],<br/>outcome: "Batch size 32 is optimal for CPU",<br/>tags: ["performance", "embedding"],<br/>importance: 0.8,<br/>brain_id: "..." }
-
-    MCP->>MCP: Generate episode_id (UUID v7)
-    MCP->>MCP: Auto-extract additional tags from content
-    MCP->>DB: INSERT INTO summaries (kind='episode', brain_id, ...)
-    MCP->>Emb: embed(goal + " " + outcome)
-    Emb-->>MCP: 384-dim vector
-    MCP->>Vec: Insert episode embedding row into per-brain LanceDB
-    MCP-->>LLM: { episode_id, created_at, tags, importance }
-
-    Note over LLM: Later, after accumulating several episodes...<br/>Agent decides to consolidate
-
-    LLM->>MCP: tools/call: memory.reflect
-    Note over LLM,MCP: { memory_ids: [ep_1, ep_2, ep_3],<br/>reflection_prompt: "Summarize perf findings",<br/>budget_tokens: 500,<br/>brain_id: "..." }
-
-    MCP->>DB: Fetch episodes by IDs from summaries table WHERE brain_id = ?
-    MCP->>Vec: Fetch episode content from per-brain LanceDB
-    MCP-->>LLM: Source material formatted for synthesis
-    Note over MCP,LLM: { sources: [{ id, goal, outcome, ... }],<br/>prompt: "Synthesize into a summary" }
-
-    Note over LLM: LLM generates the reflection summary<br/>(brain does NOT run a generative model)
-
-    LLM->>MCP: tools/call: memory.reflect (store result)
-    Note over LLM,MCP: { summary: "Embedding batch size 32 is optimal...",<br/>source_ids: [ep_1, ep_2, ep_3],<br/>brain_id: "..." }
-
-    MCP->>MCP: Generate reflection_id (UUID v7)
-    MCP->>DB: INSERT INTO summaries (kind='reflection', brain_id, ...)
-    MCP->>DB: INSERT INTO reflection_sources (reflection_id, source_id) x3
-    MCP->>Emb: embed(summary)
-    Emb-->>MCP: 384-dim vector
-    MCP->>Vec: Insert reflection embedding row into per-brain LanceDB
-    MCP-->>LLM: { reflection_id, created_at }
-
-    Note over LLM: Future searches return reflections<br/>as low-token, high-signal results
-```
-
-### 5. Dual-Store Consistency (Indexing State Machine)
-
-SQLite is the sole source of truth. The indexing state machine ensures that SQLite updates succeed before attempting to update LanceDB.
-
-```mermaid
-stateDiagram-v2
-    [*] --> idle: File exists, hash stored in SQLite
-
-    idle --> indexing_started: Hash changed / new file
-    note right of indexing_started
-        SQLite: state = 'indexing_started'
-        Hash NOT updated yet
-    end note
-
-    indexing_started --> sqlite_written: SQLite transaction committed
-    note right of sqlite_written
-        chunks, links, tasks updated
-        FTS5 triggers fired
-        State is now authoritative
-    end note
-
-    sqlite_written --> indexed: LanceDB merge_insert succeeded
-    note right of indexed
-        SQLite: state = 'indexed'
-        content_hash updated
-        last_indexed_at updated
-    end note
-
-    sqlite_written --> indexed: LanceDB write failed
-    note left of indexed
-        Log failure but succeed the operation
-        SQLite is authoritative
-        Vector index is inconsistent
-        On next vector query: full scan
-    end note
-
-    indexing_started --> indexing_started: SQLite write failed
-    note left of indexing_started
-        Transaction rolled back
-        Nothing changed
-        Hash gate will retry
-    end note
-
-    indexed --> idle: Ready for next change
-    indexed --> indexing_started: File changed again
-```
-
-There are no event logs — SQLite is the sole source of truth for all task and record mutations across all brains. Legacy JSONL event logs can be imported via `import_from_jsonl` as a one-time migration.
-
-### 6. Graceful Shutdown
-
-```mermaid
-sequenceDiagram
-    participant Signal as OS Signal
-    participant Main as Main Loop
-    participant Watcher as File Watcher
-    participant Queue as Index Queue
-    participant DB as SQLite
-    participant Vec as LanceDB
-
-    Signal->>Main: SIGTERM or SIGINT (first)
-    Main->>Main: Set shutdown flag
-
-    Main->>Watcher: Stop accepting new events
-    Main->>Queue: Drain remaining items (10s timeout)
-
-    alt Queue drained in time
-        Queue-->>Main: All items processed
-    else Timeout exceeded
-        Queue-->>Main: N items dropped (log warning)
-    end
-
-    Main->>DB: PRAGMA wal_checkpoint(TRUNCATE)
-    Note over DB: Flush WAL to unified main database
-
-    Main->>Vec: optimize() for this brain's LanceDB (if pending unoptimized rows)
-    Main->>Vec: Close per-brain table handles
-    Main->>DB: Close unified DB connections
-    Main-->>Signal: Exit code 0 (clean)
-
-    Note over Signal: Second SIGINT = force shutdown<br/>(skip drain, close immediately, exit 1)
-```
-
-### 7. Embedding Pipeline Detail
-
-```mermaid
-sequenceDiagram
-    participant Text as Chunk Text
-    participant Tok as Tokenizer
-    participant Bert as BertModel
-    participant Pool as CLS Pooling
-    participant Norm as L2 Normalize
-    participant Out as 384-dim Vector
-
-    Text->>Tok: encode_batch(chunks, padding=true)
-    Tok-->>Bert: token_ids [B, T], attention_mask [B, T]
-
-    Note over Bert: token_type_ids = zeros [B, T]
-
-    Bert->>Bert: forward(token_ids, token_type_ids, attention_mask)
-    Bert-->>Pool: hidden_states [B, T, 384]
-
-    Pool->>Pool: Select [:, 0, :] (CLS token)
-    Pool-->>Norm: cls_embeddings [B, 384]
-
-    Norm->>Norm: v / ||v||_2 per row
-    Note over Norm: sqr → sum_keepdim(1) → sqrt<br/>→ clamp(1e-12) → broadcast_div
-
-    Norm-->>Out: normalized [B, 384]
-    Note over Out: L2 norm = 1.0 (within 1e-5)<br/>Pairs with LanceDB dot product
-```
-
-**Numerical stability**: The L2 normalization must clamp the magnitude to `max(||v||_2, 1e-12)` before dividing. Degenerate all-padding inputs can produce zero-magnitude vectors, and dividing by zero silently produces NaN that poisons the LanceDB index with no runtime error. Add a debug assertion that all output vectors satisfy `|1.0 - ||v||_2| < 1e-5`.
-
-## Memory Architecture
-
-```mermaid
-quadrantChart
-    title Memory Tiers
-    x-axis "High Token Cost" --> "Low Token Cost"
-    y-axis "Low Recall" --> "High Recall"
-    Tier 1 Episodic - Raw Chunks: [0.15, 0.85]
-    Tier 1 Episodic - Full Markdown: [0.2, 0.8]
-    Tier 1 Episodic - 384-dim Embeddings: [0.25, 0.75]
-    Tier 2 Semantic - Tags & Backlinks: [0.45, 0.55]
-    Tier 2 Semantic - Tasks & Timestamps: [0.55, 0.45]
-    Tier 3 Procedural - Summaries: [0.75, 0.25]
-    Tier 3 Procedural - Reflections: [0.8, 0.2]
-    Tier 3 Procedural - 2-sent Stubs: [0.85, 0.15]
-```
-
-The retrieval policy is **progressive and budget-first**:
-
-1. **memory.search_minimal** returns compact stubs (Tier 2/3 cost) — covers both notes and task capsules
-2. **memory.expand** fetches raw chunks on demand (Tier 1 cost)
-3. **memory.write_episode** stores structured events (creates Tier 1)
-4. **memory.reflect** consolidates into summaries (creates Tier 3 from Tier 1)
-5. **tasks.apply_event** creates/mutates tasks directly in SQLite
-6. **tasks.create** creates a new task
-7. **tasks.close** closes a task (done/cancelled)
-8. **tasks.get** returns full task details including description and dependencies
-9. **tasks.list** lists tasks filtered by status
-10. **tasks.next** returns highest-priority ready task (deterministic selection)
-11. **tasks.deps_batch** batch-manages task dependencies
-12. **tasks.labels_batch** batch-manages task labels
-13. **tasks.labels_summary** summarizes label usage
-14. **records.create_artifact** / **records.save_snapshot** create records
-15. **records.get** / **records.list** / **records.fetch_content** retrieve records
-16. **records.archive** archives a record
-17. **records.tag_add** / **records.tag_remove** manage record tags
-18. **records.link_add** / **records.link_remove** manage record links
-19. **brains.list** lists all registered brains
-20. **status** returns daemon/brain health status
-
-## Hybrid Scoring
-
-All retrieval combines six signals into a single relevance score:
-
-```
-S = w_v * sim_v + w_k * bm25 + w_r * f(dt) + w_l * g(links) + w_t * tag_match + w_i * importance
-```
-
-| Signal | Source | Computation |
-|--------|--------|-------------|
-| `sim_v` | LanceDB | Dot product similarity (normalized vectors) |
-| `bm25` | SQLite FTS5 | BM25 rank, normalized to [0,1] |
-| `f(dt)` | SQLite | `exp(-dt/tau)`, tau=30 days default |
-| `g(links)` | SQLite | `log(1 + backlinks) / log(1 + max_backlinks)` |
-| `tag_match` | SQLite | Jaccard coefficient (query tags vs chunk tags) |
-| `importance` | SQLite/LanceDB | Pre-computed at write time |
-
-### Intent-Driven Weight Profiles
-
-The `intent` parameter on `memory.search_minimal` selects a weight profile that adjusts signal priorities:
-
-| Intent | Description | Upweighted signals | Downweighted signals |
-|--------|-------------|-------------------|---------------------|
-| `lookup` | Fact finding, direct answers | `bm25`, `tag_match` | `importance` |
-| `planning` | What to do next | `f(dt)`, `g(links)`, `importance` | `bm25` |
-| `reflection` | What happened, how we decided | `f(dt)`, `importance` | `tag_match` |
-| `synthesis` | Write or design something | `sim_v`, `g(links)` | `f(dt)` |
-| `auto` | Default, no adjustment | Equal weights (1/6 each) | — |
-
-Weight profiles are stored as a lookup table and are configurable via `brain.toml`.
-
-**Invariant**: All weight profiles MUST sum to 1.0. Validate at load time; normalize by dividing each weight by the sum if needed. Hand-tuned profiles can silently drift, biasing retrieval without runtime errors.
-
-## Unified Storage Model: Brain Partitioning
-
-The unified SQLite database uses `brain_id` as a partition key on all shared tables (files, chunks, tasks, records, summaries). This enables:
-
-1. **Single database instance** — All brains' metadata coexist in `~/.brain/brain.db` with no per-brain database files.
-2. **Efficient filtering** — Queries include `WHERE brain_id = ?` to isolate results to a single brain.
-3. **Shared object store** — Records from any brain can reference the same payload object, enabling deduplication across brain boundaries.
-4. **Independent vector indexes** — Each brain maintains its own LanceDB instance at `~/.brain/brains/<name>/lancedb/`. Semantic spaces are distinct (vectors from different brains are not comparable).
-5. **No cross-brain routing** — The old `RemoteBrainContext` and `cross_brain` modules were eliminated. Cross-brain task references use a `brain_id` column on dependency payloads — NULL = local, non-NULL = remote brain ID.
-
-### Migration Command
-
-Existing users upgrading from per-brain storage to unified storage run:
-
-```bash
-brain migrate
-```
-
-This command merges all per-brain `brain.db` files into the central unified database, migrates object stores to `~/.brain/objects/`, and re-registers all brains in the central config.
-
-**Edge cases in signal computation**:
-- `bm25` normalization: divide by `max(max_bm25_in_result_set, 1e-12)` — zero FTS matches means all BM25 scores should be 0.0, not NaN.
-- `tag_match` (Jaccard coefficient): `J(∅, ∅) = 0.0` by convention, not division-by-zero.
-- `g(links)`: `log(1 + 0) / log(1 + max_L)` is well-defined (= 0.0), but guard `max_L = 0` with a denominator of 1.0.
-
-### Candidate Sources
-
-Retrieval draws candidates from three sources, fused before scoring:
-
-| Source | Store | Phase | Description |
-|--------|-------|-------|-------------|
-| Vector search | LanceDB | Phase 2 | Top-50 by dot product similarity |
-| Keyword search | SQLite FTS5 | Phase 2 | Top-50 by BM25 |
-| Graph expansion | SQLite links | Phase 3+ | 1-hop neighbors of top-10 seeds (capped at 100) |
-
-Graph expansion captures transitively relevant content in interlinked brains: a query matching note A will also surface note B if A links to B, even when B has low direct similarity. Candidates from all sources are unioned, deduplicated, then scored through the hybrid formula.
-
-## Key Technology Choices
-
-| Component | Choice | Rationale |
-|-----------|--------|-----------|
-| Language | Rust | Performance, safety, single-binary deployment |
-| Async runtime | tokio | Required by LanceDB async API |
-| Embedding model | BGE-small-en-v1.5 (384-dim) | Small, fast, well-benchmarked for CPU |
-| ML framework | Candle | Rust-native, safetensors mmap, no Python dependency |
-| Vector store | LanceDB | Arrow-native, merge_insert upsert, disk-based |
-| Metadata store | SQLite (WAL mode) | Transactional, FTS5, concurrent reads |
-| Content hashing | BLAKE3 | 3-4x faster than SHA-256 |
-| File watching | notify-debouncer-full | Editor-agnostic event coalescing |
-| File identity | UUID v7 | Time-ordered, survives renames |
-| Agent protocol | MCP stdio JSON-RPC | Standard for AI tool integration |
-| Distance metric | Dot product | Optimal for L2-normalized embeddings |
-| Pooling | CLS (first token) | BGE-recommended, fastest |
-| Reranker (post-v1) | ONNX Runtime via `ort` crate | Cross-encoder reranking on top-N fused candidates |
+| **Role** | Transactional state for all domains — partitioned by brain_id | Per-brain vector similarity search | Global payload storage — deduplication across all brains |
+| **Stores** | File identity, content hashes, chunk metadata, links, tasks, records, jobs, FTS5 index | Per-brain chunk text, task capsules, 384-dim embeddings | Immutable content-addressed blobs (BLAKE3-keyed) |
+| **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 | Per-brain kNN vector search | Write-once keyed by hash, read by hash path |
 
 ## Performance Design
 
-The system is designed around one core insight: **indexing is the expensive part; querying is cheap once warm**. All performance decisions flow from keeping the daemon responsive during normal use while deferring heavy computation to idle or scheduled windows.
+The system is designed around one core insight: **indexing is the expensive part; querying is cheap once warm**.
 
-### Design Decisions
-
-#### 1. Capsule Generation Strategy
-
-Every chunk gets a **deterministic capsule** at ingest time — zero ML cost:
-
-| Capsule field | Source | Cost |
-|---------------|--------|------|
-| `title` | Heading hierarchy from Markdown AST | Negligible |
-| `summary_2sent` | First meaningful sentence + heading outline | Negligible |
-| `tags` | Frontmatter + auto-extracted | Negligible |
-
-ML-quality summarization runs only during **consolidation** (idle/scheduled), never on the hot ingest path. This prevents the biggest laptop killer: eager summarization burning CPU on every file save.
-
-#### 2. Reranker Policy
-
-Cross-encoder reranking is **opt-in**, not default:
-
-- Triggered per-query when the caller requests it, OR when fusion confidence is below threshold
-- Applied to the **top 10–30 fused candidates** only, never the full candidate pool
-- Operates on **capsules/snippets**, not full chunks, to minimize compute
-- Latency budget: 200–500ms on CPU for top-20 candidates
-- The reranker model is **loaded lazily** (not at startup) and unloaded after idle timeout
-
-#### 3. Work Queue and Backpressure
-
-The indexing pipeline is protected against watcher storms (git pulls, branch switches, mass edits):
-
-```
-File events → Debounce (250ms) → Bounded work queue → Indexer
-                                      ↓
-                              Overflow policy:
-                              • Last-write-wins per file_id
-                              • Drop oldest if queue full
-                              • Batch SQLite writes (single writer lane)
-                              • Batch LanceDB upserts
-```
-
-Key invariant: the queue is bounded. If it fills up, dropped files are caught on the next periodic scan.
-
-#### 4. LanceDB Compaction Strategy
-
-Without compaction, queries fall back to brute-force scan on unindexed fragments. The `optimize()` schedule uses a **dual trigger**:
-
-| Trigger | Threshold | Rationale |
-|---------|-----------|-----------|
-| Upsert count | ~100–500 upserts since last optimize | Keeps unindexed fragment count bounded |
-| Elapsed time | 5–10 minutes since last optimize | Catches quiet periods after bursts |
-
-Whichever fires first triggers compaction. Runs on a background task to avoid blocking indexer or query paths.
-
-#### 5. Model Loading Strategy
-
-| Model | Loading | Memory | Rationale |
-|-------|---------|--------|-----------|
-| BGE-small embedder | **Always hot** | ~130MB | Needed for every ingest and query |
-| Cross-encoder reranker | **Lazy** (on first use) | Variable | Rarely needed; idle-unloaded |
-| Summarizer | **Lazy** (consolidation only) | Variable | Only runs during idle/scheduled jobs |
-
-Target daemon baseline RSS: **300–400MB** (embedder + SQLite + LanceDB structures).
-
-### Performance Expectations
-
-Assumes a "medium" brain: 2k–10k Markdown files, 20k–200k chunks, 384-dim embeddings.
-
-| Operation | Expected Latency | Notes |
-|-----------|-----------------|-------|
-| SQLite FTS5 query | 5–30ms | Scales with brain size |
-| LanceDB vector search | 10–50ms | After compaction; warm indexes |
-| Hybrid fusion + scoring | 1–10ms | Lightweight arithmetic |
-| `search_minimal` end-to-end | 20–80ms | FTS + vector + fusion + stub packing |
-| `expand` (fetch chunks) | 5–20ms | Direct ID lookup |
-| Optional rerank (top 20) | 200–500ms | Cross-encoder on CPU |
-| Incremental index (1 file) | Sub-second | Hash gate + embed 1–10 chunks |
-| Initial full index (100k chunks) | ~10–17 min | CPU, batch size 32, no acceleration |
-
-### Storage Footprint
-
-| Component | Size (100k chunks) | Notes |
-|-----------|-------------------|-------|
-| Embeddings (raw float32) | ~147MB | 100k × 384 × 4 bytes |
-| LanceDB with indexes | ~200–400MB | Overhead from indexes + metadata |
-| SQLite (metadata + FTS) | ~50–150MB | Depends on content length |
-| BGE-small model weights | ~130MB | Loaded in RAM via mmap |
-| **Total disk** | **~400MB–800MB** | Comfortable for laptop |
-| **Daemon RSS (baseline)** | **~300–400MB** | Embedder + stores, no optional models |
+- **Capsule Generation**: Every chunk and task gets a deterministic capsule at ingest time (zero ML cost).
+- **Work Queue**: The indexing pipeline is protected against watcher storms via a bounded work queue with coalescing.
+- **Compaction**: LanceDB fragments are periodically optimized to maintain query performance.
+- **Model Loading**: The BGE-small embedder is kept hot in RAM (~130MB), while larger models (summarizers) are loaded lazily.
 
 ## Mathematical Foundations
 
-The system relies on concepts from several mathematical and computer science domains. This section summarizes the key foundations; see RESEARCH.md § Mathematical Foundations for detailed formulas, numerical verification, and implementation guidance.
-
-### Linear Algebra & Embeddings
-
-Every chunk is a point in R^384. The embedding pipeline transforms text through a BERT forward pass (`[B, T] → [B, T, 384]`), CLS pooling (`[:, 0, :]`), and L2 normalization onto the unit hypersphere S^383. Dot product on unit vectors equals cosine similarity — this is why LanceDB uses `dot` metric after normalization, saving ~2x compute vs explicit cosine.
-
-### Information Retrieval & Scoring
-
-The hybrid scoring formula is a weighted linear combination of 6 orthogonal signals. BM25 (from SQLite FTS5) provides term-frequency scoring with document-length normalization. Min-max normalization maps BM25 to [0,1]. The Jaccard coefficient measures tag overlap as `|A∩B| / |A∪B|`. All signals are combined with intent-driven weight profiles that must sum to 1.0.
-
-### Exponential Decay & Recency
-
-The recency signal uses exponential decay: `f(dt) = exp(-dt/τ)` with τ=30 days (configurable). The half-life is `τ × ln(2) ≈ 20.8 days`. The backlink signal uses logarithmic scaling: `g(L) = log(1+L) / log(1+max_L)`, which compresses the dynamic range of link counts.
-
-### Graph Theory
-
-The links table is a directed graph (adjacency list). Graph expansion performs 1-hop BFS from seed nodes. The task dependency graph is a DAG — cycle detection (DFS-based, O(V+E)) is required when adding edges. In-degree counting provides the backlink score; future work may upgrade to iterative PageRank for importance propagation.
-
-### Probability & Hashing
-
-BLAKE3 (256-bit) provides collision probability `< 10^(-70)` for 10k files. UUID v7 provides time-ordered identity with a birthday-problem safe threshold of ~2^64 IDs. UUID v7 provides monotonic event ordering with random bits for same-millisecond disambiguation. IVF-PQ indexing (Product Quantization in Voronoi cells) enables sub-5ms ANN search at 100x vector compression with >95% recall.
-
-### Concurrency & Async
-
-The daemon uses tokio for async concurrency: file watcher events, MCP request handling, and indexing run as concurrent tasks multiplexed via `tokio::select!`. SQLite WAL mode enables concurrent readers with a single writer. The bounded work queue with file_id coalescing provides backpressure against watcher storms.
+- **Embeddings**: Chunks and tasks are mapped to R^384 and L2-normalized onto the unit hypersphere.
+- **Hybrid Scoring**: Combines vector similarity, BM25, recency decay, backlink count, tag match, and importance.
+- **Recency**: Uses exponential decay `f(dt) = exp(-dt/τ)` with τ=30 days.
+- **Hashing**: BLAKE3 for content identity and object store keys.
+- **Identity**: UUID v7 for time-ordered, monotonic identifiers.
