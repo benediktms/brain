@@ -460,13 +460,19 @@ mod tests {
         assert!(result.is_error.is_none(), "should succeed");
 
         let text = &result.content[0].text;
-        let parsed: Value = serde_json::from_str(text).unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("checked in test assertions");
         assert_eq!(parsed["task_id"], compact_id_for("test-1"));
 
         assert_eq!(parsed["task"]["title"], "My first task");
         assert_eq!(parsed["task"]["status"], "open");
         assert_eq!(parsed["task"]["priority"], 2);
-        assert_eq!(parsed["unblocked_task_ids"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            parsed["unblocked_task_ids"]
+                .as_array()
+                .expect("checked in test assertions")
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -482,9 +488,14 @@ mod tests {
         assert!(result.is_error.is_none());
 
         let text = &result.content[0].text;
-        let parsed: Value = serde_json::from_str(text).unwrap();
+        let parsed: Value = serde_json::from_str(text).expect("checked in test assertions");
         assert!(parsed["task_id"].is_string());
-        assert!(!parsed["task_id"].as_str().unwrap().is_empty());
+        assert!(
+            !parsed["task_id"]
+                .as_str()
+                .expect("checked in test assertions")
+                .is_empty()
+        );
         assert_eq!(parsed["task"]["title"], "Auto ID task");
         assert_eq!(parsed["task"]["priority"], 4); // default
     }
@@ -511,7 +522,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", update, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["task"]["status"], "in_progress");
     }
 
@@ -546,8 +558,11 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", done, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let unblocked = parsed["unblocked_task_ids"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let unblocked = parsed["unblocked_task_ids"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(unblocked.len(), 1);
         assert_eq!(unblocked[0], compact_id_for("t2"));
     }
@@ -642,7 +657,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["task"]["task_type"], "bug");
         assert_eq!(parsed["task"]["assignee"], "alice");
     }
@@ -675,8 +691,11 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", add2, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let labels = parsed["task"]["labels"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let labels = parsed["task"]["labels"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(labels.len(), 2);
         assert!(labels.contains(&json!("backend")));
         assert!(labels.contains(&json!("urgent")));
@@ -688,8 +707,11 @@ mod tests {
             "payload": { "label": "urgent" }
         });
         let result = dispatch(&registry, "tasks.apply_event", rm, &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let labels = parsed["task"]["labels"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let labels = parsed["task"]["labels"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0], "backend");
     }
@@ -716,7 +738,11 @@ mod tests {
         assert!(result.is_error.is_none());
 
         // Verify comment stored by fetching via TaskStore
-        let comments = ctx.stores.tasks.get_task_comments("t1").unwrap();
+        let comments = ctx
+            .stores
+            .tasks
+            .get_task_comments("t1")
+            .expect("checked in test assertions");
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].body, "This needs review");
         assert_eq!(comments[0].author, "bob");
@@ -733,7 +759,8 @@ mod tests {
             "payload": { "title": "No explicit type" }
         });
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["task"]["task_type"], "task");
     }
 
@@ -769,7 +796,8 @@ mod tests {
             "spike should be a valid task type"
         );
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["task"]["task_type"], "spike");
     }
 
@@ -789,12 +817,18 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none(), "should succeed");
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         // Response should be ISO 8601 string
         assert_eq!(parsed["task"]["defer_until"], "2026-12-01T00:00:00+00:00");
 
         // Verify stored as i64 internally
-        let row = ctx.stores.tasks.get_task("t1").unwrap().unwrap();
+        let row = ctx
+            .stores
+            .tasks
+            .get_task("t1")
+            .expect("checked in test assertions")
+            .expect("checked in test assertions");
         assert_eq!(row.defer_until, Some(1796083200));
     }
 
@@ -814,11 +848,17 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none(), "should succeed");
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         // Response should still be ISO 8601 string
         assert_eq!(parsed["task"]["defer_until"], "2026-12-01T00:00:00+00:00");
 
-        let row = ctx.stores.tasks.get_task("t1").unwrap().unwrap();
+        let row = ctx
+            .stores
+            .tasks
+            .get_task("t1")
+            .expect("checked in test assertions")
+            .expect("checked in test assertions");
         assert_eq!(row.defer_until, Some(1796083200));
     }
 
@@ -838,7 +878,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["task"]["due_ts"], "2026-06-15T12:00:00+00:00");
     }
 
@@ -853,13 +894,16 @@ mod tests {
             "payload": { "title": "Timestamp check" }
         });
         let result = dispatch(&registry, "tasks.apply_event", params, &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
 
         // created_at and updated_at should be ISO strings, not integers
         assert!(parsed["task"]["created_at"].is_string());
         assert!(parsed["task"]["updated_at"].is_string());
         // They should be parseable as RFC 3339
-        let created = parsed["task"]["created_at"].as_str().unwrap();
+        let created = parsed["task"]["created_at"]
+            .as_str()
+            .expect("checked in test assertions");
         assert!(
             chrono::DateTime::parse_from_rfc3339(created).is_ok(),
             "created_at should be valid RFC 3339"
@@ -982,7 +1026,8 @@ mod tests {
             None,
             json!({"title": "x", "defer_until": "2026-12-01T00:00:00Z"}),
         );
-        let validated = super::parse_and_validate_event(&params).unwrap();
+        let validated =
+            super::parse_and_validate_event(&params).expect("checked in test assertions");
         // After normalization the field should be an integer, not a string
         assert!(
             validated.payload["defer_until"].is_i64() || validated.payload["defer_until"].is_u64(),
@@ -994,7 +1039,8 @@ mod tests {
     #[test]
     fn unit_valid_event_type_preserved() {
         let params = make_params("status_changed", Some("t1"), json!({"new_status": "done"}));
-        let validated = super::parse_and_validate_event(&params).unwrap();
+        let validated =
+            super::parse_and_validate_event(&params).expect("checked in test assertions");
         assert_eq!(
             validated.event_type,
             crate::tasks::events::EventType::StatusChanged
@@ -1081,7 +1127,8 @@ mod tests {
         use std::sync::Arc;
 
         // Build a context with no store and no embedder (tasks-only mode)
-        let (_tmp, stores) = crate::stores::BrainStores::in_memory().unwrap();
+        let (_tmp, stores) =
+            crate::stores::BrainStores::in_memory().expect("checked in test assertions");
         let ctx = crate::mcp::McpContext {
             stores,
             search: None,
@@ -1110,7 +1157,8 @@ mod tests {
         );
 
         // Verify the task was created
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["task_id"], compact_id_for("cap-5"));
         assert_eq!(parsed["task"]["title"], "Tasks-only mode task");
     }

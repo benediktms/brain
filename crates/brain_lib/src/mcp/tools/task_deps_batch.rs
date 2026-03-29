@@ -537,7 +537,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.deps_batch", params, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 2);
         assert_eq!(parsed["summary"]["failed"], 0);
     }
@@ -569,7 +570,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.deps_batch", remove, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 2);
     }
 
@@ -586,16 +588,25 @@ mod tests {
         let result = dispatch(&registry, "tasks.deps_batch", params, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 2); // t2→t1, t3→t2
         assert_eq!(parsed["summary"]["failed"], 0);
 
         // t2 should depend on t1
-        let deps = ctx.stores.tasks.get_deps_for_task("t2").unwrap();
+        let deps = ctx
+            .stores
+            .tasks
+            .get_deps_for_task("t2")
+            .expect("checked in test assertions");
         assert!(deps.contains(&"t1".to_string()));
 
         // t3 should depend on t2
-        let deps = ctx.stores.tasks.get_deps_for_task("t3").unwrap();
+        let deps = ctx
+            .stores
+            .tasks
+            .get_deps_for_task("t3")
+            .expect("checked in test assertions");
         assert!(deps.contains(&"t2".to_string()));
     }
 
@@ -627,12 +638,17 @@ mod tests {
         let result = dispatch(&registry, "tasks.deps_batch", params, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 3);
 
         // All should depend on t1
         for tid in &["t2", "t3", "t4"] {
-            let deps = ctx.stores.tasks.get_deps_for_task(tid).unwrap();
+            let deps = ctx
+                .stores
+                .tasks
+                .get_deps_for_task(tid)
+                .expect("checked in test assertions");
             assert!(deps.contains(&"t1".to_string()));
         }
     }
@@ -661,10 +677,15 @@ mod tests {
         let result = dispatch(&registry, "tasks.deps_batch", clear, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 2);
 
-        let deps = ctx.stores.tasks.get_deps_for_task("t3").unwrap();
+        let deps = ctx
+            .stores
+            .tasks
+            .get_deps_for_task("t3")
+            .expect("checked in test assertions");
         assert!(deps.is_empty());
     }
 
@@ -681,7 +702,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.deps_batch", clear, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 0);
         assert_eq!(parsed["summary"]["failed"], 0);
     }
@@ -707,12 +729,13 @@ mod tests {
         let result = dispatch(&registry, "tasks.deps_batch", chain, &ctx).await;
         assert!(result.is_error.is_none()); // partial success response
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["failed"], 1);
         assert!(
             parsed["failed"][0]["error"]
                 .as_str()
-                .unwrap()
+                .expect("checked in test assertions")
                 .contains("cycle")
         );
     }

@@ -156,7 +156,8 @@ mod tests {
         assert!(result.is_error.is_none(), "brains.list should not error");
 
         let text = &result.content[0].text;
-        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("checked in test assertions");
 
         assert!(parsed.get("brains").is_some());
         assert!(parsed.get("count").is_some());

@@ -226,9 +226,14 @@ mod tests {
     fn collect_tasks(parsed: &Value) -> Vec<&Value> {
         parsed["results"]
             .as_array()
-            .unwrap()
+            .expect("checked in test assertions")
             .iter()
-            .flat_map(|group| group["tasks"].as_array().unwrap().iter())
+            .flat_map(|group| {
+                group["tasks"]
+                    .as_array()
+                    .expect("checked in test assertions")
+                    .iter()
+            })
             .collect()
     }
 
@@ -253,7 +258,8 @@ mod tests {
         let result = registry.dispatch("tasks.next", json!({}), &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["task_id"], compact_id_for("t2"));
@@ -272,7 +278,8 @@ mod tests {
         apply(&registry, &ctx, json!({"event_type": "dependency_added", "task_id": "t2", "payload": {"depends_on_task_id": "t1"}})).await;
 
         let result = registry.dispatch("tasks.next", json!({}), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["task_id"], compact_id_for("t1"));
@@ -292,7 +299,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.next", json!({ "k": 2 }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 2);
     }
@@ -303,8 +311,15 @@ mod tests {
         let registry = ToolRegistry::new();
 
         let result = registry.dispatch("tasks.next", json!({}), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        assert_eq!(parsed["results"].as_array().unwrap().len(), 0);
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        assert_eq!(
+            parsed["results"]
+                .as_array()
+                .expect("checked in test assertions")
+                .len(),
+            0
+        );
         assert_eq!(parsed["ready_count"], 0);
     }
 
@@ -319,7 +334,8 @@ mod tests {
         apply(&registry, &ctx, json!({"event_type": "status_changed", "task_id": "t1", "payload": {"new_status": "done"}})).await;
 
         let result = registry.dispatch("tasks.next", json!({}), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         let task = &tasks[0];
         assert_eq!(task["task_id"], compact_id_for("t2"));
@@ -328,7 +344,7 @@ mod tests {
         assert_eq!(
             task["dependency_summary"]["blocking_task_ids"]
                 .as_array()
-                .unwrap()
+                .expect("checked in test assertions")
                 .len(),
             0
         );
@@ -348,10 +364,13 @@ mod tests {
         .await;
 
         let result = registry.dispatch("tasks.next", json!({}), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         let task = &tasks[0];
-        let labels = task["labels"].as_array().unwrap();
+        let labels = task["labels"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0], "critical");
     }
@@ -367,7 +386,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.next", json!({ "k": 10 }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         // Only the regular task, not the epic
         assert_eq!(tasks.len(), 1);
@@ -387,20 +407,41 @@ mod tests {
         let result = registry
             .dispatch("tasks.next", json!({ "k": 10 }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let groups = parsed["results"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let groups = parsed["results"]
+            .as_array()
+            .expect("checked in test assertions");
 
         // Should have 2 groups: one for the epic's children, one for the orphan
         assert_eq!(groups.len(), 2);
 
         // Find the group with the epic
-        let epic_group = groups.iter().find(|g| !g["epic"].is_null()).unwrap();
+        let epic_group = groups
+            .iter()
+            .find(|g| !g["epic"].is_null())
+            .expect("checked in test assertions");
         assert_eq!(epic_group["epic"]["title"], "My Epic");
-        assert_eq!(epic_group["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            epic_group["tasks"]
+                .as_array()
+                .expect("checked in test assertions")
+                .len(),
+            2
+        );
 
         // Find the null-epic group
-        let null_group = groups.iter().find(|g| g["epic"].is_null()).unwrap();
-        assert_eq!(null_group["tasks"].as_array().unwrap().len(), 1);
+        let null_group = groups
+            .iter()
+            .find(|g| g["epic"].is_null())
+            .expect("checked in test assertions");
+        assert_eq!(
+            null_group["tasks"]
+                .as_array()
+                .expect("checked in test assertions")
+                .len(),
+            1
+        );
         assert_eq!(null_group["tasks"][0]["task_id"], compact_id_for("o1"));
     }
 
@@ -419,7 +460,8 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 2);
         assert_eq!(
@@ -446,7 +488,8 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 2);
         assert_eq!(
@@ -465,7 +508,8 @@ mod tests {
         apply(&registry, &ctx, json!({"event_type": "task_created", "task_id": "t1", "payload": {"title": "Task", "description": "A long description", "priority": 1}})).await;
 
         let result = registry.dispatch("tasks.next", json!({}), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let tasks = collect_tasks(&parsed);
         assert_eq!(tasks.len(), 1);
         assert!(

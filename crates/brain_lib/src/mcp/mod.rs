@@ -656,7 +656,7 @@ mod tests {
     #[tokio::test]
     async fn test_initialize() {
         let resp = call("initialize", json!({})).await;
-        let parsed: Value = serde_json::from_str(&resp).unwrap();
+        let parsed: Value = serde_json::from_str(&resp).expect("checked in test assertions");
 
         assert_eq!(parsed["jsonrpc"], "2.0");
         assert_eq!(parsed["id"], 1);
@@ -668,12 +668,17 @@ mod tests {
     #[tokio::test]
     async fn test_tools_list() {
         let resp = call("tools/list", json!({})).await;
-        let parsed: Value = serde_json::from_str(&resp).unwrap();
+        let parsed: Value = serde_json::from_str(&resp).expect("checked in test assertions");
 
-        let tools = parsed["result"]["tools"].as_array().unwrap();
+        let tools = parsed["result"]["tools"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(tools.len(), 30);
 
-        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|t| t["name"].as_str().expect("checked in test assertions"))
+            .collect();
         assert!(names.contains(&"memory.search_minimal"));
         assert!(names.contains(&"memory.expand"));
         assert!(names.contains(&"tasks.apply_event"));
@@ -690,7 +695,7 @@ mod tests {
     #[tokio::test]
     async fn test_method_not_found() {
         let resp = call("unknown/method", json!({})).await;
-        let parsed: Value = serde_json::from_str(&resp).unwrap();
+        let parsed: Value = serde_json::from_str(&resp).expect("checked in test assertions");
 
         assert!(parsed["error"].is_object());
         assert_eq!(parsed["error"]["code"], -32601);
@@ -705,7 +710,7 @@ mod tests {
     // --- resolve_brain_from_roots ---
 
     fn test_db() -> crate::db::Db {
-        crate::db::Db::open_in_memory().unwrap()
+        crate::db::Db::open_in_memory().expect("checked in test assertions")
     }
 
     #[test]
@@ -742,14 +747,14 @@ mod tests {
     async fn test_initialize_without_roots_returns_ok() {
         // initialize with no roots field — fallback brain is used, no panic.
         let resp = call("initialize", json!({})).await;
-        let parsed: Value = serde_json::from_str(&resp).unwrap();
+        let parsed: Value = serde_json::from_str(&resp).expect("checked in test assertions");
         assert_eq!(parsed["result"]["protocolVersion"], "2024-11-05");
     }
 
     #[tokio::test]
     async fn test_initialize_with_empty_roots_returns_ok() {
         let resp = call("initialize", json!({"roots": []})).await;
-        let parsed: Value = serde_json::from_str(&resp).unwrap();
+        let parsed: Value = serde_json::from_str(&resp).expect("checked in test assertions");
         assert_eq!(parsed["result"]["protocolVersion"], "2024-11-05");
     }
 
@@ -761,7 +766,7 @@ mod tests {
             json!({"roots": [{"uri": "file:///no/such/project"}]}),
         )
         .await;
-        let parsed: Value = serde_json::from_str(&resp).unwrap();
+        let parsed: Value = serde_json::from_str(&resp).expect("checked in test assertions");
         assert_eq!(parsed["result"]["protocolVersion"], "2024-11-05");
     }
 }

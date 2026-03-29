@@ -142,8 +142,15 @@ mod tests {
         assert!(result.is_error.is_none());
 
         let text = &result.content[0].text;
-        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(parsed["memories"].as_array().unwrap().len(), 0);
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("checked in test assertions");
+        assert_eq!(
+            parsed["memories"]
+                .as_array()
+                .expect("checked in test assertions")
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -173,7 +180,8 @@ mod tests {
         );
 
         let text = &result.content[0].text;
-        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("checked in test assertions");
 
         let memories = parsed["memories"]
             .as_array()

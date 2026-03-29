@@ -323,7 +323,8 @@ mod tests {
         let result = registry.dispatch("memory.reflect", params, &ctx).await;
         assert!(result.is_error.is_none());
         let text = &result.content[0].text;
-        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("checked in test assertions");
         assert_eq!(parsed["mode"], "prepare");
     }
 
@@ -373,8 +374,12 @@ mod tests {
             .await;
         assert!(ep_result.is_error.is_none());
         let ep_text = &ep_result.content[0].text;
-        let ep_parsed: serde_json::Value = serde_json::from_str(ep_text).unwrap();
-        let source_id = ep_parsed["summary_id"].as_str().unwrap().to_string();
+        let ep_parsed: serde_json::Value =
+            serde_json::from_str(ep_text).expect("checked in test assertions");
+        let source_id = ep_parsed["summary_id"]
+            .as_str()
+            .expect("checked in test assertions")
+            .to_string();
 
         // Commit with out-of-range importance (2.5 should clamp to 1.0).
         let params = json!({
@@ -391,9 +396,17 @@ mod tests {
             result.content[0].text
         );
         let text = &result.content[0].text;
-        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("checked in test assertions");
         assert_eq!(parsed["mode"], "commit");
         // Importance should be clamped to 1.0.
-        assert!((parsed["importance"].as_f64().unwrap() - 1.0).abs() < f64::EPSILON);
+        assert!(
+            (parsed["importance"]
+                .as_f64()
+                .expect("checked in test assertions")
+                - 1.0)
+                .abs()
+                < f64::EPSILON
+        );
     }
 }

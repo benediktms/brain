@@ -126,18 +126,33 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_summary", json!({}), &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let labels = parsed["labels"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let labels = parsed["labels"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(labels.len(), 2);
 
         // First label should be "urgent" (count=3), then "backend" (count=2)
         assert_eq!(labels[0]["label"], "urgent");
         assert_eq!(labels[0]["count"], 3);
-        assert_eq!(labels[0]["task_ids"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            labels[0]["task_ids"]
+                .as_array()
+                .expect("checked in test assertions")
+                .len(),
+            3
+        );
 
         assert_eq!(labels[1]["label"], "backend");
         assert_eq!(labels[1]["count"], 2);
-        assert_eq!(labels[1]["task_ids"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            labels[1]["task_ids"]
+                .as_array()
+                .expect("checked in test assertions")
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -148,8 +163,11 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_summary", json!({}), &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let labels = parsed["labels"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let labels = parsed["labels"]
+            .as_array()
+            .expect("checked in test assertions");
         assert!(labels.is_empty());
     }
 }

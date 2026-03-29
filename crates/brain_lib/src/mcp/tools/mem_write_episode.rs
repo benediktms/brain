@@ -139,7 +139,8 @@ mod tests {
         assert!(result.is_error.is_none());
 
         let text = &result.content[0].text;
-        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("checked in test assertions");
         assert_eq!(parsed["status"], "stored");
         assert!(parsed["summary_id"].is_string());
     }

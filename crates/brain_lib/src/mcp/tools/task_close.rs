@@ -281,13 +281,19 @@ mod tests {
         let result = dispatch(&registry, "tasks.close", json!({ "task_ids": "t1" }), &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["closed"], 1);
         assert_eq!(parsed["summary"]["failed"], 0);
         assert_eq!(parsed["closed"][0]["task_id"], compact_id_for("t1"));
 
         // Verify task is actually done
-        let task = ctx.stores.tasks.get_task("t1").unwrap().unwrap();
+        let task = ctx
+            .stores
+            .tasks
+            .get_task("t1")
+            .expect("checked in test assertions")
+            .expect("checked in test assertions");
         assert_eq!(task.status, "done");
     }
 
@@ -306,7 +312,8 @@ mod tests {
         .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["closed"], 2);
     }
 
@@ -330,12 +337,13 @@ mod tests {
         .await;
 
         let result = dispatch(&registry, "tasks.close", json!({ "task_ids": "t1" }), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["unblocked"], 1);
         assert!(
             parsed["closed"][0]["unblocked_task_ids"]
                 .as_array()
-                .unwrap()
+                .expect("checked in test assertions")
                 .contains(&json!(compact_id_for("t2")))
         );
     }
@@ -355,7 +363,8 @@ mod tests {
         .await;
         assert!(result.is_error.is_none()); // partial success
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["closed"], 1);
         assert_eq!(parsed["summary"]["failed"], 1);
     }
@@ -373,7 +382,8 @@ mod tests {
     #[test]
     fn expand_plain_string_returns_entry() {
         let mut warnings = Vec::<Warning>::new();
-        let result = expand_task_id_entry(" brn-123 ", &mut warnings).unwrap();
+        let result =
+            expand_task_id_entry(" brn-123 ", &mut warnings).expect("checked in test assertions");
         assert_eq!(result, vec!["brn-123".to_string()]);
         assert!(warnings.is_empty());
     }
@@ -381,7 +391,8 @@ mod tests {
     #[test]
     fn expand_stringified_array_adds_warning() {
         let mut warnings = Vec::<Warning>::new();
-        let result = expand_task_id_entry("[\"brn-123\", \"brn-456\"]", &mut warnings).unwrap();
+        let result = expand_task_id_entry("[\"brn-123\", \"brn-456\"]", &mut warnings)
+            .expect("checked in test assertions");
         assert_eq!(result, vec!["brn-123".to_string(), "brn-456".to_string()]);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].error.contains("JSON array"));
@@ -397,7 +408,8 @@ mod tests {
 
     #[test]
     fn normalize_single_id_handles_synapse_uri() {
-        let normalized = normalize_single_id("synapse://test/task/BRN-123").unwrap();
+        let normalized =
+            normalize_single_id("synapse://test/task/BRN-123").expect("checked in test assertions");
         assert_eq!(normalized, "BRN-123");
     }
 

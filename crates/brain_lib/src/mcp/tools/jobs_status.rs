@@ -191,7 +191,8 @@ mod tests {
             result.content[0].text
         );
 
-        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert!(parsed.get("counts").is_some());
         let counts = &parsed["counts"];
         assert!(counts.get("pending").is_some());
@@ -236,16 +237,16 @@ mod tests {
             metadata: serde_json::json!({}),
             scheduled_at: 0,
         };
-        let job_id = db.enqueue_job(&input).unwrap();
+        let job_id = db.enqueue_job(&input).expect("checked in test assertions");
         db.with_write_conn(|conn| {
             conn.execute(
                 "UPDATE jobs SET status = 'failed', updated_at = 0 WHERE job_id = ?1",
                 rusqlite::params![job_id],
             )
-            .unwrap();
+            .expect("checked in test assertions");
             Ok(())
         })
-        .unwrap();
+        .expect("checked in test assertions");
 
         let registry = ToolRegistry::new();
         let result = registry
@@ -265,7 +266,8 @@ mod tests {
             result.is_error
         );
 
-        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         let jobs = parsed["jobs"].as_array().expect("jobs array");
         assert_eq!(jobs.len(), 1, "expected exactly one filtered job");
         assert_eq!(jobs[0]["job_id"], job_id);

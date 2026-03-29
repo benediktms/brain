@@ -376,12 +376,17 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_batch", params, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 3);
         assert_eq!(parsed["summary"]["failed"], 0);
 
         // Verify labels were actually added
-        let labels = ctx.stores.tasks.get_task_labels("t1").unwrap();
+        let labels = ctx
+            .stores
+            .tasks
+            .get_task_labels("t1")
+            .expect("checked in test assertions");
         assert!(labels.contains(&"urgent".to_string()));
     }
 
@@ -408,10 +413,15 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_batch", remove, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 2);
 
-        let labels = ctx.stores.tasks.get_task_labels("t1").unwrap();
+        let labels = ctx
+            .stores
+            .tasks
+            .get_task_labels("t1")
+            .expect("checked in test assertions");
         assert!(!labels.contains(&"old-label".to_string()));
     }
 
@@ -438,11 +448,16 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_batch", rename, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 3);
 
         // Verify old label gone, new label present
-        let labels = ctx.stores.tasks.get_task_labels("t1").unwrap();
+        let labels = ctx
+            .stores
+            .tasks
+            .get_task_labels("t1")
+            .expect("checked in test assertions");
         assert!(!labels.contains(&"old-name".to_string()));
         assert!(labels.contains(&"new-name".to_string()));
     }
@@ -469,10 +484,15 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_batch", purge, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 2);
 
-        let ids = ctx.stores.tasks.get_task_ids_with_label("doomed").unwrap();
+        let ids = ctx
+            .stores
+            .tasks
+            .get_task_ids_with_label("doomed")
+            .expect("checked in test assertions");
         assert!(ids.is_empty());
     }
 
@@ -488,7 +508,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_batch", purge, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 0);
         assert_eq!(parsed["summary"]["failed"], 0);
     }
@@ -507,7 +528,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_batch", params, &ctx).await;
         assert!(result.is_error.is_none()); // partial success, not an error
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 2);
         assert_eq!(parsed["summary"]["failed"], 1);
     }
@@ -525,7 +547,8 @@ mod tests {
         let result = dispatch(&registry, "tasks.labels_batch", params, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["summary"]["succeeded"], 0);
         assert_eq!(parsed["summary"]["failed"], 0);
     }

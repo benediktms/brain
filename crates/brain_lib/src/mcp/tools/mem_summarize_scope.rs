@@ -223,7 +223,8 @@ mod tests {
             result.content
         );
         let text = &result.content[0].text;
-        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("checked in test assertions");
         assert_eq!(parsed["scope_type"], "directory");
         assert_eq!(parsed["scope_value"], "src/");
         assert_eq!(parsed["llm_pending"], false);
@@ -262,8 +263,7 @@ mod tests {
                     params!["chunk-1", "src/example.rs", "Example content for async scope summary"],
                 )?;
                 Ok(())
-            })
-            .unwrap();
+            }).expect("checked in test assertions");
         let registry = ToolRegistry::new();
         let result = registry
             .dispatch(
@@ -280,14 +280,15 @@ mod tests {
         assert!(result.is_error.is_none());
 
         let text = &result.content[0].text;
-        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("checked in test assertions");
         assert_eq!(parsed["llm_pending"], true);
 
         let jobs = ctx
             .stores
             .db()
             .with_read_conn(|conn| crate::db::jobs::list_jobs(conn, None, 10))
-            .unwrap();
+            .expect("checked in test assertions");
         assert_eq!(jobs.len(), 1);
     }
 }

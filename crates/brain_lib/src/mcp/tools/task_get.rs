@@ -425,12 +425,15 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["task_id"], compact_id_for("parent"));
         assert_eq!(parsed["title"], "Parent");
         // parent field is null (no parent)
         assert!(parsed["parent"].is_null());
-        let children = parsed["children"].as_array().unwrap();
+        let children = parsed["children"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(children.len(), 1);
         assert_eq!(
             children[0]["task_id"],
@@ -491,7 +494,8 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         // Expanded parent has full fields
         assert_eq!(parsed["parent"]["task_id"], compact_id_for("p1"));
         assert_eq!(parsed["parent"]["status"], "open");
@@ -530,8 +534,11 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let children = parsed["children"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let children = parsed["children"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(children.len(), 1);
         // Expanded child has full fields
         assert_eq!(
@@ -584,8 +591,11 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let blocked_by = parsed["blocked_by"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let blocked_by = parsed["blocked_by"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(blocked_by.len(), 1);
         assert_eq!(blocked_by[0]["task_id"], compact_id_for("blocker"));
         assert_eq!(blocked_by[0]["status"], "open");
@@ -630,10 +640,15 @@ mod tests {
         let result = registry
             .dispatch("tasks.get", json!({ "task_id": "t1" }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let labels = parsed["labels"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let labels = parsed["labels"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(labels, &[json!("urgent")]);
-        let comments = parsed["comments"].as_array().unwrap();
+        let comments = parsed["comments"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0]["body"], "A comment");
         assert!(comments[0].get("created_at").is_some());
@@ -673,11 +688,14 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["description"], "Epic description");
 
         // Expanded children omit descriptions
-        let children = parsed["children"].as_array().unwrap();
+        let children = parsed["children"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(children.len(), 1);
         assert_eq!(children[0]["title"], "Child 1");
         assert!(
@@ -725,8 +743,11 @@ mod tests {
         let result = registry
             .dispatch("tasks.get", json!({ "task_id": "blocker" }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let blocks = parsed["blocks"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let blocks = parsed["blocks"]
+            .as_array()
+            .expect("checked in test assertions");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0]["task_id"], compact_id_for("waiting"));
         assert_eq!(blocks[0]["title"], "Waiting");
@@ -763,7 +784,8 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(
             parsed["parent_task_id"],
             compact_id_for("epic"),

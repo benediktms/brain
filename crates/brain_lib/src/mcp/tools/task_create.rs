@@ -450,13 +450,25 @@ mod tests {
             result.content
         );
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert!(parsed["task_id"].is_string());
-        assert!(!parsed["task_id"].as_str().unwrap().is_empty());
+        assert!(
+            !parsed["task_id"]
+                .as_str()
+                .expect("checked in test assertions")
+                .is_empty()
+        );
         assert_eq!(parsed["task"]["title"], "My first task");
         assert_eq!(parsed["task"]["status"], "open");
         assert_eq!(parsed["task"]["priority"], 4);
-        assert_eq!(parsed["unblocked_task_ids"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            parsed["unblocked_task_ids"]
+                .as_array()
+                .expect("checked in test assertions")
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -480,7 +492,8 @@ mod tests {
             result.content
         );
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["task"]["title"], "Full task");
         assert_eq!(parsed["task"]["description"], "A detailed description");
         assert_eq!(parsed["task"]["priority"], 2);
@@ -498,8 +511,11 @@ mod tests {
         let result = call(params, &ctx).await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let task_id = parsed["task_id"].as_str().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let task_id = parsed["task_id"]
+            .as_str()
+            .expect("checked in test assertions");
         // Should contain a dash (prefix-ULID format)
         assert!(
             task_id.contains('-'),
@@ -533,8 +549,12 @@ mod tests {
         let parent_params = json!({ "title": "Parent task" });
         let parent_result = call(parent_params, &ctx).await;
         assert!(parent_result.is_error.is_none());
-        let parent_parsed: Value = serde_json::from_str(&parent_result.content[0].text).unwrap();
-        let parent_id = parent_parsed["task_id"].as_str().unwrap().to_string();
+        let parent_parsed: Value = serde_json::from_str(&parent_result.content[0].text)
+            .expect("checked in test assertions");
+        let parent_id = parent_parsed["task_id"]
+            .as_str()
+            .expect("checked in test assertions")
+            .to_string();
 
         // Create child with parent ID
         let child_params = json!({
@@ -547,7 +567,8 @@ mod tests {
             "child creation should succeed: {}",
             child_result.content[0].text
         );
-        let child_parsed: Value = serde_json::from_str(&child_result.content[0].text).unwrap();
+        let child_parsed: Value = serde_json::from_str(&child_result.content[0].text)
+            .expect("checked in test assertions");
         assert_eq!(child_parsed["task"]["title"], "Child task");
     }
 
@@ -589,8 +610,13 @@ mod tests {
             "schema must include 'link_type'"
         );
         // link_type must have enum values
-        let enum_vals = props["link_type"]["enum"].as_array().unwrap();
-        let enum_strs: Vec<&str> = enum_vals.iter().map(|v| v.as_str().unwrap()).collect();
+        let enum_vals = props["link_type"]["enum"]
+            .as_array()
+            .expect("checked in test assertions");
+        let enum_strs: Vec<&str> = enum_vals
+            .iter()
+            .map(|v| v.as_str().expect("checked in test assertions"))
+            .collect();
         assert!(enum_strs.contains(&"depends_on"));
         assert!(enum_strs.contains(&"blocks"));
         assert!(enum_strs.contains(&"related"));
@@ -600,7 +626,8 @@ mod tests {
     async fn test_params_deserialize_without_brain() {
         // Params without brain fields should deserialize correctly (local path)
         let raw = json!({ "title": "No brain param" });
-        let params: super::Params = serde_json::from_value(raw).unwrap();
+        let params: super::Params =
+            serde_json::from_value(raw).expect("checked in test assertions");
         assert!(params.brain.is_none());
         assert!(params.link_from.is_none());
         assert!(params.link_type.is_none());
@@ -615,7 +642,8 @@ mod tests {
             "link_from": "LOCAL-01ABC",
             "link_type": "depends_on"
         });
-        let params: super::Params = serde_json::from_value(raw).unwrap();
+        let params: super::Params =
+            serde_json::from_value(raw).expect("checked in test assertions");
         assert_eq!(params.brain.as_deref(), Some("some-brain"));
         assert_eq!(params.link_from.as_deref(), Some("LOCAL-01ABC"));
         assert_eq!(params.link_type.as_deref(), Some("depends_on"));
@@ -660,7 +688,8 @@ mod tests {
             result.content
         );
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert!(parsed["task_id"].is_string());
         assert_eq!(parsed["task"]["title"], "Still local");
         assert_eq!(parsed["task"]["assignee"], "drone");

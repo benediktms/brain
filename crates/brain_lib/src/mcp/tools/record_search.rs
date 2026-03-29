@@ -256,13 +256,19 @@ mod tests {
         let required = def.input_schema.get("required");
         assert!(required.is_some(), "schema must have a 'required' field");
 
-        let required_arr = required.unwrap().as_array().unwrap();
+        let required_arr = required
+            .expect("checked in test assertions")
+            .as_array()
+            .expect("checked in test assertions");
         assert!(
             required_arr.iter().any(|v| v.as_str() == Some("query")),
             "'query' must be in required; got: {required_arr:?}"
         );
 
-        let props = def.input_schema.get("properties").unwrap();
+        let props = def
+            .input_schema
+            .get("properties")
+            .expect("checked in test assertions");
         assert!(
             props.get("query").is_some(),
             "schema must include 'query' property"

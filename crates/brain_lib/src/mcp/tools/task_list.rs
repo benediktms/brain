@@ -403,7 +403,8 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t1"));
     }
@@ -458,7 +459,8 @@ mod tests {
 
         // Default (no status param) should only return open tasks
         let result = registry.dispatch("tasks.list", json!({}), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "Open task");
 
@@ -466,7 +468,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({ "status": "done" }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "Done task");
     }
@@ -510,7 +513,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({ "status": "ready" }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t1"));
     }
@@ -554,7 +558,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({ "status": "blocked" }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
     }
@@ -584,14 +589,20 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         // Only t1 and t3 found; nonexistent skipped
         assert_eq!(parsed["count"], 2);
         let ids: Vec<String> = parsed["tasks"]
             .as_array()
-            .unwrap()
+            .expect("checked in test assertions")
             .iter()
-            .map(|t| t["task_id"].as_str().unwrap().to_string())
+            .map(|t| {
+                t["task_id"]
+                    .as_str()
+                    .expect("checked in test assertions")
+                    .to_string()
+            })
             .collect();
         assert!(ids.contains(&compact_id_for("t1")));
         assert!(ids.contains(&compact_id_for("t3")));
@@ -603,11 +614,17 @@ mod tests {
         let registry = ToolRegistry::new();
 
         let result = registry.dispatch("tasks.list", json!({}), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 0);
         assert_eq!(parsed["ready_count"], 0);
         assert_eq!(parsed["blocked_count"], 0);
-        assert!(parsed["tasks"].as_array().unwrap().is_empty());
+        assert!(
+            parsed["tasks"]
+                .as_array()
+                .expect("checked in test assertions")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -660,7 +677,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({ "status": "open" }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 3);
         assert_eq!(parsed["ready_count"], 2);
         assert_eq!(parsed["blocked_count"], 1);
@@ -684,14 +702,16 @@ mod tests {
 
         // Default: no description
         let result = registry.dispatch("tasks.list", json!({}), &ctx).await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert!(parsed["tasks"][0].get("description").is_none());
 
         // With include_description: true
         let result = registry
             .dispatch("tasks.list", json!({ "include_description": true }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["tasks"][0]["description"], "A long description");
     }
 
@@ -707,13 +727,14 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({"priority": 1}), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 2);
         let titles: Vec<&str> = parsed["tasks"]
             .as_array()
-            .unwrap()
+            .expect("checked in test assertions")
             .iter()
-            .map(|t| t["title"].as_str().unwrap())
+            .map(|t| t["title"].as_str().expect("checked in test assertions"))
             .collect();
         assert!(titles.contains(&"High"));
         assert!(titles.contains(&"High too"));
@@ -730,7 +751,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({"task_type": "bug"}), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "Bug fix");
     }
@@ -747,7 +769,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({"assignee": "alice"}), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "Alice task");
     }
@@ -764,7 +787,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({"assignee": "Alice"}), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "Alice task");
 
@@ -772,7 +796,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({"assignee": "bob"}), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "Bob task");
     }
@@ -794,7 +819,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({"label": "urgent"}), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "Labeled");
     }
@@ -809,7 +835,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({"label": "nonexistent"}), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 0);
     }
 
@@ -832,7 +859,8 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 0);
 
         // Open + P2 + bug = t2
@@ -843,7 +871,8 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["title"], "P2 bug");
     }
@@ -860,13 +889,19 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({"search": "filtering"}), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 2); // t1 (title) + t3 (description)
         let ids: Vec<String> = parsed["tasks"]
             .as_array()
-            .unwrap()
+            .expect("checked in test assertions")
             .iter()
-            .map(|t| t["task_id"].as_str().unwrap().to_string())
+            .map(|t| {
+                t["task_id"]
+                    .as_str()
+                    .expect("checked in test assertions")
+                    .to_string()
+            })
             .collect();
         assert!(ids.contains(&compact_id_for("t1")));
         assert!(ids.contains(&compact_id_for("t3")));
@@ -890,7 +925,8 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
 
@@ -902,7 +938,8 @@ mod tests {
                 &ctx,
             )
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t1"));
     }
@@ -941,7 +978,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({ "status": "open", "limit": 2 }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 2);
         assert_eq!(parsed["total"], 5);
         assert_eq!(parsed["has_more"], true);
@@ -950,7 +988,8 @@ mod tests {
         let result = registry
             .dispatch("tasks.list", json!({ "status": "open" }), &ctx)
             .await;
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 5);
         assert_eq!(parsed["total"], 5);
         assert_eq!(parsed["has_more"], false);
@@ -997,7 +1036,8 @@ mod tests {
             .dispatch("tasks.list", json!({ "status": "in_progress" }), &ctx)
             .await;
         assert!(result.is_error.is_none());
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
     }
@@ -1043,7 +1083,8 @@ mod tests {
             .dispatch("tasks.list", json!({ "status": "cancelled" }), &ctx)
             .await;
         assert!(result.is_error.is_none());
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["tasks"][0]["task_id"], compact_id_for("t2"));
     }
@@ -1081,8 +1122,11 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let tasks = parsed["tasks"].as_array().unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
+        let tasks = parsed["tasks"]
+            .as_array()
+            .expect("checked in test assertions");
         let child_task = tasks
             .iter()
             .find(|t| t["title"] == "Child")

@@ -204,12 +204,13 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
-        let (tmp, stores) = crate::stores::BrainStores::in_memory().unwrap();
+        let (tmp, stores) =
+            crate::stores::BrainStores::in_memory().expect("checked in test assertions");
 
         let lance_path = tmp.path().join("test_lance");
         let store = crate::store::Store::open_or_create(&lance_path)
             .await
-            .unwrap();
+            .expect("checked in test assertions");
         let store_reader = crate::store::StoreReader::from_store(&store);
         let embedder = Arc::new(crate::embedder::MockEmbedder);
 

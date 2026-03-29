@@ -256,7 +256,8 @@ mod tests {
 
     /// Build a context with store and embedder both absent (tasks-only mode).
     async fn create_tasks_only_context() -> (tempfile::TempDir, McpContext) {
-        let (tmp, stores) = crate::stores::BrainStores::in_memory().unwrap();
+        let (tmp, stores) =
+            crate::stores::BrainStores::in_memory().expect("checked in test assertions");
 
         (
             tmp,
@@ -275,7 +276,8 @@ mod tests {
     /// in `SearchService`. To simulate "no embedder", we set `search: None`.
     /// The test still validates that the tool returns MEMORY_UNAVAILABLE.
     async fn create_no_embedder_context() -> (tempfile::TempDir, McpContext) {
-        let (tmp, stores) = crate::stores::BrainStores::in_memory().unwrap();
+        let (tmp, stores) =
+            crate::stores::BrainStores::in_memory().expect("checked in test assertions");
 
         (
             tmp,
@@ -362,10 +364,16 @@ mod tests {
             .await;
         assert!(result.is_error.is_none(), "should succeed with defaults");
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["budget_tokens"], 800);
         assert_eq!(parsed["result_count"], 0);
-        assert!(parsed["results"].as_array().unwrap().is_empty());
+        assert!(
+            parsed["results"]
+                .as_array()
+                .expect("checked in test assertions")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -381,7 +389,8 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["budget_tokens"], 200);
     }
 
@@ -399,7 +408,8 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["result_count"], 0);
     }
 
@@ -450,7 +460,8 @@ mod tests {
             )
             .await;
         assert!(result.is_error.is_none());
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["intent_resolved"], "Lookup");
     }
 
@@ -466,7 +477,8 @@ mod tests {
             )
             .await;
         assert!(result.is_error.is_none());
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["intent_resolved"], "Planning");
     }
 
@@ -482,7 +494,8 @@ mod tests {
             )
             .await;
         assert!(result.is_error.is_none());
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["intent_resolved"], "Reflection");
     }
 
@@ -498,7 +511,8 @@ mod tests {
             )
             .await;
         assert!(result.is_error.is_none());
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["intent_resolved"], "Synthesis");
     }
 
@@ -514,7 +528,8 @@ mod tests {
             )
             .await;
         assert!(result.is_error.is_none());
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         // "auto" does not match any named profile — falls through to Default.
         assert_eq!(parsed["intent_resolved"], "Default");
     }
@@ -533,7 +548,8 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert!(
             parsed.get("budget_tokens").is_some(),
             "missing budget_tokens"
@@ -572,7 +588,8 @@ mod tests {
             "large budget should be accepted; got: {}",
             result.content[0].text
         );
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
         assert_eq!(parsed["budget_tokens"], 1_000_000);
     }
 
@@ -594,35 +611,41 @@ mod tests {
         use crate::store::Store;
 
         // Build a fully-indexed context so we get actual results back.
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("checked in test assertions");
         let sqlite_path = tmp.path().join("brain.db");
         let lance_path = tmp.path().join("brain_lancedb");
         let notes_dir = tmp.path().join("notes");
-        std::fs::create_dir_all(&notes_dir).unwrap();
+        std::fs::create_dir_all(&notes_dir).expect("checked in test assertions");
 
         // Write a note and index it.
         let note_path = notes_dir.join("signals.md");
         std::fs::write(
             &note_path,
             "## Signal Scores\n\nThis chunk exists to produce ranked results with signal breakdown.",
-        )
-        .unwrap();
+        ).expect("checked in test assertions");
 
-        let db = Db::open(&sqlite_path).unwrap();
-        let store = Store::open_or_create(&lance_path).await.unwrap();
+        let db = Db::open(&sqlite_path).expect("checked in test assertions");
+        let store = Store::open_or_create(&lance_path)
+            .await
+            .expect("checked in test assertions");
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
         let pipeline = IndexPipeline::with_embedder(db, store, embedder)
             .await
-            .unwrap();
-        pipeline.full_scan(&[notes_dir]).await.unwrap();
+            .expect("checked in test assertions");
+        pipeline
+            .full_scan(&[notes_dir])
+            .await
+            .expect("checked in test assertions");
         drop(pipeline);
 
         // Create a fresh McpContext over the indexed data.
-        let store2 = Store::open_or_create(&lance_path).await.unwrap();
+        let store2 = Store::open_or_create(&lance_path)
+            .await
+            .expect("checked in test assertions");
         let store2_reader = crate::store::StoreReader::from_store(&store2);
-        let ctx_db = Db::open(&sqlite_path).unwrap();
-        let stores2 =
-            crate::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path()).unwrap();
+        let ctx_db = Db::open(&sqlite_path).expect("checked in test assertions");
+        let stores2 = crate::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path())
+            .expect("checked in test assertions");
         let ctx = McpContext {
             stores: stores2,
             search: Some(crate::search_service::SearchService {
@@ -654,7 +677,8 @@ mod tests {
             result.content[0].text
         );
 
-        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("checked in test assertions");
 
         // Step 2: verify we have at least one result.
         let count = parsed["result_count"].as_u64().unwrap_or(0);
