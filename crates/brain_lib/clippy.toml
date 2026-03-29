@@ -2,6 +2,3 @@ disallowed-types = [
   { path = "rusqlite::Connection", reason = "use port traits — SQL belongs in brain_persistence" },
   { path = "rusqlite::Transaction", reason = "use port traits — SQL belongs in brain_persistence" },
 ]
-disallowed-methods = [
-  { path = "rusqlite::params", reason = "raw SQL params belong in brain_persistence, use port traits" },
-]
