@@ -70,7 +70,7 @@ fn build_fts_chunks_query(
 
     let brain_filter = match brain_ids {
         None => String::new(),
-        Some(ids) if ids.is_empty() => String::new(),
+        Some([]) => String::new(),
         Some(ids) => {
             let placeholders: Vec<String> = ids
                 .iter()
@@ -109,7 +109,7 @@ fn build_fts_summaries_query(
 
     let brain_filter = match brain_ids {
         None => String::new(),
-        Some(ids) if ids.is_empty() => String::new(),
+        Some([]) => String::new(),
         Some(ids) => {
             let placeholders: Vec<String> = ids
                 .iter()

@@ -20,6 +20,7 @@ pub struct MigrateArgs {
 ///
 /// Replays per-brain JSONL event logs into the unified `~/.brain/brain.db`.
 /// Idempotent — safe to re-run. Events already present are skipped.
+#[allow(clippy::disallowed_types)]
 pub fn run(args: MigrateArgs) -> Result<()> {
     let home = brain_home()?;
     let unified_db_path = home.join("brain.db");
