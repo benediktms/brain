@@ -191,9 +191,9 @@ graph TB
         end
     end
 
-    subgraph Storage["Dual Store"]
-        SQLite["SQLite<br/>FTS5 · metadata · links · tasks · records · jobs"]
-        LanceDB["LanceDB<br/>384-dim embeddings"]
+    subgraph Storage["Dual Store (brain_persistence)"]
+        SQLite["SQLite<br/>FTS5 · metadata · links · tasks · records · jobs<br/>all tables scoped by brain_id"]
+        LanceDB["LanceDB<br/>384-dim embeddings (per-brain)"]
     end
 
     MD -->|fs events| FW
@@ -296,8 +296,9 @@ just clean-db     # Clean database (forces full reindex)
 
 ```
 brain/
-  brain_lib/      # Core library: indexing, retrieval, embedding, MCP, tasks, records, jobs
-  cli/            # Thin binary: wires CLI commands to library functions
+  brain_lib/          # Core library: domain logic, ports, MCP server
+  brain_persistence/  # Persistence adapters: SQLite, LanceDB, object store
+  cli/                # Thin binary: wires CLI commands to library functions
   docs/
     ARCHITECTURE.md
     RECORDS.md

@@ -20,12 +20,21 @@ Brain manages three primary domains with decoupled lifecycles:
 
 ## Scoping Model
 
-Brain uses mixed scoping by domain to balance workspace-wide discovery with brain-specific isolation:
+All domains are partitioned by `brain_id` in the unified SQLite database:
 
-- **Workspace-global**: Notes and chunks are shared across the entire workspace. They do **not** carry a `brain_id`. This allows any brain in the same workspace to discover and link to the same note content.
-- **Brain-scoped**: Tasks, records, summaries, and jobs are partitioned by `brain_id`. These are private to the specific brain that created them.
+- **Files and chunks** carry `brain_id`, set during indexing from the owning brain's registered roots. FTS search defaults to the current brain for single-brain queries.
+- **Tasks, records, summaries, and jobs** are partitioned by `brain_id` on write.
+- **LanceDB** is inherently per-brain (separate directories per brain), so vector search is always scoped.
 
-This is why `McpContext::with_brain_id()` only re-scopes brain-scoped domains. Note retrieval remains workspace-global by design.
+Search scoping is controlled by the `brains` parameter on MCP search tools:
+
+| Mode | Behavior |
+|------|----------|
+| Omitted (default) | FTS scoped to current brain's `brain_id` |
+| `brains: ["work", "personal"]` | Federated search across specified brains |
+| `brains: ["all"]` | No brain_id filter (workspace-global) |
+
+The v37 schema migration backfills `brain_id` on existing files/chunks by matching file paths against registered brain roots. Synthetic files (`task:*`, `task-outcome:*`, `record:*`) are backfilled by joining to their owning task/record.
 
 ## Repository Boundary
 
@@ -34,7 +43,7 @@ The codebase is split into two primary crates to separate domain logic from pers
 - **`brain_lib`**: Contains the core domain logic, traits (ports), and the MCP server implementation. It defines how indexing, retrieval, and task management should work without being tied to a specific database.
 - **`brain_persistence`**: Contains the concrete SQL implementations (adapters) for SQLite and LanceDB. It handles schema migrations, query execution, and the content-addressed object store.
 
-This boundary allows for easier testing via mocks and ensures that domain rules are not leaked into persistence code.
+This boundary is enforced by clippy rules: `disallowed-types` and `disallowed-macros` in both `brain_lib/clippy.toml` and `cli/clippy.toml` prevent direct `rusqlite` imports outside `brain_persistence`. Infrastructure code (migrations, config) uses targeted `#[allow]` annotations.
 
 ## Directory Structure
 
@@ -229,8 +238,8 @@ sequenceDiagram
 
 | Concern | SQLite (Sole Source of Truth) | LanceDB (Per-Brain Data Plane) | Object Store (Global) |
 |---------|----------------------|---------------------|--------------|
-| **Role** | Transactional state for all domains — partitioned by brain_id | Per-brain vector similarity search | Global payload storage — deduplication across all brains |
-| **Stores** | File identity, content hashes, chunk metadata, links, tasks, records, jobs, FTS5 index | Per-brain chunk text, task capsules, 384-dim embeddings | Immutable content-addressed blobs (BLAKE3-keyed) |
+| **Role** | Transactional state for all domains — all tables partitioned by `brain_id` | Per-brain vector similarity search | Global payload storage — deduplication across all brains |
+| **Stores** | Files, chunks (with brain_id), links, tasks, records, summaries, jobs, FTS5 index | Per-brain chunk text, task capsules, 384-dim embeddings | Immutable content-addressed blobs (BLAKE3-keyed) |
 | **Access pattern** | Joins, filters, exact lookups, FTS5 BM25 | Per-brain kNN vector search | Write-once keyed by hash, read by hash path |
 
 ## Performance Design
