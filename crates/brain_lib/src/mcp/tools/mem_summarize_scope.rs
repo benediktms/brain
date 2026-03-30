@@ -287,7 +287,7 @@ mod tests {
         let jobs = ctx
             .stores
             .db()
-            .with_read_conn(|conn| crate::db::jobs::list_jobs(conn, None, 10))
+            .with_read_conn(|conn| brain_persistence::db::jobs::list_jobs(conn, None, 10))
             .expect("checked in test assertions");
         assert_eq!(jobs.len(), 1);
     }

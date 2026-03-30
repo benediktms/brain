@@ -14,11 +14,11 @@ use std::sync::Arc;
 use dashmap::DashSet;
 use tracing::{debug, warn};
 
-use crate::db::Db;
-use crate::db::jobs::{self, EnqueueJobInput, JobPayload};
+use brain_persistence::db::Db;
+use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload};
 use crate::embedder::Embed;
 use crate::ports::{JobPersistence, JobQueue};
-use crate::store::Store;
+use brain_persistence::store::Store;
 
 // ─── Active-job lock set ────────────────────────────────────────
 
@@ -377,7 +377,7 @@ async fn process_full_scan(
     }
 
     let dirs: Vec<PathBuf> = db.with_read_conn(|conn| {
-        use crate::db::schema::get_brain;
+        use brain_persistence::db::schema::get_brain;
         let row = get_brain(conn, brain_id)?;
         let mut dirs = Vec::new();
         if let Some(ref row) = row {
@@ -492,7 +492,7 @@ pub fn enqueue_cluster_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Db;
+    use brain_persistence::db::Db;
     use rusqlite::params;
 
     fn setup_db() -> Db {
@@ -583,10 +583,10 @@ mod tests {
 
         // Verify the job is still in_progress (not reset).
         let job = db
-            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-ACTIVE"))
+            .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-ACTIVE"))
             .unwrap()
             .unwrap();
-        assert_eq!(job.status, crate::db::jobs::JobStatus::InProgress);
+        assert_eq!(job.status, brain_persistence::db::jobs::JobStatus::InProgress);
     }
 
     #[test]
@@ -623,17 +623,17 @@ mod tests {
 
         // Verify: J-HELD still in_progress, J-FREE was reaped (fail_job was called).
         let held = db
-            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-HELD"))
+            .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-HELD"))
             .unwrap()
             .unwrap();
-        assert_eq!(held.status, crate::db::jobs::JobStatus::InProgress);
+        assert_eq!(held.status, brain_persistence::db::jobs::JobStatus::InProgress);
 
         let freed = db
-            .with_read_conn(|conn| crate::db::jobs::get_job(conn, "J-FREE"))
+            .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-FREE"))
             .unwrap()
             .unwrap();
         // fail_job with retryable config resets to Ready.
-        assert_eq!(freed.status, crate::db::jobs::JobStatus::Ready);
+        assert_eq!(freed.status, brain_persistence::db::jobs::JobStatus::Ready);
     }
 
     #[test]

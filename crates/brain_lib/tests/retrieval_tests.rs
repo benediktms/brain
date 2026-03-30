@@ -8,11 +8,11 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use brain_lib::db::Db;
-use brain_lib::db::chunks::get_chunks_by_ids;
-use brain_lib::db::fts::search_fts;
-use brain_lib::db::links::count_backlinks;
-use brain_lib::db::summaries::{Episode, get_summary, list_episodes, store_episode};
+use brain_persistence::db::Db;
+use brain_persistence::db::chunks::get_chunks_by_ids;
+use brain_persistence::db::fts::search_fts;
+use brain_persistence::db::links::count_backlinks;
+use brain_persistence::db::summaries::{Episode, get_summary, list_episodes, store_episode};
 use brain_lib::embedder::{Embed, MockEmbedder};
 use brain_lib::error::BrainCoreError;
 use brain_lib::links::{LinkType, extract_links};
@@ -24,7 +24,7 @@ use brain_lib::ranking::{
     CandidateSignals, RankedResult, SignalScores, WeightProfile, Weights, rank_candidates,
 };
 use brain_lib::retrieval::{expand_results, pack_minimal};
-use brain_lib::store::Store;
+use brain_persistence::store::Store;
 use brain_lib::tokens::estimate_tokens;
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ async fn setup_mcp() -> (McpContext, TempDir) {
 
     let db = Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
-    let store_reader = brain_lib::store::StoreReader::from_store(&store);
+    let store_reader = brain_persistence::store::StoreReader::from_store(&store);
     let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
 
     let stores =
@@ -571,7 +571,7 @@ async fn test_mcp_search_minimal_returns_results() {
 
     // Create fresh McpContext that sees the indexed data
     let store2 = Store::open_or_create(&lance_path).await.unwrap();
-    let store2_reader = brain_lib::store::StoreReader::from_store(&store2);
+    let store2_reader = brain_persistence::store::StoreReader::from_store(&store2);
     let ctx_db = Db::open(&sqlite_path).unwrap();
     let stores2 =
         brain_lib::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path()).unwrap();
@@ -638,7 +638,7 @@ async fn test_mcp_expand_returns_full_content() {
 
     // Create fresh McpContext that sees the indexed data
     let store3 = Store::open_or_create(&lance_path).await.unwrap();
-    let store3_reader = brain_lib::store::StoreReader::from_store(&store3);
+    let store3_reader = brain_persistence::store::StoreReader::from_store(&store3);
     let ctx_db3 = Db::open(&sqlite_path).unwrap();
     let stores3 =
         brain_lib::stores::BrainStores::from_dbs(ctx_db3, "", tmp.path(), tmp.path()).unwrap();
@@ -831,7 +831,7 @@ async fn test_procedure_surfaces_in_search_minimal_with_kind_procedure() {
 
     // 4. Build McpContext over the same DBs
     let store2 = Store::open_or_create(&lance_path).await.unwrap();
-    let store2_reader = brain_lib::store::StoreReader::from_store(&store2);
+    let store2_reader = brain_persistence::store::StoreReader::from_store(&store2);
     let ctx_db = Db::open(&sqlite_path).unwrap();
     let stores2 =
         brain_lib::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path()).unwrap();

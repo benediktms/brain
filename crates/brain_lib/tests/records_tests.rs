@@ -14,7 +14,7 @@
 use std::fs::OpenOptions;
 use std::io::Write as IoWrite;
 
-use brain_lib::db::Db;
+use brain_persistence::db::Db;
 use brain_lib::records::events::{
     ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
     RecordEventType, RecordUpdatedPayload, TagPayload, append_event, new_record_id,

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
-use crate::store::VectorSearchMode;
+use brain_persistence::store::VectorSearchMode;
 
 use crate::uri::SynapseUri;
 
@@ -604,11 +604,11 @@ mod tests {
 
         use tempfile::TempDir;
 
-        use crate::db::Db;
+        use brain_persistence::db::Db;
         use crate::embedder::{Embed, MockEmbedder};
         use crate::mcp::McpContext;
         use crate::pipeline::IndexPipeline;
-        use crate::store::Store;
+        use brain_persistence::store::Store;
 
         // Build a fully-indexed context so we get actual results back.
         let tmp = TempDir::new().expect("checked in test assertions");
@@ -642,7 +642,7 @@ mod tests {
         let store2 = Store::open_or_create(&lance_path)
             .await
             .expect("checked in test assertions");
-        let store2_reader = crate::store::StoreReader::from_store(&store2);
+        let store2_reader = brain_persistence::store::StoreReader::from_store(&store2);
         let ctx_db = Db::open(&sqlite_path).expect("checked in test assertions");
         let stores2 = crate::stores::BrainStores::from_dbs(ctx_db, "", tmp.path(), tmp.path())
             .expect("checked in test assertions");

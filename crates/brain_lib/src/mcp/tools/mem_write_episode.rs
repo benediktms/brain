@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::error;
 
-use crate::db::summaries::Episode;
+use brain_persistence::db::summaries::Episode;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::ports::EpisodeWriter;

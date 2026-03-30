@@ -1,8 +1,8 @@
 use tracing::instrument;
 
 use crate::chunker::CHUNKER_VERSION;
-use crate::db::Db;
-use crate::db::files;
+use brain_persistence::db::Db;
+use brain_persistence::db::files;
 use crate::utils::content_hash;
 
 /// Result of a hash gate check: should this file be (re-)indexed?

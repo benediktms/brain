@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use tracing::{debug, info, warn};
 
-use crate::db::Db;
-use crate::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
-use crate::db::summaries::{
+use brain_persistence::db::Db;
+use brain_persistence::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
+use brain_persistence::db::summaries::{
     SummaryPollRow, find_stale_summaries_for_embedding, mark_summaries_embedded,
 };
 use crate::embedder::{Embed, embed_batch_async};
@@ -303,7 +303,7 @@ pub async fn poll_stale_records(
     // ── 1. Fetch stale record rows ───────────────────────────────────────
     let brain_id_owned = brain_id.to_string();
     let rows = match db.with_read_conn(move |conn| {
-        crate::db::records::queries::find_stale_records_for_embedding(conn, &brain_id_owned)
+        brain_persistence::db::records::queries::find_stale_records_for_embedding(conn, &brain_id_owned)
     }) {
         Ok(r) => r,
         Err(e) => {
@@ -326,7 +326,7 @@ pub async fn poll_stale_records(
     let tag_map: std::collections::HashMap<String, Vec<String>> =
         match db.with_read_conn(move |conn| {
             let refs: Vec<&str> = record_ids_owned.iter().map(String::as_str).collect();
-            crate::db::records::queries::get_tags_for_records(conn, &refs)
+            brain_persistence::db::records::queries::get_tags_for_records(conn, &refs)
         }) {
             Ok(m) => m,
             Err(e) => {
@@ -411,7 +411,7 @@ pub async fn poll_stale_records(
         let ids_owned: Vec<String> = embedded_record_ids.iter().cloned().collect();
         if let Err(e) = db.with_write_conn(move |conn| {
             let refs: Vec<&str> = ids_owned.iter().map(String::as_str).collect();
-            crate::db::records::queries::mark_records_embedded(conn, &refs)
+            brain_persistence::db::records::queries::mark_records_embedded(conn, &refs)
         }) {
             warn!(error = %e, "embed_poll: failed to mark records as embedded");
         }

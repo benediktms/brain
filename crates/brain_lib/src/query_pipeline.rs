@@ -11,8 +11,8 @@ use tracing::{instrument, warn};
 use std::sync::atomic::Ordering;
 
 use crate::capsule::generate_stub_capsule;
-use crate::db::Db;
-use crate::db::summaries::SummaryRow;
+use brain_persistence::db::Db;
+use brain_persistence::db::summaries::SummaryRow;
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
@@ -22,8 +22,8 @@ use crate::ranking::{
     compute_fusion_confidence, rank_candidates, resolve_intent,
 };
 use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
-use crate::store::VectorSearchMode;
-use crate::store::{DEFAULT_NPROBES, StoreReader};
+use brain_persistence::store::VectorSearchMode;
+use brain_persistence::store::{DEFAULT_NPROBES, StoreReader};
 use crate::tokens::estimate_tokens;
 
 const CANDIDATE_LIMIT: usize = 50;

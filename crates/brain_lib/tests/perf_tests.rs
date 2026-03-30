@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use brain_lib::db::Db;
-use brain_lib::db::files;
+use brain_persistence::db::Db;
+use brain_persistence::db::files;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
-use brain_lib::store::{Store, StoreReader};
+use brain_persistence::store::{Store, StoreReader};
 use brain_lib::watcher::{FileEvent, coalesce_events};
 
 use tempfile::TempDir;
@@ -462,7 +462,7 @@ async fn test_ivf_pq_index_creation() {
     assert_eq!(stats.indexed, 130);
 
     // Create index explicitly
-    let config = brain_lib::store::IvfPqConfig::default();
+    let config = brain_persistence::store::IvfPqConfig::default();
     pipeline.store().create_vector_index(&config).await.unwrap();
 
     // Verify index exists via list_indices
@@ -489,7 +489,7 @@ async fn test_ivf_pq_query_returns_results() {
     pipeline.index_files_batch(&paths).await.unwrap();
 
     // Create index
-    let config = brain_lib::store::IvfPqConfig::default();
+    let config = brain_persistence::store::IvfPqConfig::default();
     pipeline.store().create_vector_index(&config).await.unwrap();
 
     // Query with nprobes

@@ -15,12 +15,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use crate::db::chunks::ChunkRow;
-use crate::db::fts::{FtsResult, FtsSummaryResult};
-use crate::db::summaries::{Episode, SummaryRow};
+use brain_persistence::db::chunks::ChunkRow;
+use brain_persistence::db::fts::{FtsResult, FtsSummaryResult};
+use brain_persistence::db::summaries::{Episode, SummaryRow};
 use crate::error::Result;
 use crate::hierarchy::{DerivedSummary, GeneratedScopeSummary, ScopeType};
-use crate::store::{QueryResult, VectorSearchMode};
+use brain_persistence::store::{QueryResult, VectorSearchMode};
 
 use super::{
     ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, DerivedSummaryReader,
@@ -561,7 +561,7 @@ impl ChunkMetaWriter for MockChunkMetaWriter {
     fn replace_chunk_metadata(
         &self,
         file_id: &str,
-        chunks: &[crate::db::chunks::ChunkMeta],
+        chunks: &[brain_persistence::db::chunks::ChunkMeta],
     ) -> Result<()> {
         let hashes: Vec<String> = chunks.iter().map(|c| c.chunk_hash.clone()).collect();
         self.chunk_hashes
@@ -1123,7 +1123,7 @@ mod tests {
     async fn index_pipeline_with_mock_store_upserts_without_lancedb() {
         use std::sync::Arc;
 
-        use crate::db::Db;
+        use brain_persistence::db::Db;
         use crate::embedder::MockEmbedder;
         use crate::pipeline::IndexPipeline;
 
@@ -1159,11 +1159,11 @@ mod tests {
     async fn query_pipeline_with_mock_searcher_returns_preset_results() {
         use std::sync::Arc;
 
-        use crate::db::Db;
+        use brain_persistence::db::Db;
         use crate::embedder::MockEmbedder;
         use crate::metrics::Metrics;
         use crate::query_pipeline::QueryPipeline;
-        use crate::store::QueryResult;
+        use brain_persistence::store::QueryResult;
 
         let db = Db::open_in_memory().unwrap();
         let store = MockChunkSearcher::with_results(vec![QueryResult {
@@ -1251,7 +1251,7 @@ mod tests {
 
     #[test]
     fn mock_chunk_meta_writer_replace_and_get_hashes() {
-        use crate::db::chunks::ChunkMeta;
+        use brain_persistence::db::chunks::ChunkMeta;
 
         let writer = MockChunkMetaWriter::default();
         let chunks = vec![

@@ -7,7 +7,7 @@ pub mod queries;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::Db;
+use brain_persistence::db::Db;
 use crate::error::Result;
 use tracing;
 
@@ -528,7 +528,7 @@ impl RecordStore {
         }
         // Unscoped/legacy mode: fall back to brain_meta
         self.db.with_write_conn(|conn| {
-            crate::db::meta::get_or_init_project_prefix(conn, std::path::Path::new("."))
+            brain_persistence::db::meta::get_or_init_project_prefix(conn, std::path::Path::new("."))
         })
     }
 
@@ -850,7 +850,7 @@ mod tests {
 
     #[test]
     fn test_record_store_new() {
-        let db = crate::db::Db::open_in_memory().unwrap();
+        let db = brain_persistence::db::Db::open_in_memory().unwrap();
         let store = RecordStore::new(db);
         assert!(store.brain_id.is_empty());
     }
@@ -858,7 +858,7 @@ mod tests {
     #[test]
     fn test_import_from_jsonl_missing_file() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db = crate::db::Db::open_in_memory().unwrap();
+        let db = brain_persistence::db::Db::open_in_memory().unwrap();
         let store = RecordStore::with_brain_id(db, "test-brain", "test-brain").unwrap();
 
         let missing = dir.path().join("nonexistent.jsonl");
@@ -868,7 +868,7 @@ mod tests {
 
     #[test]
     fn test_record_store_apply_event_and_query() {
-        let db = crate::db::Db::open_in_memory().unwrap();
+        let db = brain_persistence::db::Db::open_in_memory().unwrap();
         let store = RecordStore::new(db);
 
         let ev = RecordEvent::from_payload(
@@ -901,7 +901,7 @@ mod tests {
     // -- Helper for eviction/pin/retention tests --
 
     fn make_store_with_objects(dir: &tempfile::TempDir) -> (RecordStore, objects::ObjectStore) {
-        let db = crate::db::Db::open_in_memory().unwrap();
+        let db = brain_persistence::db::Db::open_in_memory().unwrap();
         let store = RecordStore::new(db);
         let objects = objects::ObjectStore::new(dir.path().join("objects")).unwrap();
         (store, objects)

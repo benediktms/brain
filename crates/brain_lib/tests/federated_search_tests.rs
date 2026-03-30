@@ -9,7 +9,7 @@ use brain_lib::embedder::MockEmbedder;
 use brain_lib::metrics::Metrics;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::query_pipeline::{FederatedPipeline, SearchParams};
-use brain_lib::store::{Store, StoreReader};
+use brain_persistence::store::{Store, StoreReader};
 use tempfile::TempDir;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ use tempfile::TempDir;
 struct BrainFixture {
     /// Kept alive to prevent temp directory cleanup.
     _tmp: TempDir,
-    db: brain_lib::db::Db,
+    db: brain_persistence::db::Db,
     store_reader: StoreReader,
 }
 
@@ -34,7 +34,7 @@ async fn setup_brain(notes: &[(&str, &str)]) -> BrainFixture {
         std::fs::write(notes_dir.join(name), content).unwrap();
     }
 
-    let db = brain_lib::db::Db::open(&sqlite_path).unwrap();
+    let db = brain_persistence::db::Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
     let pipeline = IndexPipeline::with_embedder(db, store, embedder)
@@ -44,7 +44,7 @@ async fn setup_brain(notes: &[(&str, &str)]) -> BrainFixture {
     pipeline.full_scan(&[notes_dir]).await.unwrap();
 
     // Re-open separate handles for the query path
-    let db2 = brain_lib::db::Db::open(&sqlite_path).unwrap();
+    let db2 = brain_persistence::db::Db::open(&sqlite_path).unwrap();
     let store2 = Store::open_or_create(&lance_path).await.unwrap();
     let store_reader = StoreReader::from_store(&store2);
 

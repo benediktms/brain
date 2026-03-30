@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use brain_lib::db::Db;
-use brain_lib::db::files;
-use brain_lib::db::meta;
+use brain_persistence::db::Db;
+use brain_persistence::db::files;
+use brain_persistence::db::meta;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::ports::FileMetaWriter;
-use brain_lib::store::{LANCE_SCHEMA_VERSION, Store};
+use brain_persistence::store::{LANCE_SCHEMA_VERSION, Store};
 use brain_lib::utils::content_hash;
 use brain_lib::watcher::FileEvent;
 

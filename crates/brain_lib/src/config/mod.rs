@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
-use crate::store::{Store, StoreReader};
+use brain_persistence::store::{Store, StoreReader};
 
 // ---------------------------------------------------------------------------
 // State projection (~/.brain/state_projection.toml)
@@ -343,7 +343,7 @@ pub fn resolve_brain_id(entry: &BrainEntry, _name: &str) -> Result<String> {
 /// projected state into the brains table, DB resolution is fast and
 /// supports aliases/roots. Falls back to TOML parsing on cold start.
 pub fn resolve_brain_with_fallback(
-    db: Option<&crate::db::Db>,
+    db: Option<&brain_persistence::db::Db>,
     name_or_id: &str,
 ) -> Result<(String, String)> {
     if let Some(db) = db
@@ -360,7 +360,7 @@ pub fn resolve_brain_with_fallback(
 /// Open a local [`crate::tasks::TaskStore`] for a brain identified by `name`.
 ///
 /// Resolves the brain's data paths, creates the database directory if needed,
-/// and opens a [`crate::db::Db`] backed [`crate::tasks::TaskStore`] for the
+/// and opens a [`brain_persistence::db::Db`] backed [`crate::tasks::TaskStore`] for the
 /// named brain.
 ///
 /// # Deprecation
@@ -422,7 +422,7 @@ pub async fn open_remote_search_context(
     // backward compatibility with installs that haven't run the daemon yet.
     let db_path = brain_home.join("brain.db");
     let (name, brain_id) = if db_path.exists() {
-        let db = crate::db::Db::open(&db_path)?;
+        let db = brain_persistence::db::Db::open(&db_path)?;
         match db.resolve_brain(brain_key) {
             Ok((id, n)) => (n, id),
             Err(_) => return Ok(None),
@@ -497,7 +497,7 @@ pub fn find_brain_by_id<'a>(
 /// Return all active brain `(name, id)` pairs from the database.
 ///
 /// The `id` field is the stable brain_id stored in the `brains` table.
-pub fn list_brain_keys(db: &crate::db::Db) -> Result<Vec<(String, String)>> {
+pub fn list_brain_keys(db: &brain_persistence::db::Db) -> Result<Vec<(String, String)>> {
     let rows = db.list_brains(true)?;
     let mut pairs: Vec<(String, String)> = rows.into_iter().map(|r| (r.name, r.brain_id)).collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn list_brain_keys_empty_db() {
-        let db = crate::db::Db::open_in_memory().expect("unwrap should not fail");
+        let db = brain_persistence::db::Db::open_in_memory().expect("unwrap should not fail");
         let keys = list_brain_keys(&db).expect("unwrap should not fail");
         // Only the (unscoped) sentinel from migration, filter to non-sentinel
         let real: Vec<_> = keys
@@ -934,8 +934,8 @@ mod tests {
 
     #[test]
     fn list_brain_keys_returns_name_and_id() {
-        use crate::db::schema::BrainUpsert;
-        let db = crate::db::Db::open_in_memory().expect("unwrap should not fail");
+        use brain_persistence::db::schema::BrainUpsert;
+        let db = brain_persistence::db::Db::open_in_memory().expect("unwrap should not fail");
         db.upsert_brain(&BrainUpsert {
             brain_id: "id000001",
             name: "alpha",

@@ -13,12 +13,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::db::Db;
+use brain_persistence::db::Db;
 use crate::embedder::{Embed, Embedder};
 use crate::ipc::client::IpcClient;
 use crate::metrics::Metrics;
 use crate::search_service::SearchService;
-use crate::store::{Store, StoreReader};
+use brain_persistence::store::{Store, StoreReader};
 use crate::stores::BrainStores;
 
 use protocol::{
@@ -309,7 +309,7 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
 /// Parses each root URI (strips the `file://` prefix), then matches against
 /// all registered brain roots in the DB (source of truth). Returns the name
 /// of the first matching brain, or `None` if no match is found.
-fn resolve_brain_from_roots(roots: &Value, db: &crate::db::Db) -> Option<String> {
+fn resolve_brain_from_roots(roots: &Value, db: &brain_persistence::db::Db) -> Option<String> {
     let roots_arr = roots.as_array()?;
     if roots_arr.is_empty() {
         return None;
@@ -709,8 +709,8 @@ mod tests {
 
     // --- resolve_brain_from_roots ---
 
-    fn test_db() -> crate::db::Db {
-        crate::db::Db::open_in_memory().expect("checked in test assertions")
+    fn test_db() -> brain_persistence::db::Db {
+        brain_persistence::db::Db::open_in_memory().expect("checked in test assertions")
     }
 
     #[test]

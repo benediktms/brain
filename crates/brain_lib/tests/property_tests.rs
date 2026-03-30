@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use brain_lib::chunker::chunk_document;
-use brain_lib::db::Db;
+use brain_persistence::db::Db;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::parser::parse_document;
 use brain_lib::prelude::*;

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 use crate::config;
-use crate::db::Db;
+use brain_persistence::db::Db;
 use crate::error::{BrainCoreError, Result};
 use crate::records::RecordStore;
 use crate::records::objects::ObjectStore;

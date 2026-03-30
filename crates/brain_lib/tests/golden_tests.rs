@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use brain_lib::chunker::{CHUNKER_VERSION, Chunk, chunk_text};
-use brain_lib::db::Db;
+use brain_persistence::db::Db;
 use brain_lib::links::{Link, extract_links};
 use brain_lib::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
 use brain_lib::tasks::events::*;

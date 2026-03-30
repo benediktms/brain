@@ -208,10 +208,10 @@ pub(crate) mod tests {
             crate::stores::BrainStores::in_memory().expect("checked in test assertions");
 
         let lance_path = tmp.path().join("test_lance");
-        let store = crate::store::Store::open_or_create(&lance_path)
+        let store = brain_persistence::store::Store::open_or_create(&lance_path)
             .await
             .expect("checked in test assertions");
-        let store_reader = crate::store::StoreReader::from_store(&store);
+        let store_reader = brain_persistence::store::StoreReader::from_store(&store);
         let embedder = Arc::new(crate::embedder::MockEmbedder);
 
         (

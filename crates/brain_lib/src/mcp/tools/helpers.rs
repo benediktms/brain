@@ -3,11 +3,11 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::db::Db;
+use brain_persistence::db::Db;
 use crate::embedder::Embed;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
-use crate::store::StoreReader;
+use brain_persistence::store::StoreReader;
 
 /// Return `true` if the brain with `brain_id` has been archived.
 ///

@@ -906,7 +906,7 @@ pub fn import_beads_issues(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Db;
+    use brain_persistence::db::Db;
     use std::io::Write;
     use tempfile::TempDir;
 

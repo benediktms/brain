@@ -8,8 +8,8 @@
 
 use rusqlite::Connection;
 
-use brain_lib::db::fts::{FtsSummaryResult, search_summaries_fts};
-use brain_lib::db::summaries::{SummaryRow, get_summary, store_procedure};
+use brain_persistence::db::fts::{FtsSummaryResult, search_summaries_fts};
+use brain_persistence::db::summaries::{SummaryRow, get_summary, store_procedure};
 
 // ─── Schema helpers ──────────────────────────────────────────────
 

@@ -8,7 +8,7 @@ pub mod queries;
 
 use std::collections::HashMap;
 
-use crate::db::Db;
+use brain_persistence::db::Db;
 use crate::error::Result;
 
 use events::TaskEvent;
@@ -362,7 +362,7 @@ impl TaskStore {
         }
         // Unscoped/legacy mode: fall back to brain_meta
         self.db.with_write_conn(|conn| {
-            crate::db::meta::get_or_init_project_prefix(conn, std::path::Path::new("."))
+            brain_persistence::db::meta::get_or_init_project_prefix(conn, std::path::Path::new("."))
         })
     }
 

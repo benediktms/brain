@@ -6,7 +6,7 @@ use std::str::FromStr;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::db::job::JobStatus;
+use brain_persistence::db::job::JobStatus;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::ports::JobQueue;
@@ -216,8 +216,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_jobs_status_filters_by_status_and_kind() {
-        use crate::db::job::{JobPayload, JobStatus};
-        use crate::db::jobs::EnqueueJobInput;
+        use brain_persistence::db::job::{JobPayload, JobStatus};
+        use brain_persistence::db::jobs::EnqueueJobInput;
         use crate::ports::JobQueue;
 
         let (_dir, ctx) = create_test_context().await;

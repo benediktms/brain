@@ -214,7 +214,7 @@ pub fn cleanup_orphans(
 mod tests {
     use tempfile::TempDir;
 
-    use crate::db::Db;
+    use brain_persistence::db::Db;
 
     use super::super::RecordStore;
     use super::super::events::*;

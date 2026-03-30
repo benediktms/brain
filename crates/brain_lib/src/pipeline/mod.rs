@@ -10,12 +10,12 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use crate::db::Db;
-use crate::db::meta;
+use brain_persistence::db::Db;
+use brain_persistence::db::meta;
 use crate::embedder::{Embed, Embedder};
 use crate::metrics::Metrics;
 use crate::ports::{ChunkIndexWriter, SchemaMeta};
-use crate::store::Store;
+use brain_persistence::store::Store;
 use crate::summarizer::Summarize;
 
 /// Statistics from a full scan operation.
@@ -67,7 +67,7 @@ pub async fn ensure_schema_version(
     db: &Db,
     store: &mut impl SchemaMeta,
 ) -> crate::error::Result<()> {
-    let expected = crate::store::LANCE_SCHEMA_VERSION;
+    let expected = brain_persistence::store::LANCE_SCHEMA_VERSION;
 
     let raw: Option<String> =
         db.with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))?;
@@ -106,7 +106,7 @@ pub async fn ensure_schema_version(
                 }
             }
             store.drop_and_recreate_table().await?;
-            let cleared = db.with_write_conn(crate::db::files::clear_all_content_hashes)?;
+            let cleared = db.with_write_conn(brain_persistence::db::files::clear_all_content_hashes)?;
             info!(cleared, "cleared content hashes to trigger full re-index");
             db.with_write_conn(|conn| {
                 meta::set_meta(conn, "lancedb_schema_version", &expected.to_string())

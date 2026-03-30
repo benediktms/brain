@@ -8,7 +8,7 @@
 //! Per-brain jobs (full_scan_sweep, embed_poll_sweep) have one row per brain,
 //! disambiguated by `brain_id` in the payload.
 
-use crate::db::jobs::{self, EnqueueJobInput, JobPayload, RetryStrategy};
+use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload, RetryStrategy};
 use crate::error::Result;
 use crate::ports::JobQueue;
 
@@ -123,7 +123,7 @@ pub fn protected_kinds() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Db;
+    use brain_persistence::db::Db;
 
     #[test]
     fn test_reconcile_no_brains() {

@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_dep_summary_to_json_with_blocking_has_field() {
-        use crate::db::Db;
+        use brain_persistence::db::Db;
         let db = Db::open_in_memory().unwrap();
         let store = TaskStore::new(db);
         let summary = make_dep_summary(3, 2, vec!["t1".to_string()]);
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_children_stubs_to_json_shape() {
-        use crate::db::Db;
+        use brain_persistence::db::Db;
         use crate::tasks::queries::TaskRow;
         let db = Db::open_in_memory().unwrap();
         let store = TaskStore::new(db);
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn test_attach_summary_fields_key_names() {
-        use crate::db::Db;
+        use brain_persistence::db::Db;
         use crate::tasks::queries::TaskRow;
         let row = TaskRow {
             task_id: "t1".to_string(),

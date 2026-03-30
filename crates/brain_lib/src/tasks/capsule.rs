@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use crate::db::Db;
+use brain_persistence::db::Db;
 use crate::embedder::{Embed, embed_batch_async};
 use crate::error::Result;
-use crate::store::Store;
+use brain_persistence::store::Store;
 
 /// Build a capsule string from a task's current state.
 ///
@@ -77,7 +77,7 @@ pub fn store_task_capsule(
     file_id: &str, // e.g. "task:BRN-01ABC" or "task-outcome:BRN-01ABC"
     capsule_text: &str,
 ) -> Result<()> {
-    db.with_write_conn(|conn| crate::db::chunks::upsert_task_chunk(conn, file_id, capsule_text))
+    db.with_write_conn(|conn| brain_persistence::db::chunks::upsert_task_chunk(conn, file_id, capsule_text))
 }
 
 /// Metadata required to build and embed a task capsule.

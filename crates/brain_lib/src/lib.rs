@@ -1,8 +1,5 @@
 pub mod capsule;
 pub mod chunker;
-pub mod db {
-    pub use brain_persistence::db::*;
-}
 pub mod config;
 pub mod consolidation;
 pub mod dedup;
@@ -28,9 +25,6 @@ pub mod records;
 pub mod retrieval;
 pub mod scanner;
 pub mod search_service;
-pub mod store {
-    pub use brain_persistence::store::*;
-}
 pub mod stores;
 pub mod summarizer;
 pub mod tasks;
@@ -57,7 +51,7 @@ pub mod prelude {
     };
     pub use crate::retrieval::{ExpandResult, ExpandedMemory, MemoryStub, SearchResult};
     pub use crate::scanner::{ScannedFile, scan_brain};
-    pub use crate::store::{QueryResult, Store, VectorSearchMode};
+    pub use brain_persistence::store::{QueryResult, Store, VectorSearchMode};
     pub use crate::tokens::estimate_tokens;
     pub use crate::utils::content_hash;
     pub use crate::watcher::{BrainWatcher, FileEvent};

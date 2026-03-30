@@ -46,7 +46,7 @@ pub fn resolve_provider() -> Option<Box<dyn Summarize>> {
 ///
 /// `brain_home` is needed to locate the master key file for decryption.
 pub fn resolve_provider_with_db(
-    db: &crate::db::Db,
+    db: &brain_persistence::db::Db,
     brain_home: &Path,
 ) -> Option<Box<dyn Summarize>> {
     // 1. Env vars take priority
@@ -89,8 +89,8 @@ fn resolve_from_env() -> Option<Box<dyn Summarize>> {
 }
 
 /// Try to resolve from DB-backed providers.
-fn resolve_from_db(db: &crate::db::Db, brain_home: &Path) -> Option<Box<dyn Summarize>> {
-    use crate::db::crypto;
+fn resolve_from_db(db: &brain_persistence::db::Db, brain_home: &Path) -> Option<Box<dyn Summarize>> {
+    use brain_persistence::db::crypto;
 
     let master_key = match crypto::load_or_create_master_key(brain_home) {
         Ok(k) => k,
