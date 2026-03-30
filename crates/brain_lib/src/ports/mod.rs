@@ -20,9 +20,9 @@
 
 use std::collections::HashMap;
 
+use crate::error::Result;
 use brain_persistence::db::chunks::ChunkRow;
 use brain_persistence::db::fts::{FtsResult, FtsSummaryResult};
-use crate::error::Result;
 use brain_persistence::store::{QueryResult, VectorSearchMode};
 
 // ---------------------------------------------------------------------------
@@ -288,7 +288,9 @@ impl ChunkSearcher for Store {
 
 impl ChunkMetaReader for Db {
     fn get_chunks_by_ids(&self, chunk_ids: &[String]) -> Result<Vec<ChunkRow>> {
-        self.with_read_conn(|conn| brain_persistence::db::chunks::get_chunks_by_ids(conn, chunk_ids))
+        self.with_read_conn(|conn| {
+            brain_persistence::db::chunks::get_chunks_by_ids(conn, chunk_ids)
+        })
     }
 
     fn get_ml_summaries_for_chunks(&self, chunk_ids: &[&str]) -> Result<HashMap<String, String>> {
@@ -299,7 +301,9 @@ impl ChunkMetaReader for Db {
 
     fn get_summary_kinds(&self, summary_ids: &[String]) -> Result<HashMap<String, String>> {
         let ids = summary_ids.to_vec();
-        self.with_read_conn(move |conn| brain_persistence::db::summaries::get_summary_kinds(conn, &ids))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::summaries::get_summary_kinds(conn, &ids)
+        })
     }
 }
 
@@ -329,7 +333,9 @@ impl FtsSearcher for Db {
 
     fn search_summaries_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>> {
         let query = query.to_string();
-        self.with_read_conn(move |conn| brain_persistence::db::fts::search_summaries_fts(conn, &query, limit))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::fts::search_summaries_fts(conn, &query, limit)
+        })
     }
 }
 
@@ -380,7 +386,9 @@ pub trait FileMetaWriter: Send + Sync {
 impl FileMetaWriter for Db {
     fn get_or_create_file_id(&self, path: &str) -> Result<(String, bool)> {
         let path = path.to_string();
-        self.with_write_conn(move |conn| brain_persistence::db::files::get_or_create_file_id(conn, &path))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::files::get_or_create_file_id(conn, &path)
+        })
     }
 
     fn handle_delete(&self, path: &str) -> Result<Option<String>> {
@@ -391,11 +399,15 @@ impl FileMetaWriter for Db {
     fn handle_rename(&self, file_id: &str, new_path: &str) -> Result<()> {
         let file_id = file_id.to_string();
         let new_path = new_path.to_string();
-        self.with_write_conn(move |conn| brain_persistence::db::files::handle_rename(conn, &file_id, &new_path))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::files::handle_rename(conn, &file_id, &new_path)
+        })
     }
 
     fn purge_deleted_files(&self, older_than_ts: i64) -> Result<Vec<String>> {
-        self.with_write_conn(move |conn| brain_persistence::db::files::purge_deleted_files(conn, older_than_ts))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::files::purge_deleted_files(conn, older_than_ts)
+        })
     }
 
     fn clear_all_content_hashes(&self) -> Result<usize> {
@@ -404,7 +416,9 @@ impl FileMetaWriter for Db {
 
     fn clear_content_hash_by_path(&self, path: &str) -> Result<bool> {
         let path = path.to_string();
-        self.with_write_conn(move |conn| brain_persistence::db::files::clear_content_hash_by_path(conn, &path))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::files::clear_content_hash_by_path(conn, &path)
+        })
     }
 
     fn set_indexing_state(&self, file_id: &str, state: &str) -> Result<()> {
@@ -426,7 +440,12 @@ impl FileMetaWriter for Db {
         let file_id = file_id.to_string();
         let content_hash = content_hash.to_string();
         self.with_write_conn(move |conn| {
-            brain_persistence::db::files::mark_indexed(conn, &file_id, &content_hash, chunker_version)
+            brain_persistence::db::files::mark_indexed(
+                conn,
+                &file_id,
+                &content_hash,
+                chunker_version,
+            )
         })
     }
 
@@ -485,7 +504,9 @@ impl ChunkMetaWriter for Db {
 
     fn get_chunk_hashes(&self, file_id: &str) -> Result<Vec<String>> {
         let file_id = file_id.to_string();
-        self.with_read_conn(move |conn| brain_persistence::db::chunks::get_chunk_hashes(conn, &file_id))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::chunks::get_chunk_hashes(conn, &file_id)
+        })
     }
 
     fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
@@ -619,7 +640,12 @@ impl SummaryWriter for Db {
         let summary_text = summary_text.to_string();
         let summarizer = summarizer.to_string();
         self.with_write_conn(move |conn| {
-            brain_persistence::db::summaries::store_ml_summary(conn, &chunk_id, &summary_text, &summarizer)
+            brain_persistence::db::summaries::store_ml_summary(
+                conn,
+                &chunk_id,
+                &summary_text,
+                &summarizer,
+            )
         })
     }
 }
@@ -687,8 +713,10 @@ pub trait EpisodeReader: Send + Sync {
     ) -> Result<Vec<brain_persistence::db::summaries::SummaryRow>>;
 
     /// Batch-load summaries by a list of summary IDs.
-    fn get_summaries_by_ids(&self, ids: &[String])
-    -> Result<Vec<brain_persistence::db::summaries::SummaryRow>>;
+    fn get_summaries_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<brain_persistence::db::summaries::SummaryRow>>;
 }
 
 // -- EpisodeReader for Db --------------------------------------------------
@@ -700,7 +728,9 @@ impl EpisodeReader for Db {
         brain_id: &str,
     ) -> Result<Vec<brain_persistence::db::summaries::SummaryRow>> {
         let brain_id = brain_id.to_string();
-        self.with_read_conn(move |conn| brain_persistence::db::summaries::list_episodes(conn, limit, &brain_id))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::summaries::list_episodes(conn, limit, &brain_id)
+        })
     }
 
     fn list_episodes_multi_brain(
@@ -719,7 +749,63 @@ impl EpisodeReader for Db {
         ids: &[String],
     ) -> Result<Vec<brain_persistence::db::summaries::SummaryRow>> {
         let ids = ids.to_vec();
-        self.with_read_conn(move |conn| brain_persistence::db::summaries::get_summaries_by_ids(conn, &ids))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::summaries::get_summaries_by_ids(conn, &ids)
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Brain registry — used by MCP tools for brain lookups
+// ---------------------------------------------------------------------------
+
+/// Brain registry queries for archive checks and brain listing.
+///
+/// Consumers: `mcp::tools::helpers`, `mcp::tools::brains_list`,
+/// `mcp::tools::task_create`, `mcp::tools::task_apply_event`,
+/// `mcp::mod::resolve_brain_from_roots`.
+pub trait BrainRegistry: Send + Sync {
+    /// Check whether a brain has been archived.
+    ///
+    /// Returns `false` when no matching row exists (brain not yet registered).
+    fn is_brain_archived(&self, brain_id: &str) -> Result<bool>;
+
+    /// List all brain rows, optionally filtered to active-only.
+    fn list_brains(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<brain_persistence::db::schema::BrainRow>>;
+
+    /// Return all active brain `(name, id)` pairs.
+    fn list_brain_keys(&self) -> Result<Vec<(String, String)>>;
+}
+
+// -- BrainRegistry for Db --------------------------------------------------
+
+impl BrainRegistry for Db {
+    fn is_brain_archived(&self, brain_id: &str) -> Result<bool> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::schema::is_brain_archived(conn, &brain_id)
+        })
+    }
+
+    fn list_brains(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<brain_persistence::db::schema::BrainRow>> {
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::schema::list_brains(conn, active_only)
+        })
+    }
+
+    fn list_brain_keys(&self) -> Result<Vec<(String, String)>> {
+        let rows =
+            self.with_read_conn(|conn| brain_persistence::db::schema::list_brains(conn, true))?;
+        let mut pairs: Vec<(String, String)> =
+            rows.into_iter().map(|r| (r.name, r.brain_id)).collect();
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(pairs)
     }
 }
 
@@ -781,7 +867,9 @@ impl MaintenanceOps for Db {
     fn rename_file_by_path(&self, from_path: &str, to_path: &str) -> Result<Option<String>> {
         let from = from_path.to_string();
         let to = to_path.to_string();
-        self.with_write_conn(move |conn| brain_persistence::db::files::rename_by_path(conn, &from, &to))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::files::rename_by_path(conn, &from, &to)
+        })
     }
 
     fn vacuum_db(&self) -> Result<()> {
@@ -954,12 +1042,16 @@ pub trait GraphLinkReader: Send + Sync {
 impl GraphLinkReader for Db {
     fn get_outlinks(&self, source_file_id: &str) -> Result<Vec<String>> {
         let source_file_id = source_file_id.to_string();
-        self.with_read_conn(move |conn| brain_persistence::db::links::get_outlinks(conn, &source_file_id))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::links::get_outlinks(conn, &source_file_id)
+        })
     }
 
     fn get_chunks_by_file_ids(&self, file_ids: &[String]) -> Result<Vec<ChunkRow>> {
         let file_ids = file_ids.to_vec();
-        self.with_read_conn(move |conn| brain_persistence::db::chunks::get_chunks_by_file_ids(conn, &file_ids))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::chunks::get_chunks_by_file_ids(conn, &file_ids)
+        })
     }
 }
 
@@ -1267,7 +1359,9 @@ impl JobQueue for Db {
 
     fn advance_to_in_progress(&self, job_id: &str) -> Result<()> {
         let job_id = job_id.to_string();
-        self.with_write_conn(move |conn| brain_persistence::db::jobs::advance_to_in_progress(conn, &job_id))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::jobs::advance_to_in_progress(conn, &job_id)
+        })
     }
 
     fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()> {
@@ -1281,7 +1375,9 @@ impl JobQueue for Db {
     fn fail_job(&self, job_id: &str, error_msg: &str) -> Result<()> {
         let job_id = job_id.to_string();
         let error_msg = error_msg.to_string();
-        self.with_write_conn(move |conn| brain_persistence::db::jobs::fail_job(conn, &job_id, &error_msg))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::jobs::fail_job(conn, &job_id, &error_msg)
+        })
     }
 
     fn reap_stuck_jobs(&self) -> Result<usize> {
@@ -1302,11 +1398,15 @@ impl JobQueue for Db {
     }
 
     fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64> {
-        self.with_read_conn(move |conn| brain_persistence::db::jobs::count_jobs_by_status(conn, status))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::jobs::count_jobs_by_status(conn, status)
+        })
     }
 
     fn list_jobs_by_status(&self, status: &JobStatus, limit: i32) -> Result<Vec<Job>> {
-        self.with_read_conn(move |conn| brain_persistence::db::jobs::list_jobs_by_status(conn, status, limit))
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::jobs::list_jobs_by_status(conn, status, limit)
+        })
     }
 
     fn list_stuck_jobs(&self) -> Result<Vec<Job>> {
@@ -1325,25 +1425,36 @@ impl JobQueue for Db {
 
     fn ensure_singleton_job(&self, input: &EnqueueJobInput) -> Result<Option<String>> {
         let input = input.clone();
-        self.with_write_conn(move |conn| brain_persistence::db::jobs::ensure_singleton_job(conn, &input))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::jobs::ensure_singleton_job(conn, &input)
+        })
     }
 
     fn reschedule_terminal_job(&self, kind: &str, brain_id: Option<&str>) -> Result<bool> {
         let kind = kind.to_string();
         let brain_id = brain_id.map(|s| s.to_string());
         self.with_write_conn(move |conn| {
-            brain_persistence::db::jobs::reschedule_terminal_job(conn, &kind, brain_id.as_deref(), 0)
+            brain_persistence::db::jobs::reschedule_terminal_job(
+                conn,
+                &kind,
+                brain_id.as_deref(),
+                0,
+            )
         })
     }
 
     fn enqueue_dedup_job(&self, input: &EnqueueJobInput) -> Result<(String, bool)> {
         let input = input.clone();
-        self.with_write_conn(move |conn| brain_persistence::db::jobs::enqueue_dedup_job(conn, &input))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::jobs::enqueue_dedup_job(conn, &input)
+        })
     }
 
     fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()> {
         let input = input.clone();
-        self.with_write_conn(move |conn| brain_persistence::db::jobs::reconcile_singleton_job(conn, &input))
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::jobs::reconcile_singleton_job(conn, &input)
+        })
     }
 
     fn reconcile_singleton_job_with_delay(
@@ -1353,7 +1464,9 @@ impl JobQueue for Db {
     ) -> Result<()> {
         let input = input.clone();
         self.with_write_conn(move |conn| {
-            brain_persistence::db::jobs::reconcile_singleton_job_with_delay(conn, &input, delay_secs)
+            brain_persistence::db::jobs::reconcile_singleton_job_with_delay(
+                conn, &input, delay_secs,
+            )
         })
     }
 }

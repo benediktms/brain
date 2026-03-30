@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use crate::l0_abstract::generate_l0_abstract;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::ChunkMetaWriter as _;
 use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
 use crate::records::objects::COMPRESSION_THRESHOLD;
 
@@ -46,7 +45,11 @@ impl RecordSaveSnapshot {
                 Err(e) => return ToolCallResult::error(format!("Failed to resolve brain: {e}")),
             };
             // Guard: reject writes to archived brains
-            match super::is_brain_archived(ctx.stores.db(), &bid) {
+            match ctx
+                .stores
+                .is_brain_archived(&bid)
+                .map_err(|e| e.to_string())
+            {
                 Ok(true) => {
                     return ToolCallResult::error(format!(
                         "Target brain '{brain_name}' is archived"
@@ -153,11 +156,7 @@ impl RecordSaveSnapshot {
         let tag_refs: Vec<&str> = tags_for_abstract.iter().map(String::as_str).collect();
         let capsule = generate_l0_abstract(&title_for_abstract, &content_text, &tag_refs);
         let record_file_id = format!("record:{record_id}");
-        if let Err(e) = ctx
-            .stores
-            .db()
-            .upsert_record_chunk(&record_file_id, &capsule)
-        {
+        if let Err(e) = ctx.stores.upsert_record_chunk(&record_file_id, &capsule) {
             tracing::warn!(
                 record_id = %record_id,
                 error = %e,

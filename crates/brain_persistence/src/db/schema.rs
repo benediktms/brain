@@ -187,6 +187,21 @@ pub fn upsert_brain(conn: &Connection, input: &BrainUpsert<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Check whether a brain has been archived.
+///
+/// Returns `false` when no matching row exists (brain not yet registered).
+pub fn is_brain_archived(conn: &Connection, brain_id: &str) -> Result<bool> {
+    use rusqlite::OptionalExtension;
+    let archived: Option<i64> = conn
+        .query_row(
+            "SELECT archived FROM brains WHERE brain_id = ?1",
+            [brain_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(archived.unwrap_or(0) == 1)
+}
+
 /// List all brain rows, optionally filtered.
 ///
 /// When `active_only` is true, returns only projected=1, non-archived brains.

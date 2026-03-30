@@ -200,7 +200,11 @@ impl TaskApplyEvent {
 
         // Reject task creation on archived brains (other event types pass through)
         if event_type == EventType::TaskCreated {
-            match super::is_brain_archived(ctx.stores.db(), ctx.brain_id()) {
+            match ctx
+                .stores
+                .is_brain_archived(ctx.brain_id())
+                .map_err(|e| e.to_string())
+            {
                 Ok(true) => {
                     return ExecuteResult {
                         result: ToolCallResult::error(

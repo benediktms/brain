@@ -3,11 +3,9 @@ use std::pin::Pin;
 
 use serde_json::{Value, json};
 
+use super::{McpTool, json_response};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::StatusReader;
-
-use super::{McpTool, json_response};
 
 pub(super) struct Status;
 
@@ -36,7 +34,7 @@ impl McpTool for Status {
             let mut snapshot = ctx.metrics.snapshot();
 
             // Enrich with stuck-file count from SQLite
-            let stuck_file_count = match ctx.stores.db().count_stuck_files() {
+            let stuck_file_count = match ctx.stores.count_stuck_files() {
                 Ok(count) => count,
                 Err(err) => {
                     return ToolCallResult::error(format!(
@@ -45,7 +43,7 @@ impl McpTool for Status {
                 }
             };
 
-            let stale_hash_count = match ctx.stores.db().stale_hashes_prevented() {
+            let stale_hash_count = match ctx.stores.stale_hashes_prevented() {
                 Ok(count) => count,
                 Err(err) => {
                     return ToolCallResult::error(format!(

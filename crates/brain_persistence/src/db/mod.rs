@@ -152,6 +152,14 @@ impl Db {
         self.with_write_conn(|conn| schema::upsert_brain(conn, input))
     }
 
+    /// Check whether a brain has been archived.
+    ///
+    /// Returns `false` when no matching row exists (brain not yet registered).
+    pub fn is_brain_archived(&self, brain_id: &str) -> Result<bool> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| schema::is_brain_archived(conn, &brain_id))
+    }
+
     /// List all brain rows, optionally filtered to active-only.
     pub fn list_brains(&self, active_only: bool) -> Result<Vec<schema::BrainRow>> {
         self.with_read_conn(|conn| schema::list_brains(conn, active_only))

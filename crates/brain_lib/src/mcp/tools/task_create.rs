@@ -108,7 +108,11 @@ pub(super) struct TaskCreate;
 impl TaskCreate {
     async fn execute(&self, raw_params: Value, ctx: &McpContext) -> ToolCallResult {
         // Reject task creation on archived brains
-        match super::is_brain_archived(ctx.stores.db(), ctx.brain_id()) {
+        match ctx
+            .stores
+            .is_brain_archived(ctx.brain_id())
+            .map_err(|e| e.to_string())
+        {
             Ok(true) => {
                 return ToolCallResult::error(
                     "Cannot create tasks: brain is archived. Use `brain link` to add a root and unarchive.",
@@ -150,7 +154,11 @@ impl TaskCreate {
                 }
             };
             // Guard: reject writes to archived brains
-            match super::is_brain_archived(ctx.stores.db(), &bid) {
+            match ctx
+                .stores
+                .is_brain_archived(&bid)
+                .map_err(|e| e.to_string())
+            {
                 Ok(true) => {
                     return ToolCallResult::error(format!(
                         "Target brain '{remote_brain_name}' is archived"

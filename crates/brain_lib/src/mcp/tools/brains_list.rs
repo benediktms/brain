@@ -62,7 +62,7 @@ impl McpTool for BrainsList {
                 .unwrap_or(false);
 
             let active_only = !include_archived;
-            let rows = match ctx.stores.db().list_brains(active_only) {
+            let rows = match ctx.stores.list_brains(active_only) {
                 Ok(r) => r,
                 Err(err) => {
                     return ToolCallResult::error(format!("Failed to list brains: {err}"));

@@ -5,10 +5,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::error;
 
-use brain_persistence::db::summaries::Episode;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::EpisodeWriter;
+use brain_persistence::db::summaries::Episode;
 
 use crate::uri::SynapseUri;
 
@@ -91,7 +90,7 @@ impl McpTool for MemWriteEpisode {
                 importance: params.importance,
             };
 
-            let summary_id = match ctx.stores.db().store_episode(&episode) {
+            let summary_id = match ctx.stores.store_episode(&episode) {
                 Ok(id) => id,
                 Err(e) => {
                     error!(error = %e, "failed to store episode");

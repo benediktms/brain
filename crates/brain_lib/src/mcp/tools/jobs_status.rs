@@ -6,12 +6,10 @@ use std::str::FromStr;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use brain_persistence::db::job::JobStatus;
+use super::{McpTool, json_response};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::JobQueue;
-
-use super::{McpTool, json_response};
+use brain_persistence::db::job::JobStatus;
 
 fn default_limit() -> u64 {
     10
@@ -34,8 +32,6 @@ impl JobsStatus {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let db = ctx.stores.db();
-
         let status_filter = if let Some(status_str) = params.status.as_deref() {
             match JobStatus::from_str(status_str) {
                 Ok(status) => Some(status),
@@ -48,28 +44,31 @@ impl JobsStatus {
         let listing_status = status_filter.unwrap_or(JobStatus::Failed);
         let kind_filter = params.kind.as_deref().map(|s| s.to_string());
 
-        let pending = match db.count_jobs_by_status(&JobStatus::Pending) {
+        let pending = match ctx.stores.count_jobs_by_status(&JobStatus::Pending) {
             Ok(v) => v,
             Err(e) => return ToolCallResult::error(format!("failed to count pending: {e}")),
         };
-        let running = match db.count_jobs_by_status(&JobStatus::InProgress) {
+        let running = match ctx.stores.count_jobs_by_status(&JobStatus::InProgress) {
             Ok(v) => v,
             Err(e) => return ToolCallResult::error(format!("failed to count in_progress: {e}")),
         };
-        let done = match db.count_jobs_by_status(&JobStatus::Done) {
+        let done = match ctx.stores.count_jobs_by_status(&JobStatus::Done) {
             Ok(v) => v,
             Err(e) => return ToolCallResult::error(format!("failed to count done: {e}")),
         };
-        let failed = match db.count_jobs_by_status(&JobStatus::Failed) {
+        let failed = match ctx.stores.count_jobs_by_status(&JobStatus::Failed) {
             Ok(v) => v,
             Err(e) => return ToolCallResult::error(format!("failed to count failed: {e}")),
         };
-        let ready = match db.count_jobs_by_status(&JobStatus::Ready) {
+        let ready = match ctx.stores.count_jobs_by_status(&JobStatus::Ready) {
             Ok(v) => v,
             Err(e) => return ToolCallResult::error(format!("failed to count ready: {e}")),
         };
 
-        let mut jobs = match db.list_jobs_by_status(&listing_status, params.limit as i32) {
+        let mut jobs = match ctx
+            .stores
+            .list_jobs_by_status(&listing_status, params.limit as i32)
+        {
             Ok(list) => list,
             Err(e) => return ToolCallResult::error(format!("failed to list jobs: {e}")),
         };
@@ -78,7 +77,7 @@ impl JobsStatus {
             jobs.retain(|job| job.kind() == kind);
         }
 
-        let mut stuck_jobs = match db.list_stuck_jobs() {
+        let mut stuck_jobs = match ctx.stores.list_stuck_jobs() {
             Ok(list) => list,
             Err(e) => return ToolCallResult::error(format!("failed to list stuck jobs: {e}")),
         };
@@ -218,7 +217,6 @@ mod tests {
     async fn test_jobs_status_filters_by_status_and_kind() {
         use brain_persistence::db::job::{JobPayload, JobStatus};
         use brain_persistence::db::jobs::EnqueueJobInput;
-        use crate::ports::JobQueue;
 
         let (_dir, ctx) = create_test_context().await;
         let db = ctx.stores.db();
@@ -237,7 +235,10 @@ mod tests {
             metadata: serde_json::json!({}),
             scheduled_at: 0,
         };
-        let job_id = db.enqueue_job(&input).expect("checked in test assertions");
+        let job_id = ctx
+            .stores
+            .enqueue_job(&input)
+            .expect("checked in test assertions");
         db.with_write_conn(|conn| {
             conn.execute(
                 "UPDATE jobs SET status = 'failed', updated_at = 0 WHERE job_id = ?1",

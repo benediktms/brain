@@ -7,7 +7,6 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::ProcedureWriter;
 
 use crate::uri::SynapseUri;
 
@@ -79,7 +78,7 @@ impl McpTool for MemWriteProcedure {
 
             let importance = params.importance.clamp(0.0, 1.0);
 
-            let summary_id = match ctx.stores.db().store_procedure(
+            let summary_id = match ctx.stores.store_procedure(
                 &params.title,
                 &params.steps,
                 &params.tags,

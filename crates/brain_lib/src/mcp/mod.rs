@@ -13,13 +13,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use brain_persistence::db::Db;
 use crate::embedder::{Embed, Embedder};
 use crate::ipc::client::IpcClient;
 use crate::metrics::Metrics;
 use crate::search_service::SearchService;
-use brain_persistence::store::{Store, StoreReader};
 use crate::stores::BrainStores;
+use brain_persistence::db::Db;
+use brain_persistence::store::{Store, StoreReader};
 
 use protocol::{
     InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ServerCapabilities,
@@ -309,7 +309,10 @@ pub async fn run_server(ctx: Arc<McpContext>) -> crate::error::Result<()> {
 /// Parses each root URI (strips the `file://` prefix), then matches against
 /// all registered brain roots in the DB (source of truth). Returns the name
 /// of the first matching brain, or `None` if no match is found.
-fn resolve_brain_from_roots(roots: &Value, db: &brain_persistence::db::Db) -> Option<String> {
+fn resolve_brain_from_roots(
+    roots: &Value,
+    db: &impl crate::ports::BrainRegistry,
+) -> Option<String> {
     let roots_arr = roots.as_array()?;
     if roots_arr.is_empty() {
         return None;

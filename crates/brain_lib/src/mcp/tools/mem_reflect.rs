@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::{EpisodeReader, ReflectionWriter};
 use crate::query_pipeline::QueryPipeline;
 
 use crate::uri::SynapseUri;
@@ -71,14 +70,14 @@ impl MemReflect {
         // The brains parameter is accepted but scoping is a no-op until
         // brain_persistence adds brain_id support to the summaries table.
         let episodes = if params.brains.is_empty() {
-            match ctx.stores.db().list_episodes(10, ctx.brain_id()) {
+            match ctx.stores.list_episodes(10, ctx.brain_id()) {
                 Ok(rows) => rows,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to list episodes: {e}"));
                 }
             }
         } else if params.brains.iter().any(|b| b == "all") {
-            match ctx.stores.db().list_episodes(10, "") {
+            match ctx.stores.list_episodes(10, "") {
                 Ok(rows) => rows,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to list episodes: {e}"));
@@ -86,7 +85,7 @@ impl MemReflect {
             }
         } else {
             let brain_ids: Vec<String> = params.brains.clone();
-            match ctx.stores.db().list_episodes_multi_brain(10, &brain_ids) {
+            match ctx.stores.list_episodes_multi_brain(10, &brain_ids) {
                 Ok(rows) => rows,
                 Err(e) => {
                     return ToolCallResult::error(format!(
@@ -174,7 +173,7 @@ impl MemReflect {
 
         // Finding 5: batch source_id validation — single round-trip.
         let source_ids = params.source_ids.clone();
-        let found = match EpisodeReader::get_summaries_by_ids(ctx.stores.db(), &source_ids) {
+        let found = match ctx.stores.get_summaries_by_ids(&source_ids) {
             Ok(rows) => rows,
             Err(e) => {
                 return ToolCallResult::error(format!("Failed to validate source_ids: {e}"));
@@ -188,7 +187,7 @@ impl MemReflect {
         }
 
         // Store the reflection in SQLite.
-        let summary_id = match ctx.stores.db().store_reflection(
+        let summary_id = match ctx.stores.store_reflection(
             &params.title,
             &params.content,
             &source_ids,

@@ -3,38 +3,10 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::Value;
 
-use brain_persistence::db::Db;
 use crate::embedder::Embed;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 use brain_persistence::store::StoreReader;
-
-/// Return `true` if the brain with `brain_id` has been archived.
-///
-/// Returns `false` when no matching row exists (brain not yet registered).
-/// Returns `Err` only on a hard database failure.
-pub fn is_brain_archived(db: &Db, brain_id: &str) -> Result<bool, String> {
-    db.with_read_conn(|conn| {
-        let mut stmt = conn
-            .prepare_cached("SELECT archived FROM brains WHERE brain_id = ?1")
-            .map_err(|e| crate::error::BrainCoreError::Database(format!("{e}")))?;
-        let mut rows = stmt
-            .query([brain_id])
-            .map_err(|e| crate::error::BrainCoreError::Database(format!("{e}")))?;
-        if let Some(row) = rows
-            .next()
-            .map_err(|e| crate::error::BrainCoreError::Database(format!("{e}")))?
-        {
-            let archived: i64 = row
-                .get(0)
-                .map_err(|e| crate::error::BrainCoreError::Database(format!("{e}")))?;
-            Ok(archived == 1)
-        } else {
-            Ok(false)
-        }
-    })
-    .map_err(|e| e.to_string())
-}
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Warning {
@@ -97,7 +69,7 @@ pub async fn build_federated_brains(
     brain_keys_input: &[String],
 ) -> Result<Vec<(String, Option<StoreReader>)>, String> {
     let brain_keys: Vec<String> = if brain_keys_input.iter().any(|b| b == "all") {
-        match crate::config::list_brain_keys(ctx.stores.db()) {
+        match ctx.stores.list_brain_keys() {
             Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
             Err(e) => return Err(format!("Failed to list brains: {e}")),
         }

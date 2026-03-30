@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::EpisodeReader;
 
 use super::{McpTool, json_response};
 
@@ -99,7 +98,7 @@ impl McpTool for MemConsolidate {
             };
 
             let limit = params.limit.min(500);
-            let episodes = match ctx.stores.db().list_episodes(limit, effective_brain_id) {
+            let episodes = match ctx.stores.list_episodes(limit, effective_brain_id) {
                 Ok(rows) => rows,
                 Err(e) => return ToolCallResult::error(format!("Failed to list episodes: {e}")),
             };

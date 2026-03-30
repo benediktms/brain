@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 use crate::config;
-use brain_persistence::db::Db;
 use crate::error::{BrainCoreError, Result};
 use crate::records::RecordStore;
 use crate::records::objects::ObjectStore;
 use crate::tasks::TaskStore;
+use brain_persistence::db::Db;
 
 /// Unified access to all brain stores.
 ///
@@ -166,8 +166,172 @@ impl BrainStores {
     }
 
     /// Access the underlying Db handle.
+    ///
+    /// **MCP tool handlers**: prefer the delegation methods below (e.g.
+    /// `store_episode`, `list_brains`, `count_jobs_by_status`) instead of
+    /// calling methods on the raw `Db`.  Direct `db()` access is intended
+    /// for pipeline internals (`QueryPipeline`, `IndexPipeline`) and the
+    /// daemon/CLI layers that pre-date the port-trait boundary.
     pub fn db(&self) -> &Db {
         &self.db
+    }
+
+    // -----------------------------------------------------------------
+    // Delegation methods — MCP handlers use these instead of .db()
+    // -----------------------------------------------------------------
+
+    // -- BrainRegistry --
+
+    /// Check whether a brain has been archived.
+    pub fn is_brain_archived(&self, brain_id: &str) -> Result<bool> {
+        use crate::ports::BrainRegistry;
+        BrainRegistry::is_brain_archived(&self.db, brain_id)
+    }
+
+    /// List all brain rows, optionally filtered to active-only.
+    pub fn list_brains(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<brain_persistence::db::schema::BrainRow>> {
+        use crate::ports::BrainRegistry;
+        BrainRegistry::list_brains(&self.db, active_only)
+    }
+
+    /// Return all active brain `(name, id)` pairs.
+    pub fn list_brain_keys(&self) -> Result<Vec<(String, String)>> {
+        use crate::ports::BrainRegistry;
+        BrainRegistry::list_brain_keys(&self.db)
+    }
+
+    // -- EpisodeWriter / EpisodeReader --
+
+    /// Store an episode. Returns the `summary_id`.
+    pub fn store_episode(
+        &self,
+        episode: &brain_persistence::db::summaries::Episode,
+    ) -> Result<String> {
+        use crate::ports::EpisodeWriter;
+        EpisodeWriter::store_episode(&self.db, episode)
+    }
+
+    /// List recent episodes, newest first.
+    pub fn list_episodes(
+        &self,
+        limit: usize,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::summaries::SummaryRow>> {
+        use crate::ports::EpisodeReader;
+        EpisodeReader::list_episodes(&self.db, limit, brain_id)
+    }
+
+    /// List recent episodes across multiple brains.
+    pub fn list_episodes_multi_brain(
+        &self,
+        limit: usize,
+        brain_ids: &[String],
+    ) -> Result<Vec<brain_persistence::db::summaries::SummaryRow>> {
+        use crate::ports::EpisodeReader;
+        EpisodeReader::list_episodes_multi_brain(&self.db, limit, brain_ids)
+    }
+
+    /// Batch-load summaries by ID.
+    pub fn get_summaries_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<brain_persistence::db::summaries::SummaryRow>> {
+        use crate::ports::EpisodeReader;
+        EpisodeReader::get_summaries_by_ids(&self.db, ids)
+    }
+
+    // -- ReflectionWriter --
+
+    /// Store a reflection linked to source summaries. Returns the `summary_id`.
+    pub fn store_reflection(
+        &self,
+        title: &str,
+        content: &str,
+        source_ids: &[String],
+        tags: &[String],
+        importance: f64,
+        brain_id: &str,
+    ) -> Result<String> {
+        use crate::ports::ReflectionWriter;
+        ReflectionWriter::store_reflection(
+            &self.db, title, content, source_ids, tags, importance, brain_id,
+        )
+    }
+
+    // -- ProcedureWriter --
+
+    /// Store a procedure. Returns the `summary_id`.
+    pub fn store_procedure(
+        &self,
+        title: &str,
+        steps: &str,
+        tags: &[String],
+        importance: f64,
+        brain_id: &str,
+    ) -> Result<String> {
+        use crate::ports::ProcedureWriter;
+        ProcedureWriter::store_procedure(&self.db, title, steps, tags, importance, brain_id)
+    }
+
+    // -- StatusReader --
+
+    /// Count files stuck in `indexing_started` state.
+    pub fn count_stuck_files(&self) -> Result<u64> {
+        use crate::ports::StatusReader;
+        StatusReader::count_stuck_files(&self.db)
+    }
+
+    /// Read the `stale_hashes_prevented` counter.
+    pub fn stale_hashes_prevented(&self) -> Result<u64> {
+        use crate::ports::StatusReader;
+        StatusReader::stale_hashes_prevented(&self.db)
+    }
+
+    // -- JobQueue --
+
+    /// Count jobs with the given status.
+    pub fn count_jobs_by_status(
+        &self,
+        status: &brain_persistence::db::job::JobStatus,
+    ) -> Result<i64> {
+        use crate::ports::JobQueue;
+        JobQueue::count_jobs_by_status(&self.db, status)
+    }
+
+    /// List recent jobs filtered by status.
+    pub fn list_jobs_by_status(
+        &self,
+        status: &brain_persistence::db::job::JobStatus,
+        limit: i32,
+    ) -> Result<Vec<brain_persistence::db::job::Job>> {
+        use crate::ports::JobQueue;
+        JobQueue::list_jobs_by_status(&self.db, status, limit)
+    }
+
+    /// List stuck jobs.
+    pub fn list_stuck_jobs(&self) -> Result<Vec<brain_persistence::db::job::Job>> {
+        use crate::ports::JobQueue;
+        JobQueue::list_stuck_jobs(&self.db)
+    }
+
+    /// Enqueue a new job. Returns the `job_id`.
+    pub fn enqueue_job(
+        &self,
+        input: &brain_persistence::db::jobs::EnqueueJobInput,
+    ) -> Result<String> {
+        use crate::ports::JobQueue;
+        JobQueue::enqueue_job(&self.db, input)
+    }
+
+    // -- ChunkMetaWriter --
+
+    /// Upsert a record capsule chunk into SQLite.
+    pub fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()> {
+        use crate::ports::ChunkMetaWriter;
+        ChunkMetaWriter::upsert_record_chunk(&self.db, record_file_id, capsule_text)
     }
 
     /// Clone this store bundle with a different brain_id.
