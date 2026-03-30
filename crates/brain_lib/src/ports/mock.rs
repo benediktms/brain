@@ -15,11 +15,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
+use crate::error::Result;
+use crate::hierarchy::{DerivedSummary, GeneratedScopeSummary, ScopeType};
 use brain_persistence::db::chunks::ChunkRow;
 use brain_persistence::db::fts::{FtsResult, FtsSummaryResult};
 use brain_persistence::db::summaries::{Episode, SummaryRow};
-use crate::error::Result;
-use crate::hierarchy::{DerivedSummary, GeneratedScopeSummary, ScopeType};
 use brain_persistence::store::{QueryResult, VectorSearchMode};
 
 use super::{
@@ -265,11 +265,21 @@ impl MockFtsSearcher {
 }
 
 impl FtsSearcher for MockFtsSearcher {
-    fn search_fts(&self, _query: &str, _limit: usize) -> Result<Vec<FtsResult>> {
+    fn search_fts(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _brain_ids: Option<&[String]>,
+    ) -> Result<Vec<FtsResult>> {
         Ok(self.results.lock().unwrap().clone())
     }
 
-    fn search_summaries_fts(&self, _query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>> {
+    fn search_summaries_fts(
+        &self,
+        _query: &str,
+        limit: usize,
+        _brain_ids: Option<&[String]>,
+    ) -> Result<Vec<FtsSummaryResult>> {
         Ok(self
             .summary_results
             .lock()
@@ -1108,7 +1118,7 @@ mod tests {
             score: 1.0,
         }];
         let searcher = MockFtsSearcher::with_results(results);
-        let out = searcher.search_fts("rust", 10).unwrap();
+        let out = searcher.search_fts("rust", 10, None).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].chunk_id, "c1");
     }
@@ -1123,9 +1133,9 @@ mod tests {
     async fn index_pipeline_with_mock_store_upserts_without_lancedb() {
         use std::sync::Arc;
 
-        use brain_persistence::db::Db;
         use crate::embedder::MockEmbedder;
         use crate::pipeline::IndexPipeline;
+        use brain_persistence::db::Db;
 
         let db = Db::open_in_memory().unwrap();
         let store = MockStore::default();
@@ -1159,10 +1169,10 @@ mod tests {
     async fn query_pipeline_with_mock_searcher_returns_preset_results() {
         use std::sync::Arc;
 
-        use brain_persistence::db::Db;
         use crate::embedder::MockEmbedder;
         use crate::metrics::Metrics;
         use crate::query_pipeline::QueryPipeline;
+        use brain_persistence::db::Db;
         use brain_persistence::store::QueryResult;
 
         let db = Db::open_in_memory().unwrap();
@@ -1181,7 +1191,14 @@ mod tests {
 
         // search_ranked embeds the query and calls store.query — both are mocked.
         let (ranked, _confidence) = pipeline
-            .search_ranked("fox", "semantic", &[], VectorSearchMode::default(), false)
+            .search_ranked(
+                "fox",
+                "semantic",
+                &[],
+                VectorSearchMode::default(),
+                false,
+                None,
+            )
             .await
             .unwrap();
 

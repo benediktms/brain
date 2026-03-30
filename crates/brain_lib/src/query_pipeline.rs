@@ -11,8 +11,6 @@ use tracing::{instrument, warn};
 use std::sync::atomic::Ordering;
 
 use crate::capsule::generate_stub_capsule;
-use brain_persistence::db::Db;
-use brain_persistence::db::summaries::SummaryRow;
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
@@ -22,9 +20,11 @@ use crate::ranking::{
     compute_fusion_confidence, rank_candidates, resolve_intent,
 };
 use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
+use crate::tokens::estimate_tokens;
+use brain_persistence::db::Db;
+use brain_persistence::db::summaries::SummaryRow;
 use brain_persistence::store::VectorSearchMode;
 use brain_persistence::store::{DEFAULT_NPROBES, StoreReader};
-use crate::tokens::estimate_tokens;
 
 const CANDIDATE_LIMIT: usize = 50;
 
@@ -52,6 +52,9 @@ pub struct SearchParams<'a> {
     /// add the linked chunks to the candidate pool before ranking.
     /// Defaults to `false`.
     pub graph_expand: bool,
+    /// Optional brain_id filter for FTS queries. `None` = workspace-global,
+    /// `Some(&[id])` = scope to specific brain(s).
+    pub brain_ids: Option<&'a [String]>,
 }
 
 impl<'a> SearchParams<'a> {
@@ -71,12 +74,19 @@ impl<'a> SearchParams<'a> {
             query_tags,
             mode: VectorSearchMode::default(),
             graph_expand: false,
+            brain_ids: None,
         }
     }
 
     /// Override the vector search mode.
     pub fn with_mode(mut self, mode: VectorSearchMode) -> Self {
         self.mode = mode;
+        self
+    }
+
+    /// Scope FTS queries to specific brain(s).
+    pub fn with_brain_ids(mut self, brain_ids: Option<&'a [String]>) -> Self {
+        self.brain_ids = brain_ids;
         self
     }
 }
@@ -151,6 +161,7 @@ where
                 params.query_tags,
                 params.mode,
                 params.graph_expand,
+                params.brain_ids,
             )
             .await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
@@ -175,6 +186,7 @@ where
                 params.query_tags,
                 params.mode,
                 params.graph_expand,
+                params.brain_ids,
             )
             .await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
@@ -200,6 +212,7 @@ where
         query_tags: &[String],
         mode: VectorSearchMode,
         graph_expand: bool,
+        brain_ids: Option<&[String]>,
     ) -> Result<(Vec<crate::ranking::RankedResult>, FusionConfidence)> {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
@@ -219,7 +232,7 @@ where
             .await?;
 
         // 3. FTS search (top-50, gracefully degrade on failure)
-        let fts_results = match self.db.search_fts(query, CANDIDATE_LIMIT) {
+        let fts_results = match self.db.search_fts(query, CANDIDATE_LIMIT, brain_ids) {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, "FTS search failed, continuing with vector-only");
@@ -680,7 +693,7 @@ where
             let query_tags = params.query_tags.to_vec();
             futs.push(Box::pin(async move {
                 match pipeline
-                    .search_ranked(&query, &intent, &query_tags, mode, false)
+                    .search_ranked(&query, &intent, &query_tags, mode, false, None)
                     .await
                 {
                     Ok((ranked, _confidence)) => (brain_name, ranked),

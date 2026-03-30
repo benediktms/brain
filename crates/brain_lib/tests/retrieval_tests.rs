@@ -8,11 +8,6 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use brain_persistence::db::Db;
-use brain_persistence::db::chunks::get_chunks_by_ids;
-use brain_persistence::db::fts::search_fts;
-use brain_persistence::db::links::count_backlinks;
-use brain_persistence::db::summaries::{Episode, get_summary, list_episodes, store_episode};
 use brain_lib::embedder::{Embed, MockEmbedder};
 use brain_lib::error::BrainCoreError;
 use brain_lib::links::{LinkType, extract_links};
@@ -24,8 +19,13 @@ use brain_lib::ranking::{
     CandidateSignals, RankedResult, SignalScores, WeightProfile, Weights, rank_candidates,
 };
 use brain_lib::retrieval::{expand_results, pack_minimal};
-use brain_persistence::store::Store;
 use brain_lib::tokens::estimate_tokens;
+use brain_persistence::db::Db;
+use brain_persistence::db::chunks::get_chunks_by_ids;
+use brain_persistence::db::fts::search_fts;
+use brain_persistence::db::links::count_backlinks;
+use brain_persistence::db::summaries::{Episode, get_summary, list_episodes, store_episode};
+use brain_persistence::store::Store;
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -210,7 +210,7 @@ async fn test_fts_keyword_search_after_indexing() {
     // FTS search for "rust"
     let results = pipeline
         .db()
-        .with_read_conn(|conn| search_fts(conn, "rust", 10))
+        .with_read_conn(|conn| search_fts(conn, "rust", 10, None))
         .unwrap();
     assert!(!results.is_empty(), "FTS should find 'rust'");
     // The result should be from the rust.md chunk
@@ -222,7 +222,7 @@ async fn test_fts_keyword_search_after_indexing() {
     // FTS search for "machine learning"
     let results = pipeline
         .db()
-        .with_read_conn(|conn| search_fts(conn, "\"machine learning\"", 10))
+        .with_read_conn(|conn| search_fts(conn, "\"machine learning\"", 10, None))
         .unwrap();
     assert_eq!(
         results.len(),
@@ -233,7 +233,7 @@ async fn test_fts_keyword_search_after_indexing() {
     // FTS search for something not present
     let results = pipeline
         .db()
-        .with_read_conn(|conn| search_fts(conn, "javascript", 10))
+        .with_read_conn(|conn| search_fts(conn, "javascript", 10, None))
         .unwrap();
     assert!(results.is_empty(), "javascript not in any file");
 }
@@ -256,7 +256,7 @@ async fn test_fts_consistent_after_file_update() {
 
     let results = pipeline
         .db()
-        .with_read_conn(|conn| search_fts(conn, "databases", 10))
+        .with_read_conn(|conn| search_fts(conn, "databases", 10, None))
         .unwrap();
     assert_eq!(results.len(), 1);
 
@@ -266,7 +266,7 @@ async fn test_fts_consistent_after_file_update() {
 
     let results = pipeline
         .db()
-        .with_read_conn(|conn| search_fts(conn, "databases", 10))
+        .with_read_conn(|conn| search_fts(conn, "databases", 10, None))
         .unwrap();
     assert!(
         results.is_empty(),
@@ -275,7 +275,7 @@ async fn test_fts_consistent_after_file_update() {
 
     let results = pipeline
         .db()
-        .with_read_conn(|conn| search_fts(conn, "networking", 10))
+        .with_read_conn(|conn| search_fts(conn, "networking", 10, None))
         .unwrap();
     assert_eq!(results.len(), 1, "new keyword should be found");
 }
@@ -916,7 +916,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
     // Verify FTS has entries
     let fts_results = pipeline
         .db()
-        .with_read_conn(|conn| search_fts(conn, "vector", 10))
+        .with_read_conn(|conn| search_fts(conn, "vector", 10, None))
         .unwrap();
     assert!(
         !fts_results.is_empty(),

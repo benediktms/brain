@@ -141,7 +141,8 @@ fn test_procedure_fts_searchable() {
     .unwrap();
 
     // Search for a distinctive term from the content.
-    let results: Vec<FtsSummaryResult> = search_summaries_fts(&conn, "kubernetes", 10).unwrap();
+    let results: Vec<FtsSummaryResult> =
+        search_summaries_fts(&conn, "kubernetes", 10, None).unwrap();
 
     assert!(
         !results.is_empty(),

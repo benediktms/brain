@@ -55,6 +55,90 @@ pub fn sanitize_fts_query(input: &str) -> String {
     result
 }
 
+// ---------------------------------------------------------------------------
+// Brain-scoped query builders
+// ---------------------------------------------------------------------------
+
+/// Build the SQL + params for a brain-scoped FTS chunks query.
+fn build_fts_chunks_query(
+    query: &str,
+    limit: usize,
+    brain_ids: Option<&[String]>,
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    params.push(Box::new(query.to_string()));
+
+    let brain_filter = match brain_ids {
+        None => String::new(),
+        Some(ids) if ids.is_empty() => String::new(),
+        Some(ids) => {
+            let placeholders: Vec<String> = ids
+                .iter()
+                .enumerate()
+                .map(|(_i, id)| {
+                    params.push(Box::new(id.clone()));
+                    format!("?{}", params.len())
+                })
+                .collect();
+            format!(" AND c.brain_id IN ({})", placeholders.join(", "))
+        }
+    };
+
+    params.push(Box::new(limit as i64));
+    let limit_placeholder = format!("?{}", params.len());
+
+    let sql = format!(
+        "SELECT c.chunk_id, -bm25(fts_chunks) AS score
+         FROM fts_chunks
+         JOIN chunks c ON c.rowid = fts_chunks.rowid
+         WHERE fts_chunks MATCH ?1{brain_filter}
+         ORDER BY score DESC
+         LIMIT {limit_placeholder}"
+    );
+
+    (sql, params)
+}
+
+/// Build the SQL + params for a brain-scoped FTS summaries query.
+fn build_fts_summaries_query(
+    query: &str,
+    limit: usize,
+    brain_ids: Option<&[String]>,
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    params.push(Box::new(query.to_string()));
+
+    let brain_filter = match brain_ids {
+        None => String::new(),
+        Some(ids) if ids.is_empty() => String::new(),
+        Some(ids) => {
+            let placeholders: Vec<String> = ids
+                .iter()
+                .enumerate()
+                .map(|(_i, id)| {
+                    params.push(Box::new(id.clone()));
+                    format!("?{}", params.len())
+                })
+                .collect();
+            format!(" AND s.brain_id IN ({})", placeholders.join(", "))
+        }
+    };
+
+    params.push(Box::new(limit as i64));
+    let limit_placeholder = format!("?{}", params.len());
+
+    let sql = format!(
+        "SELECT s.summary_id, -bm25(fts_summaries) AS score
+         FROM fts_summaries
+         JOIN summaries s ON s.rowid = fts_summaries.rowid
+         WHERE fts_summaries MATCH ?1{brain_filter}
+         ORDER BY score DESC
+         LIMIT {limit_placeholder}"
+    );
+
+    (sql, params)
+}
+
 /// A full-text search result with normalized BM25 score.
 #[derive(Debug, Clone)]
 pub struct FtsResult {
@@ -65,10 +149,15 @@ pub struct FtsResult {
 
 /// Search the FTS5 index for chunks matching the query.
 ///
-/// Returns results ranked by BM25 relevance, with scores normalized
-/// to [0, 1] by dividing by the maximum score in the result set.
-/// Supports FTS5 query syntax (phrases, boolean operators).
-pub fn search_fts(conn: &Connection, query: &str, limit: usize) -> Result<Vec<FtsResult>> {
+/// When `brain_ids` is `Some`, results are filtered to chunks belonging to
+/// the specified brains.  `None` means no brain filter (workspace-global).
+/// Scores are normalized to [0, 1] by dividing by the maximum score.
+pub fn search_fts(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+    brain_ids: Option<&[String]>,
+) -> Result<Vec<FtsResult>> {
     let query = sanitize_fts_query(query);
     if query.is_empty() {
         return Ok(Vec::new());
@@ -76,16 +165,10 @@ pub fn search_fts(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Ft
 
     // BM25 returns negative values where more negative = more relevant.
     // We negate to make higher = more relevant.
-    let mut stmt = conn.prepare(
-        "SELECT c.chunk_id, -bm25(fts_chunks) AS score
-         FROM fts_chunks
-         JOIN chunks c ON c.rowid = fts_chunks.rowid
-         WHERE fts_chunks MATCH ?1
-         ORDER BY score DESC
-         LIMIT ?2",
-    )?;
+    let (sql, params) = build_fts_chunks_query(&query, limit, brain_ids);
+    let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map(rusqlite::params![query, limit as i64], |row| {
+    let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
     })?;
 
@@ -198,7 +281,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         setup_with_data(&conn);
 
-        let results = search_fts(&conn, "rust", 10).unwrap();
+        let results = search_fts(&conn, "rust", 10, None).unwrap();
         assert_eq!(results.len(), 2);
 
         // Both should be rust-related chunks
@@ -212,7 +295,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         setup_with_data(&conn);
 
-        let results = search_fts(&conn, "rust", 10).unwrap();
+        let results = search_fts(&conn, "rust", 10, None).unwrap();
         assert!(!results.is_empty());
 
         // Best result should have score 1.0
@@ -237,7 +320,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         setup_with_data(&conn);
 
-        let results = search_fts(&conn, "rust", 1).unwrap();
+        let results = search_fts(&conn, "rust", 1, None).unwrap();
         assert_eq!(results.len(), 1);
     }
 
@@ -246,7 +329,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         setup_with_data(&conn);
 
-        let results = search_fts(&conn, "javascript", 10).unwrap();
+        let results = search_fts(&conn, "javascript", 10, None).unwrap();
         assert!(results.is_empty());
     }
 
@@ -255,10 +338,10 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         setup_with_data(&conn);
 
-        let results = search_fts(&conn, "", 10).unwrap();
+        let results = search_fts(&conn, "", 10, None).unwrap();
         assert!(results.is_empty());
 
-        let results = search_fts(&conn, "   ", 10).unwrap();
+        let results = search_fts(&conn, "   ", 10, None).unwrap();
         assert!(results.is_empty());
     }
 
@@ -268,7 +351,7 @@ mod tests {
         setup_with_data(&conn);
 
         // Phrase query — only f1:1 has "machine learning" adjacent
-        let results = search_fts(&conn, "\"machine learning\"", 10).unwrap();
+        let results = search_fts(&conn, "\"machine learning\"", 10, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].chunk_id, "f1:1");
     }
@@ -282,7 +365,7 @@ mod tests {
         conn.execute("DELETE FROM chunks WHERE chunk_id = 'f1:0'", [])
             .unwrap();
 
-        let results = search_fts(&conn, "rust", 10).unwrap();
+        let results = search_fts(&conn, "rust", 10, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].chunk_id, "f1:2");
     }
@@ -375,7 +458,7 @@ mod tests {
         .unwrap();
 
         // This would fail without sanitization: "no such column: migration"
-        let results = search_fts(&conn, "post-migration", 10).unwrap();
+        let results = search_fts(&conn, "post-migration", 10, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].chunk_id, "f1:0");
     }
@@ -397,22 +480,17 @@ pub fn search_summaries_fts(
     conn: &Connection,
     query: &str,
     limit: usize,
+    brain_ids: Option<&[String]>,
 ) -> Result<Vec<FtsSummaryResult>> {
     let query = sanitize_fts_query(query);
     if query.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT s.summary_id, -bm25(fts_summaries) AS score
-         FROM fts_summaries
-         JOIN summaries s ON s.rowid = fts_summaries.rowid
-         WHERE fts_summaries MATCH ?1
-         ORDER BY score DESC
-         LIMIT ?2",
-    )?;
+    let (sql, params) = build_fts_summaries_query(&query, limit, brain_ids);
+    let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map(rusqlite::params![query, limit as i64], |row| {
+    let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
     })?;
 

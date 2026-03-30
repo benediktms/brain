@@ -175,11 +175,27 @@ pub trait FileMetaReader: Send + Sync {
 pub trait FtsSearcher: Send + Sync {
     /// Search the FTS5 index and return BM25-ranked results (scores
     /// normalized to [0, 1]).
-    fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>>;
+    ///
+    /// When `brain_ids` is `Some`, results are filtered to chunks belonging
+    /// to the specified brains.  `None` means no filter (workspace-global).
+    fn search_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        brain_ids: Option<&[String]>,
+    ) -> Result<Vec<FtsResult>>;
 
     /// Search the FTS5 summaries index (episodes + reflections) and return
     /// BM25-ranked results (scores normalized to [0, 1]).
-    fn search_summaries_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>>;
+    ///
+    /// When `brain_ids` is `Some`, results are filtered to summaries belonging
+    /// to the specified brains.  `None` means no filter (workspace-global).
+    fn search_summaries_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        brain_ids: Option<&[String]>,
+    ) -> Result<Vec<FtsSummaryResult>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,15 +342,34 @@ impl FileMetaReader for Db {
 // -- FtsSearcher for Db ----------------------------------------------------
 
 impl FtsSearcher for Db {
-    fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsResult>> {
+    fn search_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        brain_ids: Option<&[String]>,
+    ) -> Result<Vec<FtsResult>> {
         let query = query.to_string();
-        self.with_read_conn(move |conn| brain_persistence::db::fts::search_fts(conn, &query, limit))
+        let brain_ids = brain_ids.map(|ids| ids.to_vec());
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::fts::search_fts(conn, &query, limit, brain_ids.as_deref())
+        })
     }
 
-    fn search_summaries_fts(&self, query: &str, limit: usize) -> Result<Vec<FtsSummaryResult>> {
+    fn search_summaries_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        brain_ids: Option<&[String]>,
+    ) -> Result<Vec<FtsSummaryResult>> {
         let query = query.to_string();
+        let brain_ids = brain_ids.map(|ids| ids.to_vec());
         self.with_read_conn(move |conn| {
-            brain_persistence::db::fts::search_summaries_fts(conn, &query, limit)
+            brain_persistence::db::fts::search_summaries_fts(
+                conn,
+                &query,
+                limit,
+                brain_ids.as_deref(),
+            )
         })
     }
 }

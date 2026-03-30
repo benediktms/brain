@@ -838,7 +838,7 @@ mod tests {
         )
         .unwrap();
 
-        let results = search_summaries_fts(&conn, "distributed caching", 10).unwrap();
+        let results = search_summaries_fts(&conn, "distributed caching", 10, None).unwrap();
         assert!(
             !results.is_empty(),
             "FTS should find the episode by content"
@@ -880,7 +880,7 @@ mod tests {
         )
         .unwrap();
 
-        let results = search_summaries_fts(&conn, "database", 10).unwrap();
+        let results = search_summaries_fts(&conn, "database", 10, None).unwrap();
         assert!(!results.is_empty());
         // Top result should be normalized to 1.0
         assert!(
@@ -916,7 +916,7 @@ mod tests {
         )
         .unwrap();
 
-        let results = search_summaries_fts(&conn, "xylophone", 10).unwrap();
+        let results = search_summaries_fts(&conn, "xylophone", 10, None).unwrap();
         assert!(results.is_empty(), "unknown term should return no results");
     }
 
@@ -943,7 +943,7 @@ mod tests {
         conn.execute("DELETE FROM fts_summaries", []).unwrap();
 
         // Verify search returns nothing after corruption
-        let pre = search_summaries_fts(&conn, "authentication", 10).unwrap();
+        let pre = search_summaries_fts(&conn, "authentication", 10, None).unwrap();
         assert!(pre.is_empty(), "FTS should be empty after manual delete");
 
         // Rebuild
@@ -951,7 +951,7 @@ mod tests {
         assert_eq!(count, 1, "reindex should count 1 summary");
 
         // Verify search works again
-        let post = search_summaries_fts(&conn, "authentication", 10).unwrap();
+        let post = search_summaries_fts(&conn, "authentication", 10, None).unwrap();
         assert!(!post.is_empty(), "FTS should find episode after reindex");
     }
 
@@ -1022,7 +1022,7 @@ mod tests {
         .unwrap();
 
         // FTS search for beta's unique content
-        let results = search_summaries_fts(&conn, "observability", 10).unwrap();
+        let results = search_summaries_fts(&conn, "observability", 10, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].summary_id, beta_id);
 
