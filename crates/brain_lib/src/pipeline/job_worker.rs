@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dashmap::DashSet;
 use tracing::{debug, warn};
@@ -23,46 +24,110 @@ use brain_persistence::store::Store;
 // ─── Active-job lock set ────────────────────────────────────────
 
 /// In-memory set of job IDs that are currently being executed by a
-/// `tokio::spawn` task. The stuck-job reaper consults this set to avoid
-/// resetting jobs that are still running (which would cause duplicate
-/// execution and wasted LLM calls).
+/// `tokio::spawn` task, combined with a lock-free capacity counter.
 ///
-/// This is the correct mutex for a single-process daemon. If the process
+/// The `DashSet` tracks *which* jobs are active (for the stuck-job reaper).
+/// The `AtomicUsize` tracks *how many* slots remain (for admission control).
+/// Together they prevent both duplicate execution and memory/CPU saturation.
+///
+/// This is the correct design for a single-process daemon. If the process
 /// crashes, the locks are lost — and that is fine, because the spawned tasks
 /// die with it. The time-based reaper handles crash recovery.
-#[derive(Clone, Default)]
-pub struct ActiveJobs(Arc<DashSet<String>>);
+#[derive(Clone)]
+pub struct ActiveJobs {
+    set: Arc<DashSet<String>>,
+    remaining: Arc<AtomicUsize>,
+}
+
+/// Default maximum number of concurrently executing jobs. Keeps memory and
+/// CPU usage bounded when many brains each produce recurring jobs.
+pub const DEFAULT_MAX_CONCURRENT_JOBS: usize = 8;
 
 impl ActiveJobs {
-    pub fn new() -> Self {
-        Self(Arc::new(DashSet::new()))
+    pub fn new(max_concurrent: usize) -> Self {
+        assert!(max_concurrent > 0, "max_concurrent must be at least 1");
+        Self {
+            set: Arc::new(DashSet::new()),
+            remaining: Arc::new(AtomicUsize::new(max_concurrent)),
+        }
     }
 
-    /// Insert a job ID. Returns a [`JobGuard`] that removes it on drop.
+    /// Atomically reserve up to `requested` execution slots.
+    ///
+    /// Uses a CAS loop so concurrent callers never over-allocate. Returns
+    /// the number of slots actually reserved (0 when at capacity). The
+    /// caller must call [`acquire`] for each reserved slot or
+    /// [`release_slots`] for any unused reservations.
+    pub fn reserve_slots(&self, requested: usize) -> usize {
+        if requested == 0 {
+            return 0;
+        }
+        loop {
+            let current = self.remaining.load(Ordering::Acquire);
+            if current == 0 {
+                return 0;
+            }
+            let to_take = requested.min(current);
+            match self.remaining.compare_exchange_weak(
+                current,
+                current - to_take,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return to_take,
+                Err(_) => continue,
+            }
+        }
+    }
+
+    /// Release slots that were reserved but not used (e.g., DB returned
+    /// fewer ready jobs than reserved).
+    pub fn release_slots(&self, count: usize) {
+        if count > 0 {
+            self.remaining.fetch_add(count, Ordering::Release);
+        }
+    }
+
+    /// Insert a job ID. Returns a [`JobGuard`] that removes it on drop
+    /// and returns one slot to the capacity pool.
     pub fn acquire(&self, job_id: String) -> JobGuard {
-        self.0.insert(job_id.clone());
+        self.set.insert(job_id.clone());
         JobGuard {
-            set: Arc::clone(&self.0),
+            set: Arc::clone(&self.set),
+            remaining: Arc::clone(&self.remaining),
             job_id,
         }
     }
 
     /// Check whether a job ID is currently held.
     pub fn contains(&self, job_id: &str) -> bool {
-        self.0.contains(job_id)
+        self.set.contains(job_id)
+    }
+
+    /// Number of jobs currently in-flight.
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    /// True if no jobs are currently in-flight.
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
     }
 }
 
-/// RAII guard that removes a job ID from the [`ActiveJobs`] set on drop.
+/// RAII guard that removes a job ID from the [`ActiveJobs`] set on drop
+/// and returns one slot to the capacity pool.
 /// This guarantees cleanup even if the spawned task panics.
 pub struct JobGuard {
     set: Arc<DashSet<String>>,
+    remaining: Arc<AtomicUsize>,
     job_id: String,
 }
 
 impl Drop for JobGuard {
     fn drop(&mut self) {
         self.set.remove(&self.job_id);
+        self.remaining.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -79,6 +144,10 @@ No markdown formatting.\n\nEpisodes:\n";
 /// to the appropriate handler via `tokio::spawn` for concurrent execution.
 /// Returns the number of claimed jobs (not completed — they run in background).
 ///
+/// The concurrency cap is enforced atomically via [`ActiveJobs::reserve_slots`].
+/// If all slots are occupied, no new jobs are claimed. This prevents memory
+/// and CPU saturation when many recurring jobs become ready simultaneously.
+///
 /// Each spawned task holds a [`JobGuard`] from the `active` set, preventing
 /// the stuck-job reaper from resetting the job while it is still running.
 pub async fn process_jobs(
@@ -88,16 +157,32 @@ pub async fn process_jobs(
     active: &ActiveJobs,
     limit: i32,
 ) -> usize {
-    let claimed = match db.claim_ready_jobs(limit) {
+    // Atomically reserve execution slots — concurrent callers cannot
+    // over-allocate thanks to the CAS loop inside reserve_slots.
+    let reserved = active.reserve_slots(limit.max(0) as usize);
+    if reserved == 0 {
+        debug!("at concurrency cap, skipping claim");
+        return 0;
+    }
+
+    let claimed = match db.claim_ready_jobs(reserved as i32) {
         Ok(jobs) => jobs,
         Err(e) => {
             warn!(error = %e, "failed to claim ready jobs");
+            active.release_slots(reserved);
             return 0;
         }
     };
 
     if claimed.is_empty() {
+        active.release_slots(reserved);
         return 0;
+    }
+
+    // Release slots we reserved but didn't need (DB had fewer ready jobs).
+    let unused = reserved - claimed.len();
+    if unused > 0 {
+        active.release_slots(unused);
     }
 
     debug!(count = claimed.len(), "claimed ready jobs");
@@ -429,7 +514,7 @@ async fn process_embed_poll(
     use crate::pipeline::embed_poll;
 
     let n_tasks = embed_poll::poll_stale_tasks(db, store, embedder, brain_id).await;
-    let n_chunks = embed_poll::poll_stale_chunks(db, store, embedder).await;
+    let n_chunks = embed_poll::poll_stale_chunks(db, store, embedder, brain_id).await;
     let n_records = embed_poll::poll_stale_records(db, store, embedder, brain_id).await;
     let n_summaries = embed_poll::poll_stale_summaries(db, store, embedder, brain_id).await;
 
@@ -573,7 +658,7 @@ mod tests {
     #[test]
     fn test_reap_skips_active_jobs() {
         let db = setup_db();
-        let active = ActiveJobs::new();
+        let active = ActiveJobs::new(100);
 
         insert_stuck_job(&db, "J-ACTIVE");
 
@@ -596,7 +681,7 @@ mod tests {
     #[test]
     fn test_reap_proceeds_after_guard_dropped() {
         let db = setup_db();
-        let active = ActiveJobs::new();
+        let active = ActiveJobs::new(100);
 
         insert_stuck_job(&db, "J-RELEASED");
 
@@ -614,7 +699,7 @@ mod tests {
     #[test]
     fn test_reap_mixed_active_and_stuck() {
         let db = setup_db();
-        let active = ActiveJobs::new();
+        let active = ActiveJobs::new(100);
 
         insert_stuck_job(&db, "J-HELD");
         insert_stuck_job(&db, "J-FREE");
@@ -645,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_active_jobs_acquire_and_release() {
-        let active = ActiveJobs::new();
+        let active = ActiveJobs::new(100);
         assert!(!active.contains("job-1"));
 
         let guard = active.acquire("job-1".into());
@@ -657,7 +742,7 @@ mod tests {
 
     #[test]
     fn test_active_jobs_guard_cleanup_on_panic() {
-        let active = ActiveJobs::new();
+        let active = ActiveJobs::new(100);
         let active2 = active.clone();
 
         let handle = std::thread::spawn(move || {
@@ -671,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_active_jobs_multiple_concurrent() {
-        let active = ActiveJobs::new();
+        let active = ActiveJobs::new(100);
 
         let g1 = active.acquire("job-a".into());
         let g2 = active.acquire("job-b".into());
@@ -686,5 +771,88 @@ mod tests {
 
         drop(g2);
         assert!(!active.contains("job-b"));
+    }
+
+    // ─── Concurrency cap tests ─────────────────────────────────
+
+    #[test]
+    fn test_reserve_slots_basic() {
+        let active = ActiveJobs::new(4);
+
+        // Can reserve up to capacity
+        assert_eq!(active.reserve_slots(2), 2);
+        assert_eq!(active.reserve_slots(3), 2); // only 2 remain
+        assert_eq!(active.reserve_slots(1), 0); // at capacity
+
+        // Releasing makes slots available again
+        active.release_slots(3);
+        assert_eq!(active.reserve_slots(2), 2);
+    }
+
+    #[test]
+    fn test_reserve_slots_zero_request() {
+        let active = ActiveJobs::new(4);
+        assert_eq!(active.reserve_slots(0), 0);
+    }
+
+    #[test]
+    fn test_guard_drop_returns_slot() {
+        let active = ActiveJobs::new(2);
+
+        // Reserve and acquire both slots
+        assert_eq!(active.reserve_slots(2), 2);
+        let g1 = active.acquire("j1".into());
+        let g2 = active.acquire("j2".into());
+
+        // At capacity
+        assert_eq!(active.reserve_slots(1), 0);
+
+        // Drop one guard — its slot returns to the pool
+        drop(g1);
+        assert_eq!(active.reserve_slots(1), 1);
+
+        drop(g2);
+        assert_eq!(active.reserve_slots(1), 1);
+    }
+
+    #[test]
+    fn test_guard_panic_returns_slot() {
+        let active = ActiveJobs::new(2);
+        assert_eq!(active.reserve_slots(1), 1);
+
+        let active2 = active.clone();
+        let handle = std::thread::spawn(move || {
+            let _guard = active2.acquire("j-panic".into());
+            panic!("boom");
+        });
+        let _ = handle.join();
+
+        // Slot returned despite panic
+        assert!(!active.contains("j-panic"));
+        assert_eq!(active.reserve_slots(2), 2); // both slots free
+    }
+
+    #[test]
+    fn test_reserve_slots_concurrent() {
+        use std::sync::Barrier;
+
+        let active = ActiveJobs::new(3);
+        let barrier = Arc::new(Barrier::new(4));
+
+        // 4 threads each try to reserve 2 slots out of 3 total
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let a = active.clone();
+                let b = barrier.clone();
+                std::thread::spawn(move || {
+                    b.wait();
+                    a.reserve_slots(2)
+                })
+            })
+            .collect();
+
+        let total: usize = handles.into_iter().map(|h| h.join().unwrap()).sum();
+        // Exactly 3 slots should be distributed across all threads
+        assert_eq!(total, 3);
     }
 }

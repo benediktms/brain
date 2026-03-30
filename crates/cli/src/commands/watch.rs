@@ -91,7 +91,7 @@ pub async fn run(
 
     // In-memory lock set: prevents the reaper from resetting jobs that are
     // still actively running in a tokio::spawn task.
-    let active_jobs = job_worker::ActiveJobs::new();
+    let active_jobs = job_worker::ActiveJobs::new(job_worker::DEFAULT_MAX_CONCURRENT_JOBS);
 
     // SIGTERM handler — the daemon sends SIGTERM on `brain stop` (daemon.rs:75)
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -571,7 +571,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     // In-memory lock set shared across all brains — prevents the reaper from
     // resetting jobs that are still actively running in a tokio::spawn task.
-    let active_jobs = job_worker::ActiveJobs::new();
+    let active_jobs = job_worker::ActiveJobs::new(job_worker::DEFAULT_MAX_CONCURRENT_JOBS);
 
     // Root validation tick: checks that registered roots still exist on disk,
     // prunes stale roots, and archives brains whose all roots are gone.

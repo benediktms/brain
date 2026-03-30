@@ -187,16 +187,19 @@ pub async fn poll_stale_chunks(
     db: &Db,
     store: &impl ChunkIndexWriter,
     embedder: &Arc<dyn Embed>,
+    brain_id: &str,
 ) -> usize {
     debug!("embed_poll: scanning stale chunks");
 
-    let rows: Vec<ChunkPollRow> = match db.with_read_conn(find_stale_for_embedding) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(error = %e, "embed_poll: failed to query stale chunks");
-            return 0;
-        }
-    };
+    let brain_id_owned = brain_id.to_string();
+    let rows: Vec<ChunkPollRow> =
+        match db.with_read_conn(move |conn| find_stale_for_embedding(conn, &brain_id_owned)) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "embed_poll: failed to query stale chunks");
+                return 0;
+            }
+        };
 
     if rows.is_empty() {
         debug!("embed_poll: no stale chunks");

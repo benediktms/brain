@@ -383,15 +383,28 @@ pub struct ChunkPollRow {
 }
 
 /// Find chunks that have not yet been embedded into LanceDB (limit 256).
-pub fn find_stale_for_embedding(conn: &Connection) -> Result<Vec<ChunkPollRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT c.chunk_id, c.file_id, COALESCE(f.path, c.file_id), c.chunk_ord, c.content
-         FROM chunks c
-         LEFT JOIN files f ON f.file_id = c.file_id
-         WHERE c.embedded_at IS NULL
-         LIMIT 256",
-    )?;
-    let rows = stmt.query_map([], |row| {
+///
+/// `brain_id` — when non-empty, filters chunks to this brain only; when empty,
+/// processes all chunks.
+pub fn find_stale_for_embedding(conn: &Connection, brain_id: &str) -> Result<Vec<ChunkPollRow>> {
+    let base = "SELECT c.chunk_id, c.file_id, COALESCE(f.path, c.file_id), c.chunk_ord, c.content
+                FROM chunks c
+                LEFT JOIN files f ON f.file_id = c.file_id
+                WHERE c.embedded_at IS NULL";
+
+    let sql = if brain_id.is_empty() {
+        format!("{base} LIMIT 256")
+    } else {
+        format!("{base} AND c.brain_id = ?1 LIMIT 256")
+    };
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = if brain_id.is_empty() {
+        vec![]
+    } else {
+        vec![&brain_id]
+    };
+    let rows = stmt.query_map(params.as_slice(), |row| {
         Ok(ChunkPollRow {
             chunk_id: row.get(0)?,
             file_id: row.get(1)?,
