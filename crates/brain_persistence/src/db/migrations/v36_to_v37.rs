@@ -68,11 +68,6 @@ pub fn migrate_v36_to_v37(conn: &Connection) -> Result<()> {
 /// For each brain row with non-empty roots JSON, parse the roots array and
 /// update files whose path starts with that root.  Uses longest-prefix-wins
 /// ordering (longer roots matched first) to handle nested roots correctly.
-/// Match file paths against each brain's registered root paths.
-///
-/// For each brain row with non-empty roots JSON, parse the roots array and
-/// update files whose path starts with that root.  Uses longest-prefix-wins
-/// ordering (longer roots matched first) to handle nested roots correctly.
 fn backfill_files_from_brain_roots(conn: &Connection) -> Result<()> {
     // Load all brains with their roots.  Each entry is (brain_id, single_root).
     let mut stmt = conn

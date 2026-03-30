@@ -74,8 +74,7 @@ fn build_fts_chunks_query(
         Some(ids) => {
             let placeholders: Vec<String> = ids
                 .iter()
-                .enumerate()
-                .map(|(_i, id)| {
+                .map(|id| {
                     params.push(Box::new(id.clone()));
                     format!("?{}", params.len())
                 })
@@ -114,8 +113,7 @@ fn build_fts_summaries_query(
         Some(ids) => {
             let placeholders: Vec<String> = ids
                 .iter()
-                .enumerate()
-                .map(|(_i, id)| {
+                .map(|id| {
                     params.push(Box::new(id.clone()));
                     format!("?{}", params.len())
                 })
@@ -461,6 +459,92 @@ mod tests {
         let results = search_fts(&conn, "post-migration", 10, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].chunk_id, "f1:0");
+    }
+
+    // --- brain_id filtering tests ---
+
+    /// Insert chunks belonging to two different brains.
+    fn setup_multi_brain(conn: &Connection) {
+        init_schema(conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO files (file_id, path, brain_id) VALUES ('fa', '/brain-a/notes.md', 'brain-a')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO files (file_id, path, brain_id) VALUES ('fb', '/brain-b/notes.md', 'brain-b')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, brain_id)
+             VALUES ('fa:0', 'fa', 0, 'ha', 'rust programming language', 'brain-a')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, brain_id)
+             VALUES ('fb:0', 'fb', 0, 'hb', 'rust ownership borrowing', 'brain-b')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_search_fts_brain_id_single_filter() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_multi_brain(&conn);
+
+        let brain_a = vec!["brain-a".to_string()];
+        let results = search_fts(&conn, "rust", 10, Some(&brain_a)).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk_id, "fa:0");
+
+        let brain_b = vec!["brain-b".to_string()];
+        let results = search_fts(&conn, "rust", 10, Some(&brain_b)).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk_id, "fb:0");
+    }
+
+    #[test]
+    fn test_search_fts_brain_id_multi_filter() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_multi_brain(&conn);
+
+        let both = vec!["brain-a".to_string(), "brain-b".to_string()];
+        let results = search_fts(&conn, "rust", 10, Some(&both)).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_fts_brain_id_none_returns_all() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_multi_brain(&conn);
+
+        let results = search_fts(&conn, "rust", 10, None).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_fts_brain_id_empty_slice_returns_all() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_multi_brain(&conn);
+
+        let empty: Vec<String> = vec![];
+        let results = search_fts(&conn, "rust", 10, Some(&empty)).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_fts_brain_id_no_match() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_multi_brain(&conn);
+
+        let unknown = vec!["brain-x".to_string()];
+        let results = search_fts(&conn, "rust", 10, Some(&unknown)).unwrap();
+        assert!(results.is_empty());
     }
 }
 
