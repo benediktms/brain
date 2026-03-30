@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use brain_lib::config::{brain_home, load_global_config};
+#[allow(clippy::disallowed_types)]
 use rusqlite::Connection;
 
 /// Arguments for `brain migrate`.
@@ -300,6 +301,7 @@ fn collect_jsonl_paths(
 /// Migrate a single brain by replaying JSONL event logs into the unified DB.
 ///
 /// Idempotent: events that already exist are skipped.
+#[allow(clippy::disallowed_macros)]
 fn migrate_one_brain(
     db: &brain_persistence::db::Db,
     brain_id: &str,

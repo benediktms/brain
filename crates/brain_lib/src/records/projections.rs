@@ -6,6 +6,7 @@ pub use brain_persistence::db::records::projections::*;
 /// Reads events from `events_path`, then delegates to `rebuild_from_events`.
 /// This wrapper stays in brain_lib because it depends on file I/O
 /// (`read_all_events` lives here, not in brain_persistence).
+#[allow(clippy::disallowed_types)] // Legacy migration helper — takes raw Connection
 pub fn rebuild(
     conn: &rusqlite::Connection,
     events_path: &std::path::Path,

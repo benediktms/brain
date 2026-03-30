@@ -5,6 +5,7 @@ use brain_lib::config::{load_global_config, save_global_config};
 
 /// Try to read the prefix from `brains.prefix` for the named brain.
 /// Returns `None` if no match or column is NULL.
+#[allow(clippy::disallowed_types)]
 fn read_brain_prefix(
     conn: &rusqlite::Connection,
     brain_name: &str,
@@ -56,6 +57,7 @@ pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<(
 ///
 /// `brain_name` must be provided explicitly — it can no longer be derived
 /// from `sqlite_db` now that the DB is unified (`~/.brain/brain.db`).
+#[allow(clippy::disallowed_macros)]
 pub fn run_config_set(
     sqlite_db: &Path,
     brain_name: &str,
