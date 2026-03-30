@@ -224,6 +224,11 @@ impl FileMetaReader for MockFileMetaReader {
         Ok(self.active_paths.lock().unwrap().clone())
     }
 
+    fn get_active_paths_for_brain(&self, _brain_id: &str) -> Result<Vec<(String, String)>> {
+        // Mock doesn't filter by brain_id
+        Ok(self.active_paths.lock().unwrap().clone())
+    }
+
     fn get_files_with_hashes(&self) -> Result<Vec<(String, String, Option<String>)>> {
         Ok(self.files_with_hashes.lock().unwrap().clone())
     }

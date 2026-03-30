@@ -64,18 +64,27 @@ where
             .map(|f| f.path.to_string_lossy().to_string())
             .collect();
 
-        let active_db_files = self.db.get_all_active_paths()?;
+        let active_db_files = self.db.get_active_paths_for_brain(&self.brain_id)?;
+        let mut stale_file_ids: Vec<String> = Vec::new();
         for (file_id, db_path) in &active_db_files {
             if !scanned_set.contains(db_path.as_str()) {
                 if let Err(e) = self.db.handle_delete(db_path) {
                     warn!(path = %db_path, error = %e, "failed to soft-delete stale file");
                 } else {
-                    // Also remove from LanceDB immediately
-                    if let Err(e) = self.store.delete_file_chunks(file_id).await {
-                        warn!(file_id = %file_id, error = %e, "failed to delete LanceDB chunks for stale file");
-                    }
+                    stale_file_ids.push(file_id.clone());
                     stats.deleted += 1;
                 }
+            }
+        }
+
+        // Batch-delete LanceDB chunks for all stale files at once.
+        if !stale_file_ids.is_empty() {
+            info!(
+                count = stale_file_ids.len(),
+                "removing stale file chunks from LanceDB"
+            );
+            if let Err(e) = self.store.delete_chunks_by_file_ids(&stale_file_ids).await {
+                warn!(error = %e, "failed to batch-delete LanceDB chunks for stale files");
             }
         }
 

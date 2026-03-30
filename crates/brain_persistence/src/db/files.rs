@@ -168,6 +168,22 @@ pub fn get_all_active_paths(conn: &Connection) -> Result<Vec<(String, String)>> 
     super::collect_rows(rows)
 }
 
+/// Get active (non-deleted) file paths for a specific brain.
+///
+/// When `brain_id` is empty, returns all active files (same as `get_all_active_paths`).
+pub fn get_active_paths_for_brain(
+    conn: &Connection,
+    brain_id: &str,
+) -> Result<Vec<(String, String)>> {
+    if brain_id.is_empty() {
+        return get_all_active_paths(conn);
+    }
+    let mut stmt =
+        conn.prepare("SELECT file_id, path FROM files WHERE deleted_at IS NULL AND brain_id = ?1")?;
+    let rows = stmt.query_map([brain_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    super::collect_rows(rows)
+}
+
 /// Clear all content hashes and chunker versions (forces full re-index on next scan).
 pub fn clear_all_content_hashes(conn: &Connection) -> Result<usize> {
     let count = conn.execute(

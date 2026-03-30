@@ -158,6 +158,10 @@ pub trait FileMetaReader: Send + Sync {
     /// Return all active (non-deleted) `(file_id, path)` pairs.
     fn get_all_active_paths(&self) -> Result<Vec<(String, String)>>;
 
+    /// Return active (non-deleted) `(file_id, path)` pairs for a specific brain.
+    /// When `brain_id` is empty, returns all active files.
+    fn get_active_paths_for_brain(&self, brain_id: &str) -> Result<Vec<(String, String)>>;
+
     /// Return `(file_id, path, content_hash)` for all active files.
     fn get_files_with_hashes(&self) -> Result<Vec<(String, String, Option<String>)>>;
 
@@ -328,6 +332,13 @@ impl ChunkMetaReader for Db {
 impl FileMetaReader for Db {
     fn get_all_active_paths(&self) -> Result<Vec<(String, String)>> {
         self.with_read_conn(brain_persistence::db::files::get_all_active_paths)
+    }
+
+    fn get_active_paths_for_brain(&self, brain_id: &str) -> Result<Vec<(String, String)>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::files::get_active_paths_for_brain(conn, &brain_id)
+        })
     }
 
     fn get_files_with_hashes(&self) -> Result<Vec<(String, String, Option<String>)>> {
