@@ -10,13 +10,13 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use brain_persistence::db::Db;
-use brain_persistence::db::meta;
 use crate::embedder::{Embed, Embedder};
 use crate::metrics::Metrics;
 use crate::ports::{ChunkIndexWriter, SchemaMeta};
-use brain_persistence::store::Store;
 use crate::summarizer::Summarize;
+use brain_persistence::db::Db;
+use brain_persistence::db::meta;
+use brain_persistence::store::Store;
 
 /// Statistics from a full scan operation.
 #[derive(Debug, Default)]
@@ -55,6 +55,8 @@ where
     pub(crate) embedder: Arc<dyn Embed>,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) summarizer: Option<Arc<dyn Summarize>>,
+    /// Brain ID used to stamp files and chunks created during indexing.
+    pub(crate) brain_id: String,
 }
 
 /// Check/stamp the LanceDB schema version, rebuilding the table when needed.
@@ -106,7 +108,8 @@ pub async fn ensure_schema_version(
                 }
             }
             store.drop_and_recreate_table().await?;
-            let cleared = db.with_write_conn(brain_persistence::db::files::clear_all_content_hashes)?;
+            let cleared =
+                db.with_write_conn(brain_persistence::db::files::clear_all_content_hashes)?;
             info!(cleared, "cleared content hashes to trigger full re-index");
             db.with_write_conn(|conn| {
                 meta::set_meta(conn, "lancedb_schema_version", &expected.to_string())
@@ -151,6 +154,7 @@ impl IndexPipeline<Store> {
             embedder: Arc::new(embedder),
             metrics: Arc::new(Metrics::new()),
             summarizer: None,
+            brain_id: String::new(),
         })
     }
 
@@ -171,6 +175,7 @@ impl IndexPipeline<Store> {
             embedder,
             metrics: Arc::new(Metrics::new()),
             summarizer: None,
+            brain_id: String::new(),
         })
     }
 }
@@ -196,7 +201,13 @@ where
             embedder,
             metrics: Arc::new(Metrics::new()),
             summarizer: None,
+            brain_id: String::new(),
         })
+    }
+
+    /// Set the brain_id on an existing pipeline.
+    pub fn set_brain_id(&mut self, brain_id: String) {
+        self.brain_id = brain_id;
     }
 
     /// Get a reference to the SQLite database.

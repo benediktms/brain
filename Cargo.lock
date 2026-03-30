@@ -669,6 +669,7 @@ dependencies = [
  "assert_cmd",
  "blake3",
  "brain-lib",
+ "brain-persistence",
  "chrono",
  "clap",
  "dirs",

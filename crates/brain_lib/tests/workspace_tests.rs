@@ -6,7 +6,6 @@
 //! 3. Unified object dedup — identical content from two brains produces one blob.
 //! 4. Brain filtering in stores — `with_brain_id` scopes reads and writes correctly.
 
-use brain_persistence::db::Db;
 use brain_lib::records::RecordStore;
 use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
 use brain_lib::records::objects::ObjectStore;
@@ -15,6 +14,7 @@ use brain_lib::tasks::TaskStore;
 use brain_lib::tasks::events::{
     DependencyPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus,
 };
+use brain_persistence::db::Db;
 use tempfile::TempDir;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -432,7 +432,9 @@ fn test_crossbrain_prefix_not_poisoned_by_brain_meta() {
 
     // Simulate host brain init: seed brain_meta.project_prefix = "BRX"
     unified_db
-        .with_write_conn(|conn| brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX"))
+        .with_write_conn(|conn| {
+            brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX")
+        })
         .unwrap();
 
     // Register a cross-brain entry — prefix must derive from brain_name, NOT from brain_meta
@@ -469,7 +471,9 @@ fn test_with_brain_id_uses_brain_name_for_prefix() {
 
     // Poison brain_meta with host brain's prefix
     unified_db
-        .with_write_conn(|conn| brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX"))
+        .with_write_conn(|conn| {
+            brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX")
+        })
         .unwrap();
 
     // Create TaskStore with explicit brain_name — prefix must come from brain_name
@@ -496,7 +500,9 @@ fn test_multiple_crossbrain_prefixes_independent() {
 
     // Seed host brain prefix
     unified_db
-        .with_write_conn(|conn| brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX"))
+        .with_write_conn(|conn| {
+            brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX")
+        })
         .unwrap();
 
     let _tasks_a = dir.path().join("tasks_a");
@@ -533,10 +539,10 @@ fn test_multiple_crossbrain_prefixes_independent() {
 async fn test_mcp_context_unified_db_task_scoping() {
     use std::sync::Arc;
 
-    use brain_persistence::db::Db;
     use brain_lib::mcp::McpContext;
     use brain_lib::mcp::tools::ToolRegistry;
     use brain_lib::metrics::Metrics;
+    use brain_persistence::db::Db;
     use tempfile::TempDir;
 
     let tmp = TempDir::new().unwrap();

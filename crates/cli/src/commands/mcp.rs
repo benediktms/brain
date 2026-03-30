@@ -40,7 +40,7 @@ pub async fn run(
 /// Falls back to the first brain alphabetically if no root matches.
 fn resolve_from_registry() -> Option<(String, brain_lib::config::ResolvedPaths)> {
     let home = brain_lib::config::brain_home().ok()?;
-    let db = brain_lib::db::Db::open(&home.join("brain.db")).ok()?;
+    let db = brain_persistence::db::Db::open(&home.join("brain.db")).ok()?;
     let brain_rows = db.list_brains(true).ok()?;
     let cwd = std::env::current_dir().ok();
 

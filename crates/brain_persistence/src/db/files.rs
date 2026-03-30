@@ -4,15 +4,31 @@ use ulid::Ulid;
 use crate::error::Result;
 
 /// Get or create a file_id for the given path. Returns (file_id, is_new).
-pub fn get_or_create_file_id(conn: &Connection, path: &str) -> Result<(String, bool)> {
+///
+/// When `brain_id` is non-empty, it is set on new files and used to resurrect
+/// soft-deleted files (files with a different brain_id are treated as new).
+pub fn get_or_create_file_id(
+    conn: &Connection,
+    path: &str,
+    brain_id: &str,
+) -> Result<(String, bool)> {
     // Try to find existing (including soft-deleted — resurrect it)
-    let existing: Option<(String, Option<i64>)> = conn
-        .query_row(
+    // When brain_id is provided, match both path and brain_id for consistency.
+    let existing: Option<(String, Option<i64>)> = if brain_id.is_empty() {
+        conn.query_row(
             "SELECT file_id, deleted_at FROM files WHERE path = ?1",
             [path],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()?;
+        .optional()?
+    } else {
+        conn.query_row(
+            "SELECT file_id, deleted_at FROM files WHERE path = ?1 AND brain_id = ?2",
+            [path, brain_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+    };
 
     if let Some((file_id, deleted_at)) = existing {
         if deleted_at.is_some() {
@@ -28,8 +44,8 @@ pub fn get_or_create_file_id(conn: &Connection, path: &str) -> Result<(String, b
     // Create new entry with ULID
     let file_id = Ulid::new().to_string();
     conn.execute(
-        "INSERT INTO files (file_id, path, indexing_state) VALUES (?1, ?2, 'idle')",
-        rusqlite::params![file_id, path],
+        "INSERT INTO files (file_id, path, indexing_state, brain_id) VALUES (?1, ?2, 'idle', ?3)",
+        rusqlite::params![file_id, path, brain_id],
     )?;
 
     Ok((file_id, true))
@@ -249,12 +265,12 @@ mod tests {
     #[test]
     fn test_get_or_create_new_file() {
         let conn = setup();
-        let (file_id, is_new) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, is_new) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
         assert!(is_new);
         assert!(!file_id.is_empty());
 
         // Second call returns same id
-        let (file_id2, is_new2) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id2, is_new2) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
         assert!(!is_new2);
         assert_eq!(file_id, file_id2);
     }
@@ -262,7 +278,7 @@ mod tests {
     #[test]
     fn test_content_hash_lifecycle() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
 
         // Initially no hash
         assert_eq!(get_content_hash(&conn, &file_id).unwrap(), None);
@@ -278,7 +294,7 @@ mod tests {
     #[test]
     fn test_indexing_state_transitions() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
 
         set_indexing_state(&conn, &file_id, "indexing_started").unwrap();
 
@@ -294,7 +310,7 @@ mod tests {
     #[test]
     fn test_reset_stuck_file_for_reindex() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
         mark_indexed(&conn, &file_id, "hash123", 1).unwrap();
         set_indexing_state(&conn, &file_id, "indexing_started").unwrap();
 
@@ -315,7 +331,7 @@ mod tests {
     #[test]
     fn test_handle_delete_and_resurrect() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
 
         // Soft-delete
         let deleted_id = handle_delete(&conn, "/notes/test.md").unwrap();
@@ -326,7 +342,7 @@ mod tests {
         assert!(active.is_empty());
 
         // Resurrect by get_or_create
-        let (file_id2, is_new) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id2, is_new) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
         assert!(!is_new);
         assert_eq!(file_id, file_id2);
 
@@ -340,13 +356,13 @@ mod tests {
         use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
 
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
 
         let chunks = vec![
             ChunkMeta::test(&format!("{file_id}:0"), 0, "h0"),
             ChunkMeta::test(&format!("{file_id}:1"), 1, "h1"),
         ];
-        replace_chunk_metadata(&conn, &file_id, &chunks).unwrap();
+        replace_chunk_metadata(&conn, &file_id, &chunks, "").unwrap();
 
         // Verify chunks exist
         let count: i64 = conn
@@ -377,19 +393,21 @@ mod tests {
         use crate::db::chunks::{ChunkMeta, replace_chunk_metadata};
 
         let conn = setup();
-        let (file_a, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
-        let (file_b, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        let (file_a, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
+        let (file_b, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
 
         replace_chunk_metadata(
             &conn,
             &file_a,
             &[ChunkMeta::test(&format!("{file_a}:0"), 0, "ha")],
+            "",
         )
         .unwrap();
         replace_chunk_metadata(
             &conn,
             &file_b,
             &[ChunkMeta::test(&format!("{file_b}:0"), 0, "hb")],
+            "",
         )
         .unwrap();
 
@@ -410,8 +428,8 @@ mod tests {
     #[test]
     fn test_clear_all_content_hashes() {
         let conn = setup();
-        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
-        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
+        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
         mark_indexed(&conn, &fid1, "hash1", 1).unwrap();
         mark_indexed(&conn, &fid2, "hash2", 1).unwrap();
 
@@ -425,8 +443,8 @@ mod tests {
     #[test]
     fn test_clear_content_hash_by_path() {
         let conn = setup();
-        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
-        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
+        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
         mark_indexed(&conn, &fid1, "hash1", 1).unwrap();
         mark_indexed(&conn, &fid2, "hash2", 1).unwrap();
 
@@ -448,7 +466,7 @@ mod tests {
     #[test]
     fn test_purge_deleted_files() {
         let conn = setup();
-        let (fid, _) = get_or_create_file_id(&conn, "/notes/old.md").unwrap();
+        let (fid, _) = get_or_create_file_id(&conn, "/notes/old.md", "").unwrap();
         handle_delete(&conn, "/notes/old.md").unwrap();
 
         // Set deleted_at to a very old timestamp
@@ -477,8 +495,8 @@ mod tests {
     #[test]
     fn test_get_files_with_hashes() {
         let conn = setup();
-        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
-        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
+        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
         mark_indexed(&conn, &fid1, "hash1", 1).unwrap();
 
         let files = get_files_with_hashes(&conn).unwrap();
@@ -494,16 +512,16 @@ mod tests {
     #[test]
     fn test_handle_rename() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/old.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/old.md", "").unwrap();
 
         handle_rename(&conn, &file_id, "/notes/new.md").unwrap();
 
         // Old path no longer found
-        let (_, is_new) = get_or_create_file_id(&conn, "/notes/old.md").unwrap();
+        let (_, is_new) = get_or_create_file_id(&conn, "/notes/old.md", "").unwrap();
         assert!(is_new); // creates a new entry
 
         // New path returns the original file_id
-        let (found_id, is_new) = get_or_create_file_id(&conn, "/notes/new.md").unwrap();
+        let (found_id, is_new) = get_or_create_file_id(&conn, "/notes/new.md", "").unwrap();
         assert!(!is_new);
         assert_eq!(found_id, file_id);
     }
@@ -511,7 +529,7 @@ mod tests {
     #[test]
     fn test_chunker_version_lifecycle() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
 
         // Initially no version
         assert_eq!(get_chunker_version(&conn, &file_id).unwrap(), None);
@@ -528,7 +546,7 @@ mod tests {
     #[test]
     fn test_resurrect_clears_chunker_version() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
         mark_indexed(&conn, &file_id, "hash1", 2).unwrap();
         assert_eq!(get_chunker_version(&conn, &file_id).unwrap(), Some(2));
 
@@ -536,7 +554,7 @@ mod tests {
         handle_delete(&conn, "/notes/test.md").unwrap();
 
         // Resurrect
-        let (file_id2, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id2, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
         assert_eq!(file_id, file_id2);
 
         // chunker_version should be cleared
@@ -546,9 +564,9 @@ mod tests {
     #[test]
     fn test_count_stale_chunker_version() {
         let conn = setup();
-        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
-        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
-        let (fid3, _) = get_or_create_file_id(&conn, "/notes/c.md").unwrap();
+        let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
+        let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
+        let (fid3, _) = get_or_create_file_id(&conn, "/notes/c.md", "").unwrap();
 
         // All NULL → all stale
         assert_eq!(count_stale_chunker_version(&conn, 2).unwrap(), 3);

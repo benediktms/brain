@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use brain_lib::chunker::chunk_document;
-use brain_persistence::db::Db;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::parser::parse_document;
 use brain_lib::prelude::*;
@@ -15,6 +14,7 @@ use brain_lib::retrieval::{expand_results, pack_minimal};
 use brain_lib::tasks::events::*;
 use brain_lib::tasks::projections::apply_event;
 use brain_lib::tasks::queries::{list_blocked, list_open, list_ready};
+use brain_persistence::db::Db;
 use proptest::prelude::*;
 use rusqlite::Connection;
 use tempfile::TempDir;

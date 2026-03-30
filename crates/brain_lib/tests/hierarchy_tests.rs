@@ -4,11 +4,11 @@
 //! `mark_scope_stale`, and `search_derived_summaries` operate correctly
 //! against an in-memory database with the `derived_summaries` schema.
 
-use brain_persistence::db::Db;
 use brain_lib::hierarchy::{
     DerivedSummary, ScopeType, generate_scope_summary, get_scope_summary, mark_scope_stale,
     search_derived_summaries,
 };
+use brain_persistence::db::Db;
 
 // ─── Schema helpers ───────────────────────────────────────────────────────────
 

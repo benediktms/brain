@@ -6,12 +6,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use brain_persistence::db::Db;
-use brain_persistence::db::files;
 use brain_lib::doctor::CheckStatus;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::ports::FileMetaWriter;
+use brain_persistence::db::Db;
+use brain_persistence::db::files;
 use brain_persistence::store::Store;
 
 use tempfile::TempDir;

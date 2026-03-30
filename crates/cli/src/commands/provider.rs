@@ -3,9 +3,9 @@ use std::path::Path;
 
 use anyhow::Result;
 use brain_lib::config::{ProviderEntry, brain_home, load_global_config, save_global_config};
-use brain_lib::db::crypto;
-use brain_lib::db::providers::InsertProvider;
 use brain_lib::stores::BrainStores;
+use brain_persistence::db::crypto;
+use brain_persistence::db::providers::InsertProvider;
 
 const VALID_PROVIDERS: &[&str] = &["anthropic", "openai"];
 
@@ -125,7 +125,7 @@ pub fn run_remove(sqlite_db: &Path, lance_db: Option<&Path>, target: &str) -> Re
 }
 
 /// Sync the providers list from DB to state_projection.toml (metadata only).
-fn project_providers_to_config(db: &brain_lib::db::Db) -> Result<()> {
+fn project_providers_to_config(db: &brain_persistence::db::Db) -> Result<()> {
     let providers = db.list_providers()?;
     let entries: Vec<ProviderEntry> = providers
         .iter()

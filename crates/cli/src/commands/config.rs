@@ -25,7 +25,7 @@ fn read_brain_prefix(
 /// `brain_name` must be provided explicitly — it can no longer be derived
 /// from `sqlite_db` now that the DB is unified (`~/.brain/brain.db`).
 pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<()> {
-    let db = brain_lib::db::Db::open(sqlite_db)?;
+    let db = brain_persistence::db::Db::open(sqlite_db)?;
     db.with_write_conn(|conn| match key {
         "prefix" => {
             if let Some(prefix) = read_brain_prefix(conn, brain_name)?
@@ -38,7 +38,8 @@ pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<(
             // Use the per-brain data dir as the legacy brain_dir.
             let brain_home = sqlite_db.parent().unwrap_or(Path::new("."));
             let brain_dir = brain_home.join("brains").join(brain_name);
-            let fallback = brain_lib::db::meta::get_or_init_project_prefix(conn, &brain_dir)?;
+            let fallback =
+                brain_persistence::db::meta::get_or_init_project_prefix(conn, &brain_dir)?;
             println!("{fallback}");
             Ok(())
         }
@@ -63,7 +64,7 @@ pub fn run_config_set(
 ) -> Result<()> {
     match key {
         "prefix" => {
-            let db = brain_lib::db::Db::open(sqlite_db)?;
+            let db = brain_persistence::db::Db::open(sqlite_db)?;
             let (old_prefix, new_prefix) = db.with_write_conn(|conn| {
                 let old = read_brain_prefix(conn, brain_name)?
                     .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
@@ -79,7 +80,7 @@ pub fn run_config_set(
                         }
                         upper
                     }
-                    None => brain_lib::db::meta::generate_prefix(brain_name),
+                    None => brain_persistence::db::meta::generate_prefix(brain_name),
                 };
 
                 // Write to brains.prefix

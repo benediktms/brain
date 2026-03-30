@@ -10,8 +10,8 @@ use brain_lib::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
 use brain_lib::ranking::resolve_intent;
 use brain_lib::retrieval::SearchResult;
 use brain_lib::search_service::SearchService;
-use brain_lib::store::StoreReader;
 use brain_lib::stores::BrainStores;
+use brain_persistence::store::StoreReader;
 
 /// Parameters for a CLI query invocation.
 pub struct QueryParams {

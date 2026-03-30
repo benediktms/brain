@@ -206,7 +206,7 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
     } else {
         use brain_lib::config::{list_brain_keys, open_remote_search_context};
         use brain_lib::query_pipeline::FederatedPipeline;
-        use brain_lib::store::StoreReader;
+        use brain_persistence::store::StoreReader;
 
         let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
             list_brain_keys(ctx.stores.db())?

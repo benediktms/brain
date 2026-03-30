@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use brain_lib::config::{brain_home, load_global_config, save_global_config};
-use brain_lib::db::Db;
-use brain_lib::db::schema::BrainUpsert;
+use brain_persistence::db::Db;
+use brain_persistence::db::schema::BrainUpsert;
 
 /// Add an alias to a brain entry.
 pub fn run_add(brain: &str, alias: &str) -> Result<()> {

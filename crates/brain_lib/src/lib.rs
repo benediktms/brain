@@ -51,9 +51,9 @@ pub mod prelude {
     };
     pub use crate::retrieval::{ExpandResult, ExpandedMemory, MemoryStub, SearchResult};
     pub use crate::scanner::{ScannedFile, scan_brain};
-    pub use brain_persistence::store::{QueryResult, Store, VectorSearchMode};
     pub use crate::tokens::estimate_tokens;
     pub use crate::utils::content_hash;
     pub use crate::watcher::{BrainWatcher, FileEvent};
     pub use crate::work_queue::WorkQueue;
+    pub use brain_persistence::store::{QueryResult, Store, VectorSearchMode};
 }

@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use brain_persistence::db::Db;
-use brain_persistence::db::files;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
-use brain_persistence::store::{Store, StoreReader};
 use brain_lib::watcher::{FileEvent, coalesce_events};
+use brain_persistence::db::Db;
+use brain_persistence::db::files;
+use brain_persistence::store::{Store, StoreReader};
 
 use tempfile::TempDir;
 

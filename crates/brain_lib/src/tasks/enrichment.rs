@@ -365,8 +365,8 @@ mod tests {
 
     #[test]
     fn test_children_stubs_to_json_shape() {
-        use brain_persistence::db::Db;
         use crate::tasks::queries::TaskRow;
+        use brain_persistence::db::Db;
         let db = Db::open_in_memory().unwrap();
         let store = TaskStore::new(db);
         let child = TaskRow {
@@ -398,8 +398,8 @@ mod tests {
 
     #[test]
     fn test_attach_summary_fields_key_names() {
-        use brain_persistence::db::Db;
         use crate::tasks::queries::TaskRow;
+        use brain_persistence::db::Db;
         let row = TaskRow {
             task_id: "t1".to_string(),
             title: "Test".to_string(),

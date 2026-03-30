@@ -9,7 +9,6 @@ use brain_lib::config::{
     brain_home, get_or_generate_brain_id, load_global_config, resolve_brain_id,
     resolve_paths_for_brain, save_global_config,
 };
-use brain_lib::db::Db;
 use brain_lib::embedder::Embedder;
 use brain_lib::ipc::router::BrainRouter;
 use brain_lib::ipc::server::IpcServer;
@@ -20,14 +19,15 @@ use brain_lib::pipeline::job_worker;
 use brain_lib::pipeline::recurring_jobs;
 use brain_lib::ports::JobQueue;
 use brain_lib::prelude::*;
-use brain_lib::store::Store;
+use brain_persistence::db::Db;
+use brain_persistence::store::Store;
 use tracing::{debug, info, warn};
 
 // The daemon (daemon.rs) uses libc and sends SIGTERM — unix-only.
 use tokio::signal::unix::SignalKind;
 
-use brain_lib::db::meta::generate_prefix;
-use brain_lib::db::schema::BrainProjection;
+use brain_persistence::db::meta::generate_prefix;
+use brain_persistence::db::schema::BrainProjection;
 
 /// Outcome of the watch shutdown sequence.
 #[allow(dead_code)]
@@ -196,7 +196,7 @@ pub async fn run(
                 let mut snapshot = pipeline.metrics().snapshot();
                 // Enrich with stuck-file count via brain_lib's Db wrapper
                 let stuck_files = pipeline.db()
-                    .with_read_conn(brain_lib::db::files::find_stuck_files)
+                    .with_read_conn(brain_persistence::db::files::find_stuck_files)
                     .unwrap_or_default();
                 snapshot.dual_store_stuck_files = stuck_files.len() as u64;
                 eprintln!("{}", serde_json::to_string_pretty(&snapshot).unwrap_or_default());
@@ -1139,7 +1139,7 @@ async fn reload_brains(
 fn validate_roots(
     brains: &mut HashMap<String, BrainInstance>,
     watcher: &mut BrainWatcher,
-    db: &brain_lib::db::Db,
+    db: &brain_persistence::db::Db,
 ) -> bool {
     // Read active brains from DB (source of truth).
     let db_brains = match db.list_brains(true) {
@@ -1245,7 +1245,7 @@ fn validate_roots(
 ///
 /// Reads all brains from the DB and overwrites state_projection.toml roots, notes,
 /// aliases, and archived status. Config.toml is a projection, not a source.
-fn project_db_to_config(db: &brain_lib::db::Db) {
+fn project_db_to_config(db: &brain_persistence::db::Db) {
     let mut cfg = match load_global_config() {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -1302,7 +1302,10 @@ fn project_db_to_config(db: &brain_lib::db::Db) {
 ///
 /// Only writes if any prefix actually changed, to avoid triggering the config
 /// watcher unnecessarily.
-fn sync_prefixes_to_config(db: &brain_lib::db::Db, brains: &HashMap<String, BrainInstance>) {
+fn sync_prefixes_to_config(
+    db: &brain_persistence::db::Db,
+    brains: &HashMap<String, BrainInstance>,
+) {
     let Ok(mut cfg) = load_global_config() else {
         return;
     };

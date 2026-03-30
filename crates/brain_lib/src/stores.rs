@@ -331,7 +331,7 @@ impl BrainStores {
     /// Upsert a record capsule chunk into SQLite.
     pub fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()> {
         use crate::ports::ChunkMetaWriter;
-        ChunkMetaWriter::upsert_record_chunk(&self.db, record_file_id, capsule_text)
+        ChunkMetaWriter::upsert_record_chunk(&self.db, record_file_id, capsule_text, &self.brain_id)
     }
 
     /// Clone this store bundle with a different brain_id.

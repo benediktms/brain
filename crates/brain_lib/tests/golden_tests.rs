@@ -7,13 +7,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use brain_lib::chunker::{CHUNKER_VERSION, Chunk, chunk_text};
-use brain_persistence::db::Db;
 use brain_lib::links::{Link, extract_links};
 use brain_lib::ranking::{CandidateSignals, Weights, rank_candidates, resolve_intent};
 use brain_lib::tasks::events::*;
 use brain_lib::tasks::projections::{apply_event, rebuild};
 use brain_lib::tasks::queries::{list_all_deps, list_all_labels, list_blocked, list_ready};
 use brain_lib::utils::content_hash;
+use brain_persistence::db::Db;
 use serde::{Deserialize, Serialize};
 
 // ─── Helpers ─────────────────────────────────────────────────────

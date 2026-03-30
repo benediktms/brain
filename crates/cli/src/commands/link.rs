@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use brain_lib::config::{
     BrainToml, brain_home, load_brain_toml, load_global_config, save_brain_toml, save_global_config,
 };
-use brain_lib::db::Db;
-use brain_lib::db::schema::BrainUpsert;
+use brain_persistence::db::Db;
+use brain_persistence::db::schema::BrainUpsert;
 use std::fs;
 use std::path::PathBuf;
 
@@ -92,7 +92,7 @@ pub fn run(name: &str) -> Result<()> {
     let roots_json = serde_json::to_string(&roots)?;
     let notes_json = brain_row.notes_json.as_deref().unwrap_or("[]");
     let aliases_json = brain_row.aliases_json.as_deref().unwrap_or("[]");
-    let prefix_fallback = brain_lib::db::meta::generate_prefix(&brain_name);
+    let prefix_fallback = brain_persistence::db::meta::generate_prefix(&brain_name);
     let prefix = brain_row.prefix.as_deref().unwrap_or(&prefix_fallback);
     db.upsert_brain(&BrainUpsert {
         brain_id: &brain_id,

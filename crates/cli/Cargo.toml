@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 brain-lib = { path = "../brain_lib" }
+brain-persistence = { path = "../brain_persistence" }
 tokio = { workspace = true, features = ["signal", "net"] }
 tokio-util = { workspace = true }
 anyhow = { workspace = true }

@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn test_replace_links_and_backlinks() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/graph.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/graph.md", "").unwrap();
 
         let links = vec![
             Link {
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn test_replace_links_is_atomic() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
 
         let links_v1 = vec![Link {
             target: "old".to_string(),
@@ -262,8 +262,8 @@ mod tests {
     #[test]
     fn test_replace_does_not_affect_other_files() {
         let conn = setup();
-        let (file_a, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
-        let (file_b, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        let (file_a, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
+        let (file_b, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
 
         replace_links(
             &conn,

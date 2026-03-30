@@ -7,8 +7,8 @@ pub mod queries;
 
 use serde::{Deserialize, Serialize};
 
-use brain_persistence::db::Db;
 use crate::error::Result;
+use brain_persistence::db::Db;
 use tracing;
 
 // -- Domain types --

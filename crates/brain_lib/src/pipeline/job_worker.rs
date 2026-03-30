@@ -14,10 +14,10 @@ use std::sync::Arc;
 use dashmap::DashSet;
 use tracing::{debug, warn};
 
-use brain_persistence::db::Db;
-use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload};
 use crate::embedder::Embed;
 use crate::ports::{JobPersistence, JobQueue};
+use brain_persistence::db::Db;
+use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload};
 use brain_persistence::store::Store;
 
 // ─── Active-job lock set ────────────────────────────────────────
@@ -404,9 +404,10 @@ async fn process_full_scan(
         return Ok(Some(r#"{"indexed":0,"skipped":0}"#.to_string()));
     }
 
-    let scan_pipeline =
+    let mut scan_pipeline =
         crate::pipeline::IndexPipeline::with_store(db.clone(), store.clone(), embedder.clone())
             .await?;
+    scan_pipeline.set_brain_id(brain_id.to_string());
 
     let stats = scan_pipeline.full_scan(&dirs).await?;
     // Compact fragments after scan.
@@ -586,7 +587,10 @@ mod tests {
             .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-ACTIVE"))
             .unwrap()
             .unwrap();
-        assert_eq!(job.status, brain_persistence::db::jobs::JobStatus::InProgress);
+        assert_eq!(
+            job.status,
+            brain_persistence::db::jobs::JobStatus::InProgress
+        );
     }
 
     #[test]
@@ -626,7 +630,10 @@ mod tests {
             .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-HELD"))
             .unwrap()
             .unwrap();
-        assert_eq!(held.status, brain_persistence::db::jobs::JobStatus::InProgress);
+        assert_eq!(
+            held.status,
+            brain_persistence::db::jobs::JobStatus::InProgress
+        );
 
         let freed = db
             .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-FREE"))

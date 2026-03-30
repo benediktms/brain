@@ -1,9 +1,9 @@
 use tracing::instrument;
 
 use crate::chunker::CHUNKER_VERSION;
+use crate::utils::content_hash;
 use brain_persistence::db::Db;
 use brain_persistence::db::files;
-use crate::utils::content_hash;
 
 /// Result of a hash gate check: should this file be (re-)indexed?
 pub struct GateVerdict {
@@ -27,12 +27,20 @@ impl<'a> HashGate<'a> {
 
     /// Resolve file identity (get_or_create) + compare stored hash with
     /// current content hash + check chunker version.
+    ///
+    /// `brain_id` is forwarded to `get_or_create_file_id` so new files are
+    /// stamped with the owning brain.
     #[instrument(skip_all)]
-    pub fn check(&self, path: &str, content: &str) -> crate::error::Result<GateVerdict> {
+    pub fn check(
+        &self,
+        path: &str,
+        content: &str,
+        brain_id: &str,
+    ) -> crate::error::Result<GateVerdict> {
         let hash = content_hash(content);
 
         let (file_id, should_index) = self.db.with_write_conn(|conn| {
-            let (file_id, _is_new) = files::get_or_create_file_id(conn, path)?;
+            let (file_id, _is_new) = files::get_or_create_file_id(conn, path, brain_id)?;
             let stored_hash = files::get_content_hash(conn, &file_id)?;
             let stored_version = files::get_chunker_version(conn, &file_id)?;
             let should_index = needs_reindex(stored_hash.as_deref(), content, stored_version);

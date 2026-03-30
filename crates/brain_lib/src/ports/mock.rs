@@ -456,7 +456,7 @@ impl MockFileMetaWriter {
 }
 
 impl FileMetaWriter for MockFileMetaWriter {
-    fn get_or_create_file_id(&self, path: &str) -> Result<(String, bool)> {
+    fn get_or_create_file_id(&self, path: &str, _brain_id: &str) -> Result<(String, bool)> {
         let mut files = self.files.lock().unwrap();
         if let Some(id) = files.get(path) {
             return Ok((id.clone(), false));
@@ -572,6 +572,7 @@ impl ChunkMetaWriter for MockChunkMetaWriter {
         &self,
         file_id: &str,
         chunks: &[brain_persistence::db::chunks::ChunkMeta],
+        _brain_id: &str,
     ) -> Result<()> {
         let hashes: Vec<String> = chunks.iter().map(|c| c.chunk_hash.clone()).collect();
         self.chunk_hashes
@@ -599,7 +600,12 @@ impl ChunkMetaWriter for MockChunkMetaWriter {
         Ok(())
     }
 
-    fn upsert_task_chunk(&self, task_file_id: &str, capsule_text: &str) -> Result<()> {
+    fn upsert_task_chunk(
+        &self,
+        task_file_id: &str,
+        capsule_text: &str,
+        _brain_id: &str,
+    ) -> Result<()> {
         self.task_chunks
             .lock()
             .unwrap()
@@ -607,7 +613,12 @@ impl ChunkMetaWriter for MockChunkMetaWriter {
         Ok(())
     }
 
-    fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()> {
+    fn upsert_record_chunk(
+        &self,
+        record_file_id: &str,
+        capsule_text: &str,
+        _brain_id: &str,
+    ) -> Result<()> {
         self.task_chunks
             .lock()
             .unwrap()
@@ -1232,10 +1243,10 @@ mod tests {
     fn mock_file_meta_writer_get_or_create() {
         let writer = MockFileMetaWriter::default();
 
-        let (id1, is_new1) = writer.get_or_create_file_id("/notes/a.md").unwrap();
+        let (id1, is_new1) = writer.get_or_create_file_id("/notes/a.md", "").unwrap();
         assert!(is_new1);
 
-        let (id2, is_new2) = writer.get_or_create_file_id("/notes/a.md").unwrap();
+        let (id2, is_new2) = writer.get_or_create_file_id("/notes/a.md", "").unwrap();
         assert!(!is_new2);
         assert_eq!(id1, id2);
     }
@@ -1244,7 +1255,7 @@ mod tests {
     fn mock_file_meta_writer_handle_delete() {
         let writer = MockFileMetaWriter::default();
 
-        let (file_id, _) = writer.get_or_create_file_id("/notes/a.md").unwrap();
+        let (file_id, _) = writer.get_or_create_file_id("/notes/a.md", "").unwrap();
         let deleted_id = writer.handle_delete("/notes/a.md").unwrap();
         assert_eq!(deleted_id, Some(file_id));
 
@@ -1257,7 +1268,7 @@ mod tests {
     fn mock_file_meta_writer_clear_all_content_hashes() {
         let writer = MockFileMetaWriter::default();
 
-        let (file_id, _) = writer.get_or_create_file_id("/notes/a.md").unwrap();
+        let (file_id, _) = writer.get_or_create_file_id("/notes/a.md", "").unwrap();
         writer.mark_indexed(&file_id, "hash123", 1).unwrap();
 
         let count = writer.clear_all_content_hashes().unwrap();
@@ -1295,7 +1306,9 @@ mod tests {
                 token_estimate: 1,
             },
         ];
-        writer.replace_chunk_metadata("file-1", &chunks).unwrap();
+        writer
+            .replace_chunk_metadata("file-1", &chunks, "")
+            .unwrap();
 
         let hashes = writer.get_chunk_hashes("file-1").unwrap();
         assert_eq!(hashes, vec!["hash-a", "hash-b"]);

@@ -14,9 +14,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use brain_persistence::db::Db;
 use brain_lib::embedder::MockEmbedder;
 use brain_lib::prelude::*;
+use brain_persistence::db::Db;
 use tempfile::TempDir;
 
 // ─── Helpers ─────────────────────────────────────────────────────

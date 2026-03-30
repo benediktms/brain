@@ -8,8 +8,8 @@ use brain_lib::mcp::tools::ToolRegistry;
 use brain_lib::metrics::Metrics;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::search_service::SearchService;
-use brain_persistence::store::{Store, StoreReader};
 use brain_lib::stores::BrainStores;
+use brain_persistence::store::{Store, StoreReader};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

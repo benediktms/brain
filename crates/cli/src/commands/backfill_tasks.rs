@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use brain_lib::db::Db;
 use brain_lib::prelude::*;
+use brain_persistence::db::Db;
 
 /// Backfill task capsule embeddings into the vector store for tasks
 /// that were created before the automatic embedding feature.
@@ -91,6 +91,7 @@ pub async fn run(
                 labels: &labels,
                 priority: task.priority,
             },
+            "", // brain_id not on TaskRow; ON CONFLICT DO UPDATE self-heals via embed_poll
         )
         .await
         {
@@ -110,6 +111,7 @@ pub async fn run(
                 &task.task_id,
                 &task.title,
                 None,
+                "", // brain_id not on TaskRow; ON CONFLICT DO UPDATE self-heals via embed_poll
             )
             .await
             {

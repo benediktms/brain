@@ -8,9 +8,9 @@
 //! Per-brain jobs (full_scan_sweep, embed_poll_sweep) have one row per brain,
 //! disambiguated by `brain_id` in the payload.
 
-use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload, RetryStrategy};
 use crate::error::Result;
 use crate::ports::JobQueue;
+use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload, RetryStrategy};
 
 /// Specification for a recurring singleton job.
 pub struct RecurringJobSpec {

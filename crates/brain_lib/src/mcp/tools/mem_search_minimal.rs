@@ -130,6 +130,16 @@ impl McpTool for MemSearchMinimal {
                 None => VectorSearchMode::default(),
             };
 
+            // Single-brain: scope FTS to the current brain.
+            // Federated: leave brain_ids=None — each brain's FTS runs globally
+            // and deduplication handles overlap (per-brain scoping needs
+            // FederatedPipeline refactor, tracked as follow-up).
+            let current_brain_ids = vec![ctx.brain_id().to_string()];
+            let fts_brain_ids: Option<&[String]> = if params.brains.is_empty() {
+                Some(&current_brain_ids)
+            } else {
+                None
+            };
             let search_params = SearchParams::new(
                 &params.query,
                 &params.intent,
@@ -137,7 +147,8 @@ impl McpTool for MemSearchMinimal {
                 params.k as usize,
                 &params.tags,
             )
-            .with_mode(mode);
+            .with_mode(mode)
+            .with_brain_ids(fts_brain_ids);
 
             let search_result = if params.brains.is_empty() {
                 // Single-brain path.
@@ -604,10 +615,10 @@ mod tests {
 
         use tempfile::TempDir;
 
-        use brain_persistence::db::Db;
         use crate::embedder::{Embed, MockEmbedder};
         use crate::mcp::McpContext;
         use crate::pipeline::IndexPipeline;
+        use brain_persistence::db::Db;
         use brain_persistence::store::Store;
 
         // Build a fully-indexed context so we get actual results back.

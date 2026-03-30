@@ -384,7 +384,9 @@ impl FtsSearcher for Db {
 /// `pipeline::maintenance`.
 pub trait FileMetaWriter: Send + Sync {
     /// Get or create a file record for the given path. Returns `(file_id, is_new)`.
-    fn get_or_create_file_id(&self, path: &str) -> Result<(String, bool)>;
+    /// When `brain_id` is non-empty, it is set on new files and used to match
+    /// existing files (for multi-brain scoping).
+    fn get_or_create_file_id(&self, path: &str, brain_id: &str) -> Result<(String, bool)>;
 
     /// Soft-delete a file by path. Returns the `file_id` if found.
     fn handle_delete(&self, path: &str) -> Result<Option<String>>;
@@ -419,10 +421,11 @@ pub trait FileMetaWriter: Send + Sync {
 // -- FileMetaWriter for Db -------------------------------------------------
 
 impl FileMetaWriter for Db {
-    fn get_or_create_file_id(&self, path: &str) -> Result<(String, bool)> {
+    fn get_or_create_file_id(&self, path: &str, brain_id: &str) -> Result<(String, bool)> {
         let path = path.to_string();
+        let brain_id = brain_id.to_string();
         self.with_write_conn(move |conn| {
-            brain_persistence::db::files::get_or_create_file_id(conn, &path)
+            brain_persistence::db::files::get_or_create_file_id(conn, &path, &brain_id)
         })
     }
 
@@ -502,10 +505,12 @@ impl FileMetaWriter for Db {
 pub trait ChunkMetaWriter: Send + Sync {
     /// Replace all chunk metadata for a file in a single transaction.
     /// Deletes existing chunks for `file_id` and inserts new ones.
+    /// When `brain_id` is non-empty, it is set on all inserted chunks.
     fn replace_chunk_metadata(
         &self,
         file_id: &str,
         chunks: &[brain_persistence::db::chunks::ChunkMeta],
+        brain_id: &str,
     ) -> Result<()>;
 
     /// Get ordered chunk hashes for a file (by `chunk_ord`).
@@ -515,10 +520,22 @@ pub trait ChunkMetaWriter: Send + Sync {
     fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()>;
 
     /// Upsert a task capsule chunk into SQLite (creates synthetic `files` row if needed).
-    fn upsert_task_chunk(&self, task_file_id: &str, capsule_text: &str) -> Result<()>;
+    /// When `brain_id` is non-empty, it is set on both the files row and chunk.
+    fn upsert_task_chunk(
+        &self,
+        task_file_id: &str,
+        capsule_text: &str,
+        brain_id: &str,
+    ) -> Result<()>;
 
     /// Upsert a record capsule chunk into SQLite (creates synthetic `files` row if needed).
-    fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()>;
+    /// When `brain_id` is non-empty, it is set on both the files row and chunk.
+    fn upsert_record_chunk(
+        &self,
+        record_file_id: &str,
+        capsule_text: &str,
+        brain_id: &str,
+    ) -> Result<()>;
 }
 
 // -- ChunkMetaWriter for Db ------------------------------------------------
@@ -528,12 +545,13 @@ impl ChunkMetaWriter for Db {
         &self,
         file_id: &str,
         chunks: &[brain_persistence::db::chunks::ChunkMeta],
+        brain_id: &str,
     ) -> Result<()> {
         // ChunkMeta is not Clone/Send, so we must call within the closure directly.
         // Caller must ensure chunks slice lifetime covers the closure.
         // We delegate via with_write_conn using a shared reference approach.
         self.with_write_conn(|conn| {
-            brain_persistence::db::chunks::replace_chunk_metadata(conn, file_id, chunks)
+            brain_persistence::db::chunks::replace_chunk_metadata(conn, file_id, chunks, brain_id)
         })
     }
 
@@ -552,19 +570,41 @@ impl ChunkMetaWriter for Db {
         })
     }
 
-    fn upsert_task_chunk(&self, task_file_id: &str, capsule_text: &str) -> Result<()> {
+    fn upsert_task_chunk(
+        &self,
+        task_file_id: &str,
+        capsule_text: &str,
+        brain_id: &str,
+    ) -> Result<()> {
         let task_file_id = task_file_id.to_string();
         let capsule_text = capsule_text.to_string();
+        let brain_id = brain_id.to_string();
         self.with_write_conn(move |conn| {
-            brain_persistence::db::chunks::upsert_task_chunk(conn, &task_file_id, &capsule_text)
+            brain_persistence::db::chunks::upsert_task_chunk(
+                conn,
+                &task_file_id,
+                &capsule_text,
+                &brain_id,
+            )
         })
     }
 
-    fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()> {
+    fn upsert_record_chunk(
+        &self,
+        record_file_id: &str,
+        capsule_text: &str,
+        brain_id: &str,
+    ) -> Result<()> {
         let record_file_id = record_file_id.to_string();
         let capsule_text = capsule_text.to_string();
+        let brain_id = brain_id.to_string();
         self.with_write_conn(move |conn| {
-            brain_persistence::db::chunks::upsert_record_chunk(conn, &record_file_id, &capsule_text)
+            brain_persistence::db::chunks::upsert_record_chunk(
+                conn,
+                &record_file_id,
+                &capsule_text,
+                &brain_id,
+            )
         })
     }
 }

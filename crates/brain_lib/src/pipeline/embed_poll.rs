@@ -9,16 +9,16 @@ use std::sync::Arc;
 
 use tracing::{debug, info, warn};
 
-use brain_persistence::db::Db;
-use brain_persistence::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
-use brain_persistence::db::summaries::{
-    SummaryPollRow, find_stale_summaries_for_embedding, mark_summaries_embedded,
-};
 use crate::embedder::{Embed, embed_batch_async};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
 use crate::tasks::queries::{TaskPollRow, find_stale_tasks_for_embedding, get_labels_for_tasks};
+use brain_persistence::db::Db;
+use brain_persistence::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
+use brain_persistence::db::summaries::{
+    SummaryPollRow, find_stale_summaries_for_embedding, mark_summaries_embedded,
+};
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 
@@ -148,7 +148,7 @@ pub async fn poll_stale_tasks(
         }
 
         // SQLite FTS upsert via ChunkMetaWriter port
-        if let Err(e) = db.upsert_task_chunk(&entry.file_id, &entry.capsule_text) {
+        if let Err(e) = db.upsert_task_chunk(&entry.file_id, &entry.capsule_text, brain_id) {
             warn!(
                 task_id = %entry.task_id,
                 file_id = %entry.file_id,
@@ -303,7 +303,10 @@ pub async fn poll_stale_records(
     // ── 1. Fetch stale record rows ───────────────────────────────────────
     let brain_id_owned = brain_id.to_string();
     let rows = match db.with_read_conn(move |conn| {
-        brain_persistence::db::records::queries::find_stale_records_for_embedding(conn, &brain_id_owned)
+        brain_persistence::db::records::queries::find_stale_records_for_embedding(
+            conn,
+            &brain_id_owned,
+        )
     }) {
         Ok(r) => r,
         Err(e) => {
@@ -393,7 +396,7 @@ pub async fn poll_stale_records(
         }
 
         // SQLite FTS upsert via ChunkMetaWriter port
-        if let Err(e) = db.upsert_record_chunk(&entry.file_id, &entry.capsule_text) {
+        if let Err(e) = db.upsert_record_chunk(&entry.file_id, &entry.capsule_text, brain_id) {
             warn!(
                 record_id = %entry.record_id,
                 file_id = %entry.file_id,

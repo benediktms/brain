@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use anyhow::Result;
-use brain_lib::db::job::JobStatus;
 use brain_lib::ports::JobQueue;
 use brain_lib::stores::BrainStores;
+use brain_persistence::db::job::JobStatus;
 
 pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Result<()> {
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
@@ -108,7 +108,7 @@ pub fn run_retry(sqlite_db: &Path, lance_db: Option<&Path>, job_id: &str) -> Res
     let db = stores.db();
 
     let job = db
-        .with_read_conn(|conn| brain_lib::db::jobs::get_job(conn, job_id))
+        .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, job_id))
         .map_err(|e| anyhow::anyhow!("failed to get job: {e}"))?
         .ok_or_else(|| anyhow::anyhow!("job not found: {job_id}"))?;
 

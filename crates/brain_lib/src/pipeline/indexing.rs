@@ -3,13 +3,13 @@ use std::path::Path;
 use tracing::{info, instrument, warn};
 
 use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
-use brain_persistence::db::chunks::{ChunkMeta, replace_chunk_metadata};
-use brain_persistence::db::links::replace_links;
 use crate::hash_gate::HashGate;
 use crate::links::{Link, extract_links};
 use crate::parser::parse_document;
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, SchemaMeta};
 use crate::utils::now_ts;
+use brain_persistence::db::chunks::{ChunkMeta, replace_chunk_metadata};
+use brain_persistence::db::links::replace_links;
 
 use super::{IndexPipeline, ScanStats};
 
@@ -89,7 +89,7 @@ where
         let path_str = path.to_string_lossy().to_string();
 
         let gate = HashGate::new(&self.db);
-        let verdict = gate.check(&path_str, &content)?;
+        let verdict = gate.check(&path_str, &content, &self.brain_id)?;
         if !verdict.should_index {
             self.metrics.record_stale_hash_prevented();
             return Ok(false);
@@ -106,7 +106,7 @@ where
             // Empty file — clear any existing chunks and links
             self.store.delete_file_chunks(&verdict.file_id).await?;
             self.db.with_write_conn(|conn| {
-                replace_chunk_metadata(conn, &verdict.file_id, &[])?;
+                replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                 replace_links(conn, &verdict.file_id, &[])?;
                 Ok(())
             })?;
@@ -119,7 +119,7 @@ where
 
         let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
         self.db.with_write_conn(|conn| {
-            replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
+            replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas, &self.brain_id)?;
             replace_links(conn, &verdict.file_id, &links)?;
             Ok(())
         })?;
@@ -189,7 +189,7 @@ where
 
             let path_str = path.to_string_lossy().to_string();
 
-            let verdict = match gate.check(&path_str, &content) {
+            let verdict = match gate.check(&path_str, &content, &self.brain_id) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "hash gate error in batch");
@@ -217,7 +217,7 @@ where
             if chunks.is_empty() {
                 self.store.delete_file_chunks(&verdict.file_id).await?;
                 self.db.with_write_conn(|conn| {
-                    replace_chunk_metadata(conn, &verdict.file_id, &[])?;
+                    replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                     replace_links(conn, &verdict.file_id, &[])?;
                     Ok(())
                 })?;
@@ -233,7 +233,7 @@ where
                 let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
                 let ts = now_ts();
                 self.db.with_write_conn(|conn| {
-                    replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas)?;
+                    replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas, &self.brain_id)?;
                     replace_links(conn, &verdict.file_id, &links)?;
                     let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
                     brain_persistence::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
@@ -322,7 +322,7 @@ where
 
             match async {
                 self.db.with_write_conn(|conn| {
-                    replace_chunk_metadata(conn, file_id, &chunk_metas)?;
+                    replace_chunk_metadata(conn, file_id, &chunk_metas, &self.brain_id)?;
                     replace_links(conn, file_id, links)?;
                     Ok(())
                 })?;

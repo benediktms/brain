@@ -37,6 +37,18 @@ pub fn migrate_v36_to_v37(conn: &Connection) -> Result<()> {
          );",
     )?;
 
+    // -- Backfill synthetic task-outcome files --------------------------------
+    conn.execute_batch(
+        "UPDATE files SET brain_id = (
+             SELECT t.brain_id FROM tasks t
+             WHERE files.file_id = 'task-outcome:' || t.task_id
+         )
+         WHERE file_id LIKE 'task-outcome:%' AND brain_id = ''
+           AND EXISTS (
+             SELECT 1 FROM tasks t WHERE files.file_id = 'task-outcome:' || t.task_id
+         );",
+    )?;
+
     // -- Backfill synthetic record files -------------------------------------
     conn.execute_batch(
         "UPDATE files SET brain_id = (
@@ -331,6 +343,42 @@ mod tests {
         let brain: String = conn
             .query_row(
                 "SELECT brain_id FROM files WHERE file_id = 'task:PR-01ABC'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(brain, "bid-1");
+    }
+
+    #[test]
+    fn test_backfill_synthetic_task_outcome_files() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_v36(&conn);
+
+        conn.execute(
+            "INSERT INTO brains (brain_id, name, prefix) VALUES ('bid-1', 'proj', 'PR')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
+             VALUES ('PR-01ABC', 'bid-1', 'Done task', 'done', 2, 'task', 1000, 1000)",
+            [],
+        )
+        .unwrap();
+
+        // Synthetic outcome file for that task.
+        conn.execute(
+            "INSERT INTO files (file_id, path) VALUES ('task-outcome:PR-01ABC', 'task-outcome:PR-01ABC')",
+            [],
+        )
+        .unwrap();
+
+        migrate_v36_to_v37(&conn).unwrap();
+
+        let brain: String = conn
+            .query_row(
+                "SELECT brain_id FROM files WHERE file_id = 'task-outcome:PR-01ABC'",
                 [],
                 |row| row.get(0),
             )

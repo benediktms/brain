@@ -17,10 +17,12 @@ pub struct ChunkMeta {
 
 /// Replace all chunk metadata for a file in a single transaction.
 /// Deletes existing chunks for the file_id and inserts new ones.
+/// When `brain_id` is non-empty, it is set on all inserted chunks.
 pub fn replace_chunk_metadata(
     conn: &Connection,
     file_id: &str,
     chunks: &[ChunkMeta],
+    brain_id: &str,
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
@@ -28,8 +30,8 @@ pub fn replace_chunk_metadata(
 
     let mut stmt = tx.prepare_cached(
         "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, chunker_version,
-                             content, heading_path, byte_start, byte_end, token_estimate)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                             content, heading_path, byte_start, byte_end, token_estimate, brain_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?;
 
     for chunk in chunks {
@@ -44,6 +46,7 @@ pub fn replace_chunk_metadata(
             chunk.byte_start as i64,
             chunk.byte_end as i64,
             chunk.token_estimate as i64,
+            brain_id,
         ])?;
     }
 
@@ -157,15 +160,19 @@ pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<
 /// Creates a synthetic `files` row if needed (with path = file_id),
 /// then replaces the chunk metadata. This ensures task capsule chunks
 /// are found by both FTS5 and the enrichment JOIN in get_chunks_by_ids.
+/// When `brain_id` is non-empty, it is set on both the files row and chunk.
 pub fn upsert_task_chunk(
     conn: &Connection,
     task_file_id: &str, // e.g. "task:BRN-01KK" or "task-outcome:BRN-01KK"
     capsule_text: &str,
+    brain_id: &str,
 ) -> Result<()> {
-    // Ensure a synthetic files row exists
+    // Ensure a synthetic files row exists; update brain_id if currently empty.
     conn.execute(
-        "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?1, 'idle')",
-        [task_file_id],
+        "INSERT INTO files (file_id, path, indexing_state, brain_id) VALUES (?1, ?1, 'idle', ?2)
+         ON CONFLICT(file_id) DO UPDATE SET brain_id = excluded.brain_id
+         WHERE files.brain_id = '' AND excluded.brain_id != ''",
+        rusqlite::params![task_file_id, brain_id],
     )?;
     // Update last_indexed_at for recency signal
     conn.execute(
@@ -176,13 +183,14 @@ pub fn upsert_task_chunk(
     conn.execute("DELETE FROM chunks WHERE file_id = ?1", [task_file_id])?;
     let chunk_id = format!("{task_file_id}:0");
     conn.execute(
-        "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate)
-         VALUES (?1, ?2, 0, '', ?3, '', 0, 0, ?4)",
+        "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate, brain_id)
+         VALUES (?1, ?2, 0, '', ?3, '', 0, 0, ?4, ?5)",
         rusqlite::params![
             chunk_id,
             task_file_id,
             capsule_text,
             crate::tokens::estimate_tokens(capsule_text) as i64,
+            brain_id,
         ],
     )?;
     Ok(())
@@ -193,15 +201,19 @@ pub fn upsert_task_chunk(
 /// Creates a synthetic `files` row if needed (with path = file_id),
 /// then replaces the chunk metadata. This ensures record capsule chunks
 /// are found by both FTS5 and the enrichment JOIN in get_chunks_by_ids.
+/// When `brain_id` is non-empty, it is set on both the files row and chunk.
 pub fn upsert_record_chunk(
     conn: &Connection,
     record_file_id: &str, // e.g. "record:BRN-01ABC"
     capsule_text: &str,
+    brain_id: &str,
 ) -> Result<()> {
-    // Ensure a synthetic files row exists
+    // Ensure a synthetic files row exists; update brain_id if currently empty.
     conn.execute(
-        "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?1, 'idle')",
-        [record_file_id],
+        "INSERT INTO files (file_id, path, indexing_state, brain_id) VALUES (?1, ?1, 'idle', ?2)
+         ON CONFLICT(file_id) DO UPDATE SET brain_id = excluded.brain_id
+         WHERE files.brain_id = '' AND excluded.brain_id != ''",
+        rusqlite::params![record_file_id, brain_id],
     )?;
     // Update last_indexed_at for recency signal
     conn.execute(
@@ -212,13 +224,14 @@ pub fn upsert_record_chunk(
     conn.execute("DELETE FROM chunks WHERE file_id = ?1", [record_file_id])?;
     let chunk_id = format!("{record_file_id}:0");
     conn.execute(
-        "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate)
-         VALUES (?1, ?2, 0, '', ?3, '', 0, 0, ?4)",
+        "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate, brain_id)
+         VALUES (?1, ?2, 0, '', ?3, '', 0, 0, ?4, ?5)",
         rusqlite::params![
             chunk_id,
             record_file_id,
             capsule_text,
             crate::tokens::estimate_tokens(capsule_text) as i64,
+            brain_id,
         ],
     )?;
     Ok(())
@@ -287,14 +300,14 @@ mod tests {
     #[test]
     fn test_replace_chunk_metadata() {
         let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md").unwrap();
+        let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
 
         let chunks = vec![
             ChunkMeta::test(&format!("{file_id}:0"), 0, "hash0"),
             ChunkMeta::test(&format!("{file_id}:1"), 1, "hash1"),
         ];
 
-        replace_chunk_metadata(&conn, &file_id, &chunks).unwrap();
+        replace_chunk_metadata(&conn, &file_id, &chunks, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -307,7 +320,7 @@ mod tests {
 
         // Replace with fewer chunks
         let chunks2 = vec![ChunkMeta::test(&format!("{file_id}:0"), 0, "newhash")];
-        replace_chunk_metadata(&conn, &file_id, &chunks2).unwrap();
+        replace_chunk_metadata(&conn, &file_id, &chunks2, "").unwrap();
 
         let count: i64 = conn
             .query_row(
@@ -322,24 +335,26 @@ mod tests {
     #[test]
     fn test_replace_does_not_affect_other_files() {
         let conn = setup();
-        let (file_a, _) = get_or_create_file_id(&conn, "/notes/a.md").unwrap();
-        let (file_b, _) = get_or_create_file_id(&conn, "/notes/b.md").unwrap();
+        let (file_a, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
+        let (file_b, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
 
         replace_chunk_metadata(
             &conn,
             &file_a,
             &[ChunkMeta::test(&format!("{file_a}:0"), 0, "ha")],
+            "",
         )
         .unwrap();
         replace_chunk_metadata(
             &conn,
             &file_b,
             &[ChunkMeta::test(&format!("{file_b}:0"), 0, "hb")],
+            "",
         )
         .unwrap();
 
         // Replace A's chunks
-        replace_chunk_metadata(&conn, &file_a, &[]).unwrap();
+        replace_chunk_metadata(&conn, &file_a, &[], "").unwrap();
 
         // B's chunks still intact
         let count: i64 = conn

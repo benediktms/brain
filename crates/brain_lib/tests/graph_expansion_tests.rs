@@ -27,11 +27,11 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use brain_persistence::db::Db;
 use brain_lib::embedder::{Embed, MockEmbedder};
 use brain_lib::metrics::Metrics;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
+use brain_persistence::db::Db;
 use brain_persistence::store::{Store, StoreReader, VectorSearchMode};
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

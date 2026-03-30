@@ -14,7 +14,6 @@
 use std::fs::OpenOptions;
 use std::io::Write as IoWrite;
 
-use brain_persistence::db::Db;
 use brain_lib::records::events::{
     ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
     RecordEventType, RecordUpdatedPayload, TagPayload, append_event, new_record_id,
@@ -23,6 +22,7 @@ use brain_lib::records::events::{
 use brain_lib::records::objects::ObjectStore;
 use brain_lib::records::projections::{apply_event, rebuild};
 use brain_lib::records::{RecordStatus, RecordStore};
+use brain_persistence::db::Db;
 use tempfile::TempDir;
 
 // ─── Helpers ─────────────────────────────────────────────────────

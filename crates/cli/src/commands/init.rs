@@ -4,7 +4,7 @@ use brain_lib::config::{
     load_brain_toml, load_global_config, paths::normalize_note_paths, save_brain_toml,
     save_global_config,
 };
-use brain_lib::db::schema::BrainUpsert;
+use brain_persistence::db::schema::BrainUpsert;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
                 // Update DB (source of truth) with the new root.
                 let home = brain_home()?;
                 let db_path = home.join("brain.db");
-                let db = brain_lib::db::Db::open(&db_path)?;
+                let db = brain_persistence::db::Db::open(&db_path)?;
                 if let Ok(Some(brain_row)) = db.get_brain(local_id) {
                     let mut roots: Vec<std::path::PathBuf> = brain_row
                         .roots_json
@@ -182,8 +182,8 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     let db_path = home.join("brain.db");
     seed_project_prefix_if_missing(&db_path, &brain_name)?;
     {
-        let db = brain_lib::db::Db::open(&db_path)?;
-        let prefix = brain_lib::db::meta::generate_prefix(&brain_name);
+        let db = brain_persistence::db::Db::open(&db_path)?;
+        let prefix = brain_persistence::db::meta::generate_prefix(&brain_name);
         let roots_json = serde_json::to_string(&vec![&cwd])?;
         let notes_json = serde_json::to_string(&abs_notes)?;
         let aliases_json = "[]".to_string();
@@ -255,7 +255,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
 /// as warnings — init should not fail due to import issues.
 fn import_project_jsonl(db_path: &Path, brain_id: &str, jsonl_path: &Path) {
     let result = (|| -> Result<usize> {
-        let db = brain_lib::db::Db::open(db_path)?;
+        let db = brain_persistence::db::Db::open(db_path)?;
         let store = brain_lib::tasks::TaskStore::with_brain_id(db, brain_id, brain_id)?;
         Ok(store.import_from_jsonl(jsonl_path)?)
     })();
@@ -275,11 +275,11 @@ fn import_project_jsonl(db_path: &Path, brain_id: &str, jsonl_path: &Path) {
 }
 
 fn seed_project_prefix_if_missing(db_path: &Path, seed_name: &str) -> Result<()> {
-    let db = brain_lib::db::Db::open(db_path)?;
+    let db = brain_persistence::db::Db::open(db_path)?;
     db.with_write_conn(|conn| {
-        if brain_lib::db::meta::get_meta(conn, "project_prefix")?.is_none() {
-            let prefix = brain_lib::db::meta::generate_prefix(seed_name);
-            brain_lib::db::meta::set_meta(conn, "project_prefix", &prefix)?;
+        if brain_persistence::db::meta::get_meta(conn, "project_prefix")?.is_none() {
+            let prefix = brain_persistence::db::meta::generate_prefix(seed_name);
+            brain_persistence::db::meta::set_meta(conn, "project_prefix", &prefix)?;
         }
         Ok(())
     })?;
@@ -916,9 +916,9 @@ mod tests {
         let db_path = dir.path().join("brain.db");
         seed_project_prefix_if_missing(&db_path, "my-cool_project 2026").unwrap();
 
-        let db = brain_lib::db::Db::open(&db_path).unwrap();
+        let db = brain_persistence::db::Db::open(&db_path).unwrap();
         let stored = db
-            .with_read_conn(|conn| brain_lib::db::meta::get_meta(conn, "project_prefix"))
+            .with_read_conn(|conn| brain_persistence::db::meta::get_meta(conn, "project_prefix"))
             .unwrap()
             .unwrap();
         assert_eq!(stored, "MCP");
@@ -930,14 +930,16 @@ mod tests {
         let db_path = dir.path().join("brain.db");
         seed_project_prefix_if_missing(&db_path, "alpha-service").unwrap();
 
-        let db = brain_lib::db::Db::open(&db_path).unwrap();
-        db.with_write_conn(|conn| brain_lib::db::meta::set_meta(conn, "project_prefix", "XYZ"))
-            .unwrap();
+        let db = brain_persistence::db::Db::open(&db_path).unwrap();
+        db.with_write_conn(|conn| {
+            brain_persistence::db::meta::set_meta(conn, "project_prefix", "XYZ")
+        })
+        .unwrap();
 
         seed_project_prefix_if_missing(&db_path, "beta-service").unwrap();
 
         let stored = db
-            .with_read_conn(|conn| brain_lib::db::meta::get_meta(conn, "project_prefix"))
+            .with_read_conn(|conn| brain_persistence::db::meta::get_meta(conn, "project_prefix"))
             .unwrap()
             .unwrap();
         assert_eq!(stored, "XYZ");

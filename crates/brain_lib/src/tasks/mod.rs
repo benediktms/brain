@@ -8,8 +8,8 @@ pub mod queries;
 
 use std::collections::HashMap;
 
-use brain_persistence::db::Db;
 use crate::error::Result;
+use brain_persistence::db::Db;
 
 use events::TaskEvent;
 

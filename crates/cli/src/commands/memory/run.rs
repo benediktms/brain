@@ -5,16 +5,16 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use brain_lib::db::summaries::Episode;
 use brain_lib::embedder::{Embed, Embedder, embed_batch_async};
 use brain_lib::metrics::Metrics;
 use brain_lib::ports::{EpisodeReader, EpisodeWriter, ReflectionWriter};
 use brain_lib::prelude::*;
 use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
 use brain_lib::search_service::SearchService;
-use brain_lib::store::StoreReader;
 use brain_lib::stores::BrainStores;
 use brain_lib::uri::SynapseUri;
+use brain_persistence::db::summaries::Episode;
+use brain_persistence::store::StoreReader;
 
 use crate::markdown_table::MarkdownTable;
 

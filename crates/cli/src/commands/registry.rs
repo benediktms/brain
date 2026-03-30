@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use brain_lib::config::{brain_home, load_global_config, save_global_config};
-use brain_lib::db::Db;
+use brain_persistence::db::Db;
 
 /// List all registered brains.
 pub fn run_list(db_path: &Path, json: bool, all: bool, archived_only: bool) -> Result<()> {
@@ -98,7 +98,7 @@ pub fn run_list(db_path: &Path, json: bool, all: bool, archived_only: bool) -> R
 pub fn run_remove(name: &str, purge: bool) -> Result<()> {
     // Delete from DB (source of truth).
     let home = brain_home()?;
-    let db = brain_lib::db::Db::open(&home.join("brain.db"))?;
+    let db = brain_persistence::db::Db::open(&home.join("brain.db"))?;
     let deleted = db.delete_brain(name).map_err(|e| anyhow::anyhow!("{e}"))?;
     if !deleted {
         anyhow::bail!("brain \"{name}\" is not registered");

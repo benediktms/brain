@@ -164,7 +164,7 @@ mod tests {
         let capsule_text = "This is the record capsule content for expand test.";
         ctx.stores
             .db()
-            .upsert_record_chunk(record_file_id, capsule_text)
+            .upsert_record_chunk(record_file_id, capsule_text, "")
             .expect("upsert_record_chunk must succeed");
 
         let chunk_id = format!("{record_file_id}:0");

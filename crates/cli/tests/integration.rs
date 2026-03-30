@@ -655,7 +655,7 @@ fn tasks_route_through_unified_db() {
 
     // Create the unified DB (brain init may not create it)
     if !unified_db.exists() {
-        brain_lib::db::Db::open(&unified_db).unwrap();
+        brain_persistence::db::Db::open(&unified_db).unwrap();
     }
 
     // Create a task — should route to unified DB
@@ -687,7 +687,7 @@ fn snapshots_list_routes_through_unified_db() {
     let unified_db = home.path().join("brain.db");
 
     if !unified_db.exists() {
-        brain_lib::db::Db::open(&unified_db).unwrap();
+        brain_persistence::db::Db::open(&unified_db).unwrap();
     }
 
     brain_cmd()
@@ -708,7 +708,7 @@ fn artifacts_list_routes_through_unified_db() {
     let unified_db = home.path().join("brain.db");
 
     if !unified_db.exists() {
-        brain_lib::db::Db::open(&unified_db).unwrap();
+        brain_persistence::db::Db::open(&unified_db).unwrap();
     }
 
     brain_cmd()

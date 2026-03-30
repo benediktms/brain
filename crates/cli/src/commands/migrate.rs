@@ -146,7 +146,7 @@ pub fn run(args: MigrateArgs) -> Result<()> {
     // ── Execute migration ──────────────────────────────────────────────────
 
     // Ensure unified DB exists with full schema.
-    let db = brain_lib::db::Db::open(&unified_db_path).with_context(|| {
+    let db = brain_persistence::db::Db::open(&unified_db_path).with_context(|| {
         format!(
             "failed to initialise unified DB at {}",
             unified_db_path.display()
@@ -301,7 +301,7 @@ fn collect_jsonl_paths(
 ///
 /// Idempotent: events that already exist are skipped.
 fn migrate_one_brain(
-    db: &brain_lib::db::Db,
+    db: &brain_persistence::db::Db,
     brain_id: &str,
     name: &str,
     jsonl: &JsonlPaths,
@@ -476,9 +476,9 @@ fn migrate_one_objects_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brain_lib::db::Db;
     use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
     use brain_lib::tasks::events::TaskCreatedPayload;
+    use brain_persistence::db::Db;
 
     /// Write task events to a JSONL file and migrate via JSONL replay.
     #[test]
