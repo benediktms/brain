@@ -191,6 +191,31 @@ impl OptimizeScheduler {
         self.run_optimize(guard).await;
     }
 
+    /// Run compaction unconditionally — ignores the `pending_mutations` counter.
+    ///
+    /// Use at daemon startup to compact historical fragment debt from previous
+    /// runs. The pending counter starts at 0 on restart, so `force_optimize`
+    /// and `maybe_optimize` would never trigger for pre-existing fragments.
+    pub async fn startup_compact(&self) {
+        let mut last_optimize = self.guard.lock().await;
+        info!("running startup compaction");
+        match self.table.optimize(OptimizeAction::All).await {
+            Ok(stats) => {
+                // Reset pending counter — startup compact subsumes any early mutations.
+                self.pending_mutations.store(0, Ordering::Relaxed);
+                *last_optimize = Instant::now();
+                info!(
+                    compaction = ?stats.compaction.as_ref().map(|c| c.fragments_removed),
+                    pruned = ?stats.prune.as_ref().map(|p| p.bytes_removed),
+                    "startup compaction complete"
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "startup compaction failed, will retry via normal optimize");
+            }
+        }
+    }
+
     /// Check whether either trigger threshold has been reached.
     fn should_run(&self, pending: u64, last_optimize: &Instant) -> bool {
         if pending == 0 {

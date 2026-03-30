@@ -829,6 +829,9 @@ async fn init_brain_instance(
     // Open or create the LanceDB store
     let store = Store::open_or_create(&paths.lance_db).await?;
 
+    // Compact historical fragment debt from previous daemon runs.
+    store.optimizer().startup_compact().await;
+
     // Create the pipeline with the shared embedder
     let mut pipeline = IndexPipeline::with_embedder(db, store, embedder).await?;
 
