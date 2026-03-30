@@ -146,14 +146,14 @@ async fn test_file_deletion_removes_from_index() {
     // Delete the file
     std::fs::remove_file(&path).unwrap();
 
-    // Re-scan — full_scan no longer detects deletions (cross-brain safety:
-    // deletion is handled by the file watcher or explicit handle_delete).
-    // Deletion stats are 0; the file remains in SQLite until explicitly deleted.
+    // Re-scan — full_scan detects files in the DB that are no longer present
+    // in the scan results (deleted from disk, excluded by .gitignore, etc.)
+    // and soft-deletes them.
     let stats = pipeline
         .full_scan(std::slice::from_ref(&notes_dir))
         .await
         .unwrap();
-    assert_eq!(stats.deleted, 0);
+    assert_eq!(stats.deleted, 1);
     assert_eq!(stats.indexed, 0);
 }
 

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use tracing::{info, instrument, warn};
@@ -54,6 +55,29 @@ where
         stats.indexed += batch_stats.indexed;
         stats.skipped += batch_stats.skipped;
         stats.errors += batch_stats.errors;
+
+        // 5. Soft-delete DB files not found in scan results.
+        // This catches files that were previously indexed but are now excluded
+        // by .gitignore, deleted from disk, or outside the configured roots.
+        let scanned_set: HashSet<String> = scanned_files
+            .iter()
+            .map(|f| f.path.to_string_lossy().to_string())
+            .collect();
+
+        let active_db_files = self.db.get_all_active_paths()?;
+        for (file_id, db_path) in &active_db_files {
+            if !scanned_set.contains(db_path.as_str()) {
+                if let Err(e) = self.db.handle_delete(db_path) {
+                    warn!(path = %db_path, error = %e, "failed to soft-delete stale file");
+                } else {
+                    // Also remove from LanceDB immediately
+                    if let Err(e) = self.store.delete_file_chunks(file_id).await {
+                        warn!(file_id = %file_id, error = %e, "failed to delete LanceDB chunks for stale file");
+                    }
+                    stats.deleted += 1;
+                }
+            }
+        }
 
         let elapsed = start.elapsed();
         info!(
