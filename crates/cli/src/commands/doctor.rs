@@ -10,7 +10,16 @@ pub async fn run(
     db_path: PathBuf,
     sqlite_path: PathBuf,
 ) -> Result<()> {
-    let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let mut pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let brain_name = db_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    if let Ok((_, brain_id)) = brain_lib::config::resolve_brain_with_fallback(None, &brain_name) {
+        pipeline.set_brain_id(brain_id);
+    }
     let report = pipeline.doctor(&[notes_path]).await?;
 
     println!("{report}");

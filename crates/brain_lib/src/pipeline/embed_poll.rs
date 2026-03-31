@@ -133,6 +133,7 @@ pub async fn poll_stale_tasks(
             .upsert_chunks(
                 &entry.file_id,
                 &entry.title,
+                brain_id,
                 &[(0, entry.capsule_text.as_str())],
                 std::slice::from_ref(embedding),
             )
@@ -253,7 +254,13 @@ pub async fn poll_stale_chunks(
 
     for (file_id, group) in &file_groups {
         if let Err(e) = store
-            .upsert_chunks(file_id, group.file_path, &group.chunks, &group.embeddings)
+            .upsert_chunks(
+                file_id,
+                group.file_path,
+                brain_id,
+                &group.chunks,
+                &group.embeddings,
+            )
             .await
         {
             warn!(
@@ -384,6 +391,7 @@ pub async fn poll_stale_records(
             .upsert_chunks(
                 &entry.file_id,
                 &entry.title,
+                brain_id,
                 &[(0, entry.capsule_text.as_str())],
                 std::slice::from_ref(embedding),
             )
@@ -467,7 +475,7 @@ pub async fn poll_stale_summaries(
 
     for (row, embedding) in rows.iter().zip(embeddings.iter()) {
         if let Err(e) = store
-            .upsert_summary(&row.summary_id, &row.content, embedding)
+            .upsert_summary(&row.summary_id, &row.content, brain_id, embedding)
             .await
         {
             warn!(

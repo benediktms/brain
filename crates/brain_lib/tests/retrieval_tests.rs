@@ -823,7 +823,7 @@ async fn test_procedure_surfaces_in_search_minimal_with_kind_procedure() {
         .unwrap();
     let vec = vecs.into_iter().next().unwrap();
     store
-        .upsert_summary(&summary_id, procedure_content, &vec)
+        .upsert_summary(&summary_id, procedure_content, "", &vec)
         .await
         .unwrap();
 

@@ -359,9 +359,9 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     sync_brain_ids(&global_cfg);
 
     // ── 2. Load shared resources once ────────────────────────────────────
-    // All brains share a single Db handle (unified ~/.brain/brain.db) and
-    // a single embedder. Db is Clone (Arc-backed) — cloning shares the
-    // same connection pool.
+    // All brains share a single Db handle (unified ~/.brain/brain.db),
+    // a single embedder, and a single unified LanceDB store.
+    // Db and Store are Clone (Arc-backed) — cloning shares the same pool.
     let first_name = global_cfg.brains.keys().next().expect("non-empty map");
     let first_paths = resolve_paths_for_brain(first_name)?;
     let model_dir = first_paths.model_dir.clone();
@@ -378,6 +378,17 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             .map_err(|e| anyhow::anyhow!("spawn_blocking embedder: {e}"))??;
         Arc::new(loaded)
     };
+
+    // Open the unified LanceDB store once. ensure_schema_version MUST run
+    // before cloning — drop_and_recreate_table replaces the inner Arc<Table>
+    // and clones made before the rebuild would hold stale references.
+    let mut shared_store = Store::open_or_create(&first_paths.lance_db).await?;
+    brain_lib::pipeline::ensure_schema_version(&shared_db, &mut shared_store).await?;
+    shared_store.set_db(Arc::new(shared_db.clone()));
+
+    // Self-heal: reset embedded_at if LanceDB is empty so EmbedPollSweep
+    // will re-embed everything.
+    embed_poll::self_heal_if_lance_missing(&shared_db, &shared_store).await;
 
     // ── 3. Initialise per-brain pipelines ────────────────────────────────
     let mut brains: HashMap<String, BrainInstance> = HashMap::new();
@@ -396,6 +407,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             Arc::clone(&embedder),
             &brain_id,
             shared_db.clone(),
+            shared_store.clone(),
         )
         .await
         {
@@ -683,7 +695,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
             _ = sighup.recv() => {
                 info!("received SIGHUP, reloading brain registry");
-                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder), &shared_db).await {
+                match reload_and_project(&mut brains, &mut watcher, Arc::clone(&embedder), &shared_db, &shared_store).await {
                     Ok(()) => {
                         prefix_map = build_prefix_map(&brains);
                         info!(brains = brains.len(), "brain registry reloaded");
@@ -776,11 +788,9 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
         }
 
-        // Phase 4: LanceDB optimize for all brains
+        // Phase 4: LanceDB optimize (single shared store)
         info!("shutdown phase 4/5: optimizing LanceDB");
-        for instance in brains.values() {
-            instance.pipeline.store().optimizer().force_optimize().await;
-        }
+        shared_store.optimizer().force_optimize().await;
     } else {
         info!("shutdown phases 3-5: skipped (force shutdown)");
     }
@@ -803,13 +813,15 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
 /// Initialise a single [`BrainInstance`] from a brain name and note directories.
 ///
-/// Accepts a shared `Db` handle (all brains use the unified `~/.brain/brain.db`).
+/// Accepts shared `Db` and `Store` handles — all brains use the unified
+/// `~/.brain/brain.db` and `~/.brain/lancedb/`.
 async fn init_brain_instance(
     name: &str,
     notes: Vec<PathBuf>,
     embedder: Arc<dyn Embed>,
     brain_id: &str,
     db: Db,
+    store: Store,
 ) -> Result<BrainInstance> {
     let paths = resolve_paths_for_brain(name)?;
 
@@ -826,11 +838,10 @@ async fn init_brain_instance(
         })
         .collect();
 
-    // Open or create the LanceDB store
-    let store = Store::open_or_create(&paths.lance_db).await?;
-
-    // Create the pipeline with the shared embedder
+    // Create the pipeline with the shared embedder and shared store.
+    // Schema version check is already done in run_multi() before cloning.
     let mut pipeline = IndexPipeline::with_embedder(db, store, embedder).await?;
+    pipeline.set_brain_id(brain_id.to_string());
 
     // Resolve LLM provider: env vars first, then DB-backed credentials.
     let brain_home =
@@ -839,15 +850,13 @@ async fn init_brain_instance(
         pipeline.set_summarizer(Arc::from(provider));
     }
 
-    // Startup scan is handled by the FullScanSweep recurring job.
-    // Self-heal: reset embedded_at if LanceDB is missing so the
-    // EmbedPollSweep job will re-embed everything.
-    embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.store()).await;
-
     // Build MCP context from the pipeline's stores + task/record/object stores.
-    // Derive brain_data_dir from the LanceDB path (per-brain), not sqlite_db
-    // (which now points to the unified ~/.brain/brain.db).
-    let brain_data_dir = paths.lance_db.parent().unwrap_or(std::path::Path::new("."));
+    // Derive brain_data_dir from the per-brain data directory.
+    let brain_data_dir = paths
+        .sqlite_db
+        .parent()
+        .map(|h| h.join("brains").join(name))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     let brain_home_path = brain_data_dir
         .parent() // brains/
@@ -858,7 +867,7 @@ async fn init_brain_instance(
     let stores = brain_lib::stores::BrainStores::from_dbs(
         pipeline.db().clone(),
         brain_id,
-        brain_data_dir,
+        &brain_data_dir,
         &brain_home_path,
     )?;
     let metrics = Arc::clone(pipeline.metrics());
@@ -947,8 +956,16 @@ async fn reload_and_project(
     watcher: &mut BrainWatcher,
     embedder: Arc<dyn Embed>,
     shared_db: &Db,
+    shared_store: &Store,
 ) -> Result<()> {
-    reload_brains(brains, watcher, Arc::clone(&embedder), shared_db).await?;
+    reload_brains(
+        brains,
+        watcher,
+        Arc::clone(&embedder),
+        shared_db,
+        shared_store,
+    )
+    .await?;
 
     // Load the freshest config after reload to build projections.
     let cfg = load_global_config()?;
@@ -1012,6 +1029,7 @@ async fn reload_brains(
     watcher: &mut BrainWatcher,
     embedder: Arc<dyn Embed>,
     shared_db: &Db,
+    shared_store: &Store,
 ) -> Result<()> {
     let new_cfg = load_global_config()?;
 
@@ -1051,6 +1069,7 @@ async fn reload_brains(
                 Arc::clone(&embedder),
                 &brain_id,
                 shared_db.clone(),
+                shared_store.clone(),
             )
             .await
             {

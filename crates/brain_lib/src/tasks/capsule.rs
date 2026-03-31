@@ -113,7 +113,13 @@ pub async fn embed_task_capsule(
 
     let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
     store
-        .upsert_chunks(&file_id, params.title, &[(0, &capsule_text)], &embeddings)
+        .upsert_chunks(
+            &file_id,
+            params.title,
+            brain_id,
+            &[(0, &capsule_text)],
+            &embeddings,
+        )
         .await?;
 
     store_task_capsule(db, &file_id, &capsule_text, brain_id)?;
@@ -138,7 +144,13 @@ pub async fn embed_outcome_capsule(
 
     let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
     store
-        .upsert_chunks(&file_id, title, &[(0, &capsule_text)], &embeddings)
+        .upsert_chunks(
+            &file_id,
+            title,
+            brain_id,
+            &[(0, &capsule_text)],
+            &embeddings,
+        )
         .await?;
 
     store_task_capsule(db, &file_id, &capsule_text, brain_id)?;

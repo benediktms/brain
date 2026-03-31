@@ -18,7 +18,16 @@ pub async fn run(
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let note_dirs = normalize_note_paths(&[notes_path], &cwd)?;
 
-    let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let mut pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let brain_name = db_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    if let Ok((_, brain_id)) = brain_lib::config::resolve_brain_with_fallback(None, &brain_name) {
+        pipeline.set_brain_id(brain_id);
+    }
     let stats = pipeline.full_scan(&note_dirs).await?;
 
     // Compact all fragments created during the full scan

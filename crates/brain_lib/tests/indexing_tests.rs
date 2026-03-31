@@ -754,12 +754,12 @@ async fn test_schema_version_mismatch_triggers_rebuild() {
     );
 
     // Table should be empty (rebuilt)
-    let ids = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    let ids = pipeline.store().get_file_ids_with_chunks("").await.unwrap();
     assert!(ids.is_empty(), "table should be empty after rebuild");
 
     // Pipeline should still be functional — index a file
     assert!(pipeline.index_file(&path).await.unwrap());
-    let ids = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    let ids = pipeline.store().get_file_ids_with_chunks("").await.unwrap();
     assert!(!ids.is_empty(), "should be able to index after rebuild");
 }
 
@@ -784,7 +784,7 @@ async fn test_schema_version_match_skips_rebuild() {
     std::fs::write(&path, "# Test\n\nSome content.").unwrap();
     pipeline.index_file(&path).await.unwrap();
 
-    let ids_before = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    let ids_before = pipeline.store().get_file_ids_with_chunks("").await.unwrap();
     assert!(!ids_before.is_empty());
     drop(pipeline);
 
@@ -797,7 +797,11 @@ async fn test_schema_version_match_skips_rebuild() {
         .unwrap();
 
     // Data should still be present (no rebuild occurred)
-    let ids_after = pipeline2.store().get_file_ids_with_chunks().await.unwrap();
+    let ids_after = pipeline2
+        .store()
+        .get_file_ids_with_chunks("")
+        .await
+        .unwrap();
     assert_eq!(
         ids_before, ids_after,
         "data should survive when version matches"
@@ -871,6 +875,6 @@ async fn test_unparseable_version_triggers_rebuild() {
     );
 
     // Table should be empty (rebuilt)
-    let ids = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    let ids = pipeline.store().get_file_ids_with_chunks("").await.unwrap();
     assert!(ids.is_empty(), "table should be empty after rebuild");
 }

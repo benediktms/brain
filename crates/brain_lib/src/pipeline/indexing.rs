@@ -104,7 +104,9 @@ where
 
         if chunks.is_empty() {
             // Empty file — clear any existing chunks and links
-            self.store.delete_file_chunks(&verdict.file_id).await?;
+            self.store
+                .delete_file_chunks(&verdict.file_id, &self.brain_id)
+                .await?;
             self.db.with_write_conn(|conn| {
                 replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                 replace_links(conn, &verdict.file_id, &[])?;
@@ -143,7 +145,13 @@ where
         let chunk_pairs: Vec<(usize, &str)> =
             chunks.iter().map(|c| (c.ord, c.content.as_str())).collect();
         self.store
-            .upsert_chunks(&verdict.file_id, &path_str, &chunk_pairs, &embeddings)
+            .upsert_chunks(
+                &verdict.file_id,
+                &path_str,
+                &self.brain_id,
+                &chunk_pairs,
+                &embeddings,
+            )
             .await?;
 
         // Stamp embedded_at now that LanceDB has the vectors.
@@ -215,7 +223,9 @@ where
 
             // Handle empty files immediately (no embedding needed)
             if chunks.is_empty() {
-                self.store.delete_file_chunks(&verdict.file_id).await?;
+                self.store
+                    .delete_file_chunks(&verdict.file_id, &self.brain_id)
+                    .await?;
                 self.db.with_write_conn(|conn| {
                     replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                     replace_links(conn, &verdict.file_id, &[])?;
@@ -333,7 +343,13 @@ where
                     .map(|c| (c.ord, c.content.as_str()))
                     .collect();
                 self.store
-                    .upsert_chunks(file_id, path_str, &chunk_pairs, file_embeddings)
+                    .upsert_chunks(
+                        file_id,
+                        path_str,
+                        &self.brain_id,
+                        &chunk_pairs,
+                        file_embeddings,
+                    )
                     .await?;
 
                 // Stamp embedded_at now that LanceDB has the vectors.

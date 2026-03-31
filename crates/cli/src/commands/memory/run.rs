@@ -343,7 +343,12 @@ pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Resul
                     Ok(vecs) => {
                         if let Some(vec) = vecs.into_iter().next()
                             && let Err(e) = store
-                                .upsert_summary(&summary_id, &embed_content, &vec)
+                                .upsert_summary(
+                                    &summary_id,
+                                    &embed_content,
+                                    &ctx.stores.brain_id,
+                                    &vec,
+                                )
                                 .await
                         {
                             eprintln!("warning: failed to embed episode (best-effort): {e}");
@@ -420,7 +425,12 @@ pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> R
                     Ok(vecs) => {
                         if let Some(vec) = vecs.into_iter().next()
                             && let Err(e) = store
-                                .upsert_summary(&summary_id, &embed_content, &vec)
+                                .upsert_summary(
+                                    &summary_id,
+                                    &embed_content,
+                                    &ctx.stores.brain_id,
+                                    &vec,
+                                )
                                 .await
                         {
                             eprintln!("warning: failed to embed procedure (best-effort): {e}");
@@ -794,7 +804,12 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
                     Ok(vecs) => {
                         if let Some(vec) = vecs.into_iter().next()
                             && let Err(e) = store
-                                .upsert_summary(&summary_id, &embed_content, &vec)
+                                .upsert_summary(
+                                    &summary_id,
+                                    &embed_content,
+                                    &ctx.stores.brain_id,
+                                    &vec,
+                                )
                                 .await
                         {
                             eprintln!("warning: failed to embed reflection (best-effort): {e}");

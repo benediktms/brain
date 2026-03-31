@@ -52,6 +52,7 @@ impl ChunkIndexWriter for MockChunkIndexWriter {
         &'a self,
         file_id: &'a str,
         _file_path: &'a str,
+        _brain_id: &'a str,
         chunks: &'a [(usize, &'a str)],
         _embeddings: &'a [Vec<f32>],
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
@@ -71,6 +72,7 @@ impl ChunkIndexWriter for MockChunkIndexWriter {
     fn delete_file_chunks<'a>(
         &'a self,
         file_id: &'a str,
+        _brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         async move {
             self.chunks.lock().unwrap().remove(file_id);
@@ -82,6 +84,7 @@ impl ChunkIndexWriter for MockChunkIndexWriter {
     fn delete_chunks_by_file_ids<'a>(
         &'a self,
         file_ids: &'a [String],
+        _brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<usize>> + Send + 'a {
         async move {
             let mut map = self.chunks.lock().unwrap();
@@ -101,6 +104,7 @@ impl ChunkIndexWriter for MockChunkIndexWriter {
         &'a self,
         file_id: &'a str,
         new_path: &'a str,
+        _brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         async move {
             self.path_updates
@@ -141,6 +145,7 @@ impl ChunkSearcher for MockChunkSearcher {
         _top_k: usize,
         _nprobes: usize,
         _mode: VectorSearchMode,
+        _brain_id: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<Vec<QueryResult>>> + Send + 'a {
         async move {
             let guard = self.results.lock().unwrap();
@@ -154,6 +159,7 @@ impl ChunkSearcher for MockChunkSearcher {
                     chunk_ord: r.chunk_ord,
                     content: r.content.clone(),
                     score: r.score,
+                    brain_id: r.brain_id.clone(),
                 })
                 .collect();
             Ok(out)
@@ -327,9 +333,10 @@ impl SchemaMeta for MockSchemaMeta {
         }
     }
 
-    fn get_file_ids_with_chunks(
-        &self,
-    ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + '_
+    fn get_file_ids_with_chunks<'a>(
+        &'a self,
+        _brain_id: &'a str,
+    ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + 'a
     {
         async move { Ok(HashSet::new()) }
     }
@@ -369,33 +376,37 @@ impl ChunkIndexWriter for MockStore {
         &'a self,
         file_id: &'a str,
         file_path: &'a str,
+        brain_id: &'a str,
         chunks: &'a [(usize, &'a str)],
         embeddings: &'a [Vec<f32>],
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         self.writer
-            .upsert_chunks(file_id, file_path, chunks, embeddings)
+            .upsert_chunks(file_id, file_path, brain_id, chunks, embeddings)
     }
 
     fn delete_file_chunks<'a>(
         &'a self,
         file_id: &'a str,
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        self.writer.delete_file_chunks(file_id)
+        self.writer.delete_file_chunks(file_id, brain_id)
     }
 
     fn delete_chunks_by_file_ids<'a>(
         &'a self,
         file_ids: &'a [String],
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<usize>> + Send + 'a {
-        self.writer.delete_chunks_by_file_ids(file_ids)
+        self.writer.delete_chunks_by_file_ids(file_ids, brain_id)
     }
 
     fn update_file_path<'a>(
         &'a self,
         file_id: &'a str,
         new_path: &'a str,
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        self.writer.update_file_path(file_id, new_path)
+        self.writer.update_file_path(file_id, new_path, brain_id)
     }
 }
 
@@ -415,9 +426,10 @@ impl SchemaMeta for MockStore {
         }
     }
 
-    fn get_file_ids_with_chunks(
-        &self,
-    ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + '_
+    fn get_file_ids_with_chunks<'a>(
+        &'a self,
+        _brain_id: &'a str,
+    ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + 'a
     {
         async move { Ok(HashSet::new()) }
     }
@@ -1028,6 +1040,7 @@ mod tests {
             .upsert_chunks(
                 "file-1",
                 "/path/to/file.md",
+                "test-brain",
                 &[(0, "hello"), (1, "world")],
                 &[vec![0.1, 0.2], vec![0.3, 0.4]],
             )
@@ -1039,7 +1052,10 @@ mod tests {
             assert_eq!(map["file-1"].len(), 2);
         }
 
-        writer.delete_file_chunks("file-1").await.unwrap();
+        writer
+            .delete_file_chunks("file-1", "test-brain")
+            .await
+            .unwrap();
 
         {
             let map = writer.chunks.lock().unwrap();
@@ -1055,13 +1071,13 @@ mod tests {
 
         for id in ["a", "b", "c"] {
             writer
-                .upsert_chunks(id, "/p", &[(0, "x")], &[vec![0.0]])
+                .upsert_chunks(id, "/p", "test-brain", &[(0, "x")], &[vec![0.0]])
                 .await
                 .unwrap();
         }
 
         let deleted = writer
-            .delete_chunks_by_file_ids(&["a".to_string(), "b".to_string()])
+            .delete_chunks_by_file_ids(&["a".to_string(), "b".to_string()], "test-brain")
             .await
             .unwrap();
         assert_eq!(deleted, 2);
@@ -1081,10 +1097,11 @@ mod tests {
             chunk_ord: 0,
             content: "hello".to_string(),
             score: Some(0.9),
+            brain_id: String::new(),
         }];
         let searcher = MockChunkSearcher::with_results(results);
         let out = searcher
-            .query(&[0.1_f32, 0.2], 10, 20, VectorSearchMode::default())
+            .query(&[0.1_f32, 0.2], 10, 20, VectorSearchMode::default(), None)
             .await
             .unwrap();
         assert_eq!(out.len(), 1);
@@ -1167,6 +1184,7 @@ mod tests {
             .upsert_chunks(
                 "file-42",
                 "/notes/test.md",
+                "test-brain",
                 &[(0, "chunk zero"), (1, "chunk one")],
                 &[vec![0.1_f32; 384], vec![0.2_f32; 384]],
             )
@@ -1199,6 +1217,7 @@ mod tests {
             chunk_ord: 0,
             content: "The quick brown fox".to_string(),
             score: Some(0.05),
+            brain_id: String::new(),
         }]);
         let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(MockEmbedder);
         let metrics = Arc::new(Metrics::new());
@@ -1236,7 +1255,7 @@ mod tests {
         meta.drop_and_recreate_table().await.unwrap();
         meta.drop_and_recreate_table().await.unwrap();
         assert_eq!(*meta.recreate_count.lock().unwrap(), 2);
-        let ids = meta.get_file_ids_with_chunks().await.unwrap();
+        let ids = meta.get_file_ids_with_chunks("test-brain").await.unwrap();
         assert!(ids.is_empty());
     }
 
@@ -1436,7 +1455,7 @@ mod tests {
     async fn mock_store_delegates_to_inner_writer() {
         let store = MockStore::default();
         store
-            .upsert_chunks("f1", "/p", &[(0, "hello")], &[vec![0.1]])
+            .upsert_chunks("f1", "/p", "test-brain", &[(0, "hello")], &[vec![0.1]])
             .await
             .unwrap();
 

@@ -243,7 +243,7 @@ async fn test_concurrent_read_write_no_deadlocks() {
         let qv = query_vec.clone();
         reader_handles.push(tokio::spawn(async move {
             for i in 0..25 {
-                let results = r.query(&qv, 5, 20, Default::default()).await;
+                let results = r.query(&qv, 5, 20, Default::default(), None).await;
                 assert!(
                     results.is_ok(),
                     "reader {task_id} query {i} failed: {:?}",
@@ -315,7 +315,7 @@ async fn test_optimize_row_threshold() {
     let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
     let results = pipeline
         .store()
-        .query(&query_vec, 5, 20, Default::default())
+        .query(&query_vec, 5, 20, Default::default(), None)
         .await
         .unwrap();
     assert!(
@@ -497,7 +497,7 @@ async fn test_ivf_pq_query_returns_results() {
     let query_vec = embedder.embed_batch(&["search query"]).unwrap()[0].clone();
     let results = pipeline
         .store()
-        .query(&query_vec, 10, 20, Default::default())
+        .query(&query_vec, 10, 20, Default::default(), None)
         .await
         .unwrap();
 
@@ -543,7 +543,7 @@ async fn test_auto_index_on_optimize() {
     let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
     let results = pipeline
         .store()
-        .query(&query_vec, 5, 20, Default::default())
+        .query(&query_vec, 5, 20, Default::default(), None)
         .await
         .unwrap();
     assert!(

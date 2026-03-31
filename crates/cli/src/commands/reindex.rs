@@ -11,7 +11,16 @@ pub async fn run_full(
     db_path: PathBuf,
     sqlite_path: PathBuf,
 ) -> Result<()> {
-    let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let mut pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let brain_name = db_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    if let Ok((_, brain_id)) = brain_lib::config::resolve_brain_with_fallback(None, &brain_name) {
+        pipeline.set_brain_id(brain_id);
+    }
     let stats = pipeline.reindex_full(&[notes_path]).await?;
 
     // Rebuild FTS5 summaries index after full reindex
@@ -34,7 +43,16 @@ pub async fn run_file(
     sqlite_path: PathBuf,
 ) -> Result<()> {
     let abs_path = file_path.canonicalize().unwrap_or(file_path.clone());
-    let pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let mut pipeline = IndexPipeline::new(&model_dir, &db_path, &sqlite_path).await?;
+    let brain_name = db_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    if let Ok((_, brain_id)) = brain_lib::config::resolve_brain_with_fallback(None, &brain_name) {
+        pipeline.set_brain_id(brain_id);
+    }
     let indexed = pipeline.reindex_file(&abs_path).await?;
 
     if indexed {

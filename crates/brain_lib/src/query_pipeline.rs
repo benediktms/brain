@@ -228,7 +228,7 @@ where
         // 2. Vector search (top-50)
         let vector_results = self
             .store
-            .query(&query_vec, CANDIDATE_LIMIT, DEFAULT_NPROBES, mode)
+            .query(&query_vec, CANDIDATE_LIMIT, DEFAULT_NPROBES, mode, None)
             .await?;
 
         // 3. FTS search (top-50, gracefully degrade on failure)

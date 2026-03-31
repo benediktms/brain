@@ -35,32 +35,36 @@ use brain_persistence::store::{QueryResult, VectorSearchMode};
 /// `embed_poll::poll_stale_tasks`.
 pub trait ChunkIndexWriter: Send + Sync {
     /// Upsert all chunks for a file: matched chunks are updated, new ones
-    /// inserted, orphaned chunks for this `file_id` are deleted.
+    /// inserted, orphaned chunks for this `file_id` within `brain_id` are deleted.
     fn upsert_chunks<'a>(
         &'a self,
         file_id: &'a str,
         file_path: &'a str,
+        brain_id: &'a str,
         chunks: &'a [(usize, &'a str)],
         embeddings: &'a [Vec<f32>],
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
 
-    /// Delete all LanceDB chunks for a given `file_id`.
+    /// Delete all LanceDB chunks for a given `file_id` within `brain_id`.
     fn delete_file_chunks<'a>(
         &'a self,
         file_id: &'a str,
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
 
-    /// Bulk-delete LanceDB chunks for a list of `file_ids` (orphan cleanup).
+    /// Bulk-delete LanceDB chunks for a list of `file_ids` within `brain_id`.
     fn delete_chunks_by_file_ids<'a>(
         &'a self,
         file_ids: &'a [String],
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<usize>> + Send + 'a;
 
-    /// Update the `file_path` column for all chunks belonging to `file_id`.
+    /// Update the `file_path` column for all chunks belonging to `file_id` within `brain_id`.
     fn update_file_path<'a>(
         &'a self,
         file_id: &'a str,
         new_path: &'a str,
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
 }
 
@@ -87,12 +91,13 @@ pub trait SchemaMeta: Send + Sync {
         &mut self,
     ) -> impl std::future::Future<Output = Result<()>> + Send + '_;
 
-    /// Return all distinct `file_id`s that have chunks in LanceDB.
+    /// Return all distinct `file_id`s that have chunks in LanceDB for a brain.
     ///
     /// Used by `IndexPipeline::doctor` for orphan detection.
-    fn get_file_ids_with_chunks(
-        &self,
-    ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + '_;
+    fn get_file_ids_with_chunks<'a>(
+        &'a self,
+        brain_id: &'a str,
+    ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + 'a;
 
     /// Force an optimize of the LanceDB table (compaction + auto-index).
     ///
@@ -112,12 +117,16 @@ pub trait ChunkSearcher: Send + Sync {
     ///
     /// `mode` controls the ANN (Approximate Nearest Neighbor) vs exact search
     /// tradeoff — see [`VectorSearchMode`].
+    ///
+    /// When `brain_id` is `Some`, results are restricted to that brain.
+    /// When `None`, all brains are searched.
     fn query<'a>(
         &'a self,
         embedding: &'a [f32],
         top_k: usize,
         nprobes: usize,
         mode: VectorSearchMode,
+        brain_id: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<Vec<QueryResult>>> + Send + 'a;
 }
 
@@ -220,32 +229,36 @@ impl ChunkIndexWriter for Store {
         &'a self,
         file_id: &'a str,
         file_path: &'a str,
+        brain_id: &'a str,
         chunks: &'a [(usize, &'a str)],
         embeddings: &'a [Vec<f32>],
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        Store::upsert_chunks(self, file_id, file_path, chunks, embeddings)
+        Store::upsert_chunks(self, file_id, file_path, brain_id, chunks, embeddings)
     }
 
     fn delete_file_chunks<'a>(
         &'a self,
         file_id: &'a str,
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        Store::delete_file_chunks(self, file_id)
+        Store::delete_file_chunks(self, file_id, brain_id)
     }
 
     fn delete_chunks_by_file_ids<'a>(
         &'a self,
         file_ids: &'a [String],
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<usize>> + Send + 'a {
-        Store::delete_chunks_by_file_ids(self, file_ids)
+        Store::delete_chunks_by_file_ids(self, file_ids, brain_id)
     }
 
     fn update_file_path<'a>(
         &'a self,
         file_id: &'a str,
         new_path: &'a str,
+        brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        Store::update_file_path(self, file_id, new_path)
+        Store::update_file_path(self, file_id, new_path, brain_id)
     }
 }
 
@@ -264,11 +277,12 @@ impl SchemaMeta for Store {
         Store::drop_and_recreate_table(self)
     }
 
-    fn get_file_ids_with_chunks(
-        &self,
-    ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + '_
+    fn get_file_ids_with_chunks<'a>(
+        &'a self,
+        brain_id: &'a str,
+    ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + 'a
     {
-        Store::get_file_ids_with_chunks(self)
+        Store::get_file_ids_with_chunks(self, brain_id)
     }
 
     fn force_optimize(&self) -> impl std::future::Future<Output = ()> + Send + '_ {
@@ -285,8 +299,9 @@ impl ChunkSearcher for StoreReader {
         top_k: usize,
         nprobes: usize,
         mode: VectorSearchMode,
+        brain_id: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<Vec<QueryResult>>> + Send + 'a {
-        StoreReader::query(self, embedding, top_k, nprobes, mode)
+        StoreReader::query(self, embedding, top_k, nprobes, mode, brain_id)
     }
 }
 
@@ -299,8 +314,9 @@ impl ChunkSearcher for Store {
         top_k: usize,
         nprobes: usize,
         mode: VectorSearchMode,
+        brain_id: Option<&'a str>,
     ) -> impl std::future::Future<Output = Result<Vec<QueryResult>>> + Send + 'a {
-        Store::query(self, embedding, top_k, nprobes, mode)
+        Store::query(self, embedding, top_k, nprobes, mode, brain_id)
     }
 }
 
@@ -1087,6 +1103,7 @@ pub trait SummaryStoreWriter: Send + Sync {
         &'a self,
         summary_id: &'a str,
         content: &'a str,
+        brain_id: &'a str,
         embedding: &'a [f32],
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
 }
@@ -1098,9 +1115,10 @@ impl SummaryStoreWriter for Store {
         &'a self,
         summary_id: &'a str,
         content: &'a str,
+        brain_id: &'a str,
         embedding: &'a [f32],
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        Store::upsert_summary(self, summary_id, content, embedding)
+        Store::upsert_summary(self, summary_id, content, brain_id, embedding)
     }
 }
 

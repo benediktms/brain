@@ -22,7 +22,7 @@ const EMBEDDING_DIM: i32 = 384;
 /// changes, vector dimension changes). On startup the pipeline compares the
 /// stored version in `brain_meta` against this constant and triggers a full
 /// table rebuild + content-hash clear when they differ.
-pub const LANCE_SCHEMA_VERSION: u32 = 1;
+pub const LANCE_SCHEMA_VERSION: u32 = 2;
 
 const DEFAULT_ROW_THRESHOLD: u64 = 200;
 const DEFAULT_TIME_THRESHOLD: Duration = Duration::from_secs(300);
@@ -356,8 +356,9 @@ impl StoreReader {
         top_k: usize,
         nprobes: usize,
         mode: VectorSearchMode,
+        brain_id: Option<&str>,
     ) -> crate::error::Result<Vec<QueryResult>> {
-        query_impl(&self.table, embedding, top_k, nprobes, mode).await
+        query_impl(&self.table, embedding, top_k, nprobes, mode, brain_id).await
     }
 }
 
@@ -489,6 +490,7 @@ impl Store {
         &self,
         file_id: &str,
         file_path: &str,
+        brain_id: &str,
         chunks: &[(usize, &str)],
         embeddings: &[Vec<f32>],
     ) -> crate::error::Result<()> {
@@ -501,12 +503,12 @@ impl Store {
         }
         if chunks.is_empty() {
             // No chunks — just delete any existing chunks for this file
-            self.delete_file_chunks(file_id).await?;
+            self.delete_file_chunks(file_id, brain_id).await?;
             return Ok(());
         }
 
         let schema = chunks_schema();
-        let batch = make_record_batch(&schema, file_id, file_path, chunks, embeddings)?;
+        let batch = make_record_batch(&schema, file_id, file_path, brain_id, chunks, embeddings)?;
         let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
 
         let mut builder = self.table.merge_insert(&["chunk_id"]);
@@ -514,8 +516,9 @@ impl Store {
             .when_matched_update_all(None)
             .when_not_matched_insert_all()
             .when_not_matched_by_source_delete(Some(format!(
-                "file_id = '{}'",
-                validate_file_id(file_id)?
+                "file_id = '{}' AND brain_id = '{}'",
+                validate_filter_value(file_id)?,
+                validate_filter_value(brain_id)?
             )));
         builder
             .execute(Box::new(batches))
@@ -527,6 +530,7 @@ impl Store {
         info!(
             file_path,
             file_id,
+            brain_id,
             chunk_count = chunks.len(),
             "chunks upserted"
         );
@@ -538,11 +542,13 @@ impl Store {
         &self,
         file_id: &str,
         new_path: &str,
+        brain_id: &str,
     ) -> crate::error::Result<()> {
-        let fid = validate_file_id(file_id)?;
+        let fid = validate_filter_value(file_id)?;
+        let bid = validate_filter_value(brain_id)?;
         self.table
             .update()
-            .only_if(format!("file_id = '{fid}'"))
+            .only_if(format!("file_id = '{fid}' AND brain_id = '{bid}'"))
             .column("file_path", format!("'{}'", new_path.replace('\'', "''")))
             .execute()
             .await
@@ -554,11 +560,17 @@ impl Store {
         Ok(())
     }
 
-    /// Delete all chunks for a given file_id.
+    /// Delete all chunks for a given file_id within a brain.
     #[instrument(skip_all)]
-    pub async fn delete_file_chunks(&self, file_id: &str) -> crate::error::Result<()> {
+    pub async fn delete_file_chunks(
+        &self,
+        file_id: &str,
+        brain_id: &str,
+    ) -> crate::error::Result<()> {
+        let fid = validate_filter_value(file_id)?;
+        let bid = validate_filter_value(brain_id)?;
         self.table
-            .delete(&format!("file_id = '{}'", validate_file_id(file_id)?))
+            .delete(&format!("file_id = '{fid}' AND brain_id = '{bid}'"))
             .await
             .map_err(|e| BrainCoreError::VectorDb(format!("delete failed: {e}")))?;
 
@@ -568,17 +580,20 @@ impl Store {
         Ok(())
     }
 
-    /// Get all distinct file_ids that have chunks in LanceDB.
+    /// Get all distinct file_ids that have chunks in LanceDB for a brain.
     pub async fn get_file_ids_with_chunks(
         &self,
+        brain_id: &str,
     ) -> crate::error::Result<std::collections::HashSet<String>> {
         use futures::TryStreamExt;
         use lancedb::query::{ExecutableQuery, QueryBase};
 
+        let bid = validate_filter_value(brain_id)?;
         let results = self
             .table
             .query()
             .select(lancedb::query::Select::columns(&["file_id"]))
+            .only_if(format!("brain_id = '{bid}'"))
             .execute()
             .await
             .map_err(|e| BrainCoreError::VectorDb(format!("file_id query failed: {e}")))?;
@@ -606,13 +621,14 @@ impl Store {
     pub async fn delete_chunks_by_file_ids(
         &self,
         file_ids: &[String],
+        brain_id: &str,
     ) -> crate::error::Result<usize> {
         if file_ids.is_empty() {
             return Ok(0);
         }
         let mut deleted = 0;
         for fid in file_ids {
-            self.delete_file_chunks(fid).await?;
+            self.delete_file_chunks(fid, brain_id).await?;
             deleted += 1;
         }
         Ok(deleted)
@@ -626,8 +642,9 @@ impl Store {
         top_k: usize,
         nprobes: usize,
         mode: VectorSearchMode,
+        brain_id: Option<&str>,
     ) -> crate::error::Result<Vec<QueryResult>> {
-        query_impl(&self.table, embedding, top_k, nprobes, mode).await
+        query_impl(&self.table, embedding, top_k, nprobes, mode, brain_id).await
     }
 
     /// Upsert a single summary embedding into LanceDB.
@@ -640,6 +657,7 @@ impl Store {
         &self,
         summary_id: &str,
         content: &str,
+        brain_id: &str,
         embedding: &[f32],
     ) -> crate::error::Result<()> {
         let key = format!("sum:{summary_id}");
@@ -662,6 +680,7 @@ impl Store {
                         EMBEDDING_DIM,
                     ),
                 ),
+                Arc::new(StringArray::from(vec![brain_id])),
             ],
         )
         .map_err(|e| BrainCoreError::VectorDb(format!("failed to build summary batch: {e}")))?;
@@ -685,14 +704,18 @@ impl Store {
 
     /// Delete a summary's embedding from LanceDB.
     ///
-    /// Deletes the row with `chunk_id = "sum:{summary_id}"`.
+    /// Deletes the row with `chunk_id = "sum:{summary_id}"` within the brain.
     #[instrument(skip_all)]
-    pub async fn delete_summary(&self, summary_id: &str) -> crate::error::Result<()> {
+    pub async fn delete_summary(
+        &self,
+        summary_id: &str,
+        brain_id: &str,
+    ) -> crate::error::Result<()> {
         let key = format!("sum:{summary_id}");
-        // validate_file_id accepts the same charset as chunk_id here
-        let safe_key = validate_file_id(&key)?;
+        let safe_key = validate_filter_value(&key)?;
+        let bid = validate_filter_value(brain_id)?;
         self.table
-            .delete(&format!("chunk_id = '{safe_key}'"))
+            .delete(&format!("chunk_id = '{safe_key}' AND brain_id = '{bid}'"))
             .await
             .map_err(|e| BrainCoreError::VectorDb(format!("summary delete failed: {e}")))?;
 
@@ -734,18 +757,23 @@ pub struct QueryResult {
     pub chunk_id: String,
     pub file_id: String,
     pub file_path: String,
+    pub brain_id: String,
     pub chunk_ord: usize,
     pub content: String,
     pub score: Option<f32>,
 }
 
 /// Shared vector search implementation used by both `Store` and `StoreReader`.
+///
+/// When `brain_id` is `Some`, a post-filter restricts results to that brain.
+/// When `None`, all brains are searched (useful for cross-brain federated queries).
 async fn query_impl(
     table: &lancedb::Table,
     embedding: &[f32],
     top_k: usize,
     nprobes: usize,
     mode: VectorSearchMode,
+    brain_id: Option<&str>,
 ) -> crate::error::Result<Vec<QueryResult>> {
     use futures::TryStreamExt;
     use lancedb::query::{ExecutableQuery, QueryBase};
@@ -756,6 +784,11 @@ async fn query_impl(
         .distance_type(lancedb::DistanceType::Dot)
         .nprobes(nprobes)
         .limit(top_k);
+
+    if let Some(bid) = brain_id {
+        let bid = validate_filter_value(bid)?;
+        builder = builder.only_if(format!("brain_id = '{bid}'"));
+    }
 
     match mode {
         VectorSearchMode::Exact => {
@@ -793,6 +826,10 @@ async fn query_impl(
             .column_by_name("file_path")
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
             .ok_or_else(|| BrainCoreError::VectorDb("missing file_path column".into()))?;
+        let brain_ids = batch
+            .column_by_name("brain_id")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .ok_or_else(|| BrainCoreError::VectorDb("missing brain_id column".into()))?;
         let chunk_ords = batch
             .column_by_name("chunk_ord")
             .and_then(|c| c.as_any().downcast_ref::<Int32Array>())
@@ -810,6 +847,7 @@ async fn query_impl(
                 chunk_id: chunk_ids.value(i).to_string(),
                 file_id: file_ids.value(i).to_string(),
                 file_path: file_paths.value(i).to_string(),
+                brain_id: brain_ids.value(i).to_string(),
                 chunk_ord: chunk_ords.value(i) as usize,
                 content: contents.value(i).to_string(),
                 score: distances.map(|d| d.value(i)),
@@ -835,6 +873,7 @@ fn chunks_schema() -> Schema {
             ),
             false,
         ),
+        Field::new("brain_id", DataType::Utf8, false),
     ])
 }
 
@@ -853,6 +892,7 @@ fn empty_record_batch(schema: &Schema) -> crate::error::Result<RecordBatch> {
                     EMBEDDING_DIM,
                 ),
             ),
+            Arc::new(StringArray::from(Vec::<&str>::new())),
         ],
     )
     .map_err(|e| BrainCoreError::VectorDb(format!("failed to build empty record batch: {e}")))
@@ -865,16 +905,20 @@ fn empty_record_batch(schema: &Schema) -> crate::error::Result<RecordBatch> {
 /// (e.g. "task:BRN-01ABC" or "task-outcome:BRN-01ABC") which contain `:`.
 /// The key constraint is preventing SQL injection in filter strings, so we
 /// allow only `[a-zA-Z0-9-:]`.
-fn validate_file_id(file_id: &str) -> crate::error::Result<&str> {
-    if !file_id.is_empty()
-        && file_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
+/// Validate that a value is safe to interpolate into a LanceDB filter expression.
+///
+/// Allows empty strings (valid for brain_id in legacy/test scenarios) and
+/// the charset `[a-zA-Z0-9-:]` which covers ULIDs, UUIDs, task capsule IDs,
+/// and brain IDs. Rejects anything that could cause SQL injection.
+fn validate_filter_value(value: &str) -> crate::error::Result<&str> {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
     {
-        Ok(file_id)
+        Ok(value)
     } else {
         Err(BrainCoreError::VectorDb(format!(
-            "invalid file_id for filter: {file_id}"
+            "invalid value for LanceDB filter: {value}"
         )))
     }
 }
@@ -883,6 +927,7 @@ fn make_record_batch(
     schema: &Schema,
     file_id: &str,
     file_path: &str,
+    brain_id: &str,
     chunks: &[(usize, &str)],
     embeddings: &[Vec<f32>],
 ) -> crate::error::Result<RecordBatch> {
@@ -894,6 +939,7 @@ fn make_record_batch(
     let file_paths: Vec<&str> = vec![file_path; chunks.len()];
     let ords: Vec<i32> = chunks.iter().map(|(ord, _)| *ord as i32).collect();
     let contents: Vec<&str> = chunks.iter().map(|(_, content)| *content).collect();
+    let brain_ids: Vec<&str> = vec![brain_id; chunks.len()];
 
     let embedding_values: Vec<Option<Vec<Option<f32>>>> = embeddings
         .iter()
@@ -914,6 +960,7 @@ fn make_record_batch(
                     EMBEDDING_DIM,
                 ),
             ),
+            Arc::new(StringArray::from(brain_ids)),
         ],
     )
     .map_err(|e| BrainCoreError::VectorDb(format!("failed to build record batch: {e}")))
@@ -1083,19 +1130,25 @@ mod tests {
         // Insert a chunk so the table is non-empty
         let embedding = vec![0.0f32; EMBEDDING_DIM as usize];
         store
-            .upsert_chunks("file-1", "/test.md", &[(0, "hello world")], &[embedding])
+            .upsert_chunks(
+                "file-1",
+                "/test.md",
+                "test-brain",
+                &[(0, "hello world")],
+                &[embedding],
+            )
             .await
             .unwrap();
 
         // Verify data exists
-        let ids = store.get_file_ids_with_chunks().await.unwrap();
+        let ids = store.get_file_ids_with_chunks("test-brain").await.unwrap();
         assert!(ids.contains("file-1"));
 
         // Rebuild
         store.drop_and_recreate_table().await.unwrap();
 
         // Table should be empty but functional
-        let ids = store.get_file_ids_with_chunks().await.unwrap();
+        let ids = store.get_file_ids_with_chunks("test-brain").await.unwrap();
         assert!(ids.is_empty(), "table should be empty after rebuild");
 
         // Schema should match expected
@@ -1104,10 +1157,16 @@ mod tests {
         // Should be able to insert again
         let embedding = vec![0.0f32; EMBEDDING_DIM as usize];
         store
-            .upsert_chunks("file-2", "/test2.md", &[(0, "new data")], &[embedding])
+            .upsert_chunks(
+                "file-2",
+                "/test2.md",
+                "test-brain",
+                &[(0, "new data")],
+                &[embedding],
+            )
             .await
             .unwrap();
-        let ids = store.get_file_ids_with_chunks().await.unwrap();
+        let ids = store.get_file_ids_with_chunks("test-brain").await.unwrap();
         assert!(ids.contains("file-2"));
     }
 

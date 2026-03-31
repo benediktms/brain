@@ -547,11 +547,10 @@ pub(crate) fn resolve_brain_paths_with_home(
         Some(r) => r,
         None => return Ok(None),
     };
-    let brain_toml = load_brain_toml(&root.join(".brain"))?;
-    let brain_data = home.join("brains").join(&brain_toml.name);
+    let _brain_toml = load_brain_toml(&root.join(".brain"))?;
     Ok(Some(ResolvedPaths {
         model_dir: home.join("models").join("bge-small-en-v1.5"),
-        lance_db: brain_data.join("lancedb"),
+        lance_db: home.join("lancedb"),
         sqlite_db: home.join("brain.db"),
     }))
 }
@@ -570,11 +569,10 @@ pub fn resolve_paths_for_brain(name: &str) -> Result<ResolvedPaths> {
 /// Separated to make unit tests independent of the `BRAIN_HOME` env var.
 /// Unlike [`resolve_brain_paths_with_home`], this returns the struct directly
 /// since home is provided and no fallible discovery is needed.
-pub fn resolve_paths_for_brain_with_home(name: &str, home: &Path) -> ResolvedPaths {
-    let brain_data = home.join("brains").join(name);
+pub fn resolve_paths_for_brain_with_home(_name: &str, home: &Path) -> ResolvedPaths {
     ResolvedPaths {
         model_dir: home.join("models").join("bge-small-en-v1.5"),
-        lance_db: brain_data.join("lancedb"),
+        lance_db: home.join("lancedb"),
         sqlite_db: home.join("brain.db"),
     }
 }
@@ -696,10 +694,7 @@ mod tests {
             result.model_dir,
             home.join("models").join("bge-small-en-v1.5")
         );
-        assert_eq!(
-            result.lance_db,
-            home.join("brains").join("my-brain").join("lancedb")
-        );
+        assert_eq!(result.lance_db, home.join("lancedb"));
         assert_eq!(result.sqlite_db, home.join("brain.db"));
     }
 
@@ -722,12 +717,10 @@ mod tests {
             .expect("resolve_brain_paths_with_home should succeed")
             .expect("brain root should resolve to paths");
 
-        // Should use the inner brain name, not outer
-        assert!(
-            result.lance_db.to_string_lossy().contains("inner-brain"),
-            "expected inner-brain in path, got: {}",
-            result.lance_db.display()
-        );
+        // lance_db is unified — not per-brain
+        assert_eq!(result.lance_db, fake_home.path().join("lancedb"));
+        // sqlite_db is also unified
+        assert_eq!(result.sqlite_db, fake_home.path().join("brain.db"));
     }
 
     // -----------------------------------------------------------------------
@@ -745,10 +738,7 @@ mod tests {
             result.model_dir,
             home.join("models").join("bge-small-en-v1.5")
         );
-        assert_eq!(
-            result.lance_db,
-            home.join("brains").join("my-brain").join("lancedb")
-        );
+        assert_eq!(result.lance_db, home.join("lancedb"));
         assert_eq!(result.sqlite_db, home.join("brain.db"));
     }
 
@@ -760,7 +750,8 @@ mod tests {
         let result_a = resolve_paths_for_brain_with_home("brain-a", home);
         let result_b = resolve_paths_for_brain_with_home("brain-b", home);
 
-        assert_ne!(result_a.lance_db, result_b.lance_db);
+        // lance_db is the unified store — same path regardless of brain name
+        assert_eq!(result_a.lance_db, result_b.lance_db);
         // sqlite_db is the unified DB — same path regardless of brain name
         assert_eq!(result_a.sqlite_db, result_b.sqlite_db);
         // model_dir is shared
@@ -774,9 +765,10 @@ mod tests {
 
         let result = resolve_paths_for_brain_with_home("special-brain", home);
 
+        // lance_db is the unified store — brain name is NOT in the path
         assert!(
-            result.lance_db.to_string_lossy().contains("special-brain"),
-            "expected brain name in lancedb path, got: {}",
+            !result.lance_db.to_string_lossy().contains("special-brain"),
+            "expected unified lancedb path (no brain name), got: {}",
             result.lance_db.display()
         );
         // sqlite_db is the unified DB — brain name is NOT in the path

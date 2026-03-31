@@ -74,7 +74,7 @@ async fn test_index_file_stores_chunks_in_lancedb() {
 
     pipeline.index_file(&path).await.unwrap();
 
-    let file_ids = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    let file_ids = pipeline.store().get_file_ids_with_chunks("").await.unwrap();
     assert_eq!(file_ids.len(), 1, "expected one file_id in LanceDB");
 }
 
@@ -154,7 +154,7 @@ async fn test_index_file_sqlite_and_lancedb_agree_on_file_id() {
         .unwrap();
     assert_eq!(sqlite_ids.len(), 1);
 
-    let lance_ids = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    let lance_ids = pipeline.store().get_file_ids_with_chunks("").await.unwrap();
     assert_eq!(lance_ids.len(), 1);
     assert_eq!(
         sqlite_ids[0],
@@ -229,7 +229,7 @@ async fn test_full_scan_idempotent_no_duplicate_chunks() {
         "no duplicate chunks after second full_scan"
     );
 
-    let lance_ids = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    let lance_ids = pipeline.store().get_file_ids_with_chunks("").await.unwrap();
     assert_eq!(lance_ids.len(), 2, "LanceDB should have exactly 2 file_ids");
 }
 
@@ -249,10 +249,9 @@ async fn test_full_scan_detects_deletion() {
 
     std::fs::remove_file(&path).unwrap();
 
-    // full_scan no longer detects deletions (cross-brain safety).
-    // Deletion is handled via the file watcher or explicit handle_delete.
+    // full_scan detects deletions via soft-delete, scoped by brain_id.
     let stats = pipeline.full_scan(&[notes_dir]).await.unwrap();
-    assert_eq!(stats.deleted, 0);
+    assert_eq!(stats.deleted, 1);
 
     // Explicitly delete via the API
     pipeline
@@ -338,7 +337,7 @@ async fn test_vacuum_purges_soft_deleted_files() {
     );
 
     // LanceDB should also have no chunks for this file
-    let lance_ids = pipeline.store().get_file_ids_with_chunks().await.unwrap();
+    let lance_ids = pipeline.store().get_file_ids_with_chunks("").await.unwrap();
     assert!(
         lance_ids.is_empty(),
         "LanceDB should have no chunks after vacuum"

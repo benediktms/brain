@@ -18,7 +18,7 @@ where
 
         let file_id = self.db.handle_delete(&path_str)?;
         if let Some(ref fid) = file_id {
-            self.store.delete_file_chunks(fid).await?;
+            self.store.delete_file_chunks(fid, &self.brain_id).await?;
             info!(path = %path_str, "file deleted from index");
             Ok(true)
         } else {
@@ -34,7 +34,9 @@ where
         let file_id = self.db.rename_file_by_path(&from_str, &to_str)?;
 
         if let Some(ref fid) = file_id {
-            self.store.update_file_path(fid, &to_str).await?;
+            self.store
+                .update_file_path(fid, &to_str, &self.brain_id)
+                .await?;
             info!(from = %from_str, to = %to_str, "file renamed in index");
             Ok(true)
         } else {
@@ -54,7 +56,9 @@ where
 
         // 2. Delete their LanceDB chunks
         if !purged_ids.is_empty() {
-            self.store.delete_chunks_by_file_ids(&purged_ids).await?;
+            self.store
+                .delete_chunks_by_file_ids(&purged_ids, &self.brain_id)
+                .await?;
             info!(purged = purged_count, "purged old deleted files");
         }
 
@@ -77,7 +81,7 @@ where
         let mut report = DoctorReport::new();
 
         // 1. Orphan chunks in LanceDB (file_id not in SQLite)
-        let lance_file_ids = self.store.get_file_ids_with_chunks().await?;
+        let lance_file_ids = self.store.get_file_ids_with_chunks(&self.brain_id).await?;
         let sqlite_file_ids: std::collections::HashSet<String> = self
             .db
             .get_all_active_paths()?

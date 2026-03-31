@@ -274,7 +274,7 @@ async fn test_roundtrip_index_then_query() {
         .await
         .unwrap();
     let results = store
-        .query(&query_vec[0], 5, 20, Default::default())
+        .query(&query_vec[0], 5, 20, Default::default(), None)
         .await
         .unwrap();
 
@@ -336,7 +336,7 @@ async fn test_roundtrip_with_fixtures() {
         .await
         .unwrap();
     let results = store
-        .query(&query_vec[0], 10, 20, Default::default())
+        .query(&query_vec[0], 10, 20, Default::default(), None)
         .await
         .unwrap();
 
@@ -427,7 +427,7 @@ async fn test_empty_brain_query_returns_nothing() {
         .await
         .unwrap();
     let results = store
-        .query(&query_vec[0], 5, 20, Default::default())
+        .query(&query_vec[0], 5, 20, Default::default(), None)
         .await
         .unwrap();
     assert!(results.is_empty(), "empty index should return no results");
@@ -470,19 +470,19 @@ async fn test_vector_search_mode_exact_returns_results() {
 
     // Exact mode: brute-force scan, bypasses any ANN index.
     let exact_results = store
-        .query(&query_vec[0], 5, 20, VectorSearchMode::Exact)
+        .query(&query_vec[0], 5, 20, VectorSearchMode::Exact, None)
         .await
         .unwrap();
 
     // AnnFast mode: pure ANN (falls back to brute-force when no index exists).
     let fast_results = store
-        .query(&query_vec[0], 5, 20, VectorSearchMode::AnnFast)
+        .query(&query_vec[0], 5, 20, VectorSearchMode::AnnFast, None)
         .await
         .unwrap();
 
     // AnnRefined mode (default).
     let refined_results = store
-        .query(&query_vec[0], 5, 20, VectorSearchMode::AnnRefined)
+        .query(&query_vec[0], 5, 20, VectorSearchMode::AnnRefined, None)
         .await
         .unwrap();
 
