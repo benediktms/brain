@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.5] - 2026-03-31
+
+### Bug Fixes
+
+- Prevent daemon restart race from deleting new daemon's socket
+- Fall back to BRAIN_HOME when MCP server can't resolve brain from cwd or registry
+- Resolve brain name from registry for MCP server
+- Raise optimize threshold to 5k rows / 10min — prevent OOM during bulk re-index
+- Raise MIN_ROWS_FOR_INDEX to 100k — prevent OOM during auto-index
+- Disable startup compaction — too memory-heavy for 28 brains
+- Defer LanceDB cleanup to vacuum, avoid memory spike during scan
+- Scope full_scan deletion by brain_id + batch LanceDB deletes
+- Full_scan now soft-deletes files absent from scan results
+- Add startup compaction to reduce LanceDB fragment memory bloat
+- Scope embed_poll_sweep by brain_id + cap concurrent jobs
+- Remediate reflection_sources FK references pointing to stale summaries_v27
+- Address clippy warnings from just lint (-D warnings)
+- Address code review findings from brain_id scoping
+- Remove module aliases and rusqlite params from production code
+- Remove invalid disallowed-methods entry
+- Remove needless borrows flagged by clippy
+- Replace silent error swallowing with explicit handling across MCP tools
+- Versioned hooks/ dir with core.hooksPath for worktree support
+- Handle custom merge format without 'branch' keyword
+
+### Documentation
+
+- Update search_minimal docs with new filter params and result kinds
+- Update scoping model and workspace layout for brain_id on files/chunks
+- Rewrite README and ARCHITECTURE for task-management-first framing
+
+### Features
+
+- Canonical metadata facets & time-scope filters (brn-83a.7.1)
+- Unified LanceDB vector store — single store with brain_id scoping
+- Thread brain_id through indexing pipeline + fix CLI boundary imports
+- Add brain_id filtering to FTS search queries
+- Add brain_id to files/chunks tables (v36→v37)
+
+### Refactoring
+
+- Enforce port-trait boundary in MCP handlers
+- Remove direct db access, add clippy.toml enforcement
+- Extract SQL helpers, add test harness, audit unwraps
+- Wire ranking signals, async summary embedding, scoping docs, port traits
+- Delete dead inline consolidation scheduler
+
+### Testing
+
+- Add handler tests and remove all unwraps
+
 ## [0.3.4] - 2026-03-28
 
 ### Bug Fixes
@@ -12,6 +63,7 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - Domain-scoped Claude Code plugins with skills format (#91)
+- DB source of truth + state_projection.toml (#brn-990)
 
 ## [0.3.3] - 2026-03-27
 
@@ -56,6 +108,7 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Non-blocking daemon + staleness detection (#brn-d7c, #brn-8d1, #brn-642)
 - Content hash optimization + source lineage in scope summaries
 - Propagate staleness to directory scopes on file re-index
 - V35 migration — source lineage + staleness detection
