@@ -29,6 +29,14 @@ pub async fn run(
             model_dir = resolved.model_dir;
             lance_db = resolved.lance_db;
             sqlite_db = resolved.sqlite_db;
+        } else if let Ok(home) = brain_lib::config::brain_home() {
+            // No brain found in cwd or registry — resolve to absolute
+            // ~/.brain paths so the model/DB can still be found regardless
+            // of which directory the MCP server was started from.
+            info!("no brain resolved; falling back to BRAIN_HOME defaults");
+            model_dir = home.join("models").join("bge-small-en-v1.5");
+            lance_db = home.join("lancedb");
+            sqlite_db = home.join("brain.db");
         }
     } else {
         // resolve_defaults found a brain from cwd — extract its name from brain.toml.
