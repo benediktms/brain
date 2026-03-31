@@ -32,6 +32,7 @@ impl Daemon {
         // The child inherits the open FD (and thus the lock) after fork.
         let lock_file = fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&self.lock_path)?;
         let lock_fd = lock_file.as_raw_fd();
@@ -351,7 +352,7 @@ mod tests {
     fn test_kill_and_wait_escalates_to_sigkill() {
         use std::process::Command;
         // Spawn a process that traps SIGTERM (ignores it).
-        let child = Command::new("bash")
+        let mut child = Command::new("bash")
             .args(["-c", "trap '' TERM; sleep 120"])
             .spawn()
             .expect("failed to spawn bash");
@@ -368,6 +369,7 @@ mod tests {
         // Verify process is gone.
         let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
         assert_ne!(ret, 0, "process should be dead after SIGKILL escalation");
+        let _ = child.wait();
     }
 
     #[test]
@@ -397,7 +399,7 @@ mod tests {
         std::fs::write(&sock_path, "dummy").unwrap();
 
         // Spawn a process we can stop.
-        let child = std::process::Command::new("sleep")
+        let mut child = std::process::Command::new("sleep")
             .arg("120")
             .spawn()
             .expect("failed to spawn sleep");
@@ -415,6 +417,7 @@ mod tests {
             sock_path.exists(),
             "stop() must NOT delete the socket file — the daemon's own shutdown handles it"
         );
+        let _ = child.wait();
     }
 
     #[test]

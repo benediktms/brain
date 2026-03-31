@@ -6,10 +6,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use brain_lib::db::Db;
 use brain_lib::embedder::{Embed, MockEmbedder};
 use brain_lib::pipeline::IndexPipeline;
-use brain_lib::store::{Store, VectorSearchMode};
+use brain_persistence::db::Db;
+use brain_persistence::store::{IvfPqConfig, Store, VectorSearchMode};
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use tempfile::TempDir;
@@ -132,7 +132,12 @@ fn bench_querying(c: &mut Criterion) {
                 let qv = query_vec.clone();
                 let store = pipeline.store();
                 async move {
-                    black_box(store.query(&qv, 10, 20, Default::default()).await.unwrap());
+                    black_box(
+                        store
+                            .query(&qv, 10, 20, Default::default(), None)
+                            .await
+                            .unwrap(),
+                    );
                 }
             });
         });
@@ -194,7 +199,7 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
         for qv in &query_vecs {
             let results = pipeline
                 .store()
-                .query(qv, 10, 20, VectorSearchMode::Exact)
+                .query(qv, 10, 20, VectorSearchMode::Exact, None)
                 .await
                 .unwrap();
             let ids: Vec<String> = results.into_iter().map(|r| r.chunk_id).collect();
@@ -202,7 +207,7 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
         }
 
         // Create IVF-PQ index
-        let config = brain_lib::store::IvfPqConfig::default();
+        let config = IvfPqConfig::default();
         pipeline.store().create_vector_index(&config).await.unwrap();
 
         (pipeline, tmp, query_vecs, ground_truth)
@@ -217,7 +222,7 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
                     for qv in qvs {
                         black_box(
                             store
-                                .query(qv, 10, nprobes, Default::default())
+                                .query(qv, 10, nprobes, Default::default(), None)
                                 .await
                                 .unwrap(),
                         );
@@ -235,7 +240,7 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
             for (i, qv) in query_vecs.iter().enumerate() {
                 let ann_results = pipeline
                     .store()
-                    .query(qv, 10, nprobes, Default::default())
+                    .query(qv, 10, nprobes, Default::default(), None)
                     .await
                     .unwrap();
                 let ann_ids: std::collections::HashSet<&str> =

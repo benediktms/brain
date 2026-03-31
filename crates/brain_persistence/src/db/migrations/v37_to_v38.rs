@@ -13,7 +13,9 @@ use crate::error::Result;
 /// `REFERENCES "summaries_v27"(summary_id)` — a table that no longer exists —
 /// causing all inserts to fail with:
 ///
-///     no such table: main.summaries_v27
+/// ```text
+/// no such table: main.summaries_v27
+/// ```
 ///
 /// Fix: detect and recreate `reflection_sources` with correct FK references
 /// pointing to `summaries`.  This is a no-op on databases where the FKs are
