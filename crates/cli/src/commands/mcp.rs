@@ -17,21 +17,55 @@ pub async fn run(
 ) -> Result<()> {
     info!("starting MCP server");
 
-    // If resolve_defaults couldn't find a brain from cwd (paths still at
-    // relative defaults), fall back to the global config registry.
-    if !sqlite_db.is_absolute()
-        && let Some((name, resolved)) = resolve_from_registry()
-    {
-        info!(brain = %name, "resolved brain from global config (cwd fallback)");
-        model_dir = resolved.model_dir;
-        lance_db = resolved.lance_db;
-        sqlite_db = resolved.sqlite_db;
+    // Resolve the brain name — either from cwd (brain.toml) or global registry.
+    let mut brain_name: Option<String> = None;
+
+    if !sqlite_db.is_absolute() {
+        // Paths are still at relative defaults — resolve_defaults didn't find
+        // a brain from cwd. Fall back to the global config registry.
+        if let Some((name, resolved)) = resolve_from_registry() {
+            info!(brain = %name, "resolved brain from global config (cwd fallback)");
+            brain_name = Some(name);
+            model_dir = resolved.model_dir;
+            lance_db = resolved.lance_db;
+            sqlite_db = resolved.sqlite_db;
+        }
+    } else {
+        // resolve_defaults found a brain from cwd — extract its name from brain.toml.
+        brain_name = resolve_brain_name_from_cwd();
     }
 
-    let ctx = brain_lib::mcp::McpContext::bootstrap(&model_dir, &lance_db, &sqlite_db).await?;
+    let ctx = brain_lib::mcp::McpContext::bootstrap(
+        &model_dir,
+        &lance_db,
+        &sqlite_db,
+        brain_name.as_deref(),
+    )
+    .await?;
     brain_lib::mcp::run_server(ctx).await?;
 
     Ok(())
+}
+
+/// Try to extract the brain name from .brain/brain.toml in cwd or ancestors.
+fn resolve_brain_name_from_cwd() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let home = brain_lib::config::brain_home().ok()?;
+    let db = brain_persistence::db::Db::open(&home.join("brain.db")).ok()?;
+    let brain_rows = db.list_brains(true).ok()?;
+
+    // Match cwd against registered brain roots.
+    for row in &brain_rows {
+        let roots: Vec<std::path::PathBuf> = row
+            .roots_json
+            .as_deref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default();
+        if roots.iter().any(|r| cwd.starts_with(r)) {
+            return Some(row.name.clone());
+        }
+    }
+    None
 }
 
 /// Try to resolve brain paths from the DB (source of truth).

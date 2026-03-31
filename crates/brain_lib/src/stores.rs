@@ -60,6 +60,7 @@ impl BrainStores {
                 .to_string();
             (data_dir, name)
         };
+
         Self::from_path_inner(sqlite_db, &brain_data_dir, &brain_name, None)
     }
 

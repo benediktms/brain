@@ -102,12 +102,22 @@ impl McpContext {
         model_dir: &Path,
         lance_db: &Path,
         sqlite_db: &Path,
+        brain_name: Option<&str>,
     ) -> crate::error::Result<Arc<Self>> {
         // Step 1: resolve DBs and build stores via BrainStores.
+        // When a brain_name is provided (from resolve_from_registry or brain.toml),
+        // use from_brain to get correct scoping. Otherwise fall back to from_path.
         let stores = tokio::task::spawn_blocking({
             let sqlite_db = sqlite_db.to_path_buf();
             let lance_db = lance_db.to_path_buf();
-            move || BrainStores::from_path(&sqlite_db, Some(&lance_db))
+            let brain_name = brain_name.map(|s| s.to_string());
+            move || {
+                if let Some(ref name) = brain_name {
+                    BrainStores::from_brain(name)
+                } else {
+                    BrainStores::from_path(&sqlite_db, Some(&lance_db))
+                }
+            }
         })
         .await
         .map_err(|e| crate::error::BrainCoreError::Database(format!("spawn_blocking: {e}")))??;
