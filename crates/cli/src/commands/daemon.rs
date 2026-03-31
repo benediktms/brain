@@ -7,7 +7,6 @@ use anyhow::{Context, Result, bail};
 pub struct Daemon {
     pid_path: PathBuf,
     log_path: PathBuf,
-    sock_path: PathBuf,
     lock_path: PathBuf,
 }
 
@@ -19,12 +18,10 @@ impl Daemon {
         brain_lib::fs_permissions::ensure_private_dir(&home).map_err(|e| anyhow::anyhow!("{e}"))?;
         let pid_path = home.join("brain.pid");
         let log_path = home.join("brain.log");
-        let sock_path = home.join("brain.sock");
         let lock_path = home.join("brain.lock");
         Ok(Self {
             pid_path,
             log_path,
-            sock_path,
             lock_path,
         })
     }
@@ -410,7 +407,6 @@ mod tests {
         let daemon = Daemon {
             pid_path,
             log_path,
-            sock_path: sock_path.clone(),
             lock_path: tmp.path().join("brain.lock"),
         };
         daemon.stop().unwrap();
