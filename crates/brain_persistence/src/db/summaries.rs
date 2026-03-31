@@ -282,15 +282,27 @@ pub fn get_ml_summaries_for_chunks(
     Ok(map)
 }
 
-/// Batch-load (summary_id, kind) pairs for a list of summary IDs.
-/// Returns a map from summary_id to kind. IDs not found are absent from the map.
-pub fn get_summary_kinds(conn: &Connection, ids: &[String]) -> Result<HashMap<String, String>> {
+/// Metadata for a summary, used by the query pipeline to enrich candidates.
+#[derive(Debug, Clone)]
+pub struct SummaryMeta {
+    pub kind: String,
+    pub tags: Vec<String>,
+    pub importance: f64,
+    pub created_at: i64,
+}
+
+/// Batch-load summary metadata for a list of summary IDs.
+/// Returns a map from summary_id to `SummaryMeta`. IDs not found are absent.
+pub fn get_summary_metadata(
+    conn: &Connection,
+    ids: &[String],
+) -> Result<HashMap<String, SummaryMeta>> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
     let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
     let sql = format!(
-        "SELECT summary_id, kind FROM summaries WHERE summary_id IN ({})",
+        "SELECT summary_id, kind, tags, importance, created_at FROM summaries WHERE summary_id IN ({})",
         placeholders.join(", ")
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -299,12 +311,24 @@ pub fn get_summary_kinds(conn: &Connection, ids: &[String]) -> Result<HashMap<St
         .map(|s| s as &dyn rusqlite::types::ToSql)
         .collect();
     let rows = stmt.query_map(params.as_slice(), |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        let tags: Vec<String> = match row.get::<_, Option<String>>(2)? {
+            Some(json) if !json.is_empty() => serde_json::from_str(&json).unwrap_or_default(),
+            _ => vec![],
+        };
+        Ok((
+            row.get::<_, String>(0)?,
+            SummaryMeta {
+                kind: row.get(1)?,
+                tags,
+                importance: row.get::<_, f64>(3).unwrap_or(1.0),
+                created_at: row.get::<_, i64>(4).unwrap_or(0),
+            },
+        ))
     })?;
     let mut map = HashMap::new();
     for row in rows {
-        let (id, kind) = row?;
-        map.insert(id, kind);
+        let (id, meta) = row?;
+        map.insert(id, meta);
     }
     Ok(map)
 }

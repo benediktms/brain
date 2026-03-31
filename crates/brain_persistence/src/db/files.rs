@@ -104,16 +104,21 @@ pub fn reset_stuck_file_for_reindex(conn: &Connection, file_id: &str) -> Result<
 }
 
 /// Mark a file as fully indexed: update hash, chunker version, timestamp, and state.
+///
+/// `disk_modified_at` is the file's OS-level modification timestamp (Unix
+/// seconds).  When `Some`, it is stored so the recency signal reflects real
+/// edits rather than indexing time.
 pub fn mark_indexed(
     conn: &Connection,
     file_id: &str,
     content_hash: &str,
     chunker_version: u32,
+    disk_modified_at: Option<i64>,
 ) -> Result<()> {
     let now = crate::utils::now_ts();
     conn.execute(
-        "UPDATE files SET content_hash = ?1, last_indexed_at = ?2, indexing_state = 'indexed', chunker_version = ?3 WHERE file_id = ?4",
-        rusqlite::params![content_hash, now, chunker_version, file_id],
+        "UPDATE files SET content_hash = ?1, last_indexed_at = ?2, indexing_state = 'indexed', chunker_version = ?3, disk_modified_at = ?4 WHERE file_id = ?5",
+        rusqlite::params![content_hash, now, chunker_version, disk_modified_at, file_id],
     )?;
     Ok(())
 }
@@ -300,7 +305,7 @@ mod tests {
         assert_eq!(get_content_hash(&conn, &file_id).unwrap(), None);
 
         // After marking indexed
-        mark_indexed(&conn, &file_id, "abc123", 1).unwrap();
+        mark_indexed(&conn, &file_id, "abc123", 1, None).unwrap();
         assert_eq!(
             get_content_hash(&conn, &file_id).unwrap(),
             Some("abc123".to_string())
@@ -318,7 +323,7 @@ mod tests {
         assert_eq!(stuck.len(), 1);
         assert_eq!(stuck[0].0, file_id);
 
-        mark_indexed(&conn, &file_id, "hash123", 1).unwrap();
+        mark_indexed(&conn, &file_id, "hash123", 1, None).unwrap();
         let stuck = find_stuck_files(&conn).unwrap();
         assert!(stuck.is_empty());
     }
@@ -327,7 +332,7 @@ mod tests {
     fn test_reset_stuck_file_for_reindex() {
         let conn = setup();
         let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
-        mark_indexed(&conn, &file_id, "hash123", 1).unwrap();
+        mark_indexed(&conn, &file_id, "hash123", 1, None).unwrap();
         set_indexing_state(&conn, &file_id, "indexing_started").unwrap();
 
         reset_stuck_file_for_reindex(&conn, &file_id).unwrap();
@@ -446,8 +451,8 @@ mod tests {
         let conn = setup();
         let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
         let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
-        mark_indexed(&conn, &fid1, "hash1", 1).unwrap();
-        mark_indexed(&conn, &fid2, "hash2", 1).unwrap();
+        mark_indexed(&conn, &fid1, "hash1", 1, None).unwrap();
+        mark_indexed(&conn, &fid2, "hash2", 1, None).unwrap();
 
         let cleared = clear_all_content_hashes(&conn).unwrap();
         assert_eq!(cleared, 2);
@@ -461,8 +466,8 @@ mod tests {
         let conn = setup();
         let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
         let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
-        mark_indexed(&conn, &fid1, "hash1", 1).unwrap();
-        mark_indexed(&conn, &fid2, "hash2", 1).unwrap();
+        mark_indexed(&conn, &fid1, "hash1", 1, None).unwrap();
+        mark_indexed(&conn, &fid2, "hash2", 1, None).unwrap();
 
         let found = clear_content_hash_by_path(&conn, "/notes/a.md").unwrap();
         assert!(found);
@@ -513,7 +518,7 @@ mod tests {
         let conn = setup();
         let (fid1, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
         let (fid2, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
-        mark_indexed(&conn, &fid1, "hash1", 1).unwrap();
+        mark_indexed(&conn, &fid1, "hash1", 1, None).unwrap();
 
         let files = get_files_with_hashes(&conn).unwrap();
         assert_eq!(files.len(), 2);
@@ -551,11 +556,11 @@ mod tests {
         assert_eq!(get_chunker_version(&conn, &file_id).unwrap(), None);
 
         // After marking indexed with version 2
-        mark_indexed(&conn, &file_id, "hash1", 2).unwrap();
+        mark_indexed(&conn, &file_id, "hash1", 2, None).unwrap();
         assert_eq!(get_chunker_version(&conn, &file_id).unwrap(), Some(2));
 
         // Update to version 3
-        mark_indexed(&conn, &file_id, "hash1", 3).unwrap();
+        mark_indexed(&conn, &file_id, "hash1", 3, None).unwrap();
         assert_eq!(get_chunker_version(&conn, &file_id).unwrap(), Some(3));
     }
 
@@ -563,7 +568,7 @@ mod tests {
     fn test_resurrect_clears_chunker_version() {
         let conn = setup();
         let (file_id, _) = get_or_create_file_id(&conn, "/notes/test.md", "").unwrap();
-        mark_indexed(&conn, &file_id, "hash1", 2).unwrap();
+        mark_indexed(&conn, &file_id, "hash1", 2, None).unwrap();
         assert_eq!(get_chunker_version(&conn, &file_id).unwrap(), Some(2));
 
         // Soft-delete
@@ -588,15 +593,15 @@ mod tests {
         assert_eq!(count_stale_chunker_version(&conn, 2).unwrap(), 3);
 
         // Mark one as current
-        mark_indexed(&conn, &fid1, "h1", 2).unwrap();
+        mark_indexed(&conn, &fid1, "h1", 2, None).unwrap();
         assert_eq!(count_stale_chunker_version(&conn, 2).unwrap(), 2);
 
         // Mark another with old version
-        mark_indexed(&conn, &fid2, "h2", 1).unwrap();
+        mark_indexed(&conn, &fid2, "h2", 1, None).unwrap();
         assert_eq!(count_stale_chunker_version(&conn, 2).unwrap(), 2);
 
         // Mark last as current
-        mark_indexed(&conn, &fid3, "h3", 2).unwrap();
+        mark_indexed(&conn, &fid3, "h3", 2, None).unwrap();
         assert_eq!(count_stale_chunker_version(&conn, 2).unwrap(), 1); // fid2 still stale
     }
 }

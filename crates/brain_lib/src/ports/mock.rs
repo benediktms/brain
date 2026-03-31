@@ -201,11 +201,26 @@ impl ChunkMetaReader for MockChunkMetaReader {
             .collect())
     }
 
-    fn get_summary_kinds(&self, summary_ids: &[String]) -> Result<HashMap<String, String>> {
+    fn get_summary_metadata(
+        &self,
+        summary_ids: &[String],
+    ) -> Result<HashMap<String, brain_persistence::db::summaries::SummaryMeta>> {
         let map = self.summary_kinds.lock().unwrap();
         Ok(summary_ids
             .iter()
-            .filter_map(|id| map.get(id).map(|k| (id.clone(), k.clone())))
+            .filter_map(|id| {
+                map.get(id).map(|k| {
+                    (
+                        id.clone(),
+                        brain_persistence::db::summaries::SummaryMeta {
+                            kind: k.clone(),
+                            tags: vec![],
+                            importance: 1.0,
+                            created_at: 0,
+                        },
+                    )
+                })
+            })
             .collect())
     }
 }
@@ -541,7 +556,13 @@ impl FileMetaWriter for MockFileMetaWriter {
         Ok(())
     }
 
-    fn mark_indexed(&self, file_id: &str, content_hash: &str, _chunker_version: u32) -> Result<()> {
+    fn mark_indexed(
+        &self,
+        file_id: &str,
+        content_hash: &str,
+        _chunker_version: u32,
+        _disk_modified_at: Option<i64>,
+    ) -> Result<()> {
         self.content_hashes
             .lock()
             .unwrap()
@@ -1123,6 +1144,7 @@ mod tests {
                 byte_end: 5,
                 token_estimate: 1,
                 last_indexed_at: None,
+                disk_modified_at: None,
                 pagerank_score: 0.0,
             });
             rows.push(ChunkRow {
@@ -1135,6 +1157,7 @@ mod tests {
                 byte_end: 11,
                 token_estimate: 1,
                 last_indexed_at: None,
+                disk_modified_at: None,
                 pagerank_score: 0.0,
             });
         }
@@ -1225,17 +1248,8 @@ mod tests {
         let pipeline = QueryPipeline::new(&db, &store, &embedder, &metrics);
 
         // search_ranked embeds the query and calls store.query — both are mocked.
-        let (ranked, _confidence) = pipeline
-            .search_ranked(
-                "fox",
-                "semantic",
-                &[],
-                VectorSearchMode::default(),
-                false,
-                None,
-            )
-            .await
-            .unwrap();
+        let sp = crate::query_pipeline::SearchParams::new("fox", "semantic", 0, 0, &[]);
+        let (ranked, _confidence) = pipeline.search_ranked(&sp).await.unwrap();
 
         // The mock searcher returns our preset result; after SQLite enrichment
         // it may be filtered out (no SQLite row). An empty ranked list is
@@ -1293,7 +1307,7 @@ mod tests {
         let writer = MockFileMetaWriter::default();
 
         let (file_id, _) = writer.get_or_create_file_id("/notes/a.md", "").unwrap();
-        writer.mark_indexed(&file_id, "hash123", 1).unwrap();
+        writer.mark_indexed(&file_id, "hash123", 1, None).unwrap();
 
         let count = writer.clear_all_content_hashes().unwrap();
         assert_eq!(count, 1);

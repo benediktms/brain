@@ -5,9 +5,24 @@
 /// - `expand`: returns full content for selected memory IDs
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::capsule::generate_stub_capsule;
 use crate::ranking::{FusionConfidence, RankedResult, SignalScores};
 use crate::tokens::estimate_tokens;
+
+/// Canonical memory result kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemoryKind {
+    Note,
+    Episode,
+    Reflection,
+    Procedure,
+    Task,
+    TaskOutcome,
+    Record,
+}
 
 /// Trait for types that can be expanded to full memory content.
 ///
@@ -250,7 +265,9 @@ fn make_stub(result: &RankedResult, ml_summary: Option<&str>) -> MemoryStub {
 
     let stub_tokens = estimate_tokens(&title) + estimate_tokens(&summary_2sent) + 5;
 
-    let kind = derive_kind(&result.chunk_id, result.summary_kind.as_deref());
+    let kind = derive_kind(&result.chunk_id, result.summary_kind.as_deref())
+        .as_str()
+        .to_string();
 
     MemoryStub {
         memory_id: result.chunk_id.clone(),
@@ -267,17 +284,43 @@ fn make_stub(result: &RankedResult, ml_summary: Option<&str>) -> MemoryStub {
 }
 
 /// Derive the result kind from a chunk_id prefix and optional summary kind.
-fn derive_kind(chunk_id: &str, summary_kind: Option<&str>) -> String {
+pub(crate) fn derive_kind(chunk_id: &str, summary_kind: Option<&str>) -> MemoryKind {
     if chunk_id.starts_with("sum:") {
-        summary_kind.unwrap_or("episode").to_string()
+        match summary_kind.unwrap_or("episode") {
+            "reflection" => MemoryKind::Reflection,
+            "procedure" => MemoryKind::Procedure,
+            "summary" => MemoryKind::Note, // derived summaries map to Note
+            _ => MemoryKind::Episode,
+        }
     } else if chunk_id.starts_with("task-outcome:") {
-        "task-outcome".to_string()
+        MemoryKind::TaskOutcome
     } else if chunk_id.starts_with("task:") {
-        "task".to_string()
+        MemoryKind::Task
     } else if chunk_id.starts_with("record:") {
-        "record".to_string()
+        MemoryKind::Record
     } else {
-        "note".to_string()
+        MemoryKind::Note
+    }
+}
+
+impl std::fmt::Display for MemoryKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl MemoryKind {
+    /// String representation matching the existing MCP JSON output format.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MemoryKind::Note => "note",
+            MemoryKind::Episode => "episode",
+            MemoryKind::Reflection => "reflection",
+            MemoryKind::Procedure => "procedure",
+            MemoryKind::Task => "task",
+            MemoryKind::TaskOutcome => "task-outcome",
+            MemoryKind::Record => "record",
+        }
     }
 }
 
@@ -450,22 +493,27 @@ mod tests {
 
     #[test]
     fn test_derive_kind() {
-        assert_eq!(derive_kind("task:BRN-01ABC:0", None), "task");
+        assert_eq!(derive_kind("task:BRN-01ABC:0", None), MemoryKind::Task);
         assert_eq!(
             derive_kind("task-outcome:BRN-01XYZ:0", None),
-            "task-outcome"
+            MemoryKind::TaskOutcome
         );
-        assert_eq!(derive_kind("01JXYZ1234:0", None), "note");
-        assert_eq!(derive_kind("some-uuid:3", None), "note");
-        assert_eq!(derive_kind("sum:01JXYZ1234", Some("episode")), "episode");
+        assert_eq!(derive_kind("01JXYZ1234:0", None), MemoryKind::Note);
+        assert_eq!(derive_kind("some-uuid:3", None), MemoryKind::Note);
+        assert_eq!(
+            derive_kind("sum:01JXYZ1234", Some("episode")),
+            MemoryKind::Episode
+        );
         assert_eq!(
             derive_kind("sum:01JXYZ1234", Some("reflection")),
-            "reflection"
+            MemoryKind::Reflection
         );
-        assert_eq!(derive_kind("record:BRN-01ABC:0", None), "record");
-        assert_eq!(derive_kind("sum:01JXYZ1234", None), "episode");
-        // TDD: procedure kind — will FAIL until derive_kind is updated to handle "procedure"
-        assert_eq!(derive_kind("sum:ABC123", Some("procedure")), "procedure");
+        assert_eq!(derive_kind("record:BRN-01ABC:0", None), MemoryKind::Record);
+        assert_eq!(derive_kind("sum:01JXYZ1234", None), MemoryKind::Episode);
+        assert_eq!(
+            derive_kind("sum:ABC123", Some("procedure")),
+            MemoryKind::Procedure
+        );
     }
 
     #[test]

@@ -19,7 +19,10 @@ use crate::ranking::{
     CandidateSignals, FusionConfidence, RerankCandidate, Reranker, RerankerPolicy, Weights,
     compute_fusion_confidence, rank_candidates, resolve_intent,
 };
-use crate::retrieval::{ExpandResult, ExpandableChunk, SearchResult, expand_results, pack_minimal};
+use crate::retrieval::{
+    ExpandResult, ExpandableChunk, MemoryKind, SearchResult, derive_kind, expand_results,
+    pack_minimal,
+};
 use crate::tokens::estimate_tokens;
 use brain_persistence::db::Db;
 use brain_persistence::db::summaries::SummaryRow;
@@ -55,6 +58,16 @@ pub struct SearchParams<'a> {
     /// Optional brain_id filter for FTS queries. `None` = workspace-global,
     /// `Some(&[id])` = scope to specific brain(s).
     pub brain_ids: Option<&'a [String]>,
+    /// Filter by result kind. Empty = no filter (all kinds).
+    pub kinds: &'a [MemoryKind],
+    /// Only include results with effective timestamp >= this (Unix seconds).
+    pub time_after: Option<i64>,
+    /// Only include results with effective timestamp <= this (Unix seconds).
+    pub time_before: Option<i64>,
+    /// Require ALL of these tags (case-insensitive, AND logic).
+    pub tags_require: &'a [String],
+    /// Exclude results matching ANY of these tags (case-insensitive, NOR logic).
+    pub tags_exclude: &'a [String],
 }
 
 impl<'a> SearchParams<'a> {
@@ -75,6 +88,11 @@ impl<'a> SearchParams<'a> {
             mode: VectorSearchMode::default(),
             graph_expand: false,
             brain_ids: None,
+            kinds: &[],
+            time_after: None,
+            time_before: None,
+            tags_require: &[],
+            tags_exclude: &[],
         }
     }
 
@@ -87,6 +105,36 @@ impl<'a> SearchParams<'a> {
     /// Scope FTS queries to specific brain(s).
     pub fn with_brain_ids(mut self, brain_ids: Option<&'a [String]>) -> Self {
         self.brain_ids = brain_ids;
+        self
+    }
+
+    /// Filter results by kind.
+    pub fn with_kinds(mut self, kinds: &'a [MemoryKind]) -> Self {
+        self.kinds = kinds;
+        self
+    }
+
+    /// Only include results modified/created after this timestamp.
+    pub fn with_time_after(mut self, ts: Option<i64>) -> Self {
+        self.time_after = ts;
+        self
+    }
+
+    /// Only include results modified/created before this timestamp.
+    pub fn with_time_before(mut self, ts: Option<i64>) -> Self {
+        self.time_before = ts;
+        self
+    }
+
+    /// Require ALL of these tags (AND logic, case-insensitive).
+    pub fn with_tags_require(mut self, tags: &'a [String]) -> Self {
+        self.tags_require = tags;
+        self
+    }
+
+    /// Exclude results matching ANY of these tags (NOR logic).
+    pub fn with_tags_exclude(mut self, tags: &'a [String]) -> Self {
+        self.tags_exclude = tags;
         self
     }
 }
@@ -154,16 +202,7 @@ where
     /// Hybrid search: vector + FTS union, enriched, ranked, packed within budget.
     #[instrument(skip_all)]
     pub async fn search(&self, params: &SearchParams<'_>) -> Result<SearchResult> {
-        let (ranked, confidence) = self
-            .search_ranked(
-                params.query,
-                params.intent,
-                params.query_tags,
-                params.mode,
-                params.graph_expand,
-                params.brain_ids,
-            )
-            .await?;
+        let (ranked, confidence) = self.search_ranked(params).await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
         let mut result = pack_minimal(
             &ranked,
@@ -179,16 +218,7 @@ where
     /// Hybrid search returning stubs with per-signal score breakdowns.
     #[instrument(skip_all)]
     pub async fn search_with_scores(&self, params: &SearchParams<'_>) -> Result<SearchResult> {
-        let (ranked, confidence) = self
-            .search_ranked(
-                params.query,
-                params.intent,
-                params.query_tags,
-                params.mode,
-                params.graph_expand,
-                params.brain_ids,
-            )
-            .await?;
+        let (ranked, confidence) = self.search_ranked(params).await?;
         let ml_summaries = self.load_ml_summaries(&ranked)?;
         let mut result = pack_minimal(&ranked, params.budget_tokens, params.k, true, &ml_summaries);
         result.fusion_confidence = Some(confidence);
@@ -207,14 +237,14 @@ where
     /// Core search logic: returns ranked results with fusion confidence.
     pub(crate) async fn search_ranked(
         &self,
-        query: &str,
-        intent: &str,
-        query_tags: &[String],
-        mode: VectorSearchMode,
-        graph_expand: bool,
-        brain_ids: Option<&[String]>,
+        params: &SearchParams<'_>,
     ) -> Result<(Vec<crate::ranking::RankedResult>, FusionConfidence)> {
-        let profile = resolve_intent(intent);
+        let query = params.query;
+        let query_tags = params.query_tags;
+        let mode = params.mode;
+        let graph_expand = params.graph_expand;
+        let brain_ids = params.brain_ids;
+        let profile = resolve_intent(params.intent);
         let weights = Weights::from_profile(profile);
 
         // 1. Embed query
@@ -306,10 +336,9 @@ where
         // 5. Enrich from SQLite (single batched JOIN — pagerank_score comes from files table)
         let chunk_ids: Vec<String> = candidates.keys().cloned().collect();
         let enrichment = self.db.get_chunks_by_ids(&chunk_ids);
+        let now = crate::utils::now_ts();
 
         if let Ok(rows) = enrichment {
-            let now = crate::utils::now_ts();
-
             for row in &rows {
                 if let Some(candidate) = candidates.get_mut(&row.chunk_id) {
                     candidate.file_path = row.file_path.clone();
@@ -328,16 +357,19 @@ where
                         .collect();
                     candidate.importance = candidate.pagerank_score;
 
-                    if let Some(indexed_at) = row.last_indexed_at {
-                        candidate.age_seconds = (now - indexed_at).max(0) as f64;
+                    // Prefer disk mtime (real edit time) over last_indexed_at
+                    let effective_ts = row.disk_modified_at.or(row.last_indexed_at);
+                    if let Some(ts) = effective_ts {
+                        candidate.age_seconds = (now - ts).max(0) as f64;
                     }
                 }
             }
         }
 
-        // 5a. Enrich summary_kind for sum:-prefixed candidates
-        //     Batch-query the summaries table to populate summary_kind so that
-        //     derive_kind can emit "procedure" (or other non-episode kinds).
+        // 5a. Enrich summary metadata for sum:-prefixed candidates.
+        //     Loads kind, tags, importance, and created_at from the summaries
+        //     table so that derive_kind, tag filtering, and recency all work
+        //     correctly for episodes/reflections/procedures.
         {
             let summary_ids: Vec<String> = candidates
                 .keys()
@@ -346,13 +378,20 @@ where
                 .collect();
 
             if !summary_ids.is_empty()
-                && let Ok(kind_map) = self.db.get_summary_kinds(&summary_ids)
+                && let Ok(meta_map) = self.db.get_summary_metadata(&summary_ids)
             {
                 for (chunk_id, candidate) in candidates.iter_mut() {
                     if let Some(raw_id) = chunk_id.strip_prefix("sum:")
-                        && let Some(kind) = kind_map.get(raw_id)
+                        && let Some(meta) = meta_map.get(raw_id)
                     {
-                        candidate.summary_kind = Some(kind.clone());
+                        candidate.summary_kind = Some(meta.kind.clone());
+                        if !meta.tags.is_empty() {
+                            candidate.tags = meta.tags.clone();
+                        }
+                        candidate.importance = meta.importance;
+                        if meta.created_at > 0 {
+                            candidate.age_seconds = (now - meta.created_at).max(0) as f64;
+                        }
                     }
                 }
             }
@@ -364,7 +403,62 @@ where
             .filter(|c| !c.content.is_empty())
             .collect();
 
-        // 5b. 1-hop graph expansion: follow outgoing links from top-K candidates
+        // 5c. Apply metadata filters (post-enrichment, pre-ranking)
+        let has_filters = !params.kinds.is_empty()
+            || params.time_after.is_some()
+            || params.time_before.is_some()
+            || !params.tags_require.is_empty()
+            || !params.tags_exclude.is_empty();
+
+        if has_filters {
+            candidate_vec.retain(|c| {
+                // Kind filter
+                if !params.kinds.is_empty() {
+                    let kind = derive_kind(&c.chunk_id, c.summary_kind.as_deref());
+                    if !params.kinds.contains(&kind) {
+                        return false;
+                    }
+                }
+                // Time filters — skip candidates with unknown timestamps
+                // (age_seconds == 0.0 means no timestamp was found during enrichment)
+                if (params.time_after.is_some() || params.time_before.is_some())
+                    && c.age_seconds > 0.0
+                {
+                    let effective_ts = now - c.age_seconds as i64;
+                    if let Some(after) = params.time_after
+                        && effective_ts < after
+                    {
+                        return false;
+                    }
+                    if let Some(before) = params.time_before
+                        && effective_ts > before
+                    {
+                        return false;
+                    }
+                }
+                // Tag filters — compute lowercase tags once for both checks
+                if !params.tags_require.is_empty() || !params.tags_exclude.is_empty() {
+                    let lower_tags: Vec<String> = c.tags.iter().map(|t| t.to_lowercase()).collect();
+                    // Require (AND): all must be present
+                    if !params.tags_require.iter().all(|req| {
+                        let req_lower = req.to_lowercase();
+                        lower_tags.iter().any(|t| t == &req_lower)
+                    }) {
+                        return false;
+                    }
+                    // Exclude (NOR): none may be present
+                    if params.tags_exclude.iter().any(|exc| {
+                        let exc_lower = exc.to_lowercase();
+                        lower_tags.iter().any(|t| t == &exc_lower)
+                    }) {
+                        return false;
+                    }
+                }
+                true
+            });
+        }
+
+        // 5d. 1-hop graph expansion: follow outgoing links from top-K candidates
         //     and inject (or boost) linked chunks in the candidate pool before ranking.
         if graph_expand && !candidate_vec.is_empty() {
             self.expand_graph_links(&mut candidate_vec, 10, 20);
@@ -497,8 +591,9 @@ where
                         continue;
                     }
 
-                    let age_seconds = if let Some(indexed_at) = chunk.last_indexed_at {
-                        (now - indexed_at).max(0) as f64
+                    let effective_ts = chunk.disk_modified_at.or(chunk.last_indexed_at);
+                    let age_seconds = if let Some(ts) = effective_ts {
+                        (now - ts).max(0) as f64
                     } else {
                         0.0
                     };
@@ -691,11 +786,28 @@ where
             let query = params.query.to_string();
             let intent = params.intent.to_string();
             let query_tags = params.query_tags.to_vec();
+            let kinds = params.kinds.to_vec();
+            let tags_require = params.tags_require.to_vec();
+            let tags_exclude = params.tags_exclude.to_vec();
+            let time_after = params.time_after;
+            let time_before = params.time_before;
             futs.push(Box::pin(async move {
-                match pipeline
-                    .search_ranked(&query, &intent, &query_tags, mode, false, None)
-                    .await
-                {
+                let sp = SearchParams {
+                    query: &query,
+                    intent: &intent,
+                    budget_tokens: 0, // unused by search_ranked
+                    k: 0,             // unused by search_ranked
+                    query_tags: &query_tags,
+                    mode,
+                    graph_expand: false,
+                    brain_ids: None,
+                    kinds: &kinds,
+                    time_after,
+                    time_before,
+                    tags_require: &tags_require,
+                    tags_exclude: &tags_exclude,
+                };
+                match pipeline.search_ranked(&sp).await {
                     Ok((ranked, _confidence)) => (brain_name, ranked),
                     Err(e) => {
                         warn!(brain = %brain_name, error = %e, "brain search failed");

@@ -48,6 +48,18 @@ struct PendingFile {
     hash: String,
     chunks: Vec<Chunk>,
     links: Vec<Link>,
+    disk_mtime: Option<i64>,
+}
+
+/// Read the file's OS-level modification time as Unix seconds.
+/// Returns `None` if metadata cannot be read (e.g. permission error).
+async fn read_disk_mtime(path: &Path) -> Option<i64> {
+    tokio::fs::metadata(path)
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
 }
 
 /// Build ChunkMeta vec from chunks and file_id.
@@ -86,6 +98,7 @@ where
     pub async fn index_file(&self, path: &Path) -> crate::error::Result<bool> {
         let start = std::time::Instant::now();
         let content = tokio::fs::read_to_string(path).await?;
+        let disk_mtime = read_disk_mtime(path).await;
         let path_str = path.to_string_lossy().to_string();
 
         let gate = HashGate::new(&self.db);
@@ -112,7 +125,7 @@ where
                 replace_links(conn, &verdict.file_id, &[])?;
                 Ok(())
             })?;
-            gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+            gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             return Ok(true);
         }
 
@@ -132,7 +145,7 @@ where
             let ts = now_ts();
             let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
             self.db.mark_chunks_embedded(&ids, ts)?;
-            gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+            gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             self.metrics.record_index_latency(start.elapsed());
             return Ok(true);
         }
@@ -159,8 +172,8 @@ where
         let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
         self.db.mark_chunks_embedded(&ids, ts)?;
 
-        // Mark indexed (sets hash + state=indexed)
-        gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+        // Mark indexed (sets hash + state=indexed + disk mtime)
+        gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
 
         // Content changed — mark ancestor directory scopes stale.
         mark_ancestors_stale(&self.db, &path_str);
@@ -195,6 +208,7 @@ where
                 }
             };
 
+            let disk_mtime = read_disk_mtime(path).await;
             let path_str = path.to_string_lossy().to_string();
 
             let verdict = match gate.check(&path_str, &content, &self.brain_id) {
@@ -231,7 +245,7 @@ where
                     replace_links(conn, &verdict.file_id, &[])?;
                     Ok(())
                 })?;
-                gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+                gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
             }
@@ -249,7 +263,7 @@ where
                     brain_persistence::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
                     Ok(())
                 })?;
-                gate.mark_passed(&verdict.file_id, &verdict.hash)?;
+                gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
             }
@@ -261,6 +275,7 @@ where
                 hash: verdict.hash,
                 chunks,
                 links,
+                disk_mtime,
             });
 
             if total_chunks >= MAX_PENDING_CHUNKS {
@@ -357,7 +372,7 @@ where
                 let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
                 self.db.mark_chunks_embedded(&ids, ts)?;
 
-                gate.mark_passed(file_id, &pf.hash)?;
+                gate.mark_passed(file_id, &pf.hash, pf.disk_mtime)?;
                 Ok::<(), crate::error::BrainCoreError>(())
             }
             .await

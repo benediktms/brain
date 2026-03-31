@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
+use crate::retrieval::MemoryKind;
 use brain_persistence::store::VectorSearchMode;
 
 use crate::uri::SynapseUri;
@@ -32,6 +33,21 @@ struct Params {
     /// When true, include per-result signal score breakdowns in the response.
     #[serde(default)]
     explain: bool,
+    /// Filter by result kind (kebab-case). Empty = all kinds.
+    #[serde(default)]
+    kinds: Vec<MemoryKind>,
+    /// Only results modified/created after this Unix timestamp (seconds).
+    #[serde(default)]
+    time_after: Option<i64>,
+    /// Only results modified/created before this Unix timestamp (seconds).
+    #[serde(default)]
+    time_before: Option<i64>,
+    /// Require ALL of these tags (AND logic, case-insensitive).
+    #[serde(default)]
+    tags_require: Vec<String>,
+    /// Exclude results matching ANY of these tags (NOR logic, case-insensitive).
+    #[serde(default)]
+    tags_exclude: Vec<String>,
 }
 
 fn default_intent() -> String {
@@ -97,6 +113,29 @@ impl McpTool for MemSearchMinimal {
                         "type": "boolean",
                         "description": "When true, return per-signal scores (vector, bm25, recency, links, tag_match, importance) for each result. Default: false",
                         "default": false
+                    },
+                    "kinds": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["note", "episode", "reflection", "procedure", "task", "task-outcome", "record"] },
+                        "description": "Filter by result kind. Empty = all kinds."
+                    },
+                    "time_after": {
+                        "type": "integer",
+                        "description": "Only results modified/created after this Unix timestamp (seconds)"
+                    },
+                    "time_before": {
+                        "type": "integer",
+                        "description": "Only results modified/created before this Unix timestamp (seconds)"
+                    },
+                    "tags_require": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Require ALL of these tags (AND logic, case-insensitive)"
+                    },
+                    "tags_exclude": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Exclude results matching ANY of these tags (NOR logic, case-insensitive)"
                     }
                 },
                 "required": ["query"]
@@ -148,7 +187,12 @@ impl McpTool for MemSearchMinimal {
                 &params.tags,
             )
             .with_mode(mode)
-            .with_brain_ids(fts_brain_ids);
+            .with_brain_ids(fts_brain_ids)
+            .with_kinds(&params.kinds)
+            .with_time_after(params.time_after)
+            .with_time_before(params.time_before)
+            .with_tags_require(&params.tags_require)
+            .with_tags_exclude(&params.tags_exclude);
 
             let search_result = if params.brains.is_empty() {
                 // Single-brain path.

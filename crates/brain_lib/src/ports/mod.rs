@@ -153,7 +153,10 @@ pub trait ChunkMetaReader: Send + Sync {
     /// Used by the query pipeline to populate `summary_kind` on `sum:` prefixed
     /// candidates, enabling `derive_kind` to emit `"procedure"` instead of
     /// the default `"episode"`.
-    fn get_summary_kinds(&self, summary_ids: &[String]) -> Result<HashMap<String, String>>;
+    fn get_summary_metadata(
+        &self,
+        summary_ids: &[String],
+    ) -> Result<HashMap<String, brain_persistence::db::summaries::SummaryMeta>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,10 +338,13 @@ impl ChunkMetaReader for Db {
         })
     }
 
-    fn get_summary_kinds(&self, summary_ids: &[String]) -> Result<HashMap<String, String>> {
+    fn get_summary_metadata(
+        &self,
+        summary_ids: &[String],
+    ) -> Result<HashMap<String, brain_persistence::db::summaries::SummaryMeta>> {
         let ids = summary_ids.to_vec();
         self.with_read_conn(move |conn| {
-            brain_persistence::db::summaries::get_summary_kinds(conn, &ids)
+            brain_persistence::db::summaries::get_summary_metadata(conn, &ids)
         })
     }
 }
@@ -439,7 +445,15 @@ pub trait FileMetaWriter: Send + Sync {
     fn reset_stuck_file_for_reindex(&self, file_id: &str) -> Result<()>;
 
     /// Mark a file as fully indexed: update hash, chunker version, timestamp, and state.
-    fn mark_indexed(&self, file_id: &str, content_hash: &str, chunker_version: u32) -> Result<()>;
+    ///
+    /// `disk_modified_at` is the file's OS-level mtime (Unix seconds).
+    fn mark_indexed(
+        &self,
+        file_id: &str,
+        content_hash: &str,
+        chunker_version: u32,
+        disk_modified_at: Option<i64>,
+    ) -> Result<()>;
 
     /// Count files where `chunker_version` doesn't match `current_version` (stale or NULL).
     fn count_stale_chunker_version(&self, current_version: u32) -> Result<usize>;
@@ -501,7 +515,13 @@ impl FileMetaWriter for Db {
         })
     }
 
-    fn mark_indexed(&self, file_id: &str, content_hash: &str, chunker_version: u32) -> Result<()> {
+    fn mark_indexed(
+        &self,
+        file_id: &str,
+        content_hash: &str,
+        chunker_version: u32,
+        disk_modified_at: Option<i64>,
+    ) -> Result<()> {
         let file_id = file_id.to_string();
         let content_hash = content_hash.to_string();
         self.with_write_conn(move |conn| {
@@ -510,6 +530,7 @@ impl FileMetaWriter for Db {
                 &file_id,
                 &content_hash,
                 chunker_version,
+                disk_modified_at,
             )
         })
     }

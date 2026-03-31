@@ -67,6 +67,9 @@ pub struct ChunkRow {
     pub byte_end: usize,
     pub token_estimate: usize,
     pub last_indexed_at: Option<i64>,
+    /// OS-level file modification timestamp (Unix seconds). Preferred over
+    /// `last_indexed_at` for recency — reflects actual edits, not re-indexing.
+    pub disk_modified_at: Option<i64>,
     /// PageRank score from the files table, normalized to [0, 1]. Defaults to 0.0 if NULL.
     pub pagerank_score: f64,
 }
@@ -82,6 +85,7 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
     let sql = format!(
         "SELECT c.chunk_id, c.file_id, f.path, c.content, c.heading_path,
                 c.byte_start, c.byte_end, c.token_estimate, f.last_indexed_at,
+                f.disk_modified_at,
                 COALESCE(f.pagerank_score, 0.0) as pagerank_score
          FROM chunks c
          JOIN files f ON f.file_id = c.file_id
@@ -107,7 +111,8 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
             byte_end: row.get::<_, i64>(6)? as usize,
             token_estimate: row.get::<_, i64>(7)? as usize,
             last_indexed_at: row.get(8)?,
-            pagerank_score: row.get::<_, f64>(9).unwrap_or(0.0),
+            disk_modified_at: row.get(9)?,
+            pagerank_score: row.get::<_, f64>(10).unwrap_or(0.0),
         })
     })?;
 
@@ -126,6 +131,7 @@ pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<
     let sql = format!(
         "SELECT c.chunk_id, c.file_id, f.path, c.content, c.heading_path,
                 c.byte_start, c.byte_end, c.token_estimate, f.last_indexed_at,
+                f.disk_modified_at,
                 COALESCE(f.pagerank_score, 0.0) as pagerank_score
          FROM chunks c
          JOIN files f ON f.file_id = c.file_id
@@ -148,7 +154,8 @@ pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<
             byte_end: row.get::<_, i64>(6)? as usize,
             token_estimate: row.get::<_, i64>(7)? as usize,
             last_indexed_at: row.get(8)?,
-            pagerank_score: row.get::<_, f64>(9).unwrap_or(0.0),
+            disk_modified_at: row.get(9)?,
+            pagerank_score: row.get::<_, f64>(10).unwrap_or(0.0),
         })
     })?;
 

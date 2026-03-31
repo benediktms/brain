@@ -62,9 +62,17 @@ impl<'a> HashGate<'a> {
     }
 
     /// Stamp the hash + chunker version + mark indexed after successful indexing.
-    pub fn mark_passed(&self, file_id: &str, hash: &str) -> crate::error::Result<()> {
-        self.db
-            .with_write_conn(|conn| files::mark_indexed(conn, file_id, hash, CHUNKER_VERSION))
+    ///
+    /// `disk_modified_at` is the file's OS-level mtime (Unix seconds).
+    pub fn mark_passed(
+        &self,
+        file_id: &str,
+        hash: &str,
+        disk_modified_at: Option<i64>,
+    ) -> crate::error::Result<()> {
+        self.db.with_write_conn(|conn| {
+            files::mark_indexed(conn, file_id, hash, CHUNKER_VERSION, disk_modified_at)
+        })
     }
 }
 
