@@ -163,6 +163,35 @@ impl IpcClient {
         PathBuf::from(home).join(".brain").join("brain.sock")
     }
 
+    /// Attempt to reconnect with exponential backoff.
+    ///
+    /// Tries up to 3 times with delays of 200ms, 1s, and 3s.  This covers
+    /// the brief window during daemon handoff where the socket exists but
+    /// the new daemon hasn't finished binding yet.
+    pub async fn reconnect_with_backoff(socket_path: &Path) -> Result<Self, IpcClientError> {
+        const DELAYS_MS: [u64; 3] = [200, 1_000, 3_000];
+
+        for (i, delay) in DELAYS_MS.iter().enumerate() {
+            match Self::connect(socket_path).await {
+                Ok(client) => return Ok(client),
+                Err(e) => {
+                    if i + 1 < DELAYS_MS.len() {
+                        tracing::debug!(
+                            attempt = i + 1,
+                            delay_ms = delay,
+                            error = %e,
+                            "IPC reconnect attempt failed, retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(*delay)).await;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        unreachable!("loop always returns on final iteration")
+    }
+
     /// Ping the daemon by calling the `status` tool.
     pub async fn ping(&mut self, brain: &str) -> Result<Value, IpcClientError> {
         self.tools_call("status", brain, serde_json::json!({}))
@@ -355,5 +384,80 @@ mod integration_tests {
         assert!(result.is_object());
 
         token.cancel();
+    }
+
+    // ── reconnect_with_backoff tests ────────────────────────────────
+
+    /// Reconnect succeeds immediately when server is available.
+    #[tokio::test]
+    async fn reconnect_with_backoff_succeeds_immediately() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("backoff_ok.sock");
+
+        let (_dir, ctx) = create_test_context().await;
+        ctx.stores
+            .db()
+            .ensure_brain_registered("test-brain", "test-brain")
+            .unwrap();
+        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let server = IpcServer::bind(&sock, router).expect("bind failed");
+        let token = server.cancellation_token();
+        tokio::spawn(async move { server.run().await });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let mut client = IpcClient::reconnect_with_backoff(&sock)
+            .await
+            .expect("reconnect should succeed");
+        let result = client.ping("test-brain").await.expect("ping failed");
+        assert!(result.is_object());
+
+        token.cancel();
+    }
+
+    /// Reconnect succeeds on retry when server appears after a delay.
+    #[tokio::test]
+    async fn reconnect_with_backoff_succeeds_after_delay() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("backoff_delay.sock");
+        let sock2 = sock.clone();
+
+        // Pre-create the context so the spawned task only needs to bind.
+        let (_dir, ctx) = create_test_context().await;
+        ctx.stores
+            .db()
+            .ensure_brain_registered("test-brain", "test-brain")
+            .unwrap();
+
+        // Start the server after 100ms — first attempt at 0ms fails,
+        // second attempt at ~200ms succeeds.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+            let server = IpcServer::bind(&sock2, router).expect("bind failed");
+            server.run().await;
+        });
+
+        let mut client = IpcClient::reconnect_with_backoff(&sock)
+            .await
+            .expect("reconnect should eventually succeed");
+        let result = client.ping("test-brain").await.expect("ping failed");
+        assert!(result.is_object());
+    }
+
+    /// Reconnect gives up after all retries when no server is available.
+    #[tokio::test]
+    async fn reconnect_with_backoff_gives_up() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("backoff_fail.sock");
+
+        let result = IpcClient::reconnect_with_backoff(&sock).await;
+        assert!(
+            result.is_err(),
+            "reconnect should fail when no server is available"
+        );
+        match result.unwrap_err() {
+            IpcClientError::DaemonUnavailable { .. } => {} // expected
+            other => panic!("expected DaemonUnavailable, got {other}"),
+        }
     }
 }

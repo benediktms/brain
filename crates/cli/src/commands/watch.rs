@@ -495,16 +495,20 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         .map(|h| h.join("brain.sock"))
         .unwrap_or_else(|_| PathBuf::from("/tmp/brain.sock"));
 
-    let ipc_cancel = match IpcServer::bind(&sock_path, Arc::clone(&router)) {
+    let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, Arc::clone(&router)) {
         Ok(server) => {
             let token = server.cancellation_token();
+            let inode = {
+                use std::os::unix::fs::MetadataExt;
+                std::fs::metadata(&sock_path).map(|m| m.ino()).unwrap_or(0)
+            };
             tokio::spawn(async move { server.run().await });
             info!(path = ?sock_path, "IPC server started");
-            Some(token)
+            (Some(token), inode)
         }
         Err(e) => {
             warn!(error = %e, "failed to start IPC server; continuing without IPC");
-            None
+            (None, 0)
         }
     };
 
@@ -723,16 +727,30 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     // ── 8. Shutdown sequence ──────────────────────────────────────────────
 
-    // Phase 1: Stop watcher
-    info!("shutdown phase 1/5: stopping file watcher");
+    // Phase 1: Stop IPC server and remove socket file FIRST.
+    // This must happen before the long drain/WAL/LanceDB phases to prevent
+    // a race where a new daemon binds a fresh socket and then our late
+    // cleanup deletes it (the bug that caused "Broken pipe" errors).
+    info!("shutdown phase 1/5: stopping IPC server");
+    if let Some(token) = ipc_cancel {
+        token.cancel();
+    }
+    // Only delete the socket if it's still ours (same inode as at bind time).
+    // A new daemon may have already replaced it during a stale-binary restart.
+    if ipc_inode != 0 {
+        brain_lib::ipc::server::remove_socket_if_owned(&sock_path, ipc_inode);
+    }
+
+    // Phase 2: Stop watcher
+    info!("shutdown phase 2/5: stopping file watcher");
     drop(watcher);
 
-    // Phase 2: Drain pending work queues (signal shutdown only)
+    // Phase 3: Drain pending work queues (signal shutdown only)
     let mut total_dropped: usize = 0;
     let mut force_shutdown = false;
 
     if matches!(shutdown_reason, ShutdownReason::Signal) {
-        info!("shutdown phase 2/5: draining pending work queues (10s timeout)");
+        info!("shutdown phase 3/5: draining pending work queues (10s timeout)");
 
         while let Ok(evt) = rx.try_recv() {
             let event_path = event_primary_path(&evt);
@@ -776,32 +794,26 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
             }
         }
     } else {
-        info!("shutdown phase 2/5: channel closed, skipping drain");
+        info!("shutdown phase 3/5: channel closed, skipping drain");
     }
 
     if !force_shutdown {
-        // Phase 3: SQLite WAL checkpoint for all brains
-        info!("shutdown phase 3/5: checkpointing SQLite WAL");
+        // Phase 4: SQLite WAL checkpoint for all brains
+        info!("shutdown phase 4/5: checkpointing SQLite WAL");
         for instance in brains.values() {
             if let Err(e) = instance.pipeline.db().wal_checkpoint() {
                 warn!(brain = %instance.name, error = %e, "WAL checkpoint failed");
             }
         }
 
-        // Phase 4: LanceDB optimize (single shared store)
-        info!("shutdown phase 4/5: optimizing LanceDB");
+        // Phase 5: LanceDB optimize (single shared store)
+        info!("shutdown phase 5/5: optimizing LanceDB");
         shared_store.optimizer().force_optimize().await;
     } else {
-        info!("shutdown phases 3-5: skipped (force shutdown)");
+        info!("shutdown phases 4-5: skipped (force shutdown)");
     }
 
-    // Phase 5: Stop IPC server and remove socket file
-    info!("shutdown phase 5/5: stopping IPC server");
-    if let Some(token) = ipc_cancel {
-        token.cancel();
-    }
-    let _ = std::fs::remove_file(&sock_path);
-
+    // Phase 5: Done (IPC was already stopped in phase 1).
     let clean = !force_shutdown && total_dropped == 0;
     info!(clean, dropped_items = total_dropped, "shutdown complete");
 

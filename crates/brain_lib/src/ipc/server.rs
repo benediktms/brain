@@ -20,6 +20,10 @@ pub struct IpcServer {
     listener: UnixListener,
     router: Arc<BrainRouter>,
     shutdown: CancellationToken,
+    socket_path: PathBuf,
+    /// Inode of the socket file at bind time — used to avoid deleting a
+    /// replacement socket created by a new daemon during restart.
+    socket_inode: u64,
 }
 
 impl IpcServer {
@@ -72,11 +76,35 @@ impl IpcServer {
 
         info!(path = ?socket_path, "IPC server bound");
 
+        let socket_inode = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(socket_path).map(|m| m.ino()).unwrap_or(0)
+        };
+
         Ok(Self {
             listener,
             router,
             shutdown: CancellationToken::new(),
+            socket_path: socket_path.to_path_buf(),
+            socket_inode,
         })
+    }
+
+    /// Return the bound socket path.
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
+    }
+
+    /// Remove the socket file only if it still belongs to this server instance.
+    ///
+    /// Compares the current file's inode against the inode recorded at bind
+    /// time. If a new daemon has already replaced the socket, the inodes
+    /// differ and we skip deletion.
+    ///
+    /// Returns `true` if the file was removed, `false` if it was missing or
+    /// owned by a different server (inode mismatch).
+    pub fn remove_socket(&self) -> bool {
+        remove_socket_if_owned(&self.socket_path, self.socket_inode)
     }
 
     /// Return a clone of the cancellation token.
@@ -191,6 +219,31 @@ async fn dispatch_request(req: JsonRpcRequest, router: &BrainRouter) -> String {
     })
 }
 
+/// Remove `socket_path` only if its inode matches `expected_inode`.
+///
+/// Returns `true` if removed, `false` if missing or owned by another daemon.
+pub fn remove_socket_if_owned(socket_path: &Path, expected_inode: u64) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // Note: narrow TOCTOU between metadata() and remove_file() exists
+    // but is acceptable — the inode guard catches the common case
+    // (seconds-scale overlap during restart), not the theoretical
+    // microsecond race.
+    let current_ino = match std::fs::metadata(socket_path) {
+        Ok(m) => m.ino(),
+        Err(_) => return false, // already gone
+    };
+    if current_ino != expected_inode {
+        info!(
+            path = ?socket_path,
+            expected = expected_inode,
+            actual = current_ino,
+            "socket inode changed — new daemon already bound, skipping removal"
+        );
+        return false;
+    }
+    std::fs::remove_file(socket_path).is_ok()
+}
+
 fn serialize_error(err: &JsonRpcError) -> String {
     serde_json::to_string(err).unwrap_or_else(|e| {
         error!(error = %e, "IPC error serialization failed");
@@ -285,5 +338,139 @@ mod tests {
         assert_eq!(parsed["error"]["code"], -32601);
 
         token.cancel();
+    }
+
+    // ── Daemon restart race condition tests ─────────────────────────
+
+    #[tokio::test]
+    async fn test_socket_path_accessor_returns_bound_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("accessor.sock");
+
+        let (_dir, ctx) = create_test_context().await;
+        ctx.stores
+            .db()
+            .ensure_brain_registered("test-brain", "test-brain")
+            .unwrap();
+        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let server = IpcServer::bind(&sock, router).expect("bind failed");
+        assert_eq!(server.socket_path(), sock);
+        server.cancellation_token().cancel();
+    }
+
+    #[tokio::test]
+    async fn test_remove_socket_deletes_own_socket() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("own.sock");
+
+        let (_dir, ctx) = create_test_context().await;
+        ctx.stores
+            .db()
+            .ensure_brain_registered("test-brain", "test-brain")
+            .unwrap();
+        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let server = IpcServer::bind(&sock, router).expect("bind failed");
+        server.cancellation_token().cancel();
+
+        assert!(sock.exists(), "socket file should exist after bind");
+        assert!(
+            server.remove_socket(),
+            "remove_socket should return true for own socket"
+        );
+        assert!(!sock.exists(), "socket file should be deleted");
+    }
+
+    #[tokio::test]
+    async fn test_remove_socket_refuses_to_delete_replaced_socket() {
+        // Simulate the race: server A binds, then server B replaces the
+        // socket at the same path.  A's remove_socket() must NOT delete
+        // B's socket.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("race.sock");
+
+        // Server A binds.
+        let (_dir_a, ctx_a) = create_test_context().await;
+        ctx_a
+            .stores
+            .db()
+            .ensure_brain_registered("test-brain", "test-brain")
+            .unwrap();
+        let router_a = BrainRouter::new(Arc::new(ctx_a), "test-brain".to_string());
+        let server_a = IpcServer::bind(&sock, router_a).expect("bind A failed");
+        server_a.cancellation_token().cancel();
+
+        // Delete A's socket (simulating early phase-1 cleanup).
+        std::fs::remove_file(&sock).unwrap();
+
+        // Server B binds at the same path (new daemon).
+        let (_dir_b, ctx_b) = create_test_context().await;
+        ctx_b
+            .stores
+            .db()
+            .ensure_brain_registered("test-brain", "test-brain")
+            .unwrap();
+        let router_b = BrainRouter::new(Arc::new(ctx_b), "test-brain".to_string());
+        let _server_b = IpcServer::bind(&sock, router_b).expect("bind B failed");
+
+        // Now A's late cleanup runs — must NOT delete B's socket.
+        assert!(
+            !server_a.remove_socket(),
+            "server A's remove_socket must return false when socket belongs to server B"
+        );
+        assert!(
+            sock.exists(),
+            "server B's socket must survive server A's late cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remove_socket_returns_false_when_file_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("missing.sock");
+
+        let (_dir, ctx) = create_test_context().await;
+        ctx.stores
+            .db()
+            .ensure_brain_registered("test-brain", "test-brain")
+            .unwrap();
+        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let server = IpcServer::bind(&sock, router).expect("bind failed");
+
+        // Delete behind the server's back.
+        std::fs::remove_file(&sock).unwrap();
+
+        assert!(
+            !server.remove_socket(),
+            "remove_socket should return false when socket already deleted"
+        );
+    }
+
+    /// Reproduces the exact race from the bug report: new server binds while
+    /// old server's cleanup hasn't run yet.
+    #[tokio::test]
+    async fn test_new_server_binds_after_old_cancelled() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("handoff.sock");
+
+        // Old server starts.
+        let token_a = start_test_server(&sock).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Old server cancelled (simulating SIGTERM → phase 1).
+        token_a.cancel();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Old server's socket deleted (phase 1 cleanup).
+        let _ = std::fs::remove_file(&sock);
+
+        // New server binds at same path.
+        let token_b = start_test_server(&sock).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // New server is reachable.
+        let stream = UnixStream::connect(&sock).await;
+        assert!(stream.is_ok(), "new server must be reachable after handoff");
+
+        token_b.cancel();
     }
 }

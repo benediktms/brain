@@ -8,6 +8,7 @@ pub struct Daemon {
     pid_path: PathBuf,
     log_path: PathBuf,
     sock_path: PathBuf,
+    lock_path: PathBuf,
 }
 
 impl Daemon {
@@ -19,15 +20,36 @@ impl Daemon {
         let pid_path = home.join("brain.pid");
         let log_path = home.join("brain.log");
         let sock_path = home.join("brain.sock");
+        let lock_path = home.join("brain.lock");
         Ok(Self {
             pid_path,
             log_path,
             sock_path,
+            lock_path,
         })
     }
 
     /// Fork, setsid, redirect fds, write PID. Parent exits; child returns.
     pub fn start(&self) -> Result<()> {
+        // Acquire an exclusive, non-blocking lock to prevent concurrent starts.
+        // The child inherits the open FD (and thus the lock) after fork.
+        let lock_file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&self.lock_path)?;
+        let lock_fd = lock_file.as_raw_fd();
+        let lock_ret = unsafe { libc::flock(lock_fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if lock_ret != 0 {
+            bail!(
+                "Another daemon start is in progress (lock held on {})",
+                self.lock_path.display()
+            );
+        }
+        // lock_file stays alive through start() — protects the startup
+        // sequence from concurrent `brain daemon start` invocations.  The
+        // lock is released when start() returns in the child, which is fine:
+        // by then the PID file is written and the daemon is running.
+
         if let Some((pid, stored_mtime)) = self.read_pid_file()? {
             if self.is_alive(pid) {
                 let cur_mtime = current_exe_mtime().ok();
@@ -37,12 +59,10 @@ impl Daemon {
                 };
                 if is_stale {
                     println!("Replacing stale daemon (PID: {pid}, binary changed)");
-                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-                    for _ in 0..10 {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        if !self.is_alive(pid) {
-                            break;
-                        }
+                    if !kill_and_wait(pid) {
+                        bail!(
+                            "Failed to stop stale daemon (PID: {pid}). Kill manually: kill -9 {pid}"
+                        );
                     }
                     let _ = fs::remove_file(&self.pid_path);
                 } else {
@@ -99,19 +119,17 @@ impl Daemon {
             return Ok(());
         }
 
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-        println!("Sent SIGTERM to daemon (PID: {pid})");
-
-        for _ in 0..10 {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if !self.is_alive(pid) {
-                let _ = fs::remove_file(&self.pid_path);
-                let _ = fs::remove_file(&self.sock_path);
-                println!("Daemon stopped");
-                return Ok(());
-            }
+        println!("Stopping daemon (PID: {pid})...");
+        if kill_and_wait(pid) {
+            let _ = fs::remove_file(&self.pid_path);
+            // NOTE: We do NOT delete the socket file here.  The daemon's own
+            // shutdown sequence removes it (phase 1 in watch.rs).  For
+            // SIGKILL, the stale-socket detection in IpcServer::bind() handles
+            // cleanup on next start.
+            println!("Daemon stopped");
+        } else {
+            eprintln!("Daemon did not exit. Kill manually: kill -9 {pid}");
         }
-        eprintln!("Daemon did not exit within 5s. Kill manually: kill -9 {pid}");
         Ok(())
     }
 
@@ -191,6 +209,50 @@ impl Daemon {
     }
 }
 
+/// Send SIGTERM, wait up to 5s, escalate to SIGKILL, wait 2s more.
+///
+/// Returns `true` if the process is no longer alive after the sequence.
+pub(crate) fn kill_and_wait(pid: u32) -> bool {
+    fn is_alive(pid: u32) -> bool {
+        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if ret != 0 {
+            // ESRCH = no such process → dead
+            return std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH);
+        }
+        // kill(0) succeeded — process exists, but might be a zombie child.
+        // Try non-blocking waitpid to reap it.  If it's our child and has
+        // exited, this reaps it and we know it's dead.  If it's not our
+        // child, waitpid returns 0 or -1 and we treat it as alive.
+        let mut status: libc::c_int = 0;
+        let w = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        if w == pid as libc::pid_t {
+            return false; // reaped zombie — process is dead
+        }
+        true
+    }
+
+    // Phase 1: SIGTERM
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if !is_alive(pid) {
+            return true;
+        }
+    }
+
+    // Phase 2: Escalate to SIGKILL
+    eprintln!("Daemon did not exit after 5s SIGTERM, sending SIGKILL (PID: {pid})");
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    for _ in 0..4 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if !is_alive(pid) {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn current_exe_mtime() -> Result<u64> {
     let exe = std::env::current_exe().context("cannot determine executable path")?;
     let meta = fs::metadata(&exe).context("cannot stat executable")?;
@@ -231,6 +293,132 @@ mod tests {
         let content = "42\n1234567890";
         let result = parse_pid_file_content(content);
         assert_eq!(result, Some((42, Some(1234567890))));
+    }
+
+    // ── flock tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_flock_prevents_concurrent_lock() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let lock_path = tmp.path().join("brain.lock");
+
+        // Acquire the lock.
+        let lock_file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        let fd = lock_file.as_raw_fd();
+        let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(ret, 0, "first flock should succeed");
+
+        // Second attempt should fail (EWOULDBLOCK).
+        let lock_file2 = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        let fd2 = lock_file2.as_raw_fd();
+        let ret2 = unsafe { libc::flock(fd2, libc::LOCK_EX | libc::LOCK_NB) };
+        assert_ne!(ret2, 0, "second flock should fail while first is held");
+
+        // Drop first lock → second should now succeed.
+        drop(lock_file);
+        let ret3 = unsafe { libc::flock(fd2, libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(ret3, 0, "flock should succeed after first lock released");
+    }
+
+    // ── kill_and_wait tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_kill_and_wait_kills_normal_process() {
+        use std::process::Command;
+        // Spawn a process that sleeps forever but responds to SIGTERM.
+        let child = Command::new("sleep")
+            .arg("120")
+            .spawn()
+            .expect("failed to spawn sleep");
+        let pid = child.id();
+
+        assert!(
+            kill_and_wait(pid),
+            "kill_and_wait should succeed for a normal process"
+        );
+
+        // Verify process is gone.
+        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_ne!(ret, 0, "process should be dead after kill_and_wait");
+    }
+
+    #[test]
+    fn test_kill_and_wait_escalates_to_sigkill() {
+        use std::process::Command;
+        // Spawn a process that traps SIGTERM (ignores it).
+        let child = Command::new("bash")
+            .args(["-c", "trap '' TERM; sleep 120"])
+            .spawn()
+            .expect("failed to spawn bash");
+        let pid = child.id();
+
+        // Give the trap a moment to be installed.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        assert!(
+            kill_and_wait(pid),
+            "kill_and_wait should escalate to SIGKILL and succeed"
+        );
+
+        // Verify process is gone.
+        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_ne!(ret, 0, "process should be dead after SIGKILL escalation");
+    }
+
+    #[test]
+    fn test_kill_and_wait_returns_true_for_already_dead_process() {
+        use std::process::Command;
+        let mut child = Command::new("true").spawn().expect("failed to spawn true");
+        let pid = child.id();
+        child.wait().unwrap(); // wait for it to exit
+
+        // Process is already dead — kill_and_wait should handle gracefully.
+        assert!(
+            kill_and_wait(pid),
+            "kill_and_wait should return true for already-dead process"
+        );
+    }
+
+    // ── stop() socket behavior tests ───────────────────────────────
+
+    #[test]
+    fn test_stop_does_not_delete_socket_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pid_path = tmp.path().join("brain.pid");
+        let log_path = tmp.path().join("brain.log");
+        let sock_path = tmp.path().join("brain.sock");
+
+        // Create a dummy socket file.
+        std::fs::write(&sock_path, "dummy").unwrap();
+
+        // Spawn a process we can stop.
+        let child = std::process::Command::new("sleep")
+            .arg("120")
+            .spawn()
+            .expect("failed to spawn sleep");
+        let pid = child.id();
+        std::fs::write(&pid_path, format!("{pid}\n1700000000")).unwrap();
+
+        let daemon = Daemon {
+            pid_path,
+            log_path,
+            sock_path: sock_path.clone(),
+            lock_path: tmp.path().join("brain.lock"),
+        };
+        daemon.stop().unwrap();
+
+        assert!(
+            sock_path.exists(),
+            "stop() must NOT delete the socket file — the daemon's own shutdown handles it"
+        );
     }
 
     #[test]

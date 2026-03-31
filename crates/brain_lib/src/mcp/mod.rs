@@ -489,8 +489,12 @@ async fn handle_request(
                                     | IpcClientError::DaemonUnavailable { .. }
                             );
                             if is_connection_error {
-                                warn!(error = %e, "IPC connection lost, attempting reconnect");
-                                match IpcClient::connect(&IpcClient::default_socket_path()).await {
+                                warn!(error = %e, "IPC connection lost, attempting reconnect with backoff");
+                                match IpcClient::reconnect_with_backoff(
+                                    &IpcClient::default_socket_path(),
+                                )
+                                .await
+                                {
                                     Ok(new_client) => {
                                         *guard = new_client;
                                         match guard
@@ -512,7 +516,7 @@ async fn handle_request(
                                         }
                                     }
                                     Err(reconnect_err) => {
-                                        error!(error = %reconnect_err, "IPC reconnect failed");
+                                        error!(error = %reconnect_err, "IPC reconnect failed after retries");
                                         protocol::ToolCallResult::error(format!(
                                             "daemon error: {e} (reconnect failed: {reconnect_err})"
                                         ))
