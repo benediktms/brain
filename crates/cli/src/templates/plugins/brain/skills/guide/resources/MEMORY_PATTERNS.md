@@ -22,8 +22,24 @@ Use the `intent` parameter on `memory_search_minimal` to control ranking:
 ## Result Kinds
 
 - **note**: Indexed markdown documents from the notes directory
+- **episode**: Recorded episodes (goal, actions, outcome)
+- **reflection**: Synthesized reflections from episodes
+- **procedure**: Stored procedures and workflows
 - **task**: Active task capsules (auto-generated from task events)
 - **task-outcome**: Completed task outcomes
+- **record**: Artifacts, snapshots, and other stored records
+
+## Metadata Filters
+
+Filter search results using metadata facets:
+
+- `kinds`: Array of kind strings to include (e.g. `["episode", "reflection"]`). Empty = all kinds.
+- `time_after`: Unix timestamp — only results modified/created after this time
+- `time_before`: Unix timestamp — only results modified/created before this time
+- `tags_require`: Array of tags — ALL must be present (AND logic, case-insensitive)
+- `tags_exclude`: Array of tags — results matching ANY are excluded (NOR logic, case-insensitive)
+
+Filters are applied post-retrieval before ranking. Note: recency is based on actual file modification time on disk (not indexing time).
 
 ## Cross-Brain Search
 
