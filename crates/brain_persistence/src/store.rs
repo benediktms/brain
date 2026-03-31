@@ -28,8 +28,13 @@ const DEFAULT_ROW_THRESHOLD: u64 = 200;
 const DEFAULT_TIME_THRESHOLD: Duration = Duration::from_secs(300);
 
 /// Minimum rows required before IVF-PQ index creation is worthwhile.
-/// LanceDB needs sufficient data for IVF partition training.
-const MIN_ROWS_FOR_INDEX: u64 = 256;
+///
+/// Set high because with the unified store all brains share one table —
+/// IVF-PQ training loads all vectors into memory at once.  At typical
+/// brain scales (~20k vectors, 384-dim) brute-force search is <5ms,
+/// so the index is unnecessary overhead.  Users who need ANN speed at
+/// 100k+ scale can create one explicitly via `brain vacuum`.
+const MIN_ROWS_FOR_INDEX: u64 = 100_000;
 
 /// Default nprobes used when querying with an IVF index.
 pub const DEFAULT_NPROBES: usize = 20;
