@@ -24,8 +24,11 @@ const EMBEDDING_DIM: i32 = 384;
 /// table rebuild + content-hash clear when they differ.
 pub const LANCE_SCHEMA_VERSION: u32 = 2;
 
-const DEFAULT_ROW_THRESHOLD: u64 = 200;
-const DEFAULT_TIME_THRESHOLD: Duration = Duration::from_secs(300);
+/// Mutations before auto-optimize triggers. Set high to avoid memory-heavy
+/// compaction during bulk re-index. The daemon's shutdown sequence and
+/// `brain vacuum` both call `force_optimize()` which bypasses this threshold.
+const DEFAULT_ROW_THRESHOLD: u64 = 5_000;
+const DEFAULT_TIME_THRESHOLD: Duration = Duration::from_secs(600);
 
 /// Minimum rows required before IVF-PQ index creation is worthwhile.
 ///
