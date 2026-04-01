@@ -14,6 +14,7 @@ pub mod l0_abstract;
 pub mod l0_generate;
 pub mod llm;
 pub mod lod;
+pub mod lod_resolver;
 pub use brain_persistence::links;
 pub mod mcp;
 pub mod metrics;

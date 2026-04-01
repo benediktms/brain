@@ -40,6 +40,15 @@ pub struct ReflectResult {
     pub search_result: SearchResult,
 }
 
+/// Diagnostic counters from a single search_ranked execution.
+#[derive(Debug, Clone, Default)]
+pub struct PipelineDiagnostics {
+    pub vector_candidates: usize,
+    pub fts_candidates: usize,
+    pub union_size: usize,
+    pub reranked: bool,
+}
+
 /// Parameters for a hybrid search query.
 pub struct SearchParams<'a> {
     pub query: &'a str,
@@ -234,11 +243,15 @@ where
         self.db.get_ml_summaries_for_chunks(&chunk_ids)
     }
 
-    /// Core search logic: returns ranked results with fusion confidence.
-    pub(crate) async fn search_ranked(
+    /// Core search logic: returns ranked results with fusion confidence and diagnostics.
+    pub(crate) async fn search_ranked_with_diagnostics(
         &self,
         params: &SearchParams<'_>,
-    ) -> Result<(Vec<crate::ranking::RankedResult>, FusionConfidence)> {
+    ) -> Result<(
+        Vec<crate::ranking::RankedResult>,
+        FusionConfidence,
+        PipelineDiagnostics,
+    )> {
         let query = params.query;
         let query_tags = params.query_tags;
         let mode = params.mode;
@@ -260,6 +273,7 @@ where
             .store
             .query(&query_vec, CANDIDATE_LIMIT, DEFAULT_NPROBES, mode, None)
             .await?;
+        let vector_count = vector_results.len();
 
         // 3. FTS search (top-50, gracefully degrade on failure)
         let fts_results = match self.db.search_fts(query, CANDIDATE_LIMIT, brain_ids) {
@@ -270,6 +284,7 @@ where
                 Vec::new()
             }
         };
+        let fts_count = fts_results.len();
 
         // 4. Union + deduplicate by chunk_id
         let mut candidates: HashMap<String, CandidateSignals> = HashMap::new();
@@ -329,8 +344,19 @@ where
         let fusion_confidence =
             compute_fusion_confidence(&vector_ids, &fts_ids, self.reranker_policy.confidence_k);
 
+        let union_count = candidates.len();
+
         if candidates.is_empty() {
-            return Ok((vec![], fusion_confidence));
+            return Ok((
+                vec![],
+                fusion_confidence,
+                PipelineDiagnostics {
+                    vector_candidates: vector_count,
+                    fts_candidates: fts_count,
+                    union_size: 0,
+                    reranked: false,
+                },
+            ));
         }
 
         // 5. Enrich from SQLite (single batched JOIN — pagerank_score comes from files table)
@@ -469,6 +495,7 @@ where
 
         // 7. Adaptive reranking: if confidence is low and a reranker is attached,
         //    rerank the top-N fused candidates using the cross-encoder.
+        let mut did_rerank = false;
         if let Some(reranker) = self.reranker
             && self.reranker_policy.should_rerank(&fusion_confidence)
         {
@@ -484,6 +511,7 @@ where
 
             match reranker.rerank(query, &candidates) {
                 Ok(reranked) => {
+                    did_rerank = true;
                     let score_map: std::collections::HashMap<&str, f64> = reranked
                         .iter()
                         .map(|r| (r.chunk_id.as_str(), r.score))
@@ -507,7 +535,28 @@ where
             }
         }
 
-        Ok((ranked, fusion_confidence))
+        Ok((
+            ranked,
+            fusion_confidence,
+            PipelineDiagnostics {
+                vector_candidates: vector_count,
+                fts_candidates: fts_count,
+                union_size: union_count,
+                reranked: did_rerank,
+            },
+        ))
+    }
+
+    /// Core search logic: returns ranked results with fusion confidence.
+    ///
+    /// Thin wrapper around [`search_ranked_with_diagnostics`] that discards the
+    /// diagnostic counters. Preserves the original call sites unchanged.
+    pub(crate) async fn search_ranked(
+        &self,
+        params: &SearchParams<'_>,
+    ) -> Result<(Vec<crate::ranking::RankedResult>, FusionConfidence)> {
+        let (ranked, fusion, _diag) = self.search_ranked_with_diagnostics(params).await?;
+        Ok((ranked, fusion))
     }
 
     /// 1-hop graph expansion: follow outgoing links from the top `seed_count` candidates

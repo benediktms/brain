@@ -5,6 +5,7 @@ mod jobs_status;
 mod mem_consolidate;
 mod mem_expand;
 mod mem_reflect;
+mod mem_retrieve;
 mod mem_search_minimal;
 mod mem_summarize_scope;
 mod mem_write_episode;
@@ -87,6 +88,7 @@ impl ToolRegistry {
         Self {
             tools: vec![
                 Box::new(mem_search_minimal::MemSearchMinimal),
+                Box::new(mem_retrieve::MemRetrieve),
                 Box::new(mem_expand::MemExpand),
                 Box::new(mem_write_episode::MemWriteEpisode),
                 Box::new(mem_write_procedure::MemWriteProcedure),
@@ -147,7 +149,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 30);
+        assert_eq!(defs.len(), 31);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
