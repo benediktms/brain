@@ -143,6 +143,13 @@ pub enum JobPayload {
     FullScanSweep { brain_id: String },
     /// Embed stale chunks, tasks, and records for a specific brain.
     EmbedPollSweep { brain_id: String },
+    /// Generate an L1 (LLM-summarized) LOD chunk for an object.
+    LodSummarize {
+        object_uri: String,
+        brain_id: String,
+        source_content: String,
+        source_hash: String,
+    },
 }
 
 impl JobPayload {
@@ -157,6 +164,7 @@ impl JobPayload {
             JobPayload::ConsolidationSweep => "sweep",
             JobPayload::FullScanSweep { brain_id, .. } => brain_id,
             JobPayload::EmbedPollSweep { brain_id } => brain_id,
+            JobPayload::LodSummarize { object_uri, .. } => object_uri,
         }
     }
 
@@ -169,6 +177,7 @@ impl JobPayload {
             JobPayload::ConsolidationSweep => "consolidation_sweep",
             JobPayload::FullScanSweep { .. } => "full_scan_sweep",
             JobPayload::EmbedPollSweep { .. } => "embed_poll_sweep",
+            JobPayload::LodSummarize { .. } => "lod_summarize",
         }
     }
 
@@ -177,7 +186,8 @@ impl JobPayload {
         match self {
             JobPayload::FullScanSweep { brain_id, .. }
             | JobPayload::EmbedPollSweep { brain_id }
-            | JobPayload::ConsolidateCluster { brain_id, .. } => Some(brain_id),
+            | JobPayload::ConsolidateCluster { brain_id, .. }
+            | JobPayload::LodSummarize { brain_id, .. } => Some(brain_id),
             _ => None,
         }
     }
@@ -185,9 +195,9 @@ impl JobPayload {
     /// Default retry strategy for this job kind.
     pub fn default_retry_strategy(&self) -> RetryStrategy {
         match self {
-            JobPayload::SummarizeScope { .. } | JobPayload::ConsolidateCluster { .. } => {
-                RetryStrategy::Fixed { attempts: 3 }
-            }
+            JobPayload::SummarizeScope { .. }
+            | JobPayload::ConsolidateCluster { .. }
+            | JobPayload::LodSummarize { .. } => RetryStrategy::Fixed { attempts: 3 },
             // Recurring jobs always retry — they're idempotent.
             JobPayload::StaleScopeSweep
             | JobPayload::ConsolidationSweep
@@ -199,7 +209,9 @@ impl JobPayload {
     /// Default stuck threshold (seconds) for this job kind.
     pub fn default_stuck_threshold_secs(&self) -> i64 {
         match self {
-            JobPayload::SummarizeScope { .. } | JobPayload::ConsolidateCluster { .. } => 300,
+            JobPayload::SummarizeScope { .. }
+            | JobPayload::ConsolidateCluster { .. }
+            | JobPayload::LodSummarize { .. } => 300,
             // Sweep jobs: 60s for lightweight DB queries.
             JobPayload::StaleScopeSweep | JobPayload::ConsolidationSweep => 60,
             // Scan and embed can take longer.

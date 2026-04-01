@@ -1475,6 +1475,22 @@ impl LodChunkStore for Db {
         Ok(chunk.is_some_and(|c| c.source_hash == current_source_hash))
     }
 
+    fn is_l1_fresh(&self, object_uri: &str, current_source_hash: &str) -> Result<bool> {
+        let chunk = LodChunkStore::get_lod_chunk(self, object_uri, LodLevel::L1)?;
+        Ok(chunk.is_some_and(|c| {
+            if c.source_hash != current_source_hash {
+                return false;
+            }
+            match &c.expires_at {
+                None => true,
+                Some(exp) => {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    exp.as_str() > now.as_str()
+                }
+            }
+        }))
+    }
+
     fn count_lod_chunks_by_brain(
         &self,
         brain_id: &str,
@@ -1609,6 +1625,9 @@ pub trait JobQueue: Send + Sync {
         input: &EnqueueJobInput,
         delay_secs: i64,
     ) -> Result<()>;
+
+    /// Check if an active (non-terminal) `lod_summarize` job exists for `object_uri`.
+    fn has_active_lod_job(&self, object_uri: &str) -> Result<bool>;
 }
 
 // -- JobQueue for Db -------------------------------------------------------
@@ -1729,6 +1748,11 @@ impl JobQueue for Db {
                 conn, &input, delay_secs,
             )
         })
+    }
+
+    fn has_active_lod_job(&self, object_uri: &str) -> Result<bool> {
+        let uri = object_uri.to_string();
+        self.with_read_conn(move |conn| brain_persistence::db::jobs::has_active_lod_job(conn, &uri))
     }
 }
 

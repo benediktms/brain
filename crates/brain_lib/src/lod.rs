@@ -6,6 +6,14 @@
 
 use brain_persistence::error::Result;
 
+/// TTL for L1 chunks (days). After this period, the chunk is considered stale
+/// even if the source hash matches, and regeneration is triggered.
+pub const L1_TTL_DAYS: i64 = 30;
+
+/// Minimum acceptable length (chars, trimmed) for LLM-generated L1 content.
+/// Outputs shorter than this are rejected and trigger a retry.
+pub const L1_MIN_CONTENT_LEN: usize = 50;
+
 /// LOD level discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LodLevel {
@@ -129,6 +137,13 @@ pub trait LodChunkStore: Send + Sync {
         lod_level: LodLevel,
         current_source_hash: &str,
     ) -> Result<bool>;
+
+    /// Check if an L1 chunk is fresh: source_hash matches AND (expires_at is
+    /// NULL OR expires_at > now).
+    ///
+    /// Returns `true` only when all three conditions hold. Returns `false` when
+    /// the chunk is missing, has a different source hash, or has expired.
+    fn is_l1_fresh(&self, object_uri: &str, current_source_hash: &str) -> Result<bool>;
 
     /// Count LOD chunks for a brain, optionally filtered by level.
     fn count_lod_chunks_by_brain(

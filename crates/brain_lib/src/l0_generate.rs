@@ -10,6 +10,9 @@ use std::sync::LazyLock;
 /// Maximum character budget for the L0 abstract (~100 tokens).
 const MAX_L0_CHARS: usize = 400;
 
+/// Maximum character budget for the L1 extractive abstract (~2000 tokens).
+const MAX_L1_CHARS: usize = 8000;
+
 /// Regex for backtick-quoted code tokens (e.g., `foo_bar`).
 static RE_BACKTICK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`([^`]{2,40})`").expect("backtick regex"));
@@ -154,6 +157,39 @@ fn truncate_at_word_boundary(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// Generate an extractive L1 abstract (~2000 tokens) as an LLM fallback.
+///
+/// Algorithm:
+/// 1. Take the first 3 paragraphs (split on `\n\n`) verbatim.
+/// 2. If content remains beyond those paragraphs, append key terms extracted
+///    from the remainder.
+/// 3. Truncate at `MAX_L1_CHARS` (≈8000 chars) at a word boundary.
+pub fn generate_extractive_l1(content: &str) -> String {
+    let content = content.trim();
+    if content.is_empty() {
+        return String::new();
+    }
+
+    let paragraphs: Vec<&str> = content.split("\n\n").collect();
+    let first_three: Vec<&str> = paragraphs.iter().take(3).copied().collect();
+    let remainder: Vec<&str> = paragraphs.iter().skip(3).copied().collect();
+
+    let mut result = first_three.join("\n\n");
+
+    if !remainder.is_empty() {
+        let remainder_text = remainder.join(" ");
+        let terms = extract_key_terms(&remainder_text);
+        if !terms.is_empty() {
+            result.push_str("\n\n...\n\nKey terms: ");
+            result.push_str(&terms.join(", "));
+        } else {
+            result.push_str("\n\n...");
+        }
+    }
+
+    truncate_at_word_boundary(&result, MAX_L1_CHARS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +292,72 @@ mod tests {
             1,
             "duplicates should be removed"
         );
+    }
+
+    // ── generate_extractive_l1 tests ────────────────────────────
+
+    #[test]
+    fn test_extractive_l1_empty_content() {
+        assert_eq!(generate_extractive_l1(""), "");
+        assert_eq!(generate_extractive_l1("   "), "");
+    }
+
+    #[test]
+    fn test_extractive_l1_single_paragraph() {
+        let content = "This is a single paragraph with some content.";
+        let result = generate_extractive_l1(content);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_extractive_l1_three_paragraphs_verbatim() {
+        let content = "Para one.\n\nPara two.\n\nPara three.";
+        let result = generate_extractive_l1(content);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_extractive_l1_more_than_three_paragraphs_appends_ellipsis() {
+        let content = "Para one.\n\nPara two.\n\nPara three.\n\nPara four.";
+        let result = generate_extractive_l1(content);
+        assert!(result.starts_with("Para one.\n\nPara two.\n\nPara three."));
+        assert!(result.contains("..."), "should contain ellipsis");
+    }
+
+    #[test]
+    fn test_extractive_l1_key_terms_from_remainder() {
+        let content =
+            "Para one.\n\nPara two.\n\nPara three.\n\nThe `FooBar` and SOME_CONST are important.";
+        let result = generate_extractive_l1(content);
+        assert!(
+            result.contains("Key terms:"),
+            "should include key terms section"
+        );
+        assert!(result.contains("FooBar") || result.contains("SOME_CONST"));
+    }
+
+    #[test]
+    fn test_extractive_l1_output_size() {
+        // Generate content well over the budget.
+        let big_para = "Word ".repeat(500);
+        let content = std::iter::repeat(big_para.as_str())
+            .take(10)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let result = generate_extractive_l1(&content);
+        assert!(
+            result.len() <= MAX_L1_CHARS,
+            "result len {} exceeds budget {}",
+            result.len(),
+            MAX_L1_CHARS
+        );
+    }
+
+    #[test]
+    fn test_extractive_l1_within_budget_not_truncated() {
+        let content = "Short paragraph.\n\nAnother short one.";
+        let result = generate_extractive_l1(content);
+        assert!(result.len() <= MAX_L1_CHARS);
+        assert!(!result.is_empty());
     }
 }
