@@ -42,7 +42,7 @@ impl BrainRouter {
         tool_name: &str,
         params: Value,
     ) -> ToolCallResult {
-        let (brain_id, brain_name) = match brain {
+        let (brain_id, brain_name) = match brain.filter(|s| !s.is_empty()) {
             Some(input) => {
                 // DB lookup via resolve_brain (name, id, alias, or root path)
                 match self.ctx.stores.db().resolve_brain(input) {
@@ -120,6 +120,31 @@ mod tests {
         assert!(
             msg.contains("no-such-brain"),
             "error should name the missing brain"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_empty_brain_uses_default() {
+        let (_dir, ctx) = create_test_context().await;
+        let brain_id = if ctx.brain_id().is_empty() {
+            "test-id".to_string()
+        } else {
+            ctx.brain_id().to_string()
+        };
+        ctx.stores
+            .db()
+            .ensure_brain_registered(&brain_id, "test-brain")
+            .unwrap();
+        let router = BrainRouter::new(Arc::new(ctx), brain_id);
+
+        // Empty string should be treated the same as None (default brain).
+        let result = router
+            .dispatch(Some(""), "status", serde_json::json!({}))
+            .await;
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "empty brain name should fall back to default"
         );
     }
 

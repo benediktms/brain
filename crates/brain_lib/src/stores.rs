@@ -41,6 +41,10 @@ impl BrainStores {
     ///
     /// Resolves brain_home, opens the unified DB, resolves brain_id from the
     /// config registry, and builds all stores.
+    ///
+    /// TODO: Legacy — this path-derivation approach predates the unified DB
+    /// and registry. Callers should migrate to `from_brain` (name-based) or
+    /// `from_dbs` (pre-opened handle) and this method should be removed.
     pub fn from_path(sqlite_db: &Path, lance_db: Option<&Path>) -> Result<Self> {
         let (brain_data_dir, brain_name) = if let Some(ldb) = lance_db {
             let data_dir = ldb.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -59,6 +63,14 @@ impl BrainStores {
                 .unwrap_or("")
                 .to_string();
             (data_dir, name)
+        };
+
+        // Hidden directories (e.g. ".brain" from ~/.brain/) are BRAIN_HOME
+        // paths, not brain project names — treat them as unscoped.
+        let brain_name = if brain_name.starts_with('.') {
+            String::new()
+        } else {
+            brain_name
         };
 
         Self::from_path_inner(sqlite_db, &brain_data_dir, &brain_name, None)
@@ -556,6 +568,28 @@ mod tests {
         // Stores are functional
         let tasks = rescoped.tasks.list_all().unwrap();
         assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn from_path_rejects_dotfile_brain_name() {
+        // Simulates ~/.brain/lancedb where parent is ~/.brain — the directory
+        // name ".brain" should not become a brain_name.
+        let tmp = TempDir::new().unwrap();
+        let dot_brain = tmp.path().join(".brain");
+        std::fs::create_dir_all(dot_brain.join("brains").join(".brain")).unwrap();
+
+        let sqlite_db = dot_brain.join("brain.db");
+        Db::open(&sqlite_db).unwrap();
+
+        let lance_db = dot_brain.join("lancedb");
+        std::fs::create_dir_all(&lance_db).unwrap();
+
+        let stores = BrainStores::from_path(&sqlite_db, Some(&lance_db)).unwrap();
+        assert!(
+            stores.brain_name.is_empty(),
+            "dotfile directory name should not become brain_name, got: {:?}",
+            stores.brain_name
+        );
     }
 
     #[test]
