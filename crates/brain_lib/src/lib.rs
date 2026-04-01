@@ -11,6 +11,7 @@ pub mod hash_gate;
 pub mod hierarchy;
 pub mod ipc;
 pub mod l0_abstract;
+pub mod l0_generate;
 pub mod llm;
 pub mod lod;
 pub use brain_persistence::links;

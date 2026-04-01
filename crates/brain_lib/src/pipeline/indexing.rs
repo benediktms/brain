@@ -4,12 +4,16 @@ use tracing::{info, instrument, warn};
 
 use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
 use crate::hash_gate::HashGate;
+use crate::l0_generate::generate_chunk_l0;
 use crate::links::{Link, extract_links};
 use crate::parser::parse_document;
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, SchemaMeta};
+use crate::tokens::estimate_tokens;
+use crate::uri::SynapseUri;
 use crate::utils::now_ts;
 use brain_persistence::db::chunks::{ChunkMeta, replace_chunk_metadata};
 use brain_persistence::db::links::replace_links;
+use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 
 use super::{IndexPipeline, ScanStats};
 
@@ -89,6 +93,49 @@ fn chunks_match_stored(chunks: &[Chunk], stored_hashes: &[String]) -> bool {
             .all(|(c, stored)| c.chunk_hash == *stored)
 }
 
+/// Build L0 upsert inputs for a batch of chunks.
+///
+/// Returns a vec of `(uri, id, content, token_est, source_hash)` ready for
+/// `lod_chunks::upsert_lod_chunk`. Separated from the DB call so the caller
+/// can pass them into a `with_write_conn` closure.
+fn build_l0_inputs(chunks: &[Chunk], chunk_metas: &[ChunkMeta], brain_id: &str) -> Vec<L0Input> {
+    chunks
+        .iter()
+        .zip(chunk_metas.iter())
+        .map(|(chunk, meta)| {
+            let l0 = generate_chunk_l0(&chunk.heading_path, &chunk.content);
+            let token_est = estimate_tokens(&l0) as i64;
+            L0Input {
+                uri: SynapseUri::for_memory(brain_id, &meta.chunk_id).to_string(),
+                id: ulid::Ulid::new().to_string(),
+                content: l0,
+                token_est,
+                source_hash: chunk.chunk_hash.clone(),
+            }
+        })
+        .collect()
+}
+
+struct L0Input {
+    uri: String,
+    id: String,
+    content: String,
+    token_est: i64,
+    source_hash: String,
+}
+
+/// Build a LIKE pattern that matches all LOD chunk URIs for a file's chunks.
+///
+/// Chunk IDs have the format `{file_id}:{ord}`, so URIs look like
+/// `synapse://{brain}/memory/{file_id}:0`, `synapse://{brain}/memory/{file_id}:1`, etc.
+/// The pattern `synapse://{brain}/memory/{file_id}:%` matches all of them.
+pub(crate) fn lod_uri_pattern_for_file(brain_id: &str, file_id: &str) -> String {
+    format!(
+        "{}%",
+        SynapseUri::for_memory(brain_id, &format!("{file_id}:"))
+    )
+}
+
 impl<S> IndexPipeline<S>
 where
     S: ChunkIndexWriter + SchemaMeta + Send + Sync,
@@ -116,10 +163,12 @@ where
         let links = extract_links(&content);
 
         if chunks.is_empty() {
-            // Empty file — clear any existing chunks and links
+            // Empty file — clear any existing chunks, links, and LOD entries
             self.store
                 .delete_file_chunks(&verdict.file_id, &self.brain_id)
                 .await?;
+            let pattern = lod_uri_pattern_for_file(&self.brain_id, &verdict.file_id);
+            self.db.delete_lod_chunks_by_uri_pattern(&pattern)?;
             self.db.with_write_conn(|conn| {
                 replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                 replace_links(conn, &verdict.file_id, &[])?;
@@ -133,9 +182,30 @@ where
         let stored_hashes = self.db.get_chunk_hashes(&verdict.file_id)?;
 
         let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
+        let l0_inputs = build_l0_inputs(&chunks, &chunk_metas, &self.brain_id);
         self.db.with_write_conn(|conn| {
             replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas, &self.brain_id)?;
             replace_links(conn, &verdict.file_id, &links)?;
+            let now = chrono::Utc::now().to_rfc3339();
+            for l0 in &l0_inputs {
+                lod_chunks::upsert_lod_chunk(
+                    conn,
+                    &InsertLodChunk {
+                        id: &l0.id,
+                        object_uri: &l0.uri,
+                        brain_id: &self.brain_id,
+                        lod_level: "L0",
+                        content: &l0.content,
+                        token_est: Some(l0.token_est),
+                        method: "extractive",
+                        model_id: None,
+                        source_hash: &l0.source_hash,
+                        created_at: &now,
+                        expires_at: None,
+                        job_id: None,
+                    },
+                )?;
+            }
             Ok(())
         })?;
 
@@ -240,6 +310,8 @@ where
                 self.store
                     .delete_file_chunks(&verdict.file_id, &self.brain_id)
                     .await?;
+                let pattern = lod_uri_pattern_for_file(&self.brain_id, &verdict.file_id);
+                self.db.delete_lod_chunks_by_uri_pattern(&pattern)?;
                 self.db.with_write_conn(|conn| {
                     replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                     replace_links(conn, &verdict.file_id, &[])?;
@@ -340,6 +412,7 @@ where
             let file_embeddings = &all_embeddings[offset_start..offset_start + chunk_count];
 
             let chunk_metas = build_chunk_metas(&pf.file_id, &pf.chunks);
+            let l0_inputs = build_l0_inputs(&pf.chunks, &chunk_metas, &self.brain_id);
 
             let file_id = &pf.file_id;
             let path_str = &pf.path_str;
@@ -349,6 +422,26 @@ where
                 self.db.with_write_conn(|conn| {
                     replace_chunk_metadata(conn, file_id, &chunk_metas, &self.brain_id)?;
                     replace_links(conn, file_id, links)?;
+                    let now = chrono::Utc::now().to_rfc3339();
+                    for l0 in &l0_inputs {
+                        lod_chunks::upsert_lod_chunk(
+                            conn,
+                            &InsertLodChunk {
+                                id: &l0.id,
+                                object_uri: &l0.uri,
+                                brain_id: &self.brain_id,
+                                lod_level: "L0",
+                                content: &l0.content,
+                                token_est: Some(l0.token_est),
+                                method: "extractive",
+                                model_id: None,
+                                source_hash: &l0.source_hash,
+                                created_at: &now,
+                                expires_at: None,
+                                job_id: None,
+                            },
+                        )?;
+                    }
                     Ok(())
                 })?;
 

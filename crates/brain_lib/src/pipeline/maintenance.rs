@@ -18,6 +18,9 @@ where
 
         let file_id = self.db.handle_delete(&path_str)?;
         if let Some(ref fid) = file_id {
+            // Clean up LOD entries for this file's chunks.
+            let pattern = super::indexing::lod_uri_pattern_for_file(&self.brain_id, fid);
+            let _ = self.db.delete_lod_chunks_by_uri_pattern(&pattern);
             self.store.delete_file_chunks(fid, &self.brain_id).await?;
             info!(path = %path_str, "file deleted from index");
             Ok(true)

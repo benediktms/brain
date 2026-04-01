@@ -232,6 +232,13 @@ impl Db {
         self.with_write_conn(move |conn| lod_chunks::delete_expired_lod_chunks(conn, &now_iso))
     }
 
+    pub fn delete_lod_chunks_by_uri_pattern(&self, uri_pattern: &str) -> Result<usize> {
+        let uri_pattern = uri_pattern.to_string();
+        self.with_write_conn(move |conn| {
+            lod_chunks::delete_lod_chunks_by_uri_pattern(conn, &uri_pattern)
+        })
+    }
+
     pub fn count_lod_chunks_by_brain(
         &self,
         brain_id: &str,

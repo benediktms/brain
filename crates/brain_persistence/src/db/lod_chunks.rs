@@ -140,6 +140,19 @@ pub fn delete_lod_chunks_for_uri(conn: &Connection, object_uri: &str) -> Result<
     Ok(count)
 }
 
+/// Delete all LOD chunks whose `object_uri` matches a LIKE pattern.
+///
+/// Used to clean up LOD entries when a file is deleted or emptied.
+/// Pattern example: `"synapse://my-brain/memory/file123:%"` deletes all
+/// LOD entries for chunks of that file.
+pub fn delete_lod_chunks_by_uri_pattern(conn: &Connection, uri_pattern: &str) -> Result<usize> {
+    let count = conn.execute(
+        "DELETE FROM lod_chunks WHERE object_uri LIKE ?1",
+        params![uri_pattern],
+    )?;
+    Ok(count)
+}
+
 /// Delete expired LOD chunks where `expires_at < now_iso`. Returns count deleted.
 pub fn delete_expired_lod_chunks(conn: &Connection, now_iso: &str) -> Result<usize> {
     let count = conn.execute(
