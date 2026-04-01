@@ -5,6 +5,7 @@ pub mod fts;
 pub mod job;
 pub mod jobs;
 pub mod links;
+pub mod lod_chunks;
 pub mod meta;
 #[cfg(test)]
 mod migration_harness;
@@ -198,6 +199,61 @@ impl Db {
     /// Delete a brain by name.
     pub fn delete_brain(&self, name: &str) -> Result<bool> {
         self.with_write_conn(|conn| schema::delete_brain(conn, name))
+    }
+
+    // ── LOD Chunks ─────────────────────────────────────────────────────
+
+    pub fn upsert_lod_chunk(&self, input: &lod_chunks::InsertLodChunk) -> Result<()> {
+        self.with_write_conn(|conn| lod_chunks::upsert_lod_chunk(conn, input))
+    }
+
+    pub fn get_lod_chunk(
+        &self,
+        object_uri: &str,
+        lod_level: &str,
+    ) -> Result<Option<lod_chunks::LodChunkRow>> {
+        let object_uri = object_uri.to_string();
+        let lod_level = lod_level.to_string();
+        self.with_read_conn(move |conn| lod_chunks::get_lod_chunk(conn, &object_uri, &lod_level))
+    }
+
+    pub fn get_lod_chunks_for_uri(&self, object_uri: &str) -> Result<Vec<lod_chunks::LodChunkRow>> {
+        let object_uri = object_uri.to_string();
+        self.with_read_conn(move |conn| lod_chunks::get_lod_chunks_for_uri(conn, &object_uri))
+    }
+
+    pub fn delete_lod_chunks_for_uri(&self, object_uri: &str) -> Result<usize> {
+        let object_uri = object_uri.to_string();
+        self.with_write_conn(move |conn| lod_chunks::delete_lod_chunks_for_uri(conn, &object_uri))
+    }
+
+    pub fn delete_expired_lod_chunks(&self, now_iso: &str) -> Result<usize> {
+        let now_iso = now_iso.to_string();
+        self.with_write_conn(move |conn| lod_chunks::delete_expired_lod_chunks(conn, &now_iso))
+    }
+
+    pub fn count_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        lod_level: Option<&str>,
+    ) -> Result<usize> {
+        let brain_id = brain_id.to_string();
+        let lod_level = lod_level.map(String::from);
+        self.with_read_conn(move |conn| {
+            lod_chunks::count_lod_chunks_by_brain(conn, &brain_id, lod_level.as_deref())
+        })
+    }
+
+    pub fn list_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<lod_chunks::LodChunkRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            lod_chunks::list_lod_chunks_by_brain(conn, &brain_id, limit, offset)
+        })
     }
 
     // ── Provider CRUD ──────────────────────────────────────────────────

@@ -1399,6 +1399,111 @@ impl DerivedSummaryStore for Db {
 }
 
 // ---------------------------------------------------------------------------
+// LOD chunk operations — used by Retrieve+ LOD storage layer
+// ---------------------------------------------------------------------------
+
+use crate::lod::{LodChunk, LodChunkStore, LodLevel, UpsertLodChunk};
+
+impl LodChunkStore for Db {
+    fn upsert_lod_chunk(&self, input: &UpsertLodChunk<'_>) -> Result<String> {
+        let id = ulid::Ulid::new().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let persist = brain_persistence::db::lod_chunks::InsertLodChunk {
+            id: &id,
+            object_uri: input.object_uri,
+            brain_id: input.brain_id,
+            lod_level: input.lod_level.as_str(),
+            content: input.content,
+            token_est: input.token_est,
+            method: input.method.as_str(),
+            model_id: input.model_id,
+            source_hash: input.source_hash,
+            created_at: &now,
+            expires_at: input.expires_at,
+            job_id: input.job_id,
+        };
+        self.with_write_conn(|conn| {
+            brain_persistence::db::lod_chunks::upsert_lod_chunk(conn, &persist)
+        })?;
+        Ok(id)
+    }
+
+    fn get_lod_chunk(&self, object_uri: &str, lod_level: LodLevel) -> Result<Option<LodChunk>> {
+        let uri = object_uri.to_string();
+        let level = lod_level.as_str().to_string();
+        let row = self.with_read_conn(move |conn| {
+            brain_persistence::db::lod_chunks::get_lod_chunk(conn, &uri, &level)
+        })?;
+        Ok(row.map(row_to_lod_chunk))
+    }
+
+    fn get_lod_chunks_for_uri(&self, object_uri: &str) -> Result<Vec<LodChunk>> {
+        let uri = object_uri.to_string();
+        let rows = self.with_read_conn(move |conn| {
+            brain_persistence::db::lod_chunks::get_lod_chunks_for_uri(conn, &uri)
+        })?;
+        Ok(rows.into_iter().map(row_to_lod_chunk).collect())
+    }
+
+    fn delete_lod_chunks_for_uri(&self, object_uri: &str) -> Result<usize> {
+        let uri = object_uri.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::lod_chunks::delete_lod_chunks_for_uri(conn, &uri)
+        })
+    }
+
+    fn delete_expired_lod_chunks(&self, now_iso: &str) -> Result<usize> {
+        let now = now_iso.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::lod_chunks::delete_expired_lod_chunks(conn, &now)
+        })
+    }
+
+    fn is_lod_fresh(
+        &self,
+        object_uri: &str,
+        lod_level: LodLevel,
+        current_source_hash: &str,
+    ) -> Result<bool> {
+        let chunk = LodChunkStore::get_lod_chunk(self, object_uri, lod_level)?;
+        Ok(chunk.is_some_and(|c| c.source_hash == current_source_hash))
+    }
+
+    fn count_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        lod_level: Option<LodLevel>,
+    ) -> Result<usize> {
+        let bid = brain_id.to_string();
+        let level = lod_level.map(|l| l.as_str().to_string());
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::lod_chunks::count_lod_chunks_by_brain(
+                conn,
+                &bid,
+                level.as_deref(),
+            )
+        })
+    }
+}
+
+fn row_to_lod_chunk(row: brain_persistence::db::lod_chunks::LodChunkRow) -> LodChunk {
+    LodChunk {
+        id: row.id,
+        object_uri: row.object_uri,
+        brain_id: row.brain_id,
+        lod_level: LodLevel::parse(&row.lod_level).unwrap_or(LodLevel::L0),
+        content: row.content,
+        token_est: row.token_est,
+        method: row.method,
+        model_id: row.model_id,
+        source_hash: row.source_hash,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        job_id: row.job_id,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Job queue operations — used by job_worker and daemon event loop
 // ---------------------------------------------------------------------------
 
