@@ -117,9 +117,8 @@ fn resolve_single(
 
             match store.get_lod_chunk(&uri, LodLevel::L0) {
                 Ok(Some(chunk)) => {
-                    let fresh = store
-                        .is_lod_fresh(&uri, LodLevel::L0, &source_hash)
-                        .unwrap_or(false);
+                    // Inline freshness: compare source_hash directly (avoids re-fetching the same row)
+                    let fresh = chunk.source_hash == source_hash;
                     diag.lod_hits += 1;
                     LodResolution {
                         content: chunk.content,
@@ -129,8 +128,19 @@ fn resolve_single(
                         enqueued: false,
                     }
                 }
-                Ok(None) | Err(_) => {
+                Ok(None) => {
                     // L0 miss — fall back to L2 passthrough.
+                    diag.lod_misses += 1;
+                    LodResolution {
+                        content: ranked.content.clone(),
+                        actual_lod: LodLevel::L2,
+                        lod_fresh: true,
+                        generated_at: None,
+                        enqueued: false,
+                    }
+                }
+                Err(e) => {
+                    warn!(uri = %uri, error = %e, "LOD L0 lookup failed, falling back to L2");
                     diag.lod_misses += 1;
                     LodResolution {
                         content: ranked.content.clone(),
@@ -149,7 +159,13 @@ fn resolve_single(
 
             match store.get_lod_chunk(&uri, LodLevel::L1) {
                 Ok(Some(chunk)) => {
-                    let fresh = store.is_l1_fresh(&uri, &source_hash).unwrap_or(false);
+                    // Inline freshness: hash match + TTL (avoids re-fetching the same row)
+                    let fresh = chunk.source_hash == source_hash
+                        && chunk.expires_at.as_ref().is_none_or(|exp| {
+                            chrono::DateTime::parse_from_rfc3339(exp)
+                                .map(|e| e > chrono::Utc::now())
+                                .unwrap_or(false)
+                        });
                     if fresh {
                         diag.lod_hits += 1;
                         LodResolution {
@@ -172,34 +188,61 @@ fn resolve_single(
                         }
                     }
                 }
-                Ok(None) | Err(_) => {
+                Ok(None) => {
                     // L1 miss — try L0 fallback, then L2, and enqueue L1 generation.
-                    let enqueued =
-                        try_enqueue_l1(db, &uri, brain_id, &ranked.content, &source_hash, diag);
-
-                    match store.get_lod_chunk(&uri, LodLevel::L0) {
-                        Ok(Some(l0_chunk)) => {
-                            diag.lod_misses += 1;
-                            LodResolution {
-                                content: l0_chunk.content,
-                                actual_lod: LodLevel::L0,
-                                lod_fresh: false,
-                                generated_at: Some(l0_chunk.created_at),
-                                enqueued,
-                            }
-                        }
-                        Ok(None) | Err(_) => {
-                            diag.lod_misses += 1;
-                            LodResolution {
-                                content: ranked.content.clone(),
-                                actual_lod: LodLevel::L2,
-                                lod_fresh: true,
-                                generated_at: None,
-                                enqueued,
-                            }
-                        }
-                    }
+                    l1_miss_fallback(store, db, &uri, brain_id, ranked, &source_hash, diag)
                 }
+                Err(e) => {
+                    warn!(uri = %uri, error = %e, "LOD L1 lookup failed, falling back");
+                    l1_miss_fallback(store, db, &uri, brain_id, ranked, &source_hash, diag)
+                }
+            }
+        }
+    }
+}
+
+/// L1 miss fallback: try L0, then L2, and enqueue L1 generation.
+fn l1_miss_fallback(
+    store: &dyn LodChunkStore,
+    db: &Db,
+    uri: &str,
+    brain_id: &str,
+    ranked: &RankedResult,
+    source_hash: &str,
+    diag: &mut LodDiagnostics,
+) -> LodResolution {
+    let enqueued = try_enqueue_l1(db, uri, brain_id, &ranked.content, source_hash, diag);
+
+    match store.get_lod_chunk(uri, LodLevel::L0) {
+        Ok(Some(l0_chunk)) => {
+            diag.lod_misses += 1;
+            LodResolution {
+                content: l0_chunk.content,
+                actual_lod: LodLevel::L0,
+                lod_fresh: false,
+                generated_at: Some(l0_chunk.created_at),
+                enqueued,
+            }
+        }
+        Ok(None) => {
+            diag.lod_misses += 1;
+            LodResolution {
+                content: ranked.content.clone(),
+                actual_lod: LodLevel::L2,
+                lod_fresh: true,
+                generated_at: None,
+                enqueued,
+            }
+        }
+        Err(e) => {
+            warn!(uri = %uri, error = %e, "LOD L0 fallback lookup failed, using L2");
+            diag.lod_misses += 1;
+            LodResolution {
+                content: ranked.content.clone(),
+                actual_lod: LodLevel::L2,
+                lod_fresh: true,
+                generated_at: None,
+                enqueued,
             }
         }
     }
