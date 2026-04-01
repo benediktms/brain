@@ -424,6 +424,28 @@ pub fn retry_failed_job(conn: &Connection, job_id: &str) -> Result<bool> {
     Ok(rows > 0)
 }
 
+// ─── LOD dedup ──────────────────────────────────────────────────
+
+/// Check if an active (ready/pending/in_progress) `lod_summarize` job exists
+/// for the given `object_uri` in the JSON payload.
+///
+/// Uses `json_extract` on the payload column, consistent with the
+/// `ensure_singleton_job` dedup pattern.
+pub fn has_active_lod_job(conn: &Connection, object_uri: &str) -> Result<bool> {
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM jobs \
+             WHERE kind = 'lod_summarize' \
+               AND status NOT IN ('done', 'failed') \
+               AND json_extract(payload, '$.object_uri') = ?1 \
+             LIMIT 1",
+            params![object_uri],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
 // ─── Singleton / dedup ──────────────────────────────────────────
 
 /// Get a job by its `kind` column. Prefers active (non-terminal) jobs;

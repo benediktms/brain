@@ -615,7 +615,7 @@ async fn handle_request(
 
             if matches!(
                 tool_name,
-                "memory.search_minimal" | "memory.expand" | "memory.reflect"
+                "memory.search_minimal" | "memory.expand" | "memory.reflect" | "memory.retrieve"
             ) {
                 ctx.metrics.record_query_latency(call_start.elapsed());
             }
@@ -690,7 +690,7 @@ mod tests {
         let tools = parsed["result"]["tools"]
             .as_array()
             .expect("checked in test assertions");
-        assert_eq!(tools.len(), 30);
+        assert_eq!(tools.len(), 31);
 
         let names: Vec<&str> = tools
             .iter()

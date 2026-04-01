@@ -1399,6 +1399,157 @@ impl DerivedSummaryStore for Db {
 }
 
 // ---------------------------------------------------------------------------
+// LOD chunk operations — used by Retrieve+ LOD storage layer
+// ---------------------------------------------------------------------------
+
+use crate::lod::{LodChunk, LodChunkStore, LodLevel, LodMethod, UpsertLodChunk};
+use brain_persistence::error::BrainCoreError;
+
+impl LodChunkStore for Db {
+    fn upsert_lod_chunk(&self, input: &UpsertLodChunk<'_>) -> Result<String> {
+        if !input.lod_level.is_stored() {
+            return Err(BrainCoreError::Database(
+                "L2 chunks are passthrough and must not be stored".into(),
+            ));
+        }
+        let id = ulid::Ulid::new().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let persist = brain_persistence::db::lod_chunks::InsertLodChunk {
+            id: &id,
+            object_uri: input.object_uri,
+            brain_id: input.brain_id,
+            lod_level: input.lod_level.as_str(),
+            content: input.content,
+            token_est: input.token_est,
+            method: input.method.as_str(),
+            model_id: input.model_id,
+            source_hash: input.source_hash,
+            created_at: &now,
+            expires_at: input.expires_at,
+            job_id: input.job_id,
+        };
+        self.with_write_conn(|conn| {
+            brain_persistence::db::lod_chunks::upsert_lod_chunk(conn, &persist)
+        })?;
+        Ok(id)
+    }
+
+    fn get_lod_chunk(&self, object_uri: &str, lod_level: LodLevel) -> Result<Option<LodChunk>> {
+        let uri = object_uri.to_string();
+        let level = lod_level.as_str().to_string();
+        let row = self.with_read_conn(move |conn| {
+            brain_persistence::db::lod_chunks::get_lod_chunk(conn, &uri, &level)
+        })?;
+        row.map(row_to_lod_chunk).transpose()
+    }
+
+    fn get_lod_chunks_for_uri(&self, object_uri: &str) -> Result<Vec<LodChunk>> {
+        let uri = object_uri.to_string();
+        let rows = self.with_read_conn(move |conn| {
+            brain_persistence::db::lod_chunks::get_lod_chunks_for_uri(conn, &uri)
+        })?;
+        rows.into_iter().map(row_to_lod_chunk).collect()
+    }
+
+    fn delete_lod_chunks_for_uri(&self, object_uri: &str) -> Result<usize> {
+        let uri = object_uri.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::lod_chunks::delete_lod_chunks_for_uri(conn, &uri)
+        })
+    }
+
+    fn delete_expired_lod_chunks(&self, now_iso: &str) -> Result<usize> {
+        let now = now_iso.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::lod_chunks::delete_expired_lod_chunks(conn, &now)
+        })
+    }
+
+    fn is_lod_fresh(
+        &self,
+        object_uri: &str,
+        lod_level: LodLevel,
+        current_source_hash: &str,
+    ) -> Result<bool> {
+        let chunk = LodChunkStore::get_lod_chunk(self, object_uri, lod_level)?;
+        Ok(chunk.is_some_and(|c| c.source_hash == current_source_hash))
+    }
+
+    fn is_l1_fresh(&self, object_uri: &str, current_source_hash: &str) -> Result<bool> {
+        let chunk = LodChunkStore::get_lod_chunk(self, object_uri, LodLevel::L1)?;
+        Ok(chunk.is_some_and(|c| {
+            if c.source_hash != current_source_hash {
+                return false;
+            }
+            match &c.expires_at {
+                None => true,
+                Some(exp) => chrono::DateTime::parse_from_rfc3339(exp)
+                    .map(|e| e > chrono::Utc::now())
+                    .unwrap_or(false), // treat unparseable expiry as stale
+            }
+        }))
+    }
+
+    fn count_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        lod_level: Option<LodLevel>,
+    ) -> Result<usize> {
+        let bid = brain_id.to_string();
+        let level = lod_level.map(|l| l.as_str().to_string());
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::lod_chunks::count_lod_chunks_by_brain(
+                conn,
+                &bid,
+                level.as_deref(),
+            )
+        })
+    }
+
+    fn list_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<LodChunk>> {
+        let bid = brain_id.to_string();
+        let rows = self.with_read_conn(move |conn| {
+            brain_persistence::db::lod_chunks::list_lod_chunks_by_brain(conn, &bid, limit, offset)
+        })?;
+        rows.into_iter().map(row_to_lod_chunk).collect()
+    }
+}
+
+fn row_to_lod_chunk(row: brain_persistence::db::lod_chunks::LodChunkRow) -> Result<LodChunk> {
+    let lod_level = LodLevel::parse(&row.lod_level).ok_or_else(|| {
+        BrainCoreError::Database(format!(
+            "unknown lod_level '{}' for chunk {}",
+            row.lod_level, row.id
+        ))
+    })?;
+    let method = LodMethod::parse(&row.method).ok_or_else(|| {
+        BrainCoreError::Database(format!(
+            "unknown method '{}' for chunk {}",
+            row.method, row.id
+        ))
+    })?;
+    Ok(LodChunk {
+        id: row.id,
+        object_uri: row.object_uri,
+        brain_id: row.brain_id,
+        lod_level,
+        content: row.content,
+        token_est: row.token_est,
+        method,
+        model_id: row.model_id,
+        source_hash: row.source_hash,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        job_id: row.job_id,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Job queue operations — used by job_worker and daemon event loop
 // ---------------------------------------------------------------------------
 
@@ -1473,6 +1624,9 @@ pub trait JobQueue: Send + Sync {
         input: &EnqueueJobInput,
         delay_secs: i64,
     ) -> Result<()>;
+
+    /// Check if an active (non-terminal) `lod_summarize` job exists for `object_uri`.
+    fn has_active_lod_job(&self, object_uri: &str) -> Result<bool>;
 }
 
 // -- JobQueue for Db -------------------------------------------------------
@@ -1593,6 +1747,11 @@ impl JobQueue for Db {
                 conn, &input, delay_secs,
             )
         })
+    }
+
+    fn has_active_lod_job(&self, object_uri: &str) -> Result<bool> {
+        let uri = object_uri.to_string();
+        self.with_read_conn(move |conn| brain_persistence::db::jobs::has_active_lod_job(conn, &uri))
     }
 }
 
