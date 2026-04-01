@@ -231,9 +231,7 @@ impl McpTool for MemSearchMinimal {
                     metrics: &ctx.metrics,
                 };
 
-                // TODO(W1-IMPL-EXPLAIN): FederatedPipeline has no search_with_scores.
-                // explain=true is silently ignored for federated searches.
-                match federated.search(&search_params).await {
+                match federated.search(&search_params, params.explain).await {
                     Ok(r) => r,
                     Err(e) => {
                         return ToolCallResult::error(format!("Federated search failed: {e}"));
@@ -284,7 +282,7 @@ impl McpTool for MemSearchMinimal {
                 })
                 .collect();
 
-            let response = json!({
+            let mut response = json!({
                 "budget_tokens": search_result.budget_tokens,
                 "used_tokens_est": search_result.used_tokens_est,
                 "intent_resolved": format!("{:?}", crate::ranking::resolve_intent(&params.intent)),
@@ -292,6 +290,13 @@ impl McpTool for MemSearchMinimal {
                 "total_available": search_result.total_available,
                 "results": results_json
             });
+            if let Some(ref fc) = search_result.fusion_confidence {
+                response["fusion_confidence"] = json!({
+                    "confidence": fc.confidence,
+                    "k": fc.k,
+                    "overlap": fc.overlap,
+                });
+            }
 
             json_response(&response)
         })

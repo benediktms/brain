@@ -88,13 +88,16 @@ async fn test_federated_search_merges_results_from_multiple_brains() {
 
     // Use a query whose exact text exists in brain-a so MockEmbedder can find it
     let result = pipeline
-        .search(&SearchParams::new(
-            "Rust async programming with tokio and futures.",
-            "lookup",
-            4000,
-            10,
-            &[],
-        ))
+        .search(
+            &SearchParams::new(
+                "Rust async programming with tokio and futures.",
+                "lookup",
+                4000,
+                10,
+                &[],
+            ),
+            false,
+        )
         .await
         .unwrap();
 
@@ -159,13 +162,16 @@ async fn test_federated_search_brain_attribution() {
 
     // Query using exact content from brain_a so it definitely hits
     let result = pipeline
-        .search(&SearchParams::new(
-            "Systems programming requires low-level control.",
-            "lookup",
-            4000,
-            10,
-            &[],
-        ))
+        .search(
+            &SearchParams::new(
+                "Systems programming requires low-level control.",
+                "lookup",
+                4000,
+                10,
+                &[],
+            ),
+            false,
+        )
         .await
         .unwrap();
 
@@ -212,13 +218,16 @@ async fn test_federated_search_single_brain_fallback() {
     };
 
     let result = pipeline
-        .search(&SearchParams::new(
-            "This content is only in the local brain.",
-            "lookup",
-            4000,
-            10,
-            &[],
-        ))
+        .search(
+            &SearchParams::new(
+                "This content is only in the local brain.",
+                "lookup",
+                4000,
+                10,
+                &[],
+            ),
+            false,
+        )
         .await
         .unwrap();
 
@@ -300,13 +309,10 @@ async fn test_federated_search_respects_budget() {
     };
 
     let result = pipeline
-        .search(&SearchParams::new(
-            "note content topic",
-            "lookup",
-            tight_budget,
-            20,
-            &[],
-        ))
+        .search(
+            &SearchParams::new("note content topic", "lookup", tight_budget, 20, &[]),
+            false,
+        )
         .await
         .unwrap();
 
@@ -343,13 +349,16 @@ async fn test_federated_search_skips_brain_without_lancedb() {
 
     // Should not panic or error — just skip the brain without a store
     let result = pipeline
-        .search(&SearchParams::new(
-            "This brain has a proper LanceDB store.",
-            "lookup",
-            4000,
-            10,
-            &[],
-        ))
+        .search(
+            &SearchParams::new(
+                "This brain has a proper LanceDB store.",
+                "lookup",
+                4000,
+                10,
+                &[],
+            ),
+            false,
+        )
         .await;
 
     assert!(
@@ -409,13 +418,16 @@ async fn test_federated_search_ranks_by_hybrid_score() {
 
     // Query that exactly matches brain-a content
     let result = pipeline
-        .search(&SearchParams::new(
-            "Rust memory safety is guaranteed by the borrow checker.",
-            "lookup",
-            4000,
-            10,
-            &[],
-        ))
+        .search(
+            &SearchParams::new(
+                "Rust memory safety is guaranteed by the borrow checker.",
+                "lookup",
+                4000,
+                10,
+                &[],
+            ),
+            false,
+        )
         .await
         .unwrap();
 

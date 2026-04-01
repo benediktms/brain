@@ -188,7 +188,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
         params.top_k,
         &empty_tags,
     );
-    let search_result = federated.search(&fed_search_params).await?;
+    let search_result = federated.search(&fed_search_params, false).await?;
 
     let output = format_search_results(&search_result, &params.intent, params.budget);
     print!("{output}");
