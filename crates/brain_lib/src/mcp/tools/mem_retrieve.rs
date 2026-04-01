@@ -6,20 +6,24 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::lod::LodLevel;
-use crate::lod_resolver::resolve_lod_batch;
+use crate::lod_resolver::{resolve_lod_batch, resolve_single_lod};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::ports::ChunkMetaReader;
 use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
 use crate::ranking::resolve_intent;
 use crate::retrieval::{MemoryKind, derive_kind};
-use crate::uri::SynapseUri;
+use crate::uri::{Domain, SynapseUri};
 use brain_persistence::store::VectorSearchMode;
 
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct Params {
-    query: String,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    uri: Option<String>,
     #[serde(default = "default_lod")]
     lod: String,
     #[serde(default = "default_count")]
@@ -84,6 +88,137 @@ fn parse_time_scope(scope: &str) -> Option<i64> {
     Some(now - seconds)
 }
 
+async fn handle_uri_mode(
+    ctx: &McpContext,
+    uri_str: &str,
+    lod_level: LodLevel,
+    explain: bool,
+) -> ToolCallResult {
+    let start = Instant::now();
+
+    // Parse the URI.
+    let uri = match uri_str.parse::<SynapseUri>() {
+        Ok(u) => u,
+        Err(e) => return ToolCallResult::error(format!("Invalid URI {uri_str:?}: {e}")),
+    };
+
+    let db = ctx.stores.db();
+
+    // Resolve brain: "_" means current brain.
+    let (brain_id, brain_name) = if uri.brain == "_" {
+        (ctx.brain_id().to_string(), ctx.brain_name().to_string())
+    } else {
+        match db.resolve_brain(&uri.brain) {
+            Ok((id, name)) => (id, name),
+            Err(e) => {
+                return ToolCallResult::error(format!("Unknown brain {:?}: {e}", uri.brain));
+            }
+        }
+    };
+
+    // Domain dispatch: fetch content.
+    let content: String = match uri.domain {
+        Domain::Memory => {
+            let chunk_ids = vec![uri.id.clone()];
+            match db.get_chunks_by_ids(&chunk_ids) {
+                Ok(chunks) => match chunks.into_iter().next() {
+                    Some(c) => c.content,
+                    None => return ToolCallResult::error(format!("Object not found: {uri_str}")),
+                },
+                Err(e) => return ToolCallResult::error(format!("DB error: {e}")),
+            }
+        }
+        Domain::Episode | Domain::Reflection | Domain::Procedure => {
+            match db.get_summary_by_id(&uri.id) {
+                Ok(Some(row)) => row.content,
+                Ok(None) => return ToolCallResult::error(format!("Object not found: {uri_str}")),
+                Err(e) => return ToolCallResult::error(format!("DB error: {e}")),
+            }
+        }
+        Domain::Task => {
+            let chunk_ids = vec![format!("task:{}:0", uri.id)];
+            match db.get_chunks_by_ids(&chunk_ids) {
+                Ok(chunks) => match chunks.into_iter().next() {
+                    Some(c) => c.content,
+                    None => return ToolCallResult::error(format!("Object not found: {uri_str}")),
+                },
+                Err(e) => return ToolCallResult::error(format!("DB error: {e}")),
+            }
+        }
+        Domain::Record => {
+            let chunk_ids = vec![format!("record:{}:0", uri.id)];
+            match db.get_chunks_by_ids(&chunk_ids) {
+                Ok(chunks) => match chunks.into_iter().next() {
+                    Some(c) => c.content,
+                    None => return ToolCallResult::error(format!("Object not found: {uri_str}")),
+                },
+                Err(e) => return ToolCallResult::error(format!("DB error: {e}")),
+            }
+        }
+    };
+
+    let source_hash = crate::utils::content_hash(&content);
+
+    let (resolution, lod_diag) =
+        resolve_single_lod(db, uri_str, &content, &source_hash, lod_level, &brain_id);
+
+    let query_time_ms = start.elapsed().as_millis() as u64;
+
+    // Derive kind string from domain.
+    let kind = match uri.domain {
+        Domain::Memory => "note",
+        Domain::Episode => "episode",
+        Domain::Reflection => "reflection",
+        Domain::Procedure => "procedure",
+        Domain::Task => "task",
+        Domain::Record => "record",
+    };
+
+    // Derive title: first line of resolved content.
+    let title: String = resolution
+        .content
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('#')
+        .trim()
+        .to_string();
+
+    let mut entry = json!({
+        "uri": uri_str,
+        "kind": kind,
+        "lod": resolution.actual_lod.as_str(),
+        "lod_fresh": resolution.lod_fresh,
+        "title": title,
+        "content": resolution.content,
+        "score": null,
+        "strategy_used": null,
+        "generated_at": resolution.generated_at,
+        "source_uri": uri_str,
+        "explain": null,
+    });
+
+    if explain {
+        entry["signals"] = json!(null);
+    }
+
+    let _ = brain_name; // used for brain resolution; not needed in response
+
+    let response = json!({
+        "query_time_ms": query_time_ms,
+        "lod_requested": lod_level.as_str(),
+        "result_count": 1,
+        "lod_diagnostics": {
+            "lod_hits": lod_diag.lod_hits,
+            "lod_misses": lod_diag.lod_misses,
+            "lod_generation_enqueued": lod_diag.lod_generation_enqueued,
+        },
+        "results": [entry],
+    });
+
+    json_response(&response)
+}
+
 pub(super) struct MemRetrieve;
 
 impl McpTool for MemRetrieve {
@@ -94,13 +229,17 @@ impl McpTool for MemRetrieve {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Retrieve memory chunks at a requested level of detail (LOD). L0 returns extractive summaries (~100 tokens each), L1 returns LLM-summarized content (~2000 tokens each), L2 returns full source content. Falls back to the next available level when the requested LOD is not yet generated.".into(),
+            description: "Retrieve memory chunks at a requested level of detail (LOD). Supports two modes: query (semantic search) and URI (direct access by synapse:// address). L0 returns extractive summaries (~100 tokens each), L1 returns LLM-summarized content (~2000 tokens each), L2 returns full source content. Falls back to the next available level when the requested LOD is not yet generated. Provide `query` for semantic search or `uri` for direct access.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural language search query"
+                        "description": "Natural language search query. Provide either query or uri."
+                    },
+                    "uri": {
+                        "type": "string",
+                        "description": "Direct access by synapse:// URI (e.g. synapse://brain-name/memory/chunk-id). Provide either query or uri."
                     },
                     "lod": {
                         "type": "string",
@@ -170,8 +309,7 @@ impl McpTool for MemRetrieve {
                         "enum": ["exact", "ann_refined", "ann_fast"],
                         "description": "Vector search strategy. Default: ann_refined"
                     }
-                },
-                "required": ["query"]
+                }
             }),
         }
     }
@@ -205,6 +343,19 @@ impl McpTool for MemRetrieve {
                 }
             };
 
+            // URI mode: direct access by synapse:// URI, no ranking.
+            if let Some(ref uri_str) = params.uri
+                && params.query.as_ref().is_none_or(|q| q.trim().is_empty())
+            {
+                return handle_uri_mode(ctx, uri_str, lod, params.explain).await;
+            }
+
+            // Query mode: query is required.
+            let query = match params.query.as_deref() {
+                Some(q) if !q.trim().is_empty() => q,
+                _ => return ToolCallResult::error("Either 'query' or 'uri' is required"),
+            };
+
             let mode = match params.vector_search_mode.as_deref() {
                 Some(s) => match s.parse::<VectorSearchMode>() {
                     Ok(m) => m,
@@ -233,7 +384,7 @@ impl McpTool for MemRetrieve {
             };
 
             let search_params = SearchParams::new(
-                &params.query,
+                query,
                 &params.strategy,
                 0, // budget_tokens unused by search_ranked_with_diagnostics
                 params.count as usize,
@@ -442,6 +593,41 @@ mod tests {
         let registry = ToolRegistry::new();
         let result = registry.dispatch("memory.retrieve", json!({}), &ctx).await;
         assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0].text.contains("required"),
+            "got: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_neither_query_nor_uri_errors() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch("memory.retrieve", json!({ "lod": "L2" }), &ctx)
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0].text.contains("required"),
+            "got: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_uri_mode_invalid_uri() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch("memory.retrieve", json!({ "uri": "not-a-valid-uri" }), &ctx)
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0].text.contains("Invalid URI"),
+            "got: {}",
+            result.content[0].text
+        );
     }
 
     #[tokio::test]

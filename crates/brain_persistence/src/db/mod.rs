@@ -227,6 +227,14 @@ impl Db {
         self.with_write_conn(move |conn| lod_chunks::delete_lod_chunks_for_uri(conn, &object_uri))
     }
 
+    /// Fetch a single summary row by its ID.
+    ///
+    /// No brain_id filter — PK lookup, intentional for cross-brain references.
+    pub fn get_summary_by_id(&self, summary_id: &str) -> Result<Option<summaries::SummaryRow>> {
+        let id = summary_id.to_string();
+        self.with_read_conn(move |conn| summaries::get_summary(conn, &id))
+    }
+
     pub fn delete_expired_lod_chunks(&self, now_iso: &str) -> Result<usize> {
         let now_iso = now_iso.to_string();
         self.with_write_conn(move |conn| lod_chunks::delete_expired_lod_chunks(conn, &now_iso))

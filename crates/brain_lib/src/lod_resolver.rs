@@ -278,6 +278,192 @@ fn try_enqueue_l1(
 }
 
 // ---------------------------------------------------------------------------
+// URI-mode: single-object LOD resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve LOD for a single object by URI (for URI-mode retrieval).
+///
+/// Unlike [`resolve_lod_batch`], takes the object URI and raw source content
+/// directly instead of a [`RankedResult`]. Returns a single [`LodResolution`]
+/// plus aggregate [`LodDiagnostics`].
+pub fn resolve_single_lod(
+    db: &Db,
+    object_uri: &str,
+    source_content: &str,
+    source_hash: &str,
+    requested_lod: LodLevel,
+    brain_id: &str,
+) -> (LodResolution, LodDiagnostics) {
+    let mut diag = LodDiagnostics::default();
+    let store: &dyn LodChunkStore = db;
+
+    let resolution = match requested_lod {
+        LodLevel::L2 => {
+            diag.lod_hits += 1;
+            LodResolution {
+                content: source_content.to_string(),
+                actual_lod: LodLevel::L2,
+                lod_fresh: true,
+                generated_at: None,
+                enqueued: false,
+            }
+        }
+
+        LodLevel::L0 => match store.get_lod_chunk(object_uri, LodLevel::L0) {
+            Ok(Some(chunk)) => {
+                let fresh = chunk.source_hash == source_hash;
+                diag.lod_hits += 1;
+                LodResolution {
+                    content: chunk.content,
+                    actual_lod: LodLevel::L0,
+                    lod_fresh: fresh,
+                    generated_at: Some(chunk.created_at),
+                    enqueued: false,
+                }
+            }
+            Ok(None) => {
+                diag.lod_misses += 1;
+                LodResolution {
+                    content: source_content.to_string(),
+                    actual_lod: LodLevel::L2,
+                    lod_fresh: true,
+                    generated_at: None,
+                    enqueued: false,
+                }
+            }
+            Err(e) => {
+                warn!(uri = %object_uri, error = %e, "LOD L0 lookup failed, falling back to L2");
+                diag.lod_misses += 1;
+                LodResolution {
+                    content: source_content.to_string(),
+                    actual_lod: LodLevel::L2,
+                    lod_fresh: true,
+                    generated_at: None,
+                    enqueued: false,
+                }
+            }
+        },
+
+        LodLevel::L1 => match store.get_lod_chunk(object_uri, LodLevel::L1) {
+            Ok(Some(chunk)) => {
+                let fresh = chunk.source_hash == source_hash
+                    && chunk.expires_at.as_ref().is_none_or(|exp| {
+                        chrono::DateTime::parse_from_rfc3339(exp)
+                            .map(|e| e > chrono::Utc::now())
+                            .unwrap_or(false)
+                    });
+                if fresh {
+                    diag.lod_hits += 1;
+                    LodResolution {
+                        content: chunk.content,
+                        actual_lod: LodLevel::L1,
+                        lod_fresh: true,
+                        generated_at: Some(chunk.created_at),
+                        enqueued: false,
+                    }
+                } else {
+                    // Stale — serve but enqueue regeneration.
+                    let enqueued = try_enqueue_l1(
+                        db,
+                        object_uri,
+                        brain_id,
+                        source_content,
+                        source_hash,
+                        &mut diag,
+                    );
+                    LodResolution {
+                        content: chunk.content,
+                        actual_lod: LodLevel::L1,
+                        lod_fresh: false,
+                        generated_at: Some(chunk.created_at),
+                        enqueued,
+                    }
+                }
+            }
+            Ok(None) => {
+                // L1 miss — try L0, then L2, and enqueue.
+                let enqueued = try_enqueue_l1(
+                    db,
+                    object_uri,
+                    brain_id,
+                    source_content,
+                    source_hash,
+                    &mut diag,
+                );
+                match store.get_lod_chunk(object_uri, LodLevel::L0) {
+                    Ok(Some(l0_chunk)) => {
+                        diag.lod_misses += 1;
+                        LodResolution {
+                            content: l0_chunk.content,
+                            actual_lod: LodLevel::L0,
+                            lod_fresh: false,
+                            generated_at: Some(l0_chunk.created_at),
+                            enqueued,
+                        }
+                    }
+                    Ok(None) => {
+                        diag.lod_misses += 1;
+                        LodResolution {
+                            content: source_content.to_string(),
+                            actual_lod: LodLevel::L2,
+                            lod_fresh: true,
+                            generated_at: None,
+                            enqueued,
+                        }
+                    }
+                    Err(e) => {
+                        warn!(uri = %object_uri, error = %e, "LOD L0 fallback lookup failed, using L2");
+                        diag.lod_misses += 1;
+                        LodResolution {
+                            content: source_content.to_string(),
+                            actual_lod: LodLevel::L2,
+                            lod_fresh: true,
+                            generated_at: None,
+                            enqueued,
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(uri = %object_uri, error = %e, "LOD L1 lookup failed, falling back");
+                let enqueued = try_enqueue_l1(
+                    db,
+                    object_uri,
+                    brain_id,
+                    source_content,
+                    source_hash,
+                    &mut diag,
+                );
+                match store.get_lod_chunk(object_uri, LodLevel::L0) {
+                    Ok(Some(l0_chunk)) => {
+                        diag.lod_misses += 1;
+                        LodResolution {
+                            content: l0_chunk.content,
+                            actual_lod: LodLevel::L0,
+                            lod_fresh: false,
+                            generated_at: Some(l0_chunk.created_at),
+                            enqueued,
+                        }
+                    }
+                    _ => {
+                        diag.lod_misses += 1;
+                        LodResolution {
+                            content: source_content.to_string(),
+                            actual_lod: LodLevel::L2,
+                            lod_fresh: true,
+                            generated_at: None,
+                            enqueued,
+                        }
+                    }
+                }
+            }
+        },
+    };
+
+    (resolution, diag)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -422,6 +608,96 @@ mod tests {
     // ---------------------------------------------------------------------------
     // Diagnostics counts
     // ---------------------------------------------------------------------------
+
+    // ---------------------------------------------------------------------------
+    // resolve_single_lod tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_single_lod_l2_passthrough() {
+        let db = open_db();
+        let (resolution, diag) = resolve_single_lod(
+            &db,
+            "synapse://brain/memory/chunk:abc:0",
+            "hello world",
+            "hash-abc",
+            LodLevel::L2,
+            "brain-id",
+        );
+        assert_eq!(resolution.content, "hello world");
+        assert_eq!(resolution.actual_lod, LodLevel::L2);
+        assert!(resolution.lod_fresh);
+        assert_eq!(resolution.generated_at, None);
+        assert!(!resolution.enqueued);
+        assert_eq!(diag.lod_hits, 1);
+        assert_eq!(diag.lod_misses, 0);
+    }
+
+    #[test]
+    fn test_resolve_single_lod_l0_hit() {
+        let db = open_db();
+        let uri = "synapse://brain/memory/chunk:abc:0";
+        let source_hash = crate::utils::content_hash("source content");
+        seed_lod(&db, uri, LodLevel::L0, "l0 abstract", &source_hash);
+
+        let (resolution, diag) = resolve_single_lod(
+            &db,
+            uri,
+            "source content",
+            &source_hash,
+            LodLevel::L0,
+            "brain-id",
+        );
+        assert_eq!(resolution.content, "l0 abstract");
+        assert_eq!(resolution.actual_lod, LodLevel::L0);
+        assert!(resolution.lod_fresh);
+        assert_eq!(diag.lod_hits, 1);
+        assert_eq!(diag.lod_misses, 0);
+    }
+
+    #[test]
+    fn test_resolve_single_lod_l0_miss() {
+        let db = open_db();
+        let uri = "synapse://brain/memory/chunk:xyz:0";
+
+        let (resolution, diag) = resolve_single_lod(
+            &db,
+            uri,
+            "source content",
+            "some-hash",
+            LodLevel::L0,
+            "brain-id",
+        );
+        // Miss → falls back to L2 passthrough
+        assert_eq!(resolution.content, "source content");
+        assert_eq!(resolution.actual_lod, LodLevel::L2);
+        assert!(resolution.lod_fresh);
+        assert_eq!(diag.lod_hits, 0);
+        assert_eq!(diag.lod_misses, 1);
+    }
+
+    #[test]
+    fn test_resolve_single_lod_l1_stale() {
+        let db = open_db();
+        let uri = "synapse://brain/memory/chunk:stale:0";
+        // Seed L1 with a different source_hash → stale
+        seed_lod(&db, uri, LodLevel::L1, "stale l1 content", "old-hash");
+
+        let (resolution, diag) = resolve_single_lod(
+            &db,
+            uri,
+            "new source content",
+            "new-hash",
+            LodLevel::L1,
+            "brain-id",
+        );
+        // Stale → served but lod_fresh=false
+        assert_eq!(resolution.content, "stale l1 content");
+        assert_eq!(resolution.actual_lod, LodLevel::L1);
+        assert!(!resolution.lod_fresh);
+        // enqueued may be true or false depending on job worker; just check lod_misses=0 (stale hit)
+        assert_eq!(diag.lod_misses, 0);
+    }
 
     #[test]
     fn test_diagnostics_counts() {
