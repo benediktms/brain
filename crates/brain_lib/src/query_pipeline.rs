@@ -374,7 +374,7 @@ where
                     candidate.byte_start = row.byte_start;
                     candidate.byte_end = row.byte_end;
                     candidate.pagerank_score = row.pagerank_score;
-                    // Combine frontmatter tags + heading-derived tags
+                    // Combine frontmatter tags + heading-derived tags (deduplicated)
                     let mut tags: Vec<String> = row.tags.clone();
                     tags.extend(
                         row.heading_path
@@ -383,6 +383,8 @@ where
                             .filter(|segment| !segment.is_empty())
                             .map(|segment| segment.to_lowercase()),
                     );
+                    tags.sort();
+                    tags.dedup();
                     candidate.tags = tags;
                     candidate.importance = row.importance;
 
@@ -810,6 +812,7 @@ where
     pub async fn search(
         &self,
         params: &SearchParams<'_>,
+        include_scores: bool,
     ) -> Result<crate::retrieval::SearchResult> {
         // ── 1. Build per-brain vector-search futures ──────────────────────────
         type BrainResult = (String, Vec<crate::ranking::RankedResult>);
@@ -911,7 +914,7 @@ where
             &merged,
             params.budget_tokens,
             params.k,
-            false,
+            include_scores,
             &HashMap::new(),
         );
 

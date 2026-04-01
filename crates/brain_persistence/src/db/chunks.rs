@@ -91,7 +91,7 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
                 c.byte_start, c.byte_end, c.token_estimate, f.last_indexed_at,
                 f.disk_modified_at,
                 COALESCE(f.pagerank_score, 0.0) as pagerank_score,
-                COALESCE(f.tags, '') as tags,
+                COALESCE(f.tags, '[]') as tags,
                 COALESCE(f.importance, 0.5) as importance
          FROM chunks c
          JOIN files f ON f.file_id = c.file_id
@@ -143,7 +143,7 @@ pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<
                 c.byte_start, c.byte_end, c.token_estimate, f.last_indexed_at,
                 f.disk_modified_at,
                 COALESCE(f.pagerank_score, 0.0) as pagerank_score,
-                COALESCE(f.tags, '') as tags,
+                COALESCE(f.tags, '[]') as tags,
                 COALESCE(f.importance, 0.5) as importance
          FROM chunks c
          JOIN files f ON f.file_id = c.file_id

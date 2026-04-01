@@ -78,7 +78,10 @@ fn extract_frontmatter_signals(
         .and_then(|v| v.as_f64())
         .unwrap_or(0.5)
         .clamp(0.0, 1.0);
-    (serde_json::to_string(&tags).unwrap_or_default(), importance)
+    (
+        serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()),
+        importance,
+    )
 }
 
 /// Read the file's OS-level modification time as Unix seconds.

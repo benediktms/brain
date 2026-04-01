@@ -16,7 +16,7 @@ use crate::error::Result;
 pub fn migrate_v40_to_v41(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "BEGIN;
-         ALTER TABLE files ADD COLUMN tags TEXT NOT NULL DEFAULT '';
+         ALTER TABLE files ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
          ALTER TABLE files ADD COLUMN importance REAL NOT NULL DEFAULT 0.5;
          PRAGMA user_version = 41;
          COMMIT;",
@@ -111,7 +111,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(tags, "");
+        assert_eq!(tags, "[]");
         assert!((importance - 0.5).abs() < f64::EPSILON);
     }
 
@@ -136,7 +136,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(tags, "");
+        assert_eq!(tags, "[]");
         assert!((importance - 0.5).abs() < f64::EPSILON);
     }
 
