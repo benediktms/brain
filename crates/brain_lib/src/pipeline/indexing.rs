@@ -327,10 +327,31 @@ where
 
             if chunks_match_stored(&chunks, &stored_hashes) {
                 let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
+                let l0_inputs = build_l0_inputs(&chunks, &chunk_metas, &self.brain_id);
                 let ts = now_ts();
                 self.db.with_write_conn(|conn| {
                     replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas, &self.brain_id)?;
                     replace_links(conn, &verdict.file_id, &links)?;
+                    let now = chrono::Utc::now().to_rfc3339();
+                    for l0 in &l0_inputs {
+                        lod_chunks::upsert_lod_chunk(
+                            conn,
+                            &InsertLodChunk {
+                                id: &l0.id,
+                                object_uri: &l0.uri,
+                                brain_id: &self.brain_id,
+                                lod_level: "L0",
+                                content: &l0.content,
+                                token_est: Some(l0.token_est),
+                                method: "extractive",
+                                model_id: None,
+                                source_hash: &l0.source_hash,
+                                created_at: &now,
+                                expires_at: None,
+                                job_id: None,
+                            },
+                        )?;
+                    }
                     let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
                     brain_persistence::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
                     Ok(())

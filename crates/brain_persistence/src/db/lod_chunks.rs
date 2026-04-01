@@ -394,4 +394,30 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].brain_id, "brain-a");
     }
+
+    #[test]
+    fn test_delete_by_uri_pattern() {
+        let conn = setup();
+        // Two chunks for file1, one chunk for file12 (potential prefix collision)
+        let c1 = make_input("01A", "synapse://b/memory/file1:0", "b", "L0", "a", "h1");
+        let c2 = make_input("01B", "synapse://b/memory/file1:1", "b", "L0", "b", "h2");
+        let c3 = make_input("01C", "synapse://b/memory/file12:0", "b", "L0", "c", "h3");
+
+        upsert_lod_chunk(&conn, &c1).unwrap();
+        upsert_lod_chunk(&conn, &c2).unwrap();
+        upsert_lod_chunk(&conn, &c3).unwrap();
+
+        // Pattern for file1 chunks: "synapse://b/memory/file1:%"
+        let deleted =
+            delete_lod_chunks_by_uri_pattern(&conn, "synapse://b/memory/file1:%").unwrap();
+        assert_eq!(deleted, 2, "should delete file1:0 and file1:1");
+
+        // file12:0 must survive (LIKE 'file1:%' does NOT match 'file12:0')
+        assert!(
+            get_lod_chunk(&conn, "synapse://b/memory/file12:0", "L0")
+                .unwrap()
+                .is_some(),
+            "file12:0 must not be affected by file1:% pattern"
+        );
+    }
 }

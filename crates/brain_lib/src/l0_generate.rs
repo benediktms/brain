@@ -30,6 +30,11 @@ static RE_CAMEL: LazyLock<Regex> =
 /// 3. Format as `{heading_path}: {first_sentence}. Key: {terms}`
 /// 4. Truncate to ~100 tokens (400 chars) at word boundary
 pub fn generate_chunk_l0(heading_path: &str, content: &str) -> String {
+    let content = content.trim();
+    if content.is_empty() {
+        return heading_path.to_string();
+    }
+
     let first_sentence = extract_first_sentence(content);
     let key_terms = extract_key_terms(content);
 
@@ -220,7 +225,13 @@ mod tests {
     #[test]
     fn test_empty_content() {
         let result = generate_chunk_l0("## Empty", "");
-        assert_eq!(result, "## Empty: ");
+        assert_eq!(result, "## Empty");
+    }
+
+    #[test]
+    fn test_whitespace_only_content() {
+        let result = generate_chunk_l0("## Blank", "   \n  \n  ");
+        assert_eq!(result, "## Blank");
     }
 
     #[test]
