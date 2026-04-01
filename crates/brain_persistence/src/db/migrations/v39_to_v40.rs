@@ -17,7 +17,9 @@ use crate::error::Result;
 /// Part of the Retrieve+ initiative (ADR-001, brn-83a.5.1).
 pub fn migrate_v39_to_v40(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "CREATE TABLE lod_chunks (
+        "BEGIN;
+
+         CREATE TABLE lod_chunks (
              id          TEXT    NOT NULL,
              object_uri  TEXT    NOT NULL,
              brain_id    TEXT    NOT NULL,
@@ -34,11 +36,12 @@ pub fn migrate_v39_to_v40(conn: &Connection) -> Result<()> {
              UNIQUE (object_uri, lod_level)
          );
 
-         CREATE INDEX idx_lod_chunks_uri   ON lod_chunks (object_uri, lod_level);
          CREATE INDEX idx_lod_chunks_brain ON lod_chunks (brain_id, created_at DESC);
          CREATE INDEX idx_lod_chunks_exp   ON lod_chunks (expires_at) WHERE expires_at IS NOT NULL;
 
-         PRAGMA user_version = 40;",
+         PRAGMA user_version = 40;
+
+         COMMIT;",
     )?;
 
     Ok(())
@@ -104,10 +107,6 @@ mod tests {
             .collect::<std::result::Result<_, _>>()
             .unwrap();
 
-        assert!(
-            indexes.contains(&"idx_lod_chunks_uri".to_string()),
-            "missing idx_lod_chunks_uri, got: {indexes:?}"
-        );
         assert!(
             indexes.contains(&"idx_lod_chunks_brain".to_string()),
             "missing idx_lod_chunks_brain, got: {indexes:?}"

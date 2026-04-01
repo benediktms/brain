@@ -55,6 +55,14 @@ impl LodMethod {
             LodMethod::Llm => "llm",
         }
     }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "extractive" => Some(LodMethod::Extractive),
+            "llm" => Some(LodMethod::Llm),
+            _ => None,
+        }
+    }
 }
 
 /// A domain-level LOD chunk (mapped from persistence `LodChunkRow`).
@@ -66,7 +74,7 @@ pub struct LodChunk {
     pub lod_level: LodLevel,
     pub content: String,
     pub token_est: Option<i64>,
-    pub method: String,
+    pub method: LodMethod,
     pub model_id: Option<String>,
     pub source_hash: String,
     pub created_at: String,
@@ -94,6 +102,11 @@ pub struct UpsertLodChunk<'a> {
 pub trait LodChunkStore: Send + Sync {
     /// Insert or replace an LOD chunk for `(object_uri, lod_level)`.
     /// Returns the ULID of the inserted/replaced row.
+    ///
+    /// On conflict (same `object_uri` + `lod_level`), the existing row's id is
+    /// replaced with a fresh ULID. Callers must not cache old ids across upserts.
+    ///
+    /// Returns an error if `lod_level` is `L2` (passthrough, never stored).
     fn upsert_lod_chunk(&self, input: &UpsertLodChunk<'_>) -> Result<String>;
 
     /// Get LOD chunk by `(object_uri, lod_level)`.
@@ -123,6 +136,14 @@ pub trait LodChunkStore: Send + Sync {
         brain_id: &str,
         lod_level: Option<LodLevel>,
     ) -> Result<usize>;
+
+    /// List LOD chunks for a brain with pagination, ordered by `created_at` DESC.
+    fn list_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<LodChunk>>;
 }
 
 #[cfg(test)]
@@ -150,8 +171,15 @@ mod tests {
     }
 
     #[test]
-    fn test_lod_method_as_str() {
-        assert_eq!(LodMethod::Extractive.as_str(), "extractive");
-        assert_eq!(LodMethod::Llm.as_str(), "llm");
+    fn test_lod_method_round_trip() {
+        for method in [LodMethod::Extractive, LodMethod::Llm] {
+            assert_eq!(LodMethod::parse(method.as_str()), Some(method));
+        }
+    }
+
+    #[test]
+    fn test_lod_method_parse_invalid() {
+        assert_eq!(LodMethod::parse("passthrough"), None);
+        assert_eq!(LodMethod::parse(""), None);
     }
 }

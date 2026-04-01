@@ -1402,10 +1402,16 @@ impl DerivedSummaryStore for Db {
 // LOD chunk operations — used by Retrieve+ LOD storage layer
 // ---------------------------------------------------------------------------
 
-use crate::lod::{LodChunk, LodChunkStore, LodLevel, UpsertLodChunk};
+use crate::lod::{LodChunk, LodChunkStore, LodLevel, LodMethod, UpsertLodChunk};
+use brain_persistence::error::BrainCoreError;
 
 impl LodChunkStore for Db {
     fn upsert_lod_chunk(&self, input: &UpsertLodChunk<'_>) -> Result<String> {
+        if !input.lod_level.is_stored() {
+            return Err(BrainCoreError::Database(
+                "L2 chunks are passthrough and must not be stored".into(),
+            ));
+        }
         let id = ulid::Ulid::new().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let persist = brain_persistence::db::lod_chunks::InsertLodChunk {
@@ -1434,7 +1440,7 @@ impl LodChunkStore for Db {
         let row = self.with_read_conn(move |conn| {
             brain_persistence::db::lod_chunks::get_lod_chunk(conn, &uri, &level)
         })?;
-        Ok(row.map(row_to_lod_chunk))
+        row.map(row_to_lod_chunk).transpose()
     }
 
     fn get_lod_chunks_for_uri(&self, object_uri: &str) -> Result<Vec<LodChunk>> {
@@ -1442,7 +1448,7 @@ impl LodChunkStore for Db {
         let rows = self.with_read_conn(move |conn| {
             brain_persistence::db::lod_chunks::get_lod_chunks_for_uri(conn, &uri)
         })?;
-        Ok(rows.into_iter().map(row_to_lod_chunk).collect())
+        rows.into_iter().map(row_to_lod_chunk).collect()
     }
 
     fn delete_lod_chunks_for_uri(&self, object_uri: &str) -> Result<usize> {
@@ -1484,23 +1490,48 @@ impl LodChunkStore for Db {
             )
         })
     }
+
+    fn list_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<LodChunk>> {
+        let bid = brain_id.to_string();
+        let rows = self.with_read_conn(move |conn| {
+            brain_persistence::db::lod_chunks::list_lod_chunks_by_brain(conn, &bid, limit, offset)
+        })?;
+        rows.into_iter().map(row_to_lod_chunk).collect()
+    }
 }
 
-fn row_to_lod_chunk(row: brain_persistence::db::lod_chunks::LodChunkRow) -> LodChunk {
-    LodChunk {
+fn row_to_lod_chunk(row: brain_persistence::db::lod_chunks::LodChunkRow) -> Result<LodChunk> {
+    let lod_level = LodLevel::parse(&row.lod_level).ok_or_else(|| {
+        BrainCoreError::Database(format!(
+            "unknown lod_level '{}' for chunk {}",
+            row.lod_level, row.id
+        ))
+    })?;
+    let method = LodMethod::parse(&row.method).ok_or_else(|| {
+        BrainCoreError::Database(format!(
+            "unknown method '{}' for chunk {}",
+            row.method, row.id
+        ))
+    })?;
+    Ok(LodChunk {
         id: row.id,
         object_uri: row.object_uri,
         brain_id: row.brain_id,
-        lod_level: LodLevel::parse(&row.lod_level).unwrap_or(LodLevel::L0),
+        lod_level,
         content: row.content,
         token_est: row.token_est,
-        method: row.method,
+        method,
         model_id: row.model_id,
         source_hash: row.source_hash,
         created_at: row.created_at,
         expires_at: row.expires_at,
         job_id: row.job_id,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -186,6 +186,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "jobs",
     "providers",
     "summary_sources",
+    "lod_chunks",
 ];
 
 /// All named indexes that must exist at the current schema version.
@@ -211,6 +212,8 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_jobs_poll",
     "idx_jobs_kind",
     "idx_summary_sources_source",
+    "idx_lod_chunks_brain",
+    "idx_lod_chunks_exp",
 ];
 
 /// FTS5 triggers that must exist.
