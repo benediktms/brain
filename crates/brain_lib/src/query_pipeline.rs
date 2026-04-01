@@ -374,14 +374,17 @@ where
                     candidate.byte_start = row.byte_start;
                     candidate.byte_end = row.byte_end;
                     candidate.pagerank_score = row.pagerank_score;
-                    candidate.tags = row
-                        .heading_path
-                        .split(" > ")
-                        .map(|segment| segment.trim_start_matches('#').trim())
-                        .filter(|segment| !segment.is_empty())
-                        .map(|segment| segment.to_lowercase())
-                        .collect();
-                    candidate.importance = candidate.pagerank_score;
+                    // Combine frontmatter tags + heading-derived tags
+                    let mut tags: Vec<String> = row.tags.clone();
+                    tags.extend(
+                        row.heading_path
+                            .split(" > ")
+                            .map(|segment| segment.trim_start_matches('#').trim())
+                            .filter(|segment| !segment.is_empty())
+                            .map(|segment| segment.to_lowercase()),
+                    );
+                    candidate.tags = tags;
+                    candidate.importance = row.importance;
 
                     // Prefer disk mtime (real edit time) over last_indexed_at
                     let effective_ts = row.disk_modified_at.or(row.last_indexed_at);
