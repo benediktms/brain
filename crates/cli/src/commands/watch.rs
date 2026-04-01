@@ -884,11 +884,12 @@ async fn init_brain_instance(
     )?;
     let metrics = Arc::clone(pipeline.metrics());
 
-    let mcp_context = McpContext::from_stores(
-        stores, None, // search: no embedder available in daemon context
-        None, // writable_store: pipeline.store() is owned by pipeline; IPC is read-only
-        metrics,
-    );
+    let search = Some(brain_lib::search_service::SearchService {
+        store: brain_persistence::store::StoreReader::from_store(pipeline.store()),
+        embedder: Arc::clone(pipeline.embedder()),
+    });
+
+    let mcp_context = McpContext::from_stores(stores, search, None, metrics);
 
     Ok(BrainInstance {
         name: name.to_string(),
