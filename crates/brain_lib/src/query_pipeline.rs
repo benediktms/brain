@@ -735,6 +735,8 @@ where
         episodes: Vec<SummaryRow>,
     ) -> Result<ReflectResult> {
         let empty_tags: Vec<String> = Vec::new();
+        // TODO(spike): reflect may benefit from graph_expand — linked notes
+        // often contain supporting evidence for the reflection topic
         let params = SearchParams::new(&topic, "reflection", budget_tokens / 2, 5, &empty_tags);
         let search_result = self.search(&params).await?;
 
@@ -851,6 +853,8 @@ where
             let time_after = params.time_after;
             let time_before = params.time_before;
             futs.push(Box::pin(async move {
+                // TODO(spike): federated search skips graph_expand — evaluate
+                // whether cross-brain queries should follow links within each brain
                 let sp = SearchParams {
                     query: &query,
                     intent: &intent,

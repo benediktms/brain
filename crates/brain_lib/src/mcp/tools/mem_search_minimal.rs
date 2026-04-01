@@ -179,6 +179,7 @@ impl McpTool for MemSearchMinimal {
             } else {
                 None
             };
+            // TODO(spike): evaluate enabling graph_expand for planning/synthesis intents
             let search_params = SearchParams::new(
                 &params.query,
                 &params.intent,

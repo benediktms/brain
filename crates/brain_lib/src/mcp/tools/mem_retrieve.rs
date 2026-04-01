@@ -400,6 +400,8 @@ impl McpTool for MemRetrieve {
                 Some(&current_brain_ids)
             };
 
+            // TODO(spike): evaluate enabling graph_expand — retrieve is the
+            // strongest candidate since callers expect related context
             let search_params = SearchParams::new(
                 query,
                 &params.strategy,
