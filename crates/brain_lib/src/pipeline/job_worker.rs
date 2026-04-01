@@ -562,10 +562,17 @@ async fn process_lod_summarize(db: &Db, payload: &JobPayload) -> JobResult {
             );
             let result = s.summarize(&prompt).await?;
             if result.trim().len() < L1_MIN_CONTENT_LEN {
-                return Err("LLM returned insufficient content".into());
+                warn!(
+                    object_uri = %object_uri,
+                    output_len = result.trim().len(),
+                    "LLM returned insufficient content, falling back to extractive"
+                );
+                let l1 = generate_extractive_l1(source_content);
+                (l1, LodMethod::Extractive, None)
+            } else {
+                let model = s.backend_name().to_string();
+                (result, LodMethod::Llm, Some(model))
             }
-            let model = s.backend_name().to_string();
-            (result, LodMethod::Llm, Some(model))
         }
         None => {
             let l1 = generate_extractive_l1(source_content);
@@ -661,8 +668,9 @@ pub fn enqueue_l1_summarize(
         warn!(
             object_uri = %object_uri,
             content_len = source_content.len(),
-            "enqueue_l1_summarize: source_content exceeds 100K chars"
+            "enqueue_l1_summarize: rejecting source_content exceeding 100K chars"
         );
+        return Ok(None);
     }
 
     if db.has_active_lod_job(object_uri)? {
@@ -1011,7 +1019,6 @@ mod tests {
 
     #[test]
     fn test_enqueue_allows_after_completed() {
-        use brain_persistence::db::jobs as pjobs;
         let db = setup_db();
 
         let first = enqueue_l1_summarize(
@@ -1048,7 +1055,6 @@ mod tests {
 
     #[test]
     fn test_has_active_lod_job_true_for_active_statuses() {
-        use brain_persistence::db::jobs as pjobs;
         let db = setup_db();
 
         for status in &["ready", "pending", "in_progress"] {
@@ -1085,7 +1091,6 @@ mod tests {
 
     #[test]
     fn test_has_active_lod_job_false_for_terminal_statuses() {
-        use brain_persistence::db::jobs as pjobs;
         let db = setup_db();
 
         for status in &["done", "failed"] {
@@ -1122,8 +1127,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_lod_summarize_extractive_fallback() {
-        use crate::lod::{LodChunkStore, LodLevel};
-
         let db = setup_db();
         let payload = JobPayload::LodSummarize {
             object_uri: "synapse://brain-1/chunk-fallback".into(),

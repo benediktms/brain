@@ -1483,10 +1483,9 @@ impl LodChunkStore for Db {
             }
             match &c.expires_at {
                 None => true,
-                Some(exp) => {
-                    let now = chrono::Utc::now().to_rfc3339();
-                    exp.as_str() > now.as_str()
-                }
+                Some(exp) => chrono::DateTime::parse_from_rfc3339(exp)
+                    .map(|e| e > chrono::Utc::now())
+                    .unwrap_or(false), // treat unparseable expiry as stale
             }
         }))
     }
