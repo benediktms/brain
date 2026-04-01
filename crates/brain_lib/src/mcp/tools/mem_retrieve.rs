@@ -159,8 +159,20 @@ async fn handle_uri_mode(
 
     let source_hash = crate::utils::content_hash(&content);
 
+    // Build the LOD object_uri matching what build_object_uri produces in query mode.
+    // For task/record domains, the LOD key uses the synthetic chunk_id, not the raw URI.
+    let lod_uri = match uri.domain {
+        Domain::Task => {
+            SynapseUri::for_task(&brain_name, &format!("task:{}:0", uri.id)).to_string()
+        }
+        Domain::Record => {
+            SynapseUri::for_record(&brain_name, &format!("record:{}:0", uri.id)).to_string()
+        }
+        _ => uri_str.to_string(),
+    };
+
     let (resolution, lod_diag) =
-        resolve_single_lod(db, uri_str, &content, &source_hash, lod_level, &brain_id);
+        resolve_single_lod(db, &lod_uri, &content, &source_hash, lod_level, &brain_id);
 
     let query_time_ms = start.elapsed().as_millis() as u64;
 
@@ -343,10 +355,15 @@ impl McpTool for MemRetrieve {
                 }
             };
 
+            let has_query = params.query.as_ref().is_some_and(|q| !q.trim().is_empty());
+            let has_uri = params.uri.is_some();
+
+            if has_query && has_uri {
+                return ToolCallResult::error("Provide 'query' or 'uri', not both");
+            }
+
             // URI mode: direct access by synapse:// URI, no ranking.
-            if let Some(ref uri_str) = params.uri
-                && params.query.as_ref().is_none_or(|q| q.trim().is_empty())
-            {
+            if let Some(ref uri_str) = params.uri {
                 return handle_uri_mode(ctx, uri_str, lod, params.explain).await;
             }
 
@@ -610,6 +627,25 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
         assert!(
             result.content[0].text.contains("required"),
+            "got: {}",
+            result.content[0].text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_and_uri_rejects() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch(
+                "memory.retrieve",
+                json!({ "query": "hello", "uri": "synapse://b/memory/x" }),
+                &ctx,
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            result.content[0].text.contains("not both"),
             "got: {}",
             result.content[0].text
         );
