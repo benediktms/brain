@@ -815,7 +815,11 @@ where
         include_scores: bool,
     ) -> Result<crate::retrieval::SearchResult> {
         // ── 1. Build per-brain vector-search futures ──────────────────────────
-        type BrainResult = (String, Vec<crate::ranking::RankedResult>);
+        type BrainResult = (
+            String,
+            Vec<crate::ranking::RankedResult>,
+            Option<crate::ranking::FusionConfidence>,
+        );
 
         let mode = params.mode;
         let mut futs: Vec<
@@ -863,10 +867,10 @@ where
                     tags_exclude: &tags_exclude,
                 };
                 match pipeline.search_ranked(&sp).await {
-                    Ok((ranked, _confidence)) => (brain_name, ranked),
+                    Ok((ranked, confidence)) => (brain_name, ranked, Some(confidence)),
                     Err(e) => {
                         warn!(brain = %brain_name, error = %e, "brain search failed");
-                        (brain_name, vec![])
+                        (brain_name, vec![], None)
                     }
                 }
             }));
@@ -886,7 +890,11 @@ where
         let mut chunk_brain: HashMap<String, String> = HashMap::new();
         let mut best_by_chunk: HashMap<String, crate::ranking::RankedResult> = HashMap::new();
 
-        for (brain_name, ranked) in all_results {
+        let mut first_confidence: Option<crate::ranking::FusionConfidence> = None;
+        for (brain_name, ranked, confidence) in all_results {
+            if first_confidence.is_none() {
+                first_confidence = confidence;
+            }
             for result in ranked {
                 let dominated = best_by_chunk
                     .get(&result.chunk_id)
@@ -922,6 +930,9 @@ where
         for stub in &mut search_result.results {
             stub.brain_name = chunk_brain.get(&stub.memory_id).cloned();
         }
+
+        // ── 7. Attach fusion confidence from primary brain ───────────────────
+        search_result.fusion_confidence = first_confidence;
 
         Ok(search_result)
     }

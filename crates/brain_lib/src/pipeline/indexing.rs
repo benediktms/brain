@@ -204,7 +204,6 @@ where
                 replace_links(conn, &verdict.file_id, &[])?;
                 Ok(())
             })?;
-            gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             self.db.with_write_conn(|conn| {
                 brain_persistence::db::files::update_file_frontmatter(
                     conn,
@@ -213,6 +212,7 @@ where
                     importance,
                 )
             })?;
+            gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             return Ok(true);
         }
 
@@ -253,7 +253,6 @@ where
             let ts = now_ts();
             let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
             self.db.mark_chunks_embedded(&ids, ts)?;
-            gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             self.db.with_write_conn(|conn| {
                 brain_persistence::db::files::update_file_frontmatter(
                     conn,
@@ -262,6 +261,7 @@ where
                     importance,
                 )
             })?;
+            gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             self.metrics.record_index_latency(start.elapsed());
             return Ok(true);
         }
@@ -289,7 +289,6 @@ where
         self.db.mark_chunks_embedded(&ids, ts)?;
 
         // Mark indexed (sets hash + state=indexed + disk mtime)
-        gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
         self.db.with_write_conn(|conn| {
             brain_persistence::db::files::update_file_frontmatter(
                 conn,
@@ -298,6 +297,7 @@ where
                 importance,
             )
         })?;
+        gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
 
         // Content changed — mark ancestor directory scopes stale.
         mark_ancestors_stale(&self.db, &path_str);
@@ -372,7 +372,6 @@ where
                     replace_links(conn, &verdict.file_id, &[])?;
                     Ok(())
                 })?;
-                gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 self.db.with_write_conn(|conn| {
                     brain_persistence::db::files::update_file_frontmatter(
                         conn,
@@ -381,6 +380,7 @@ where
                         importance,
                     )
                 })?;
+                gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
             }
@@ -419,7 +419,6 @@ where
                     brain_persistence::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
                     Ok(())
                 })?;
-                gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 self.db.with_write_conn(|conn| {
                     brain_persistence::db::files::update_file_frontmatter(
                         conn,
@@ -428,6 +427,7 @@ where
                         importance,
                     )
                 })?;
+                gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
             }
@@ -559,7 +559,6 @@ where
                 let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
                 self.db.mark_chunks_embedded(&ids, ts)?;
 
-                gate.mark_passed(file_id, &pf.hash, pf.disk_mtime)?;
                 self.db.with_write_conn(|conn| {
                     brain_persistence::db::files::update_file_frontmatter(
                         conn,
@@ -568,6 +567,7 @@ where
                         pf.importance,
                     )
                 })?;
+                gate.mark_passed(file_id, &pf.hash, pf.disk_mtime)?;
                 Ok::<(), crate::error::BrainCoreError>(())
             }
             .await
