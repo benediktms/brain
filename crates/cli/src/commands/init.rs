@@ -630,7 +630,8 @@ fn render_brain_section(brain_name: &str, build_section: &str) -> String {
     let body = BRAIN_SECTION_BODY
         .replace("{brain_name}", brain_name)
         .replace("{build_section}", build_section);
-    let hash = &blake3::hash(body.as_bytes()).to_hex()[..8];
+    let hex = blake3::hash(body.as_bytes()).to_hex();
+    let hash = &hex.as_str()[..8];
     format!("<!-- brain:start:{hash} -->\n{body}{BRAIN_SECTION_END}\n")
 }
 
@@ -957,7 +958,9 @@ mod tests {
         let body_start = section.find('\n').unwrap() + 1;
         let body_end = section.find(BRAIN_SECTION_END).unwrap();
         let body = &section[body_start..body_end];
-        let expected_hash = &blake3::hash(body.as_bytes()).to_hex()[..8];
+
+        let hex = blake3::hash(body.as_bytes()).to_hex();
+        let expected_hash = &hex.as_str()[..8];
 
         assert_eq!(
             hash_in_marker, expected_hash,

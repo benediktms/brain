@@ -1146,6 +1146,8 @@ mod tests {
                 last_indexed_at: None,
                 disk_modified_at: None,
                 pagerank_score: 0.0,
+                tags: vec![],
+                importance: 0.5,
             });
             rows.push(ChunkRow {
                 chunk_id: "c2".to_string(),
@@ -1159,6 +1161,8 @@ mod tests {
                 last_indexed_at: None,
                 disk_modified_at: None,
                 pagerank_score: 0.0,
+                tags: vec![],
+                importance: 0.5,
             });
         }
 

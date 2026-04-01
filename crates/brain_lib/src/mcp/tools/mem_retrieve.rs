@@ -436,7 +436,7 @@ impl McpTool for MemRetrieve {
                     metrics: &ctx.metrics,
                 };
 
-                let search_result = match federated.search(&search_params).await {
+                let search_result = match federated.search(&search_params, params.explain).await {
                     Ok(r) => r,
                     Err(e) => {
                         return ToolCallResult::error(format!("Federated search failed: {e}"));
@@ -489,7 +489,7 @@ impl McpTool for MemRetrieve {
             // Single-brain path.
             let pipeline = QueryPipeline::new(ctx.stores.db(), store, embedder, &ctx.metrics);
 
-            let (ranked, _fusion, pipeline_diag) = match pipeline
+            let (ranked, fusion, pipeline_diag) = match pipeline
                 .search_ranked_with_diagnostics(&search_params)
                 .await
             {
@@ -579,6 +579,11 @@ impl McpTool for MemRetrieve {
                     "fts_candidates": pipeline_diag.fts_candidates,
                     "union_size": pipeline_diag.union_size,
                     "reranked": pipeline_diag.reranked,
+                },
+                "fusion_confidence": {
+                    "confidence": fusion.confidence,
+                    "k": fusion.k,
+                    "overlap": fusion.overlap,
                 },
                 "lod_diagnostics": {
                     "lod_hits": lod_diag.lod_hits,

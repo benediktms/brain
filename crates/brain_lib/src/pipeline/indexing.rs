@@ -53,6 +53,35 @@ struct PendingFile {
     chunks: Vec<Chunk>,
     links: Vec<Link>,
     disk_mtime: Option<i64>,
+    tags_json: String,
+    importance: f64,
+}
+
+/// Extract tags and importance from parsed YAML frontmatter.
+///
+/// Returns `(tags_json, importance)` where `tags_json` is a JSON array string
+/// and `importance` is clamped to [0.0, 1.0] with a default of 0.5.
+fn extract_frontmatter_signals(
+    fm: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> (String, f64) {
+    let tags: Vec<String> = fm
+        .get("tags")
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let importance = fm
+        .get("importance")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5)
+        .clamp(0.0, 1.0);
+    (
+        serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string()),
+        importance,
+    )
 }
 
 /// Read the file's OS-level modification time as Unix seconds.
@@ -157,10 +186,11 @@ where
 
         gate.mark_in_progress(&verdict.file_id)?;
 
-        // Parse → Chunk → Extract links
+        // Parse → Chunk → Extract links → Extract frontmatter signals
         let doc = parse_document(&content);
         let chunks = chunk_document(&doc);
         let links = extract_links(&content);
+        let (tags_json, importance) = extract_frontmatter_signals(&doc.frontmatter);
 
         if chunks.is_empty() {
             // Empty file — clear any existing chunks, links, and LOD entries
@@ -173,6 +203,14 @@ where
                 replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                 replace_links(conn, &verdict.file_id, &[])?;
                 Ok(())
+            })?;
+            self.db.with_write_conn(|conn| {
+                brain_persistence::db::files::update_file_frontmatter(
+                    conn,
+                    &verdict.file_id,
+                    &tags_json,
+                    importance,
+                )
             })?;
             gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             return Ok(true);
@@ -215,6 +253,14 @@ where
             let ts = now_ts();
             let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
             self.db.mark_chunks_embedded(&ids, ts)?;
+            self.db.with_write_conn(|conn| {
+                brain_persistence::db::files::update_file_frontmatter(
+                    conn,
+                    &verdict.file_id,
+                    &tags_json,
+                    importance,
+                )
+            })?;
             gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             self.metrics.record_index_latency(start.elapsed());
             return Ok(true);
@@ -243,6 +289,14 @@ where
         self.db.mark_chunks_embedded(&ids, ts)?;
 
         // Mark indexed (sets hash + state=indexed + disk mtime)
+        self.db.with_write_conn(|conn| {
+            brain_persistence::db::files::update_file_frontmatter(
+                conn,
+                &verdict.file_id,
+                &tags_json,
+                importance,
+            )
+        })?;
         gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
 
         // Content changed — mark ancestor directory scopes stale.
@@ -304,6 +358,7 @@ where
             let doc = parse_document(&content);
             let chunks = chunk_document(&doc);
             let links = extract_links(&content);
+            let (tags_json, importance) = extract_frontmatter_signals(&doc.frontmatter);
 
             // Handle empty files immediately (no embedding needed)
             if chunks.is_empty() {
@@ -316,6 +371,14 @@ where
                     replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                     replace_links(conn, &verdict.file_id, &[])?;
                     Ok(())
+                })?;
+                self.db.with_write_conn(|conn| {
+                    brain_persistence::db::files::update_file_frontmatter(
+                        conn,
+                        &verdict.file_id,
+                        &tags_json,
+                        importance,
+                    )
                 })?;
                 gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
@@ -356,6 +419,14 @@ where
                     brain_persistence::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
                     Ok(())
                 })?;
+                self.db.with_write_conn(|conn| {
+                    brain_persistence::db::files::update_file_frontmatter(
+                        conn,
+                        &verdict.file_id,
+                        &tags_json,
+                        importance,
+                    )
+                })?;
                 gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
@@ -369,6 +440,8 @@ where
                 chunks,
                 links,
                 disk_mtime,
+                tags_json,
+                importance,
             });
 
             if total_chunks >= MAX_PENDING_CHUNKS {
@@ -486,6 +559,14 @@ where
                 let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
                 self.db.mark_chunks_embedded(&ids, ts)?;
 
+                self.db.with_write_conn(|conn| {
+                    brain_persistence::db::files::update_file_frontmatter(
+                        conn,
+                        file_id,
+                        &pf.tags_json,
+                        pf.importance,
+                    )
+                })?;
                 gate.mark_passed(file_id, &pf.hash, pf.disk_mtime)?;
                 Ok::<(), crate::error::BrainCoreError>(())
             }

@@ -139,7 +139,7 @@ impl McpTool for RecordSearch {
                     metrics: &ctx.metrics,
                 };
 
-                match federated.search(&search_params).await {
+                match federated.search(&search_params, false).await {
                     Ok(r) => r,
                     Err(e) => {
                         return ToolCallResult::error(format!("Federated search failed: {e}"));

@@ -72,6 +72,10 @@ pub struct ChunkRow {
     pub disk_modified_at: Option<i64>,
     /// PageRank score from the files table, normalized to [0, 1]. Defaults to 0.0 if NULL.
     pub pagerank_score: f64,
+    /// Tags from file frontmatter, parsed from JSON array. Empty if no frontmatter.
+    pub tags: Vec<String>,
+    /// Importance from file frontmatter [0.0, 1.0]. Defaults to 0.5.
+    pub importance: f64,
 }
 
 /// Look up chunks by their IDs, joining with the files table for path, timestamp, and pagerank.
@@ -86,7 +90,9 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
         "SELECT c.chunk_id, c.file_id, f.path, c.content, c.heading_path,
                 c.byte_start, c.byte_end, c.token_estimate, f.last_indexed_at,
                 f.disk_modified_at,
-                COALESCE(f.pagerank_score, 0.0) as pagerank_score
+                COALESCE(f.pagerank_score, 0.0) as pagerank_score,
+                COALESCE(f.tags, '[]') as tags,
+                COALESCE(f.importance, 0.5) as importance
          FROM chunks c
          JOIN files f ON f.file_id = c.file_id
          WHERE c.chunk_id IN ({})
@@ -101,6 +107,8 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
         .collect();
 
     let rows = stmt.query_map(params.as_slice(), |row| {
+        let tags_json: String = row.get::<_, String>(11).unwrap_or_default();
+        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         Ok(ChunkRow {
             chunk_id: row.get(0)?,
             file_id: row.get(1)?,
@@ -113,6 +121,8 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
             last_indexed_at: row.get(8)?,
             disk_modified_at: row.get(9)?,
             pagerank_score: row.get::<_, f64>(10).unwrap_or(0.0),
+            tags,
+            importance: row.get::<_, f64>(12).unwrap_or(0.5),
         })
     })?;
 
@@ -132,7 +142,9 @@ pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<
         "SELECT c.chunk_id, c.file_id, f.path, c.content, c.heading_path,
                 c.byte_start, c.byte_end, c.token_estimate, f.last_indexed_at,
                 f.disk_modified_at,
-                COALESCE(f.pagerank_score, 0.0) as pagerank_score
+                COALESCE(f.pagerank_score, 0.0) as pagerank_score,
+                COALESCE(f.tags, '[]') as tags,
+                COALESCE(f.importance, 0.5) as importance
          FROM chunks c
          JOIN files f ON f.file_id = c.file_id
          WHERE c.file_id IN ({})
@@ -144,6 +156,8 @@ pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<
     let params: Vec<&dyn ToSql> = file_ids.iter().map(|id| id as &dyn ToSql).collect();
 
     let rows = stmt.query_map(params.as_slice(), |row| {
+        let tags_json: String = row.get::<_, String>(11).unwrap_or_default();
+        let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         Ok(ChunkRow {
             chunk_id: row.get(0)?,
             file_id: row.get(1)?,
@@ -156,6 +170,8 @@ pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<
             last_indexed_at: row.get(8)?,
             disk_modified_at: row.get(9)?,
             pagerank_score: row.get::<_, f64>(10).unwrap_or(0.0),
+            tags,
+            importance: row.get::<_, f64>(12).unwrap_or(0.5),
         })
     })?;
 

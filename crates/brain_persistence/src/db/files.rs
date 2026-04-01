@@ -123,6 +123,23 @@ pub fn mark_indexed(
     Ok(())
 }
 
+/// Update frontmatter-derived tags and importance for a file.
+///
+/// Called after indexing to persist metadata extracted from YAML frontmatter.
+/// `tags_json` is a JSON array string (e.g. `'["rust","memory"]'`).
+pub fn update_file_frontmatter(
+    conn: &Connection,
+    file_id: &str,
+    tags_json: &str,
+    importance: f64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET tags = ?1, importance = ?2 WHERE file_id = ?3",
+        rusqlite::params![tags_json, importance, file_id],
+    )?;
+    Ok(())
+}
+
 /// Update the path for a renamed file.
 pub fn handle_rename(conn: &Connection, file_id: &str, new_path: &str) -> Result<()> {
     conn.execute(

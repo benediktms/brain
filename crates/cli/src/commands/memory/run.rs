@@ -134,9 +134,7 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             embedder: &ctx.search.embedder,
             metrics: &ctx.metrics,
         };
-        // TODO(W1-IMPL-EXPLAIN): FederatedPipeline has no search_with_scores.
-        // explain=true is silently ignored for federated searches.
-        federated.search(&search_params).await?
+        federated.search(&search_params, false).await?
     };
 
     if ctx.json {

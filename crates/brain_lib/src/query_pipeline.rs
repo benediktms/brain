@@ -374,14 +374,19 @@ where
                     candidate.byte_start = row.byte_start;
                     candidate.byte_end = row.byte_end;
                     candidate.pagerank_score = row.pagerank_score;
-                    candidate.tags = row
-                        .heading_path
-                        .split(" > ")
-                        .map(|segment| segment.trim_start_matches('#').trim())
-                        .filter(|segment| !segment.is_empty())
-                        .map(|segment| segment.to_lowercase())
-                        .collect();
-                    candidate.importance = candidate.pagerank_score;
+                    // Combine frontmatter tags + heading-derived tags (deduplicated)
+                    let mut tags: Vec<String> = row.tags.clone();
+                    tags.extend(
+                        row.heading_path
+                            .split(" > ")
+                            .map(|segment| segment.trim_start_matches('#').trim())
+                            .filter(|segment| !segment.is_empty())
+                            .map(|segment| segment.to_lowercase()),
+                    );
+                    tags.sort();
+                    tags.dedup();
+                    candidate.tags = tags;
+                    candidate.importance = row.importance;
 
                     // Prefer disk mtime (real edit time) over last_indexed_at
                     let effective_ts = row.disk_modified_at.or(row.last_indexed_at);
@@ -807,9 +812,14 @@ where
     pub async fn search(
         &self,
         params: &SearchParams<'_>,
+        include_scores: bool,
     ) -> Result<crate::retrieval::SearchResult> {
         // ── 1. Build per-brain vector-search futures ──────────────────────────
-        type BrainResult = (String, Vec<crate::ranking::RankedResult>);
+        type BrainResult = (
+            String,
+            Vec<crate::ranking::RankedResult>,
+            Option<crate::ranking::FusionConfidence>,
+        );
 
         let mode = params.mode;
         let mut futs: Vec<
@@ -857,10 +867,10 @@ where
                     tags_exclude: &tags_exclude,
                 };
                 match pipeline.search_ranked(&sp).await {
-                    Ok((ranked, _confidence)) => (brain_name, ranked),
+                    Ok((ranked, confidence)) => (brain_name, ranked, Some(confidence)),
                     Err(e) => {
                         warn!(brain = %brain_name, error = %e, "brain search failed");
-                        (brain_name, vec![])
+                        (brain_name, vec![], None)
                     }
                 }
             }));
@@ -880,7 +890,11 @@ where
         let mut chunk_brain: HashMap<String, String> = HashMap::new();
         let mut best_by_chunk: HashMap<String, crate::ranking::RankedResult> = HashMap::new();
 
-        for (brain_name, ranked) in all_results {
+        let mut first_confidence: Option<crate::ranking::FusionConfidence> = None;
+        for (brain_name, ranked, confidence) in all_results {
+            if first_confidence.is_none() {
+                first_confidence = confidence;
+            }
             for result in ranked {
                 let dominated = best_by_chunk
                     .get(&result.chunk_id)
@@ -908,7 +922,7 @@ where
             &merged,
             params.budget_tokens,
             params.k,
-            false,
+            include_scores,
             &HashMap::new(),
         );
 
@@ -916,6 +930,9 @@ where
         for stub in &mut search_result.results {
             stub.brain_name = chunk_brain.get(&stub.memory_id).cloned();
         }
+
+        // ── 7. Attach fusion confidence from primary brain ───────────────────
+        search_result.fusion_confidence = first_confidence;
 
         Ok(search_result)
     }

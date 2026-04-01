@@ -250,7 +250,7 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
             embedder: &ctx.search.embedder,
             metrics: &ctx.metrics,
         };
-        federated.search(&search_params).await?
+        federated.search(&search_params, false).await?
     };
 
     // Filter to record-kind only, then truncate to k.
