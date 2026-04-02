@@ -451,6 +451,37 @@ pub async fn poll_stale_records(
             continue;
         }
 
+        // L0 LOD upsert — store capsule text as extractive L0 in lod_chunks.
+        let lod_uri = SynapseUri::for_record(brain_id, &entry.file_id).to_string();
+        let source_hash = crate::utils::content_hash(&entry.capsule_text);
+        let token_est = estimate_tokens(&entry.capsule_text) as i64;
+        let now_lod = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = db.with_write_conn(|conn| {
+            lod_chunks::upsert_lod_chunk(
+                conn,
+                &InsertLodChunk {
+                    id: &ulid::Ulid::new().to_string(),
+                    object_uri: &lod_uri,
+                    brain_id,
+                    lod_level: "L0",
+                    content: &entry.capsule_text,
+                    token_est: Some(token_est),
+                    method: "extractive",
+                    model_id: None,
+                    source_hash: &source_hash,
+                    created_at: &now_lod,
+                    expires_at: None,
+                    job_id: None,
+                },
+            )
+        }) {
+            warn!(
+                record_id = %entry.record_id,
+                error = %e,
+                "embed_poll: LOD L0 upsert failed for record capsule"
+            );
+        }
+
         embedded_record_ids.insert(entry.record_id.clone());
     }
 
