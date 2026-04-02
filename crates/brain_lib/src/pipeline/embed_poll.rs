@@ -22,6 +22,7 @@ use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::db::summaries::{
     SummaryPollRow, find_stale_summaries_for_embedding, mark_summaries_embedded,
 };
+use crate::l0_generate::generate_episode_l0;
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 
@@ -545,6 +546,33 @@ pub async fn poll_stale_summaries(
             );
             continue;
         }
+        // For episodes, generate L0 and upsert to lod_chunks
+        if row.kind == "episode" {
+            let l0_content = generate_episode_l0(&row.content);
+            if !l0_content.is_empty() {
+                // Use summary_id as the chunk_id (with :0 suffix)
+                let file_id = format!("summary:{}", row.summary_id);
+                upsert_domain_lod_l0(db, &file_id, &l0_content, brain_id, "episode");
+            }
+
+            // Enqueue L1 if content > 300 chars
+            if row.content.len() > 300 {
+                let file_id = format!("summary:{}", row.summary_id);
+                let chunk_id = format!("{file_id}:0");
+                let lod_uri = SynapseUri::for_episode(brain_id, &chunk_id).to_string();
+                let source_hash = crate::utils::content_hash(&row.content);
+                if let Err(e) = crate::pipeline::job_worker::enqueue_l1_summarize(
+                    db, &lod_uri, brain_id, &row.content, &source_hash,
+                ) {
+                    warn!(
+                        error = %e,
+                        summary_id = %row.summary_id,
+                        "embed_poll: failed to enqueue L1 for episode"
+                    );
+                }
+            }
+        }
+
 
         embedded_summary_ids.insert(row.summary_id.clone());
     }

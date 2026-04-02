@@ -55,6 +55,47 @@ pub fn generate_chunk_l0(heading_path: &str, content: &str) -> String {
     truncate_at_word_boundary(&result, MAX_L0_CHARS)
 }
 
+/// Generate an extractive L0 abstract for an episode.
+///
+/// Extracts the goal text from episode content by:
+/// 1. Taking the first line and stripping the "Goal:" prefix
+/// 2. If the goal is empty, falling back to the "Outcome:" line
+/// 3. Truncating to MAX_L0_CHARS at word boundary
+///
+/// Episode content format:
+/// ```text
+/// Goal: {goal}
+/// Actions: {actions}
+/// Outcome: {outcome}
+/// ```
+pub fn generate_episode_l0(content: &str) -> String {
+    let content = content.trim();
+    if content.is_empty() {
+        return String::new();
+    }
+
+    // Take first line
+    let first_line = content.lines().next().unwrap_or("");
+
+    // Strip "Goal: " prefix if present
+    let goal = first_line.strip_prefix("Goal:").unwrap_or(first_line).trim();
+
+    if goal.is_empty() {
+        // Fall back to Outcome line (skip first line since we already checked it)
+        for line in content.lines().skip(1) {
+            if let Some(outcome) = line.strip_prefix("Outcome:") {
+                let outcome = outcome.trim();
+                if !outcome.is_empty() {
+                    return truncate_at_word_boundary(outcome, MAX_L0_CHARS);
+                }
+            }
+        }
+        return String::new();
+    }
+
+    truncate_at_word_boundary(goal, MAX_L0_CHARS)
+}
+
 /// Extract the first meaningful sentence from content.
 ///
 /// Splits on `. ` (sentence end followed by space) or `\n\n` (paragraph break),
@@ -359,5 +400,72 @@ mod tests {
         let result = generate_extractive_l1(content);
         assert!(result.len() <= MAX_L1_CHARS);
         assert!(!result.is_empty());
+    }
+
+    // ── generate_episode_l0 tests ───────────────────────────────
+    #[test]
+    fn test_episode_l0_goal_only() {
+        let content = "Goal: Fix the authentication bug\nActions: Debugged and patched\nOutcome: Bug fixed";
+        let result = generate_episode_l0(content);
+        assert_eq!(result, "Fix the authentication bug");
+    }
+
+    #[test]
+    fn test_episode_l0_no_goal_prefix() {
+        let content = "Fix the authentication bug\nActions: Debugged and patched\nOutcome: Bug fixed";
+        let result = generate_episode_l0(content);
+        assert_eq!(result, "Fix the authentication bug");
+    }
+
+    #[test]
+    fn test_episode_l0_no_goal_falls_back_to_outcome() {
+        // When Goal: is empty, fall back to Outcome line
+        let content = "Goal: \nActions: Debugged and patched\nOutcome: Bug successfully fixed";
+        let result = generate_episode_l0(content);
+        assert_eq!(result, "Bug successfully fixed");
+    }
+
+    #[test]
+    fn test_episode_l0_empty() {
+        let result = generate_episode_l0("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_episode_l0_whitespace_only() {
+        let result = generate_episode_l0("   \n  \n  ");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_episode_l0_long_goal_truncated() {
+        let long_goal = "A".repeat(500);
+        let content = format!("Goal: {}\nActions: Some actions\nOutcome: Some outcome", long_goal);
+        let result = generate_episode_l0(&content);
+        assert!(result.len() <= MAX_L0_CHARS, "result len {} exceeds MAX_L0_CHARS {}", result.len(), MAX_L0_CHARS);
+    }
+
+    #[test]
+    fn test_episode_l0_actions_only() {
+        // When no Goal: prefix, first line is returned as-is (even if it's Actions:)
+        let content = "Actions: Debugged and patched";
+        let result = generate_episode_l0(content);
+        assert_eq!(result, "Actions: Debugged and patched");
+    }
+
+    #[test]
+    fn test_episode_l0_goal_colon_only() {
+        // Edge case: first line is exactly "Goal:" with no content - should fall back to Outcome
+        let content = "Goal:\nActions: Debugged and patched\nOutcome: Bug fixed";
+        let result = generate_episode_l0(content);
+        assert_eq!(result, "Bug fixed");
+    }
+
+    
+    #[test]
+    fn test_episode_l0_outcome_empty() {
+        let content = "Goal: Test goal\nActions: Actions\nOutcome: ";
+        let result = generate_episode_l0(content);
+        assert_eq!(result, "Test goal");
     }
 }
