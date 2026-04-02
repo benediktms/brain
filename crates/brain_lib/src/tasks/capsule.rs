@@ -5,9 +5,14 @@
 
 use std::sync::Arc;
 
+use tracing::warn;
+
 use crate::embedder::{Embed, embed_batch_async};
 use crate::error::Result;
+use crate::tokens::estimate_tokens;
+use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
+use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::store::Store;
 
 /// Build a capsule string from a task's current state.
@@ -123,6 +128,7 @@ pub async fn embed_task_capsule(
         .await?;
 
     store_task_capsule(db, &file_id, &capsule_text, brain_id)?;
+    upsert_task_lod_l0(db, &file_id, &capsule_text, brain_id);
     Ok(())
 }
 
@@ -154,7 +160,37 @@ pub async fn embed_outcome_capsule(
         .await?;
 
     store_task_capsule(db, &file_id, &capsule_text, brain_id)?;
+    upsert_task_lod_l0(db, &file_id, &capsule_text, brain_id);
     Ok(())
+}
+
+/// Best-effort L0 LOD upsert for a task/outcome capsule.
+fn upsert_task_lod_l0(db: &Db, file_id: &str, capsule_text: &str, brain_id: &str) {
+    let lod_uri = SynapseUri::for_task(brain_id, file_id).to_string();
+    let source_hash = crate::utils::content_hash(capsule_text);
+    let token_est = estimate_tokens(capsule_text) as i64;
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = db.with_write_conn(|conn| {
+        lod_chunks::upsert_lod_chunk(
+            conn,
+            &InsertLodChunk {
+                id: &ulid::Ulid::new().to_string(),
+                object_uri: &lod_uri,
+                brain_id,
+                lod_level: "L0",
+                content: capsule_text,
+                token_est: Some(token_est),
+                method: "extractive",
+                model_id: None,
+                source_hash: &source_hash,
+                created_at: &now,
+                expires_at: None,
+                job_id: None,
+            },
+        )
+    }) {
+        warn!(file_id = %file_id, error = %e, "LOD L0 upsert failed for task capsule");
+    }
 }
 
 fn priority_label(p: i32) -> &'static str {

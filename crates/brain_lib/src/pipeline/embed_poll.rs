@@ -14,8 +14,11 @@ use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
 use crate::tasks::queries::{TaskPollRow, find_stale_tasks_for_embedding, get_labels_for_tasks};
+use crate::tokens::estimate_tokens;
+use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
 use brain_persistence::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
+use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::db::summaries::{
     SummaryPollRow, find_stale_summaries_for_embedding, mark_summaries_embedded,
 };
@@ -157,6 +160,37 @@ pub async fn poll_stale_tasks(
                 "embed_poll: SQLite FTS upsert failed for task capsule"
             );
             continue;
+        }
+
+        // L0 LOD upsert — store capsule text as extractive L0 in lod_chunks.
+        let lod_uri = SynapseUri::for_task(brain_id, &entry.file_id).to_string();
+        let source_hash = crate::utils::content_hash(&entry.capsule_text);
+        let token_est = estimate_tokens(&entry.capsule_text) as i64;
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = db.with_write_conn(|conn| {
+            lod_chunks::upsert_lod_chunk(
+                conn,
+                &InsertLodChunk {
+                    id: &ulid::Ulid::new().to_string(),
+                    object_uri: &lod_uri,
+                    brain_id,
+                    lod_level: "L0",
+                    content: &entry.capsule_text,
+                    token_est: Some(token_est),
+                    method: "extractive",
+                    model_id: None,
+                    source_hash: &source_hash,
+                    created_at: &now,
+                    expires_at: None,
+                    job_id: None,
+                },
+            )
+        }) {
+            warn!(
+                task_id = %entry.task_id,
+                error = %e,
+                "embed_poll: LOD L0 upsert failed for task capsule"
+            );
         }
 
         // Track unique task IDs (task + outcome capsule both count once)
