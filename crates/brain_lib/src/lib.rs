@@ -47,7 +47,9 @@ pub mod prelude {
     pub use crate::metrics::Metrics;
     pub use crate::parser::{ParsedDocument, parse_document};
     pub use crate::pipeline::{IndexPipeline, ScanStats, VacuumStats};
-    pub use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
+    pub use crate::query_pipeline::{
+        FederatedPipeline, FederatedRankedResult, QueryPipeline, SearchParams,
+    };
     pub use crate::ranking::{
         FusionConfidence, RankedResult, RerankCandidate, RerankResult, Reranker, RerankerPolicy,
         WeightProfile,

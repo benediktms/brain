@@ -3,6 +3,7 @@
 //! Maps a batch of [`RankedResult`] values to resolved content at the
 //! requested [`LodLevel`], with fallback logic and background enqueue.
 
+use std::collections::HashMap;
 use tracing::warn;
 
 use crate::lod::{LodChunkStore, LodLevel};
@@ -293,7 +294,7 @@ pub fn resolve_lod_batch_federated(
     db: &Db,
     ranked: &[RankedResult],
     requested_lod: LodLevel,
-    chunk_brain: &std::collections::HashMap<String, String>,
+    chunk_brain: &HashMap<String, String>,
     default_brain_name: &str,
     default_brain_id: &str,
     brain_id_resolver: &dyn Fn(&str) -> Option<String>,

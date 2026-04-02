@@ -511,7 +511,7 @@ impl McpTool for MemRetrieve {
                                 .to_string()
                         };
 
-                        json!({
+                        let mut entry = json!({
                             "uri": uri_str,
                             "kind": kind.as_str(),
                             "lod": resolution.actual_lod.as_str(),
@@ -523,7 +523,20 @@ impl McpTool for MemRetrieve {
                             "generated_at": resolution.generated_at,
                             "source_uri": uri_str,
                             "brain": brain_name,
-                        })
+                        });
+
+                        if params.explain {
+                            entry["signals"] = json!({
+                                "sim_vector": r.scores.vector,
+                                "bm25": r.scores.keyword,
+                                "recency": r.scores.recency,
+                                "links": r.scores.links,
+                                "tag_match": r.scores.tag_match,
+                                "importance": r.scores.importance,
+                            });
+                        }
+
+                        entry
                     })
                     .collect();
 
@@ -531,9 +544,17 @@ impl McpTool for MemRetrieve {
                     "query_time_ms": query_time_ms,
                     "lod_requested": lod.as_str(),
                     "result_count": results_json.len(),
-                    "lod_hits": lod_diag.lod_hits,
-                    "lod_misses": lod_diag.lod_misses,
-                    "lod_generation_enqueued": lod_diag.lod_generation_enqueued,
+                    "fusion_confidence": fed_result.fusion_confidence.as_ref().map(|fc| json!({
+                        "confidence": fc.confidence,
+                        "k": fc.k,
+                        "overlap": fc.overlap,
+                    })),
+                    "pipeline_diagnostics": null,
+                    "lod_diagnostics": {
+                        "lod_hits": lod_diag.lod_hits,
+                        "lod_misses": lod_diag.lod_misses,
+                        "lod_generation_enqueued": lod_diag.lod_generation_enqueued,
+                    },
                     "results": results_json,
                 });
 
