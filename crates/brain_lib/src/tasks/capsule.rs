@@ -165,8 +165,13 @@ pub async fn embed_outcome_capsule(
 }
 
 /// Best-effort L0 LOD upsert for a task/outcome capsule.
-fn upsert_task_lod_l0(db: &Db, file_id: &str, capsule_text: &str, brain_id: &str) {
-    let lod_uri = SynapseUri::for_task(brain_id, file_id).to_string();
+///
+/// Uses the chunk_id format (`{file_id}:0`) for the URI to match the lookup
+/// path in `lod_resolver::build_object_uri`, which receives `ranked.chunk_id`.
+pub(crate) fn upsert_task_lod_l0(db: &Db, file_id: &str, capsule_text: &str, brain_id: &str) {
+    // chunk_id = "{file_id}:0" — matches what chunks.rs:207 stores in FTS.
+    let chunk_id = format!("{file_id}:0");
+    let lod_uri = SynapseUri::for_task(brain_id, &chunk_id).to_string();
     let source_hash = crate::utils::content_hash(capsule_text);
     let token_est = estimate_tokens(capsule_text) as i64;
     let now = chrono::Utc::now().to_rfc3339();

@@ -162,36 +162,13 @@ pub async fn poll_stale_tasks(
             continue;
         }
 
-        // L0 LOD upsert — store capsule text as extractive L0 in lod_chunks.
-        let lod_uri = SynapseUri::for_task(brain_id, &entry.file_id).to_string();
-        let source_hash = crate::utils::content_hash(&entry.capsule_text);
-        let token_est = estimate_tokens(&entry.capsule_text) as i64;
-        let now = chrono::Utc::now().to_rfc3339();
-        if let Err(e) = db.with_write_conn(|conn| {
-            lod_chunks::upsert_lod_chunk(
-                conn,
-                &InsertLodChunk {
-                    id: &ulid::Ulid::new().to_string(),
-                    object_uri: &lod_uri,
-                    brain_id,
-                    lod_level: "L0",
-                    content: &entry.capsule_text,
-                    token_est: Some(token_est),
-                    method: "extractive",
-                    model_id: None,
-                    source_hash: &source_hash,
-                    created_at: &now,
-                    expires_at: None,
-                    job_id: None,
-                },
-            )
-        }) {
-            warn!(
-                task_id = %entry.task_id,
-                error = %e,
-                "embed_poll: LOD L0 upsert failed for task capsule"
-            );
-        }
+        // L0 LOD upsert via shared helper (uses chunk_id format with :0 suffix).
+        crate::tasks::capsule::upsert_task_lod_l0(
+            db,
+            &entry.file_id,
+            &entry.capsule_text,
+            brain_id,
+        );
 
         // Track unique task IDs (task + outcome capsule both count once)
         embedded_task_ids.insert(entry.task_id.clone());
@@ -451,36 +428,8 @@ pub async fn poll_stale_records(
             continue;
         }
 
-        // L0 LOD upsert — store capsule text as extractive L0 in lod_chunks.
-        let lod_uri = SynapseUri::for_record(brain_id, &entry.file_id).to_string();
-        let source_hash = crate::utils::content_hash(&entry.capsule_text);
-        let token_est = estimate_tokens(&entry.capsule_text) as i64;
-        let now_lod = chrono::Utc::now().to_rfc3339();
-        if let Err(e) = db.with_write_conn(|conn| {
-            lod_chunks::upsert_lod_chunk(
-                conn,
-                &InsertLodChunk {
-                    id: &ulid::Ulid::new().to_string(),
-                    object_uri: &lod_uri,
-                    brain_id,
-                    lod_level: "L0",
-                    content: &entry.capsule_text,
-                    token_est: Some(token_est),
-                    method: "extractive",
-                    model_id: None,
-                    source_hash: &source_hash,
-                    created_at: &now_lod,
-                    expires_at: None,
-                    job_id: None,
-                },
-            )
-        }) {
-            warn!(
-                record_id = %entry.record_id,
-                error = %e,
-                "embed_poll: LOD L0 upsert failed for record capsule"
-            );
-        }
+        // L0 LOD upsert (uses chunk_id format with :0 suffix).
+        upsert_domain_lod_l0(db, &entry.file_id, &entry.capsule_text, brain_id, "record");
 
         embedded_record_ids.insert(entry.record_id.clone());
     }
@@ -499,6 +448,52 @@ pub async fn poll_stale_records(
     let count = embedded_record_ids.len();
     info!(count, "embed_poll: records embedded");
     count
+}
+
+// ── Shared LOD helper ──────────────────────────────────────────────────────
+
+/// Best-effort L0 LOD upsert for a domain capsule (records, etc.).
+///
+/// Uses the chunk_id format (`{file_id}:0`) for the URI to match the lookup
+/// path in `lod_resolver::build_object_uri`.
+fn upsert_domain_lod_l0(db: &Db, file_id: &str, capsule_text: &str, brain_id: &str, domain: &str) {
+    let chunk_id = format!("{file_id}:0");
+    let lod_uri = match domain {
+        "record" => SynapseUri::for_record(brain_id, &chunk_id).to_string(),
+        "episode" => SynapseUri::for_episode(brain_id, &chunk_id).to_string(),
+        "reflection" => SynapseUri::for_reflection(brain_id, &chunk_id).to_string(),
+        "procedure" => SynapseUri::for_procedure(brain_id, &chunk_id).to_string(),
+        _ => SynapseUri::for_memory(brain_id, &chunk_id).to_string(),
+    };
+    let source_hash = crate::utils::content_hash(capsule_text);
+    let token_est = estimate_tokens(capsule_text) as i64;
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = db.with_write_conn(|conn| {
+        lod_chunks::upsert_lod_chunk(
+            conn,
+            &InsertLodChunk {
+                id: &ulid::Ulid::new().to_string(),
+                object_uri: &lod_uri,
+                brain_id,
+                lod_level: "L0",
+                content: capsule_text,
+                token_est: Some(token_est),
+                method: "extractive",
+                model_id: None,
+                source_hash: &source_hash,
+                created_at: &now,
+                expires_at: None,
+                job_id: None,
+            },
+        )
+    }) {
+        warn!(
+            file_id = %file_id,
+            domain = %domain,
+            error = %e,
+            "embed_poll: LOD L0 upsert failed"
+        );
+    }
 }
 
 pub async fn poll_stale_summaries(
