@@ -49,6 +49,21 @@ pub struct PipelineDiagnostics {
     pub reranked: bool,
 }
 
+/// Result of a federated ranked search (pre-pack).
+///
+/// Contains the merged ranked results with brain attribution, before packing
+/// into stubs. Used by callers that need full content access (e.g., LOD
+/// resolution) before the lossy pack step.
+#[derive(Debug)]
+pub struct FederatedRankedResult {
+    /// Merged ranked results sorted by hybrid_score descending.
+    pub ranked: Vec<crate::ranking::RankedResult>,
+    /// Map from chunk_id → brain_name for each result.
+    pub chunk_brain: HashMap<String, String>,
+    /// Fusion confidence from the primary brain.
+    pub fusion_confidence: Option<crate::ranking::FusionConfidence>,
+}
+
 /// Parameters for a hybrid search query.
 pub struct SearchParams<'a> {
     pub query: &'a str,
@@ -802,20 +817,16 @@ where
     S: ChunkSearcher + Send + Sync,
     D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
 {
-    /// Search across all configured brains.
+    /// Search across all configured brains, returning merged ranked results
+    /// with brain attribution before packing into stubs.
     ///
-    /// The query is embedded once. Vector search fans out concurrently to
-    /// each brain's LanceDB store. FTS and chunk enrichment run against the
-    /// shared `db`. Results are merged by `hybrid_score` (descending) and
-    /// packed into a single `SearchResult` within the token budget.
-    ///
-    /// Brains whose `store` is `None` (LanceDB not yet initialised) are
-    /// skipped with a warning — the search continues with the remaining brains.
-    pub async fn search(
+    /// This is the core federated search logic. Callers that need pre-pack
+    /// access to full `RankedResult` content (e.g., LOD resolution) should
+    /// use this method directly.
+    pub async fn search_ranked_federated(
         &self,
         params: &SearchParams<'_>,
-        include_scores: bool,
-    ) -> Result<crate::retrieval::SearchResult> {
+    ) -> Result<FederatedRankedResult> {
         // ── 1. Build per-brain vector-search futures ──────────────────────────
         type BrainResult = (
             String,
@@ -919,24 +930,46 @@ where
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // ── 5. Pack into SearchResult ─────────────────────────────────────────
-        // ML summary preloading skipped for federated search — results span
-        // multiple brain namespaces.
+        Ok(FederatedRankedResult {
+            ranked: merged,
+            chunk_brain,
+            fusion_confidence: first_confidence,
+        })
+    }
+
+    /// Search across all configured brains.
+    ///
+    /// The query is embedded once. Vector search fans out concurrently to
+    /// each brain's LanceDB store. FTS and chunk enrichment run against the
+    /// shared `db`. Results are merged by `hybrid_score` (descending) and
+    /// packed into a single `SearchResult` within the token budget.
+    ///
+    /// Brains whose `store` is `None` (LanceDB not yet initialised) are
+    /// skipped with a warning — the search continues with the remaining brains.
+    pub async fn search(
+        &self,
+        params: &SearchParams<'_>,
+        include_scores: bool,
+    ) -> Result<crate::retrieval::SearchResult> {
+        let federated = self.search_ranked_federated(params).await?;
+
+        // Pack into SearchResult — ML summary preloading skipped for federated
+        // search since results span multiple brain namespaces.
         let mut search_result = crate::retrieval::pack_minimal(
-            &merged,
+            &federated.ranked,
             params.budget_tokens,
             params.k,
             include_scores,
             &HashMap::new(),
         );
 
-        // ── 6. Annotate each stub with its source brain name ──────────────────
+        // Annotate each stub with its source brain name.
         for stub in &mut search_result.results {
-            stub.brain_name = chunk_brain.get(&stub.memory_id).cloned();
+            stub.brain_name = federated.chunk_brain.get(&stub.memory_id).cloned();
         }
 
-        // ── 7. Attach fusion confidence from primary brain ───────────────────
-        search_result.fusion_confidence = first_confidence;
+        // Attach fusion confidence from primary brain.
+        search_result.fusion_confidence = federated.fusion_confidence;
 
         Ok(search_result)
     }

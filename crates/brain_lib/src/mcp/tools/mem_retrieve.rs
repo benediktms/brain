@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::lod::LodLevel;
-use crate::lod_resolver::{resolve_lod_batch, resolve_single_lod};
+use crate::lod_resolver::{resolve_lod_batch, resolve_lod_batch_federated, resolve_single_lod};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::ports::ChunkMetaReader;
@@ -418,7 +418,7 @@ impl McpTool for MemRetrieve {
             .with_tags_exclude(&params.tags_exclude);
 
             if is_federated {
-                // Federated path — LOD forced to L2 (no per-brain LOD resolution).
+                // Federated path — resolve LOD per-brain using ranked results.
                 let brains = match super::build_federated_brains(
                     ctx,
                     store.clone(),
@@ -438,42 +438,91 @@ impl McpTool for MemRetrieve {
                     metrics: &ctx.metrics,
                 };
 
-                let search_result = match federated.search(&search_params, params.explain).await {
+                let fed_result = match federated.search_ranked_federated(&search_params).await {
                     Ok(r) => r,
                     Err(e) => {
                         return ToolCallResult::error(format!("Federated search failed: {e}"));
                     }
                 };
 
+                // Truncate to requested count.
+                let ranked =
+                    &fed_result.ranked[..fed_result.ranked.len().min(params.count as usize)];
+
+                // Build brain_name → brain_id cache for L1 enqueue.
+                let db = ctx.stores.db();
+                let brain_id_cache: std::collections::HashMap<String, String> = fed_result
+                    .chunk_brain
+                    .values()
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .filter_map(|name| {
+                        db.resolve_brain(name)
+                            .ok()
+                            .map(|(id, _)| (name.clone(), id))
+                    })
+                    .collect();
+
+                // Resolve LOD with per-result brain attribution.
+                let (resolutions, lod_diag) = resolve_lod_batch_federated(
+                    db,
+                    ranked,
+                    lod,
+                    &fed_result.chunk_brain,
+                    ctx.brain_name(),
+                    ctx.brain_id(),
+                    &|name| brain_id_cache.get(name).cloned(),
+                );
+
                 let query_time_ms = start.elapsed().as_millis() as u64;
 
-                let results_json: Vec<Value> = search_result
-                    .results
+                let results_json: Vec<Value> = ranked
                     .iter()
-                    .map(|stub| {
-                        let uri_brain = stub.brain_name.as_deref().unwrap_or(ctx.brain_name());
-                        let uri = match stub.kind.as_str() {
-                            "episode" => SynapseUri::for_episode(uri_brain, &stub.memory_id),
-                            "reflection" => SynapseUri::for_reflection(uri_brain, &stub.memory_id),
-                            "procedure" => SynapseUri::for_procedure(uri_brain, &stub.memory_id),
-                            "record" => SynapseUri::for_record(uri_brain, &stub.memory_id),
+                    .zip(resolutions.iter())
+                    .map(|(r, resolution)| {
+                        let brain_name = fed_result
+                            .chunk_brain
+                            .get(&r.chunk_id)
+                            .map(|s| s.as_str())
+                            .unwrap_or(ctx.brain_name());
+                        let kind = derive_kind(&r.chunk_id, r.summary_kind.as_deref());
+                        let uri = match kind.as_str() {
+                            "episode" => SynapseUri::for_episode(brain_name, &r.chunk_id),
+                            "reflection" => SynapseUri::for_reflection(brain_name, &r.chunk_id),
+                            "procedure" => SynapseUri::for_procedure(brain_name, &r.chunk_id),
+                            "record" => SynapseUri::for_record(brain_name, &r.chunk_id),
                             "task" | "task-outcome" => {
-                                SynapseUri::for_task(uri_brain, &stub.memory_id)
+                                SynapseUri::for_task(brain_name, &r.chunk_id)
                             }
-                            _ => SynapseUri::for_memory(uri_brain, &stub.memory_id),
+                            _ => SynapseUri::for_memory(brain_name, &r.chunk_id),
                         };
                         let uri_str = uri.to_string();
+
+                        let title = if !r.heading_path.is_empty() {
+                            r.heading_path.clone()
+                        } else {
+                            resolution
+                                .content
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim_start_matches('#')
+                                .trim()
+                                .to_string()
+                        };
+
                         json!({
                             "uri": uri_str,
-                            "kind": stub.kind,
-                            "lod": "L2",
-                            "lod_fresh": true,
-                            "title": stub.title,
-                            "content": stub.summary_2sent,
-                            "score": stub.hybrid_score,
+                            "kind": kind.as_str(),
+                            "lod": resolution.actual_lod.as_str(),
+                            "lod_fresh": resolution.lod_fresh,
+                            "title": title,
+                            "content": resolution.content,
+                            "score": r.hybrid_score,
                             "strategy_used": format!("{:?}", resolve_intent(&params.strategy)),
-                            "generated_at": null,
+                            "generated_at": resolution.generated_at,
                             "source_uri": uri_str,
+                            "brain": brain_name,
                         })
                     })
                     .collect();
@@ -482,6 +531,9 @@ impl McpTool for MemRetrieve {
                     "query_time_ms": query_time_ms,
                     "lod_requested": lod.as_str(),
                     "result_count": results_json.len(),
+                    "lod_hits": lod_diag.lod_hits,
+                    "lod_misses": lod_diag.lod_misses,
+                    "lod_generation_enqueued": lod_diag.lod_generation_enqueued,
                     "results": results_json,
                 });
 

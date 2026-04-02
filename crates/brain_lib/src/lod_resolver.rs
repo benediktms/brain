@@ -278,6 +278,46 @@ fn try_enqueue_l1(
 }
 
 // ---------------------------------------------------------------------------
+// Federated (cross-brain) batch LOD resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve LOD content for ranked results from a federated (cross-brain) search.
+///
+/// Each result is attributed to a brain via `chunk_brain` (chunk_id → brain_name).
+/// The correct brain_name is used for URI construction so that LOD lookups match
+/// the stored `object_uri` in `lod_chunks`.
+///
+/// `brain_id_resolver` maps brain_name → brain_id for L1 job enqueue. If
+/// resolution fails for a brain, L1 enqueue is skipped (LOD still resolves).
+pub fn resolve_lod_batch_federated(
+    db: &Db,
+    ranked: &[RankedResult],
+    requested_lod: LodLevel,
+    chunk_brain: &std::collections::HashMap<String, String>,
+    default_brain_name: &str,
+    default_brain_id: &str,
+    brain_id_resolver: &dyn Fn(&str) -> Option<String>,
+) -> (Vec<LodResolution>, LodDiagnostics) {
+    let mut resolutions = Vec::with_capacity(ranked.len());
+    let mut diag = LodDiagnostics::default();
+
+    for result in ranked {
+        let brain_name = chunk_brain
+            .get(&result.chunk_id)
+            .map(|s| s.as_str())
+            .unwrap_or(default_brain_name);
+        let brain_id =
+            brain_id_resolver(brain_name).unwrap_or_else(|| default_brain_id.to_string());
+
+        let resolution =
+            resolve_single(db, result, requested_lod, brain_name, &brain_id, &mut diag);
+        resolutions.push(resolution);
+    }
+
+    (resolutions, diag)
+}
+
+// ---------------------------------------------------------------------------
 // URI-mode: single-object LOD resolution
 // ---------------------------------------------------------------------------
 
@@ -715,6 +755,89 @@ mod tests {
 
         let (_, diag) = resolve_lod_batch(&db, &ranked, LodLevel::L0, "brain", "brain-id");
         assert_eq!(diag.lod_hits, 1);
+        assert_eq!(diag.lod_misses, 1);
+    }
+
+    // ---------------------------------------------------------------------------
+    // resolve_lod_batch_federated tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_federated_batch_resolves_per_brain() {
+        let db = open_db();
+
+        // Two results from different brains.
+        let ranked = vec![
+            make_ranked("chunk:alpha:0", "alpha content"),
+            make_ranked("chunk:beta:0", "beta content"),
+        ];
+
+        // Seed L0 for alpha using brain-a URI, and for beta using brain-b URI.
+        let uri_a = build_object_uri(&ranked[0], "brain-a");
+        let uri_b = build_object_uri(&ranked[1], "brain-b");
+        let hash_a = crate::utils::content_hash("alpha content");
+        let hash_b = crate::utils::content_hash("beta content");
+
+        seed_lod(&db, &uri_a, LodLevel::L0, "alpha L0", &hash_a);
+        seed_lod(&db, &uri_b, LodLevel::L0, "beta L0", &hash_b);
+
+        // Build brain attribution map.
+        let mut chunk_brain = std::collections::HashMap::new();
+        chunk_brain.insert("chunk:alpha:0".to_string(), "brain-a".to_string());
+        chunk_brain.insert("chunk:beta:0".to_string(), "brain-b".to_string());
+
+        let (resolutions, diag) = resolve_lod_batch_federated(
+            &db,
+            &ranked,
+            LodLevel::L0,
+            &chunk_brain,
+            "default-brain",
+            "default-id",
+            &|_name| Some("some-id".to_string()),
+        );
+
+        assert_eq!(resolutions.len(), 2);
+
+        // Both should resolve to L0 because the URIs were built with the correct brain names.
+        assert_eq!(resolutions[0].actual_lod, LodLevel::L0);
+        assert_eq!(resolutions[0].content, "alpha L0");
+        assert!(resolutions[0].lod_fresh);
+
+        assert_eq!(resolutions[1].actual_lod, LodLevel::L0);
+        assert_eq!(resolutions[1].content, "beta L0");
+        assert!(resolutions[1].lod_fresh);
+
+        assert_eq!(diag.lod_hits, 2);
+        assert_eq!(diag.lod_misses, 0);
+    }
+
+    #[test]
+    fn test_federated_batch_wrong_brain_misses() {
+        let db = open_db();
+
+        let ranked = vec![make_ranked("chunk:abc:0", "content")];
+
+        // Seed L0 under brain-a's URI.
+        let uri = build_object_uri(&ranked[0], "brain-a");
+        let hash = crate::utils::content_hash("content");
+        seed_lod(&db, &uri, LodLevel::L0, "L0 for brain-a", &hash);
+
+        // But attribute the chunk to brain-b → URI mismatch → miss.
+        let mut chunk_brain = std::collections::HashMap::new();
+        chunk_brain.insert("chunk:abc:0".to_string(), "brain-b".to_string());
+
+        let (resolutions, diag) = resolve_lod_batch_federated(
+            &db,
+            &ranked,
+            LodLevel::L0,
+            &chunk_brain,
+            "default",
+            "default-id",
+            &|_| Some("id".to_string()),
+        );
+
+        // Should miss because the URI is built with brain-b but LOD was stored under brain-a.
+        assert_eq!(resolutions[0].actual_lod, LodLevel::L2);
         assert_eq!(diag.lod_misses, 1);
     }
 }
