@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::embedder::{Embed, embed_batch_async};
+use crate::l0_generate::generate_episode_l0;
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
@@ -22,7 +23,6 @@ use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::db::summaries::{
     SummaryPollRow, find_stale_summaries_for_embedding, mark_summaries_embedded,
 };
-use crate::l0_generate::generate_episode_l0;
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 
@@ -562,7 +562,11 @@ pub async fn poll_stale_summaries(
                 let lod_uri = SynapseUri::for_episode(brain_id, &chunk_id).to_string();
                 let source_hash = crate::utils::content_hash(&row.content);
                 if let Err(e) = crate::pipeline::job_worker::enqueue_l1_summarize(
-                    db, &lod_uri, brain_id, &row.content, &source_hash,
+                    db,
+                    &lod_uri,
+                    brain_id,
+                    &row.content,
+                    &source_hash,
                 ) {
                     warn!(
                         error = %e,
@@ -572,7 +576,6 @@ pub async fn poll_stale_summaries(
                 }
             }
         }
-
 
         embedded_summary_ids.insert(row.summary_id.clone());
     }

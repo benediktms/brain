@@ -78,7 +78,10 @@ pub fn generate_episode_l0(content: &str) -> String {
     let first_line = content.lines().next().unwrap_or("");
 
     // Strip "Goal: " prefix if present
-    let goal = first_line.strip_prefix("Goal:").unwrap_or(first_line).trim();
+    let goal = first_line
+        .strip_prefix("Goal:")
+        .unwrap_or(first_line)
+        .trim();
 
     if goal.is_empty() {
         // Fall back to Outcome line (skip first line since we already checked it)
@@ -405,14 +408,16 @@ mod tests {
     // ── generate_episode_l0 tests ───────────────────────────────
     #[test]
     fn test_episode_l0_goal_only() {
-        let content = "Goal: Fix the authentication bug\nActions: Debugged and patched\nOutcome: Bug fixed";
+        let content =
+            "Goal: Fix the authentication bug\nActions: Debugged and patched\nOutcome: Bug fixed";
         let result = generate_episode_l0(content);
         assert_eq!(result, "Fix the authentication bug");
     }
 
     #[test]
     fn test_episode_l0_no_goal_prefix() {
-        let content = "Fix the authentication bug\nActions: Debugged and patched\nOutcome: Bug fixed";
+        let content =
+            "Fix the authentication bug\nActions: Debugged and patched\nOutcome: Bug fixed";
         let result = generate_episode_l0(content);
         assert_eq!(result, "Fix the authentication bug");
     }
@@ -440,9 +445,17 @@ mod tests {
     #[test]
     fn test_episode_l0_long_goal_truncated() {
         let long_goal = "A".repeat(500);
-        let content = format!("Goal: {}\nActions: Some actions\nOutcome: Some outcome", long_goal);
+        let content = format!(
+            "Goal: {}\nActions: Some actions\nOutcome: Some outcome",
+            long_goal
+        );
         let result = generate_episode_l0(&content);
-        assert!(result.len() <= MAX_L0_CHARS, "result len {} exceeds MAX_L0_CHARS {}", result.len(), MAX_L0_CHARS);
+        assert!(
+            result.len() <= MAX_L0_CHARS,
+            "result len {} exceeds MAX_L0_CHARS {}",
+            result.len(),
+            MAX_L0_CHARS
+        );
     }
 
     #[test]
@@ -461,7 +474,6 @@ mod tests {
         assert_eq!(result, "Bug fixed");
     }
 
-    
     #[test]
     fn test_episode_l0_outcome_empty() {
         let content = "Goal: Test goal\nActions: Actions\nOutcome: ";
