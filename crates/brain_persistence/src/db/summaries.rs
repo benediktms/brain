@@ -447,6 +447,7 @@ pub fn list_unconsolidated_episodes(
 pub struct SummaryPollRow {
     pub summary_id: String,
     pub kind: String,
+    pub title: Option<String>, // Required for reflection L0 generation
     pub content: String,
 }
 
@@ -455,7 +456,7 @@ pub fn find_stale_summaries_for_embedding(
     brain_id: &str,
 ) -> Result<Vec<SummaryPollRow>> {
     let mut stmt = conn.prepare(
-        "SELECT summary_id, kind, content
+        "SELECT summary_id, kind, title, content
          FROM summaries
          WHERE kind IN ('episode', 'reflection', 'procedure')
            AND updated_at > COALESCE(embedded_at, 0)
@@ -467,7 +468,8 @@ pub fn find_stale_summaries_for_embedding(
         Ok(SummaryPollRow {
             summary_id: row.get(0)?,
             kind: row.get(1)?,
-            content: row.get(2)?,
+            title: row.get(2)?,
+            content: row.get(3)?,
         })
     })?;
 

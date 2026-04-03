@@ -99,6 +99,42 @@ pub fn generate_episode_l0(content: &str) -> String {
     truncate_at_word_boundary(goal, MAX_L0_CHARS)
 }
 
+/// Generate an extractive L0 abstract for a reflection.
+///
+/// Format: "{title}: {first_paragraph}. Key: {terms}"
+///
+/// For reflections, the L0 captures:
+/// - The reflection title (topic)
+/// - First paragraph (main insight)
+/// - Key terms for semantic specificity
+pub fn generate_reflection_l0(title: &str, content: &str) -> String {
+    let content = content.trim();
+
+    if content.is_empty() {
+        if title.is_empty() {
+            return String::new();
+        }
+        return truncate_at_word_boundary(title, MAX_L0_CHARS);
+    }
+
+    let first_paragraph = content.split("\n\n").next().unwrap_or(content).trim();
+
+    let key_terms = extract_key_terms(content);
+
+    let mut result = if title.is_empty() {
+        first_paragraph.to_string()
+    } else {
+        format!("{title}: {first_paragraph}")
+    };
+
+    if !key_terms.is_empty() {
+        result.push_str(". Key: ");
+        result.push_str(&key_terms.join(", "));
+    }
+
+    truncate_at_word_boundary(&result, MAX_L0_CHARS)
+}
+
 /// Extract the first meaningful sentence from content.
 ///
 /// Splits on `. ` (sentence end followed by space) or `\n\n` (paragraph break),
@@ -479,5 +515,63 @@ mod tests {
         let content = "Goal: Test goal\nActions: Actions\nOutcome: ";
         let result = generate_episode_l0(content);
         assert_eq!(result, "Test goal");
+    }
+    // ── generate_reflection_l0 tests ───────────────────────────
+    #[test]
+    fn test_reflection_l0_full() {
+        let content = "The `SynapseUri` pattern enables BLAKE3 hashing for content addressing.\n\nSecond paragraph here.";
+        let result = generate_reflection_l0("Architecture Decision", content);
+        assert!(result.starts_with("Architecture Decision: The `SynapseUri`"));
+        assert!(result.contains(". Key: "), "should include key terms");
+        assert!(
+            result.contains("SynapseUri"),
+            "should include backtick term"
+        );
+    }
+
+    #[test]
+    fn test_reflection_l0_no_title() {
+        let content = "First paragraph content.\n\nSecond paragraph.";
+        let result = generate_reflection_l0("", content);
+        assert_eq!(result, "First paragraph content.");
+    }
+
+    #[test]
+    fn test_reflection_l0_no_content() {
+        let result = generate_reflection_l0("My Reflection", "");
+        assert_eq!(result, "My Reflection");
+    }
+
+    #[test]
+    fn test_reflection_l0_empty() {
+        let result = generate_reflection_l0("", "");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_reflection_l0_long_truncated() {
+        let long_paragraph = "Word ".repeat(200);
+        let content = format!("{}\n\nSecond paragraph.", long_paragraph);
+        let result = generate_reflection_l0("Title", &content);
+        assert!(
+            result.len() <= MAX_L0_CHARS,
+            "result len {} exceeds MAX_L0_CHARS {}",
+            result.len(),
+            MAX_L0_CHARS
+        );
+    }
+
+    #[test]
+    fn test_reflection_l0_key_terms_extraction() {
+        let content = "The `SynapseUri` pattern enables BLAKE3 hashing. Reflections help consolidate knowledge.";
+        let result = generate_reflection_l0("URI Pattern", content);
+        assert!(
+            result.contains("SynapseUri"),
+            "should extract backtick term"
+        );
+        assert!(
+            result.contains(". Key: "),
+            "should include key terms section"
+        );
     }
 }
