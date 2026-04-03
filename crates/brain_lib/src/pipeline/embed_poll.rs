@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::embedder::{Embed, embed_batch_async};
-use crate::l0_generate::generate_episode_l0;
+use crate::l0_generate::{generate_episode_l0, generate_procedure_l0};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
@@ -602,6 +602,36 @@ pub async fn poll_stale_summaries(
                         error = %e,
                         summary_id = %row.summary_id,
                         "embed_poll: failed to enqueue L1 for reflection"
+                    );
+                }
+            }
+        }
+        // For procedures, generate L0 and upsert to lod_chunks
+        if row.kind == "procedure" {
+            let title = row.title.as_deref().unwrap_or("");
+            let l0_content = generate_procedure_l0(title, &row.content);
+            if !l0_content.is_empty() {
+                let file_id = format!("summary:{}", row.summary_id);
+                upsert_domain_lod_l0(db, &file_id, &l0_content, brain_id, "procedure");
+            }
+
+            // Enqueue L1 if content > 300 chars
+            if row.content.len() > 300 {
+                let file_id = format!("summary:{}", row.summary_id);
+                let chunk_id = format!("{file_id}:0");
+                let lod_uri = SynapseUri::for_procedure(brain_id, &chunk_id).to_string();
+                let source_hash = crate::utils::content_hash(&row.content);
+                if let Err(e) = crate::pipeline::job_worker::enqueue_l1_summarize(
+                    db,
+                    &lod_uri,
+                    brain_id,
+                    &row.content,
+                    &source_hash,
+                ) {
+                    warn!(
+                        error = %e,
+                        summary_id = %row.summary_id,
+                        "embed_poll: failed to enqueue L1 for procedure"
                     );
                 }
             }

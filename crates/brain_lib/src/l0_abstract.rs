@@ -2,7 +2,11 @@
 ///
 /// Produces a compact, semantically dense text from a record's metadata and
 /// content. This abstract is used as the embedding source instead of the full
-/// content, yielding more focused vector search results.
+///
+/// ⚠️ DEPRECATED: Use `crate::records::capsule::build_record_capsule` instead.
+/// This function is kept for backward compatibility but may be phased out.
+/// The capsule approach uses description-based summaries (consistent with
+/// episodes/reflections/procedures) rather than content extraction.
 const MAX_CONTENT_CHARS: usize = 500;
 
 /// Generate an extractive L0 abstract for a record.

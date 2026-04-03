@@ -135,6 +135,43 @@ pub fn generate_reflection_l0(title: &str, content: &str) -> String {
     truncate_at_word_boundary(&result, MAX_L0_CHARS)
 }
 
+/// Generate an extractive L0 abstract for a procedure.
+
+/// Format: "{title}: {first_step}. Key: {terms}"
+
+/// For procedures, the L0 captures:
+/// - The procedure title (what it does)
+/// - First step (entry action)
+/// - Key terms for semantic specificity
+pub fn generate_procedure_l0(title: &str, content: &str) -> String {
+    let content = content.trim();
+
+    if content.is_empty() {
+        if title.is_empty() {
+            return String::new();
+        }
+        return truncate_at_word_boundary(title, MAX_L0_CHARS);
+    }
+
+    // Extract first line/step
+    let first_step = content.lines().next().unwrap_or(content).trim();
+
+    let key_terms = extract_key_terms(content);
+
+    let mut result = if title.is_empty() {
+        first_step.to_string()
+    } else {
+        format!("{title}: {first_step}")
+    };
+
+    if !key_terms.is_empty() {
+        result.push_str(". Key: ");
+        result.push_str(&key_terms.join(", "));
+    }
+
+    truncate_at_word_boundary(&result, MAX_L0_CHARS)
+}
+
 /// Extract the first meaningful sentence from content.
 ///
 /// Splits on `. ` (sentence end followed by space) or `\n\n` (paragraph break),
@@ -567,6 +604,70 @@ mod tests {
         let result = generate_reflection_l0("URI Pattern", content);
         assert!(
             result.contains("SynapseUri"),
+            "should extract backtick term"
+        );
+        assert!(
+            result.contains(". Key: "),
+            "should include key terms section"
+        );
+    }
+
+    // ── generate_procedure_l0 tests ─────────────────────────────
+    #[test]
+    fn test_procedure_l0_full() {
+        let content = "Run the `migration_script` to update the DATABASE schema.\n\nVerify the changes in production.";
+        let result = generate_procedure_l0("Deploy to Production", content);
+        assert!(
+            result.starts_with("Deploy to Production: Run the `migration_script`"),
+            "should include title and first step"
+        );
+        assert!(
+            result.contains(". Key: "),
+            "should include key terms section"
+        );
+    }
+
+    #[test]
+    fn test_procedure_l0_no_title() {
+        let content = "Run the migration script to update the database schema.\n\nVerify changes.";
+        let result = generate_procedure_l0("", content);
+        assert_eq!(
+            result,
+            "Run the migration script to update the database schema."
+        );
+    }
+
+    #[test]
+    fn test_procedure_l0_no_content() {
+        let result = generate_procedure_l0("Deploy to Production", "");
+        assert_eq!(result, "Deploy to Production");
+    }
+
+    #[test]
+    fn test_procedure_l0_empty() {
+        let result = generate_procedure_l0("", "");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_procedure_l0_long_truncated() {
+        let long_step = "Word ".repeat(200);
+        let content = format!("{}\n\nSecond step.", long_step);
+        let result = generate_procedure_l0("Long Procedure", &content);
+        assert!(
+            result.len() <= MAX_L0_CHARS,
+            "result len {} exceeds MAX_L0_CHARS {}",
+            result.len(),
+            MAX_L0_CHARS
+        );
+    }
+
+    #[test]
+    fn test_procedure_l0_key_terms_extraction() {
+        let content = "Run the `migration_script` with DATABASE_URL set. Verify `BLAKE3` hashes.";
+        let result = generate_procedure_l0("Deploy", content);
+        assert!(
+            result.contains("migration_script"),
             "should extract backtick term"
         );
         assert!(
