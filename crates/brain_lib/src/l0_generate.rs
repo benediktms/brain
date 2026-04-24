@@ -136,9 +136,9 @@ pub fn generate_reflection_l0(title: &str, content: &str) -> String {
 }
 
 /// Generate an extractive L0 abstract for a procedure.
-
+///
 /// Format: "{title}: {first_step}. Key: {terms}"
-
+///
 /// For procedures, the L0 captures:
 /// - The procedure title (what it does)
 /// - First step (entry action)

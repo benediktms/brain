@@ -6,9 +6,10 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::l0_abstract::generate_l0_abstract;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::records::capsule::{build_record_capsule, upsert_record_lod_l0};
+use crate::pipeline::embed_poll::upsert_domain_lod_l0;
 use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
 use crate::records::objects::COMPRESSION_THRESHOLD;
 
@@ -130,8 +131,6 @@ impl RecordCreateArtifact {
 
         // Capture values needed for capsule before moving into payload.
         let title_for_capsule = params.title.clone();
-        let kind_for_capsule = params.kind.clone();
-        let desc_for_capsule = params.description.clone();
         let tags_for_capsule = params.tags.clone();
 
         let payload = RecordCreatedPayload {
@@ -159,23 +158,29 @@ impl RecordCreateArtifact {
             return ToolCallResult::error(format!("Failed to save record: {e}"));
         }
 
-        // Eagerly write the L0 capsule for FTS and LOD so it is available
+        // Eagerly write the L0 abstract for FTS and LOD so it is available
         // before the async embed pipeline runs.
-        let capsule = build_record_capsule(
-            &title_for_capsule,
-            &kind_for_capsule,
-            desc_for_capsule.as_deref(),
-            &tags_for_capsule,
-        );
+        let content = String::from_utf8_lossy(&raw_bytes);
+        let tags_refs: Vec<&str> = tags_for_capsule.iter().map(|s| s.as_str()).collect();
+        let abstract_text = generate_l0_abstract(&title_for_capsule, &content, &tags_refs);
         let record_file_id = format!("record:{record_id}");
-        if let Err(e) = ctx.stores.upsert_record_chunk(&record_file_id, &capsule) {
+        if let Err(e) = ctx
+            .stores
+            .upsert_record_chunk(&record_file_id, &abstract_text)
+        {
             tracing::warn!(
                 record_id = %record_id,
                 error = %e,
-                "record_create_artifact: failed to write L0 capsule to FTS"
+                "record_create_artifact: failed to write L0 abstract to FTS"
             );
         }
-        upsert_record_lod_l0(ctx.stores.db(), &record_file_id, &capsule, ctx.brain_id());
+        upsert_domain_lod_l0(
+            ctx.stores.db(),
+            &record_file_id,
+            &abstract_text,
+            ctx.brain_id(),
+            "record",
+        );
 
         let uri = SynapseUri::for_record(ctx.brain_name(), &record_id).to_string();
 

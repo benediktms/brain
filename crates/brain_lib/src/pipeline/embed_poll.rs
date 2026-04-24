@@ -429,9 +429,6 @@ pub async fn poll_stale_records(
             continue;
         }
 
-        // L0 LOD upsert (uses chunk_id format with :0 suffix).
-        upsert_domain_lod_l0(db, &entry.file_id, &entry.capsule_text, brain_id, "record");
-
         embedded_record_ids.insert(entry.record_id.clone());
     }
 
@@ -457,7 +454,13 @@ pub async fn poll_stale_records(
 ///
 /// Uses the chunk_id format (`{file_id}:0`) for the URI to match the lookup
 /// path in `lod_resolver::build_object_uri`.
-fn upsert_domain_lod_l0(db: &Db, file_id: &str, capsule_text: &str, brain_id: &str, domain: &str) {
+pub fn upsert_domain_lod_l0(
+    db: &Db,
+    file_id: &str,
+    capsule_text: &str,
+    brain_id: &str,
+    domain: &str,
+) {
     let chunk_id = format!("{file_id}:0");
     let lod_uri = match domain {
         "record" => SynapseUri::for_record(brain_id, &chunk_id).to_string(),
