@@ -23,11 +23,19 @@ use brain_persistence::db::summaries::{Episode, SummaryRow};
 use brain_persistence::store::{QueryResult, VectorSearchMode};
 
 use super::{
-    ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, DerivedSummaryReader,
-    DerivedSummaryWriter, EmbeddingResetter, EpisodeReader, EpisodeWriter, FileMetaReader,
-    FileMetaWriter, FtsSearcher, GraphLinkReader, JobPersistence, SchemaMeta, SummaryReader,
-    SummaryWriter,
+    BrainManager, ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher,
+    DerivedSummaryReader, DerivedSummaryWriter, EmbeddingOps, EmbeddingResetter, EpisodeReader,
+    EpisodeWriter, FileMetaReader, FileMetaWriter, FtsSearcher, GraphLinkReader, JobPersistence,
+    JobQueue, LinkWriter, MaintenanceOps, SchemaMeta, SummaryReader, SummaryWriter,
 };
+use brain_persistence::db::chunks::ChunkPollRow;
+use brain_persistence::db::job::{Job, JobStatus};
+use brain_persistence::db::jobs::EnqueueJobInput;
+use brain_persistence::db::records::queries::RecordPollRow;
+use brain_persistence::db::schema::BrainRow;
+use brain_persistence::db::summaries::SummaryPollRow;
+use brain_persistence::db::tasks::queries::TaskPollRow;
+use brain_persistence::links::Link;
 
 // ---------------------------------------------------------------------------
 // MockChunkIndexWriter
@@ -1048,6 +1056,293 @@ impl JobPersistence for MockJobPersistence {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// MockLinkWriter
+// ---------------------------------------------------------------------------
+
+/// In-memory mock for `LinkWriter`.
+#[derive(Default)]
+pub struct MockLinkWriter {
+    /// Outgoing links per file_id: `file_id → Vec<Link>`
+    pub links: Mutex<HashMap<String, Vec<Link>>>,
+}
+
+impl LinkWriter for MockLinkWriter {
+    fn replace_links(&self, file_id: &str, links: &[Link]) -> Result<()> {
+        self.links
+            .lock()
+            .unwrap()
+            .insert(file_id.to_string(), links.to_vec());
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MockBrainManager
+// ---------------------------------------------------------------------------
+
+/// In-memory mock for `BrainManager`.
+#[derive(Default)]
+pub struct MockBrainManager {
+    /// Brains by id: `brain_id → BrainRow`
+    pub brains: Mutex<HashMap<String, BrainRow>>,
+}
+
+impl BrainManager for MockBrainManager {
+    fn archive_brain(&self, brain_id: &str) -> Result<()> {
+        let mut brains = self.brains.lock().unwrap();
+        if let Some(brain) = brains.get_mut(brain_id) {
+            brain.archived = true;
+        }
+        Ok(())
+    }
+
+    fn get_brain(&self, brain_id: &str) -> Result<Option<BrainRow>> {
+        Ok(self.brains.lock().unwrap().get(brain_id).cloned())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MockEmbeddingOps
+// ---------------------------------------------------------------------------
+
+/// In-memory mock for `EmbeddingOps`.
+#[derive(Default)]
+pub struct MockEmbeddingOps {
+    pub stale_chunks: Mutex<Vec<ChunkPollRow>>,
+    pub stale_summaries: Mutex<Vec<SummaryPollRow>>,
+    pub stale_tasks: Mutex<Vec<TaskPollRow>>,
+    pub stale_records: Mutex<Vec<RecordPollRow>>,
+    pub embedded_chunks: Mutex<HashMap<String, i64>>,
+    pub embedded_summaries: Mutex<HashSet<String>>,
+    pub embedded_tasks: Mutex<HashSet<String>>,
+    pub embedded_records: Mutex<HashSet<String>>,
+}
+
+impl EmbeddingOps for MockEmbeddingOps {
+    fn find_stale_chunks_for_embedding(&self, _brain_id: &str) -> Result<Vec<ChunkPollRow>> {
+        Ok(self.stale_chunks.lock().unwrap().clone())
+    }
+
+    fn find_stale_summaries_for_embedding(&self, _brain_id: &str) -> Result<Vec<SummaryPollRow>> {
+        Ok(self.stale_summaries.lock().unwrap().clone())
+    }
+
+    fn find_stale_tasks_for_embedding(&self, _brain_id: &str) -> Result<Vec<TaskPollRow>> {
+        Ok(self.stale_tasks.lock().unwrap().clone())
+    }
+
+    fn find_stale_records_for_embedding(&self, _brain_id: &str) -> Result<Vec<RecordPollRow>> {
+        Ok(self.stale_records.lock().unwrap().clone())
+    }
+
+    fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
+        let mut map = self.embedded_chunks.lock().unwrap();
+        for id in chunk_ids {
+            map.insert(id.to_string(), timestamp);
+        }
+        Ok(())
+    }
+
+    fn mark_summaries_embedded(&self, summary_ids: &[&str]) -> Result<()> {
+        let mut set = self.embedded_summaries.lock().unwrap();
+        for id in summary_ids {
+            set.insert(id.to_string());
+        }
+        Ok(())
+    }
+
+    fn mark_tasks_embedded(&self, task_ids: &[&str]) -> Result<()> {
+        let mut set = self.embedded_tasks.lock().unwrap();
+        for id in task_ids {
+            set.insert(id.to_string());
+        }
+        Ok(())
+    }
+
+    fn mark_records_embedded(&self, record_ids: &[&str]) -> Result<()> {
+        let mut set = self.embedded_records.lock().unwrap();
+        for id in record_ids {
+            set.insert(id.to_string());
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MockJobQueue
+// ---------------------------------------------------------------------------
+
+/// In-memory mock for `JobQueue`.
+#[derive(Default)]
+pub struct MockJobQueue {
+    pub jobs: Mutex<HashMap<String, Job>>,
+    pub next_id: Mutex<usize>,
+}
+
+impl MockJobQueue {
+    fn next_job_id(&self) -> String {
+        let mut id = self.next_id.lock().unwrap();
+        *id += 1;
+        format!("mock-job-{}", *id)
+    }
+}
+
+impl JobQueue for MockJobQueue {
+    fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>> {
+        let jobs = self.jobs.lock().unwrap();
+        let mut ready: Vec<_> = jobs
+            .values()
+            .filter(|j| j.status == JobStatus::Ready)
+            .cloned()
+            .collect();
+        ready.sort_by_key(|j| j.priority);
+        ready.truncate(limit as usize);
+        Ok(ready)
+    }
+
+    fn advance_to_in_progress(&self, _job_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn complete_job(&self, _job_id: &str, _result: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+
+    fn fail_job(&self, _job_id: &str, _error_msg: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn reap_stuck_jobs(&self) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn enqueue_job(&self, _input: &EnqueueJobInput) -> Result<String> {
+        Ok(self.next_job_id())
+    }
+
+    fn gc_completed_jobs(&self, _age_secs: i64, _protected_kinds: &[&str]) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64> {
+        let jobs = self.jobs.lock().unwrap();
+        let count = jobs.values().filter(|j| j.status == *status).count() as i64;
+        Ok(count)
+    }
+
+    fn list_jobs_by_status(&self, status: &JobStatus, limit: i32) -> Result<Vec<Job>> {
+        let jobs = self.jobs.lock().unwrap();
+        let mut out: Vec<_> = jobs
+            .values()
+            .filter(|j| j.status == *status)
+            .cloned()
+            .collect();
+        out.truncate(limit as usize);
+        Ok(out)
+    }
+
+    fn list_stuck_jobs(&self) -> Result<Vec<Job>> {
+        Ok(vec![])
+    }
+
+    fn retry_failed_job(&self, _job_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn get_job(&self, job_id: &str) -> Result<Option<Job>> {
+        Ok(self.jobs.lock().unwrap().get(job_id).cloned())
+    }
+
+    fn update_job_status(&self, job_id: &str, status: &JobStatus) -> Result<bool> {
+        let mut jobs = self.jobs.lock().unwrap();
+        if let Some(job) = jobs.get_mut(job_id) {
+            job.status = status.clone();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn get_job_by_kind(&self, kind: &str) -> Result<Option<Job>> {
+        let jobs = self.jobs.lock().unwrap();
+        Ok(jobs.values().find(|j| j.kind() == kind).cloned())
+    }
+
+    fn ensure_singleton_job(&self, _input: &EnqueueJobInput) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn reschedule_terminal_job(&self, _kind: &str, _brain_id: Option<&str>) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn enqueue_dedup_job(&self, _input: &EnqueueJobInput) -> Result<(String, bool)> {
+        Ok((self.next_job_id(), true))
+    }
+
+    fn reconcile_singleton_job(&self, _input: &EnqueueJobInput) -> Result<()> {
+        Ok(())
+    }
+
+    fn reconcile_singleton_job_with_delay(
+        &self,
+        _input: &EnqueueJobInput,
+        _delay_secs: i64,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn has_active_lod_job(&self, _object_uri: &str) -> Result<bool> {
+        Ok(false)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MockMaintenanceOps
+// ---------------------------------------------------------------------------
+
+/// In-memory mock for `MaintenanceOps`.
+#[derive(Default)]
+pub struct MockMaintenanceOps {
+    pub renamed: Mutex<Vec<(String, String)>>,
+    pub vacuum_count: Mutex<usize>,
+    pub reindex_count: Mutex<usize>,
+    pub consistency_result: Mutex<Option<(i64, i64)>>,
+    pub reindex_summaries_count: Mutex<usize>,
+    pub stuck_files: Mutex<Vec<(String, String)>>,
+}
+
+impl MaintenanceOps for MockMaintenanceOps {
+    fn rename_file_by_path(&self, from_path: &str, to_path: &str) -> Result<Option<String>> {
+        self.renamed
+            .lock()
+            .unwrap()
+            .push((from_path.to_string(), to_path.to_string()));
+        Ok(None)
+    }
+
+    fn vacuum_db(&self) -> Result<()> {
+        *self.vacuum_count.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    fn reindex_fts(&self) -> Result<()> {
+        *self.reindex_count.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    fn fts_consistency(&self) -> Result<(i64, i64)> {
+        Ok(self.consistency_result.lock().unwrap().unwrap_or((0, 0)))
+    }
+
+    fn reindex_summaries_fts(&self) -> Result<usize> {
+        let mut count = self.reindex_summaries_count.lock().unwrap();
+        *count += 1;
+        Ok(*count)
+    }
+}
 
 #[cfg(test)]
 mod tests {

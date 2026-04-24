@@ -273,7 +273,7 @@ pub fn task_exists(conn: &Connection, task_id: &str) -> Result<bool> {
 // ---------------------------------------------------------------------------
 
 /// A task row for the embedding poll (minimal fields for capsule generation).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskPollRow {
     pub task_id: String,
     pub title: String,

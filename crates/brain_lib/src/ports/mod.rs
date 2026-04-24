@@ -21,8 +21,10 @@
 use std::collections::HashMap;
 
 use crate::error::Result;
-use brain_persistence::db::chunks::ChunkRow;
+use brain_persistence::db::chunks::{ChunkPollRow, ChunkRow};
 use brain_persistence::db::fts::{FtsResult, FtsSummaryResult};
+use brain_persistence::db::summaries::SummaryPollRow;
+use brain_persistence::db::tasks::queries::TaskPollRow;
 use brain_persistence::store::{QueryResult, VectorSearchMode};
 
 // ---------------------------------------------------------------------------
@@ -656,6 +658,29 @@ impl ChunkMetaWriter for Db {
         })
     }
 }
+// ---------------------------------------------------------------------------
+// SQLite write path — links
+// ---------------------------------------------------------------------------
+
+/// Link write operations required by the indexing pipeline.
+///
+/// Consumers: `pipeline::indexing`.
+pub trait LinkWriter: Send + Sync {
+    /// Atomically replace all outgoing links for a file.
+    fn replace_links(&self, file_id: &str, links: &[brain_persistence::links::Link]) -> Result<()>;
+}
+
+// -- LinkWriter for Db -------------------------------------------------------
+
+impl LinkWriter for Db {
+    fn replace_links(&self, file_id: &str, links: &[brain_persistence::links::Link]) -> Result<()> {
+        let file_id = file_id.to_string();
+        let links = links.to_vec();
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::links::replace_links(conn, &file_id, &links)
+        })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // SQLite write path — self-heal / embedded_at reset
@@ -1109,6 +1134,36 @@ impl ProcedureWriter for Db {
         })
     }
 }
+// ---------------------------------------------------------------------------
+// SQLite read/write path — brain management
+// ---------------------------------------------------------------------------
+
+/// Brain registry management operations.
+///
+/// Consumers: `mcp::tools::task_apply_event` (archive), `pipeline::job_worker` (lookup).
+pub trait BrainManager: Send + Sync {
+    /// Archive a brain by setting its `archived` flag.
+    fn archive_brain(&self, brain_id: &str) -> Result<()>;
+
+    /// Get a brain row by its `brain_id`.
+    fn get_brain(&self, brain_id: &str) -> Result<Option<brain_persistence::db::schema::BrainRow>>;
+}
+
+// -- BrainManager for Db -----------------------------------------------------
+
+impl BrainManager for Db {
+    fn archive_brain(&self, brain_id: &str) -> Result<()> {
+        let brain_id = brain_id.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::schema::archive_brain(conn, &brain_id)
+        })
+    }
+
+    fn get_brain(&self, brain_id: &str) -> Result<Option<brain_persistence::db::schema::BrainRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| brain_persistence::db::schema::get_brain(conn, &brain_id))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LanceDB write path — summary embeddings
@@ -1176,6 +1231,110 @@ impl GraphLinkReader for Db {
         let file_ids = file_ids.to_vec();
         self.with_read_conn(move |conn| {
             brain_persistence::db::chunks::get_chunks_by_file_ids(conn, &file_ids)
+        })
+    }
+}
+// ---------------------------------------------------------------------------
+// SQLite read/write path — embedding poll operations
+// ---------------------------------------------------------------------------
+
+/// Embedding poll operations required by the async embedding pipeline.
+///
+/// Consumers: `pipeline::embed_poll`.
+pub trait EmbeddingOps: Send + Sync {
+    /// Find chunks that need embedding (stale or never embedded).
+    fn find_stale_chunks_for_embedding(&self, brain_id: &str) -> Result<Vec<ChunkPollRow>>;
+
+    /// Find summaries that need embedding (stale or never embedded).
+    fn find_stale_summaries_for_embedding(&self, brain_id: &str) -> Result<Vec<SummaryPollRow>>;
+
+    /// Find tasks that need embedding (stale or never embedded).
+    fn find_stale_tasks_for_embedding(&self, brain_id: &str) -> Result<Vec<TaskPollRow>>;
+
+    /// Find records that need embedding (stale or never embedded).
+    fn find_stale_records_for_embedding(
+        &self,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::records::queries::RecordPollRow>>;
+
+    /// Mark chunks as embedded at the given timestamp.
+    fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()>;
+
+    /// Mark summaries as embedded.
+    fn mark_summaries_embedded(&self, summary_ids: &[&str]) -> Result<()>;
+
+    /// Mark tasks as embedded.
+    fn mark_tasks_embedded(&self, task_ids: &[&str]) -> Result<()>;
+
+    /// Mark records as embedded.
+    fn mark_records_embedded(&self, record_ids: &[&str]) -> Result<()>;
+}
+
+// -- EmbeddingOps for Db -----------------------------------------------------
+
+impl EmbeddingOps for Db {
+    fn find_stale_chunks_for_embedding(&self, brain_id: &str) -> Result<Vec<ChunkPollRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::chunks::find_stale_for_embedding(conn, &brain_id)
+        })
+    }
+
+    fn find_stale_summaries_for_embedding(&self, brain_id: &str) -> Result<Vec<SummaryPollRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::summaries::find_stale_summaries_for_embedding(conn, &brain_id)
+        })
+    }
+
+    fn find_stale_tasks_for_embedding(&self, brain_id: &str) -> Result<Vec<TaskPollRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::tasks::queries::find_stale_tasks_for_embedding(conn, &brain_id)
+        })
+    }
+
+    fn find_stale_records_for_embedding(
+        &self,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::records::queries::RecordPollRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::records::queries::find_stale_records_for_embedding(
+                conn, &brain_id,
+            )
+        })
+    }
+
+    fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
+        let chunk_ids: Vec<String> = chunk_ids.iter().map(|s| s.to_string()).collect();
+        self.with_write_conn(move |conn| {
+            let refs: Vec<&str> = chunk_ids.iter().map(|s| s.as_str()).collect();
+            brain_persistence::db::chunks::mark_chunks_embedded(conn, &refs, timestamp)
+        })
+    }
+
+    fn mark_summaries_embedded(&self, summary_ids: &[&str]) -> Result<()> {
+        let summary_ids: Vec<String> = summary_ids.iter().map(|s| s.to_string()).collect();
+        self.with_write_conn(move |conn| {
+            let refs: Vec<&str> = summary_ids.iter().map(|s| s.as_str()).collect();
+            brain_persistence::db::summaries::mark_summaries_embedded(conn, &refs)
+        })
+    }
+
+    fn mark_tasks_embedded(&self, task_ids: &[&str]) -> Result<()> {
+        let task_ids: Vec<String> = task_ids.iter().map(|s| s.to_string()).collect();
+        self.with_write_conn(move |conn| {
+            let refs: Vec<&str> = task_ids.iter().map(|s| s.as_str()).collect();
+            brain_persistence::db::chunks::mark_tasks_embedded(conn, &refs)
+        })
+    }
+
+    fn mark_records_embedded(&self, record_ids: &[&str]) -> Result<()> {
+        let record_ids: Vec<String> = record_ids.iter().map(|s| s.to_string()).collect();
+        self.with_write_conn(move |conn| {
+            let refs: Vec<&str> = record_ids.iter().map(|s| s.as_str()).collect();
+            brain_persistence::db::records::queries::mark_records_embedded(conn, &refs)
         })
     }
 }
@@ -1602,6 +1761,11 @@ pub trait JobQueue: Send + Sync {
     /// Get a job by its `kind` column.
     fn get_job_by_kind(&self, kind: &str) -> Result<Option<Job>>;
 
+    /// Get a single job by its `job_id`.
+    fn get_job(&self, job_id: &str) -> Result<Option<Job>>;
+
+    /// Update a job's status directly. Returns true if a row was updated.
+    fn update_job_status(&self, job_id: &str, status: &JobStatus) -> Result<bool>;
     /// Ensure a singleton job row exists for the given kind.
     /// Returns `Some(job_id)` if inserted, `None` if already exists.
     fn ensure_singleton_job(&self, input: &EnqueueJobInput) -> Result<Option<String>>;
@@ -1700,6 +1864,18 @@ impl JobQueue for Db {
     fn get_job_by_kind(&self, kind: &str) -> Result<Option<Job>> {
         let kind = kind.to_string();
         self.with_read_conn(move |conn| brain_persistence::db::jobs::get_job_by_kind(conn, &kind))
+    }
+    fn get_job(&self, job_id: &str) -> Result<Option<Job>> {
+        let job_id = job_id.to_string();
+        self.with_read_conn(move |conn| brain_persistence::db::jobs::get_job(conn, &job_id))
+    }
+
+    fn update_job_status(&self, job_id: &str, status: &JobStatus) -> Result<bool> {
+        let job_id = job_id.to_string();
+        let status = *status;
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::jobs::update_job_status(conn, &job_id, &status)
+        })
     }
 
     fn ensure_singleton_job(&self, input: &EnqueueJobInput) -> Result<Option<String>> {

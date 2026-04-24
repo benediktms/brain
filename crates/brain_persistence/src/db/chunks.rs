@@ -396,7 +396,7 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// A chunk pending embedding into LanceDB.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChunkPollRow {
     pub chunk_id: String,
     pub file_id: String,

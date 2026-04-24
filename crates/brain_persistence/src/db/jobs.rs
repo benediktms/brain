@@ -448,6 +448,21 @@ pub fn has_active_lod_job(conn: &Connection, object_uri: &str) -> Result<bool> {
 
 // ─── Singleton / dedup ──────────────────────────────────────────
 
+/// Update a job's status directly. Returns true if a row was updated.
+pub fn update_job_status(conn: &Connection, job_id: &str, status: &JobStatus) -> Result<bool> {
+    let status_str = status.as_ref().to_string();
+    let now = now_secs();
+    let rows = conn.execute(
+        "UPDATE jobs
+         SET status = ?1,
+             updated_at = ?2,
+             started_at = CASE WHEN ?1 = 'in_progress' THEN ?2 ELSE started_at END,
+             processed_at = CASE WHEN ?1 IN ('done', 'failed') THEN ?2 ELSE processed_at END
+         WHERE job_id = ?3",
+        params![status_str, now, job_id],
+    )?;
+    Ok(rows > 0)
+}
 /// Get a job by its `kind` column. Prefers active (non-terminal) jobs;
 /// falls back to the most recently updated row.
 pub fn get_job_by_kind(conn: &Connection, kind: &str) -> Result<Option<Job>> {
