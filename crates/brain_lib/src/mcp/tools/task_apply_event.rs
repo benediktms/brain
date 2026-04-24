@@ -1066,14 +1066,7 @@ mod tests {
 
     fn mark_brain_archived(ctx: &crate::mcp::McpContext) {
         ctx.stores
-            .db()
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
-                    [ctx.brain_id()],
-                )?;
-                Ok(())
-            })
+            .archive_brain(ctx.brain_id())
             .expect("failed to archive brain in test");
     }
 

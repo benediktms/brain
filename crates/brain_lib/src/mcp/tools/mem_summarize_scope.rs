@@ -175,7 +175,6 @@ impl McpTool for MemSummarizeScope {
 
 #[cfg(test)]
 mod tests {
-    use rusqlite::params;
     use serde_json::json;
 
     use super::super::ToolRegistry;
@@ -251,19 +250,9 @@ mod tests {
     #[tokio::test]
     async fn test_summarize_scope_async_llm_enqueues_job() {
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores.db()
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?1, 'idle')",
-                    params!["src/example.rs"],
-                )?;
-                conn.execute(
-                    "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content, heading_path, byte_start, byte_end, token_estimate)
-                     VALUES (?1, ?2, 0, '', ?3, '', 0, 0, 0)",
-                    params!["chunk-1", "src/example.rs", "Example content for async scope summary"],
-                )?;
-                Ok(())
-            }).expect("checked in test assertions");
+        ctx.stores
+            .upsert_record_chunk("src/example.rs", "Example content for async scope summary")
+            .expect("checked in test assertions");
         let registry = ToolRegistry::new();
         let result = registry
             .dispatch(
@@ -286,8 +275,7 @@ mod tests {
 
         let jobs = ctx
             .stores
-            .db()
-            .with_read_conn(|conn| brain_persistence::db::jobs::list_jobs(conn, None, 10))
+            .list_jobs(None, 10)
             .expect("checked in test assertions");
         assert_eq!(jobs.len(), 1);
     }

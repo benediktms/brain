@@ -296,6 +296,145 @@ impl BrainStores {
         use crate::ports::StatusReader;
         StatusReader::count_stuck_files(&self.db)
     }
+    // -- BrainManager --
+
+    /// Archive a brain by ID.
+    pub fn archive_brain(&self, brain_id: &str) -> Result<()> {
+        use crate::ports::BrainManager;
+        BrainManager::archive_brain(&self.db, brain_id)
+    }
+
+    /// Get a brain row by ID.
+    pub fn get_brain(
+        &self,
+        brain_id: &str,
+    ) -> Result<Option<brain_persistence::db::schema::BrainRow>> {
+        use crate::ports::BrainManager;
+        BrainManager::get_brain(&self.db, brain_id)
+    }
+
+    // -- JobQueue (extended) --
+
+    /// Get a single job by ID.
+    pub fn get_job(&self, job_id: &str) -> Result<Option<brain_persistence::db::job::Job>> {
+        use crate::ports::JobQueue;
+        JobQueue::get_job(&self.db, job_id)
+    }
+
+    /// Update a job's status directly.
+    pub fn update_job_status(
+        &self,
+        job_id: &str,
+        status: &brain_persistence::db::job::JobStatus,
+    ) -> Result<bool> {
+        use crate::ports::JobQueue;
+        JobQueue::update_job_status(&self.db, job_id, status)
+    }
+
+    /// List recent jobs filtered by optional status.
+    pub fn list_jobs(
+        &self,
+        status: Option<&brain_persistence::db::job::JobStatus>,
+        limit: i32,
+    ) -> Result<Vec<brain_persistence::db::job::Job>> {
+        self.db
+            .with_read_conn(move |conn| brain_persistence::db::jobs::list_jobs(conn, status, limit))
+    }
+
+    // -- LinkWriter --
+
+    /// Replace all links for a file.
+    pub fn replace_links(
+        &self,
+        file_id: &str,
+        links: &[brain_persistence::links::Link],
+    ) -> Result<()> {
+        use crate::ports::LinkWriter;
+        LinkWriter::replace_links(&self.db, file_id, links)
+    }
+
+    // -- EmbeddingOps --
+
+    /// Find chunks that need embedding.
+    pub fn find_stale_chunks_for_embedding(
+        &self,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::chunks::ChunkPollRow>> {
+        use crate::ports::EmbeddingOps;
+        EmbeddingOps::find_stale_chunks_for_embedding(&self.db, brain_id)
+    }
+
+    /// Find summaries that need embedding.
+    pub fn find_stale_summaries_for_embedding(
+        &self,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::summaries::SummaryPollRow>> {
+        use crate::ports::EmbeddingOps;
+        EmbeddingOps::find_stale_summaries_for_embedding(&self.db, brain_id)
+    }
+
+    /// Find tasks that need embedding.
+    pub fn find_stale_tasks_for_embedding(
+        &self,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::tasks::queries::TaskPollRow>> {
+        use crate::ports::EmbeddingOps;
+        EmbeddingOps::find_stale_tasks_for_embedding(&self.db, brain_id)
+    }
+
+    /// Find records that need embedding.
+    pub fn find_stale_records_for_embedding(
+        &self,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::records::queries::RecordPollRow>> {
+        use crate::ports::EmbeddingOps;
+        EmbeddingOps::find_stale_records_for_embedding(&self.db, brain_id)
+    }
+
+    /// Mark chunks as embedded.
+    pub fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
+        use crate::ports::EmbeddingOps;
+        EmbeddingOps::mark_chunks_embedded(&self.db, chunk_ids, timestamp)
+    }
+
+    /// Mark summaries as embedded.
+    pub fn mark_summaries_embedded(&self, summary_ids: &[&str]) -> Result<()> {
+        use crate::ports::EmbeddingOps;
+        EmbeddingOps::mark_summaries_embedded(&self.db, summary_ids)
+    }
+
+    /// Mark tasks as embedded.
+    pub fn mark_tasks_embedded(&self, task_ids: &[&str]) -> Result<()> {
+        use crate::ports::EmbeddingOps;
+        EmbeddingOps::mark_tasks_embedded(&self.db, task_ids)
+    }
+
+    /// Mark records as embedded.
+    pub fn mark_records_embedded(&self, record_ids: &[&str]) -> Result<()> {
+        use crate::ports::EmbeddingOps;
+        EmbeddingOps::mark_records_embedded(&self.db, record_ids)
+    }
+
+    // -- MaintenanceOps --
+
+    /// Rebuild the FTS index for summaries.
+    pub fn reindex_summaries_fts(&self) -> Result<usize> {
+        use crate::ports::MaintenanceOps;
+        MaintenanceOps::reindex_summaries_fts(&self.db)
+    }
+
+    // -- FtsSearcher --
+
+    /// Full-text search over summaries.
+    pub fn search_summaries_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        brain_ids: Option<&[String]>,
+    ) -> Result<Vec<brain_persistence::db::fts::FtsSummaryResult>> {
+        use crate::ports::FtsSearcher;
+        FtsSearcher::search_summaries_fts(&self.db, query, limit, brain_ids)
+    }
 
     /// Read the `stale_hashes_prevented` counter.
     pub fn stale_hashes_prevented(&self) -> Result<u64> {

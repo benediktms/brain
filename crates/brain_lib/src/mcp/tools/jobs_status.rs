@@ -219,7 +219,6 @@ mod tests {
         use brain_persistence::db::jobs::EnqueueJobInput;
 
         let (_dir, ctx) = create_test_context().await;
-        let db = ctx.stores.db();
 
         let payload = JobPayload::SummarizeScope {
             summary_id: "sum-123".into(),
@@ -239,15 +238,9 @@ mod tests {
             .stores
             .enqueue_job(&input)
             .expect("checked in test assertions");
-        db.with_write_conn(|conn| {
-            conn.execute(
-                "UPDATE jobs SET status = 'failed', updated_at = 0 WHERE job_id = ?1",
-                rusqlite::params![job_id],
-            )
+        ctx.stores
+            .update_job_status(&job_id, &JobStatus::Failed)
             .expect("checked in test assertions");
-            Ok(())
-        })
-        .expect("checked in test assertions");
 
         let registry = ToolRegistry::new();
         let result = registry
