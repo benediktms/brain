@@ -393,8 +393,8 @@ impl BrainStores {
 
     /// Mark chunks as embedded.
     pub fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
-        use crate::ports::EmbeddingOps;
-        EmbeddingOps::mark_chunks_embedded(&self.db, chunk_ids, timestamp)
+        use crate::ports::ChunkMetaWriter;
+        ChunkMetaWriter::mark_chunks_embedded(&self.db, chunk_ids, timestamp)
     }
 
     /// Mark summaries as embedded.

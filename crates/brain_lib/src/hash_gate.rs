@@ -1,10 +1,8 @@
 use tracing::instrument;
 
 use crate::chunker::CHUNKER_VERSION;
+use crate::ports::{FileMetaReader, FileMetaWriter};
 use crate::utils::content_hash;
-use brain_persistence::db::Db;
-use brain_persistence::db::files;
-
 /// Result of a hash gate check: should this file be (re-)indexed?
 pub struct GateVerdict {
     pub file_id: String,
@@ -16,13 +14,22 @@ pub struct GateVerdict {
 ///
 /// Consolidates identity resolution, hash comparison, and state transitions
 /// so the pipeline can focus on chunking/embedding/upserting.
-pub struct HashGate<'a> {
-    db: &'a Db,
+pub struct HashGate<'a, W, R>
+where
+    W: FileMetaWriter,
+    R: FileMetaReader,
+{
+    writer: &'a W,
+    reader: &'a R,
 }
 
-impl<'a> HashGate<'a> {
-    pub fn new(db: &'a Db) -> Self {
-        Self { db }
+impl<'a, W, R> HashGate<'a, W, R>
+where
+    W: FileMetaWriter,
+    R: FileMetaReader,
+{
+    pub fn new(writer: &'a W, reader: &'a R) -> Self {
+        Self { writer, reader }
     }
 
     /// Resolve file identity (get_or_create) + compare stored hash with
@@ -39,13 +46,10 @@ impl<'a> HashGate<'a> {
     ) -> crate::error::Result<GateVerdict> {
         let hash = content_hash(content);
 
-        let (file_id, should_index) = self.db.with_write_conn(|conn| {
-            let (file_id, _is_new) = files::get_or_create_file_id(conn, path, brain_id)?;
-            let stored_hash = files::get_content_hash(conn, &file_id)?;
-            let stored_version = files::get_chunker_version(conn, &file_id)?;
-            let should_index = needs_reindex(stored_hash.as_deref(), content, stored_version);
-            Ok((file_id, should_index))
-        })?;
+        let (file_id, _is_new) = self.writer.get_or_create_file_id(path, brain_id)?;
+        let stored_hash = self.reader.get_content_hash(&file_id)?;
+        let stored_version = self.reader.get_chunker_version(&file_id)?;
+        let should_index = needs_reindex(stored_hash.as_deref(), content, stored_version);
 
         Ok(GateVerdict {
             file_id,
@@ -57,8 +61,7 @@ impl<'a> HashGate<'a> {
     /// Mark file as in-flight for crash recovery. Call after check()
     /// returns should_index=true, before starting the actual work.
     pub fn mark_in_progress(&self, file_id: &str) -> crate::error::Result<()> {
-        self.db
-            .with_write_conn(|conn| files::set_indexing_state(conn, file_id, "indexing_started"))
+        self.writer.set_indexing_state(file_id, "indexing_started")
     }
 
     /// Stamp the hash + chunker version + mark indexed after successful indexing.
@@ -70,9 +73,8 @@ impl<'a> HashGate<'a> {
         hash: &str,
         disk_modified_at: Option<i64>,
     ) -> crate::error::Result<()> {
-        self.db.with_write_conn(|conn| {
-            files::mark_indexed(conn, file_id, hash, CHUNKER_VERSION, disk_modified_at)
-        })
+        self.writer
+            .mark_indexed(file_id, hash, CHUNKER_VERSION, disk_modified_at)
     }
 }
 

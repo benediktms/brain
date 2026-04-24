@@ -11,18 +11,16 @@ use tracing::{debug, info, warn};
 
 use crate::embedder::{Embed, embed_batch_async};
 use crate::l0_generate::{generate_episode_l0, generate_procedure_l0};
-use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingResetter};
+use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingOps, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
-use crate::tasks::queries::{TaskPollRow, find_stale_tasks_for_embedding, get_labels_for_tasks};
+use crate::tasks::queries::{TaskPollRow, get_labels_for_tasks};
 use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
-use brain_persistence::db::chunks::{ChunkPollRow, find_stale_for_embedding, mark_tasks_embedded};
+use brain_persistence::db::chunks::ChunkPollRow;
 use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
-use brain_persistence::db::summaries::{
-    SummaryPollRow, find_stale_summaries_for_embedding, mark_summaries_embedded,
-};
+use brain_persistence::db::summaries::SummaryPollRow;
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 
@@ -44,14 +42,13 @@ pub async fn poll_stale_tasks(
     debug!("embed_poll: scanning stale tasks");
 
     // ── 1. Fetch stale task rows ─────────────────────────────────────────
-    let rows: Vec<TaskPollRow> =
-        match db.with_read_conn(|conn| find_stale_tasks_for_embedding(conn, brain_id)) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, "embed_poll: failed to query stale tasks");
-                return 0;
-            }
-        };
+    let rows: Vec<TaskPollRow> = match db.find_stale_tasks_for_embedding(brain_id) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "embed_poll: failed to query stale tasks");
+            return 0;
+        }
+    };
 
     if rows.is_empty() {
         debug!("embed_poll: no stale tasks");
@@ -178,7 +175,7 @@ pub async fn poll_stale_tasks(
     // ── 6. Mark embedded ─────────────────────────────────────────────────
     if !embedded_task_ids.is_empty() {
         let ids_ref: Vec<&str> = embedded_task_ids.iter().map(|s| s.as_str()).collect();
-        if let Err(e) = db.with_write_conn(|conn| mark_tasks_embedded(conn, &ids_ref)) {
+        if let Err(e) = db.mark_tasks_embedded(&ids_ref) {
             warn!(error = %e, "embed_poll: failed to mark tasks as embedded");
         }
     }
@@ -203,16 +200,13 @@ pub async fn poll_stale_chunks(
     brain_id: &str,
 ) -> usize {
     debug!("embed_poll: scanning stale chunks");
-
-    let brain_id_owned = brain_id.to_string();
-    let rows: Vec<ChunkPollRow> =
-        match db.with_read_conn(move |conn| find_stale_for_embedding(conn, &brain_id_owned)) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, "embed_poll: failed to query stale chunks");
-                return 0;
-            }
-        };
+    let rows: Vec<ChunkPollRow> = match db.find_stale_chunks_for_embedding(brain_id) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "embed_poll: failed to query stale chunks");
+            return 0;
+        }
+    };
 
     if rows.is_empty() {
         debug!("embed_poll: no stale chunks");
@@ -292,7 +286,7 @@ pub async fn poll_stale_chunks(
             .unwrap_or_default()
             .as_secs() as i64;
 
-        if let Err(e) = db.mark_chunks_embedded(&embedded_chunk_ids, now) {
+        if let Err(e) = ChunkMetaWriter::mark_chunks_embedded(db, &embedded_chunk_ids, now) {
             warn!(error = %e, "embed_poll: failed to mark chunks as embedded");
         }
     }
@@ -322,14 +316,7 @@ pub async fn poll_stale_records(
 ) -> usize {
     debug!("embed_poll: scanning stale records");
 
-    // ── 1. Fetch stale record rows ───────────────────────────────────────
-    let brain_id_owned = brain_id.to_string();
-    let rows = match db.with_read_conn(move |conn| {
-        brain_persistence::db::records::queries::find_stale_records_for_embedding(
-            conn,
-            &brain_id_owned,
-        )
-    }) {
+    let rows = match db.find_stale_records_for_embedding(brain_id) {
         Ok(r) => r,
         Err(e) => {
             warn!(error = %e, "embed_poll: failed to query stale records");
@@ -435,10 +422,8 @@ pub async fn poll_stale_records(
     // ── 6. Mark embedded ─────────────────────────────────────────────────
     if !embedded_record_ids.is_empty() {
         let ids_owned: Vec<String> = embedded_record_ids.iter().cloned().collect();
-        if let Err(e) = db.with_write_conn(move |conn| {
-            let refs: Vec<&str> = ids_owned.iter().map(String::as_str).collect();
-            brain_persistence::db::records::queries::mark_records_embedded(conn, &refs)
-        }) {
+        let ids_ref: Vec<&str> = ids_owned.iter().map(String::as_str).collect();
+        if let Err(e) = db.mark_records_embedded(&ids_ref) {
             warn!(error = %e, "embed_poll: failed to mark records as embedded");
         }
     }
@@ -508,10 +493,7 @@ pub async fn poll_stale_summaries(
 ) -> usize {
     debug!("embed_poll: scanning stale summaries");
 
-    let brain_id_owned = brain_id.to_string();
-    let rows: Vec<SummaryPollRow> = match db
-        .with_read_conn(move |conn| find_stale_summaries_for_embedding(conn, &brain_id_owned))
-    {
+    let rows: Vec<SummaryPollRow> = match db.find_stale_summaries_for_embedding(brain_id) {
         Ok(r) => r,
         Err(e) => {
             warn!(error = %e, "embed_poll: failed to query stale summaries");
@@ -645,10 +627,8 @@ pub async fn poll_stale_summaries(
 
     if !embedded_summary_ids.is_empty() {
         let ids_owned: Vec<String> = embedded_summary_ids.iter().cloned().collect();
-        if let Err(e) = db.with_write_conn(move |conn| {
-            let refs: Vec<&str> = ids_owned.iter().map(String::as_str).collect();
-            mark_summaries_embedded(conn, &refs)
-        }) {
+        let ids_ref: Vec<&str> = ids_owned.iter().map(String::as_str).collect();
+        if let Err(e) = db.mark_summaries_embedded(&ids_ref) {
             warn!(error = %e, "embed_poll: failed to mark summaries as embedded");
         }
     }

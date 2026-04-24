@@ -181,6 +181,12 @@ pub trait FileMetaReader: Send + Sync {
 
     /// Return `(file_id, path)` pairs for files stuck in `indexing_started`.
     fn find_stuck_files(&self) -> Result<Vec<(String, String)>>;
+
+    /// Get the stored content hash for a file.
+    fn get_content_hash(&self, file_id: &str) -> Result<Option<String>>;
+
+    /// Get the stored chunker version for a file.
+    fn get_chunker_version(&self, file_id: &str) -> Result<Option<u32>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +377,20 @@ impl FileMetaReader for Db {
 
     fn find_stuck_files(&self) -> Result<Vec<(String, String)>> {
         self.with_read_conn(brain_persistence::db::files::find_stuck_files)
+    }
+
+    fn get_content_hash(&self, file_id: &str) -> Result<Option<String>> {
+        let file_id = file_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::files::get_content_hash(conn, &file_id)
+        })
+    }
+
+    fn get_chunker_version(&self, file_id: &str) -> Result<Option<u32>> {
+        let file_id = file_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::files::get_chunker_version(conn, &file_id)
+        })
     }
 }
 
@@ -1257,9 +1277,6 @@ pub trait EmbeddingOps: Send + Sync {
         brain_id: &str,
     ) -> Result<Vec<brain_persistence::db::records::queries::RecordPollRow>>;
 
-    /// Mark chunks as embedded at the given timestamp.
-    fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()>;
-
     /// Mark summaries as embedded.
     fn mark_summaries_embedded(&self, summary_ids: &[&str]) -> Result<()>;
 
@@ -1303,14 +1320,6 @@ impl EmbeddingOps for Db {
             brain_persistence::db::records::queries::find_stale_records_for_embedding(
                 conn, &brain_id,
             )
-        })
-    }
-
-    fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
-        let chunk_ids: Vec<String> = chunk_ids.iter().map(|s| s.to_string()).collect();
-        self.with_write_conn(move |conn| {
-            let refs: Vec<&str> = chunk_ids.iter().map(|s| s.as_str()).collect();
-            brain_persistence::db::chunks::mark_chunks_embedded(conn, &refs, timestamp)
         })
     }
 

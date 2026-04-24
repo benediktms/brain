@@ -246,6 +246,10 @@ pub struct MockFileMetaReader {
     pub files_with_hashes: Mutex<Vec<(String, String, Option<String>)>>,
     /// Stuck `(file_id, path)` rows.
     pub stuck_files: Mutex<Vec<(String, String)>>,
+    /// `file_id -> content_hash` map.
+    pub content_hashes: Mutex<std::collections::HashMap<String, String>>,
+    /// `file_id -> chunker_version` map.
+    pub chunker_versions: Mutex<std::collections::HashMap<String, u32>>,
 }
 
 impl FileMetaReader for MockFileMetaReader {
@@ -264,6 +268,14 @@ impl FileMetaReader for MockFileMetaReader {
 
     fn find_stuck_files(&self) -> Result<Vec<(String, String)>> {
         Ok(self.stuck_files.lock().unwrap().clone())
+    }
+
+    fn get_content_hash(&self, file_id: &str) -> Result<Option<String>> {
+        Ok(self.content_hashes.lock().unwrap().get(file_id).cloned())
+    }
+
+    fn get_chunker_version(&self, file_id: &str) -> Result<Option<u32>> {
+        Ok(self.chunker_versions.lock().unwrap().get(file_id).cloned())
     }
 }
 
@@ -1135,14 +1147,6 @@ impl EmbeddingOps for MockEmbeddingOps {
 
     fn find_stale_records_for_embedding(&self, _brain_id: &str) -> Result<Vec<RecordPollRow>> {
         Ok(self.stale_records.lock().unwrap().clone())
-    }
-
-    fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
-        let mut map = self.embedded_chunks.lock().unwrap();
-        for id in chunk_ids {
-            map.insert(id.to_string(), timestamp);
-        }
-        Ok(())
     }
 
     fn mark_summaries_embedded(&self, summary_ids: &[&str]) -> Result<()> {
