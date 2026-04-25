@@ -264,7 +264,7 @@ mod tests {
     async fn start_test_server(socket_path: &Path) -> CancellationToken {
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -349,7 +349,7 @@ mod tests {
 
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -365,7 +365,7 @@ mod tests {
 
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -392,7 +392,7 @@ mod tests {
         let (_dir_a, ctx_a) = create_test_context().await;
         ctx_a
             .stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router_a = BrainRouter::new(Arc::new(ctx_a), "test-brain".to_string());
@@ -406,7 +406,7 @@ mod tests {
         let (_dir_b, ctx_b) = create_test_context().await;
         ctx_b
             .stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router_b = BrainRouter::new(Arc::new(ctx_b), "test-brain".to_string());
@@ -430,7 +430,7 @@ mod tests {
 
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());

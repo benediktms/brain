@@ -320,7 +320,7 @@ mod integration_tests {
 
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -346,7 +346,7 @@ mod integration_tests {
 
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -367,7 +367,7 @@ mod integration_tests {
 
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("my-brain", "my-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "my-brain".to_string());
@@ -396,7 +396,7 @@ mod integration_tests {
 
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
@@ -424,7 +424,7 @@ mod integration_tests {
         // Pre-create the context so the spawned task only needs to bind.
         let (_dir, ctx) = create_test_context().await;
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered("test-brain", "test-brain")
             .unwrap();
 

@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use brain_lib::config::{list_brain_keys, open_remote_search_context};
+use brain_lib::config::open_remote_search_context;
 use brain_lib::embedder::{Embed, Embedder};
 use brain_lib::metrics::Metrics;
 use brain_lib::prelude::*;
-use brain_lib::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
+use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
 use brain_lib::ranking::resolve_intent;
 use brain_lib::retrieval::SearchResult;
 use brain_lib::search_service::SearchService;
@@ -139,7 +139,8 @@ pub async fn run(params: QueryParams) -> Result<()> {
 
     // Determine which brain names to search.
     let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-        list_brain_keys(stores.db())?
+        stores
+            .list_brain_keys()?
             .into_iter()
             .map(|(name, _id)| name)
             .collect()
@@ -152,7 +153,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
     let local_store_reader = StoreReader::from_store(&local_store);
 
     // Build brain list: local first, then each remote.
-    // All share the same unified DB via `stores.db()`.
+    // All share the same unified DB held by `stores`.
     let mut brains: Vec<(String, Option<StoreReader>)> = Vec::new();
     brains.push((stores.brain_name.clone(), Some(local_store_reader)));
 
@@ -173,12 +174,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
         }
     }
 
-    let federated = FederatedPipeline {
-        db: stores.db(),
-        brains,
-        embedder: &embedder_arc,
-        metrics: &metrics,
-    };
+    let federated = stores.federated_pipeline(brains, &embedder_arc, &metrics);
 
     let empty_tags: Vec<String> = Vec::new();
     let fed_search_params = SearchParams::new(

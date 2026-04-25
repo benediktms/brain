@@ -9,8 +9,7 @@ use crate::lod::LodLevel;
 use crate::lod_resolver::{resolve_lod_batch, resolve_lod_batch_federated, resolve_single_lod};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::ports::ChunkMetaReader;
-use crate::query_pipeline::{FederatedPipeline, SearchParams};
+use crate::query_pipeline::SearchParams;
 use crate::ranking::resolve_intent;
 use crate::retrieval::{MemoryKind, derive_kind};
 use crate::uri::{Domain, SynapseUri};
@@ -102,13 +101,13 @@ async fn handle_uri_mode(
         Err(e) => return ToolCallResult::error(format!("Invalid URI {uri_str:?}: {e}")),
     };
 
-    let db = ctx.stores.db();
+    let stores = &ctx.stores;
 
     // Resolve brain: "_" means current brain.
     let (brain_id, brain_name) = if uri.brain == "_" {
         (ctx.brain_id().to_string(), ctx.brain_name().to_string())
     } else {
-        match ctx.stores.resolve_brain(&uri.brain) {
+        match stores.resolve_brain(&uri.brain) {
             Ok((id, name)) => (id, name),
             Err(e) => {
                 return ToolCallResult::error(format!("Unknown brain {:?}: {e}", uri.brain));
@@ -120,7 +119,7 @@ async fn handle_uri_mode(
     let content: String = match uri.domain {
         Domain::Memory => {
             let chunk_ids = vec![uri.id.clone()];
-            match db.get_chunks_by_ids(&chunk_ids) {
+            match stores.get_chunks_by_ids(&chunk_ids) {
                 Ok(chunks) => match chunks.into_iter().next() {
                     Some(c) => c.content,
                     None => return ToolCallResult::error(format!("Object not found: {uri_str}")),
@@ -129,7 +128,7 @@ async fn handle_uri_mode(
             }
         }
         Domain::Episode | Domain::Reflection | Domain::Procedure => {
-            match db.get_summary_by_id(&uri.id) {
+            match stores.get_summary_by_id(&uri.id) {
                 Ok(Some(row)) => row.content,
                 Ok(None) => return ToolCallResult::error(format!("Object not found: {uri_str}")),
                 Err(e) => return ToolCallResult::error(format!("DB error: {e}")),
@@ -137,7 +136,7 @@ async fn handle_uri_mode(
         }
         Domain::Task => {
             let chunk_ids = vec![format!("task:{}:0", uri.id)];
-            match db.get_chunks_by_ids(&chunk_ids) {
+            match stores.get_chunks_by_ids(&chunk_ids) {
                 Ok(chunks) => match chunks.into_iter().next() {
                     Some(c) => c.content,
                     None => return ToolCallResult::error(format!("Object not found: {uri_str}")),
@@ -147,7 +146,7 @@ async fn handle_uri_mode(
         }
         Domain::Record => {
             let chunk_ids = vec![format!("record:{}:0", uri.id)];
-            match db.get_chunks_by_ids(&chunk_ids) {
+            match stores.get_chunks_by_ids(&chunk_ids) {
                 Ok(chunks) => match chunks.into_iter().next() {
                     Some(c) => c.content,
                     None => return ToolCallResult::error(format!("Object not found: {uri_str}")),
@@ -171,8 +170,14 @@ async fn handle_uri_mode(
         _ => uri_str.to_string(),
     };
 
-    let (resolution, lod_diag) =
-        resolve_single_lod(db, &lod_uri, &content, &source_hash, lod_level, &brain_id);
+    let (resolution, lod_diag) = resolve_single_lod(
+        stores,
+        &lod_uri,
+        &content,
+        &source_hash,
+        lod_level,
+        &brain_id,
+    );
 
     let query_time_ms = start.elapsed().as_millis() as u64;
 
@@ -431,12 +436,9 @@ impl McpTool for MemRetrieve {
                     Err(e) => return ToolCallResult::error(e),
                 };
 
-                let federated = FederatedPipeline {
-                    db: ctx.stores.db(),
-                    brains,
-                    embedder,
-                    metrics: &ctx.metrics,
-                };
+                let federated = ctx
+                    .stores
+                    .federated_pipeline(brains, embedder, &ctx.metrics);
 
                 let fed_result = match federated.search_ranked_federated(&search_params).await {
                     Ok(r) => r,
@@ -450,7 +452,6 @@ impl McpTool for MemRetrieve {
                     &fed_result.ranked[..fed_result.ranked.len().min(params.count as usize)];
 
                 // Build brain_name → brain_id cache for L1 enqueue.
-                let db = ctx.stores.db();
                 let brain_id_cache: std::collections::HashMap<String, String> = fed_result
                     .chunk_brain
                     .values()
@@ -466,7 +467,7 @@ impl McpTool for MemRetrieve {
 
                 // Resolve LOD with per-result brain attribution.
                 let (resolutions, lod_diag) = resolve_lod_batch_federated(
-                    db,
+                    &ctx.stores,
                     ranked,
                     lod,
                     &fed_result.chunk_brain,
@@ -577,13 +578,8 @@ impl McpTool for MemRetrieve {
             let ranked = &ranked[..ranked.len().min(params.count as usize)];
 
             // Resolve LOD for each result.
-            let (resolutions, lod_diag) = resolve_lod_batch(
-                ctx.stores.db(),
-                ranked,
-                lod,
-                ctx.brain_name(),
-                ctx.brain_id(),
-            );
+            let (resolutions, lod_diag) =
+                resolve_lod_batch(&ctx.stores, ranked, lod, ctx.brain_name(), ctx.brain_id());
 
             let query_time_ms = start.elapsed().as_millis() as u64;
 

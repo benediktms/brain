@@ -6,6 +6,9 @@ edition.workspace = true
 [features]
 default = []
 accelerate = ["candle-core/accelerate"]
+# Exposes test-only accessors (e.g. BrainStores::db_for_tests). Enable from
+# integration tests that need direct DB access; not for production use.
+test-utils = []
 
 [dependencies]
 brain-persistence = { path = "../brain_persistence" }

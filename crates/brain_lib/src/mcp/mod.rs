@@ -125,7 +125,7 @@ impl McpContext {
         // Step 2: optionally load LanceDB + embedder. Failures are logged and
         // result in tasks-only mode — no hard error.
         let (writable_store, search) =
-            match Self::try_load_search_layer(model_dir, lance_db, stores.db()).await {
+            match Self::try_load_search_layer(model_dir, lance_db, stores.inner_db()).await {
                 Ok((ws, sr, emb)) => (
                     Some(ws),
                     Some(SearchService {

@@ -7,7 +7,6 @@ use serde_json::json;
 
 use brain_lib::embedder::{Embed, Embedder, embed_batch_async};
 use brain_lib::metrics::Metrics;
-use brain_lib::ports::{EpisodeReader, EpisodeWriter, ReflectionWriter};
 use brain_lib::prelude::*;
 use brain_lib::query_pipeline::SearchParams;
 use brain_lib::search_service::SearchService;
@@ -86,11 +85,11 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             pipeline.search(&search_params).await?
         }
     } else {
-        use brain_lib::config::{list_brain_keys, open_remote_search_context};
-        use brain_lib::query_pipeline::FederatedPipeline;
+        use brain_lib::config::open_remote_search_context;
 
         let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-            list_brain_keys(ctx.stores.db())?
+            ctx.stores
+                .list_brain_keys()?
                 .into_iter()
                 .map(|(name, _id)| name)
                 .collect()
@@ -125,12 +124,9 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             }
         }
 
-        let federated = FederatedPipeline {
-            db: ctx.stores.db(),
-            brains,
-            embedder: &ctx.search.embedder,
-            metrics: &ctx.metrics,
-        };
+        let federated = ctx
+            .stores
+            .federated_pipeline(brains, &ctx.search.embedder, &ctx.metrics);
         federated.search(&search_params, false).await?
     };
 
@@ -325,7 +321,7 @@ pub async fn write_episode(ctx: &MemoryCtx, params: WriteEpisodeParams) -> Resul
         importance: params.importance,
     };
 
-    let summary_id = ctx.stores.db().store_episode(&episode)?;
+    let summary_id = ctx.stores.store_episode(&episode)?;
 
     // Best-effort embedding.
     if let Some(ref lance_path) = params.lance_db {
@@ -397,11 +393,9 @@ pub struct WriteProcedureParams {
 }
 
 pub async fn write_procedure(ctx: &MemoryCtx, params: WriteProcedureParams) -> Result<()> {
-    use brain_lib::ports::ProcedureWriter;
-
     let embed_content = format!("{}\n\n{}", params.title, params.steps);
 
-    let summary_id = ctx.stores.db().store_procedure(
+    let summary_id = ctx.stores.store_procedure(
         &params.title,
         &params.steps,
         &params.tags,
@@ -476,11 +470,9 @@ pub async fn consolidate(
     auto_summarize: bool,
 ) -> Result<()> {
     use brain_lib::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
-    use brain_lib::ports::EpisodeReader;
 
     let episodes = ctx
         .stores
-        .db()
         .list_episodes(limit, &ctx.stores.brain_id)
         .unwrap_or_default();
 
@@ -635,14 +627,12 @@ pub struct ReflectPrepareParams {
 pub async fn reflect_prepare(ctx: &MemoryCtx, params: ReflectPrepareParams) -> Result<()> {
     let episodes = if params.brains.is_empty() {
         ctx.stores
-            .db()
             .list_episodes(10, &ctx.stores.brain_id)
             .unwrap_or_default()
     } else if params.brains.iter().any(|b| b == "all") {
-        ctx.stores.db().list_episodes(10, "").unwrap_or_default()
+        ctx.stores.list_episodes(10, "").unwrap_or_default()
     } else {
         ctx.stores
-            .db()
             .list_episodes_multi_brain(10, &params.brains)
             .unwrap_or_default()
     };
@@ -764,7 +754,7 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
     let importance = params.importance.clamp(0.0, 1.0);
 
     // Validate source_ids.
-    let found = ctx.stores.db().get_summaries_by_ids(&params.source_ids)?;
+    let found = ctx.stores.get_summaries_by_ids(&params.source_ids)?;
     let found_ids: HashSet<&str> = found.iter().map(|r| r.summary_id.as_str()).collect();
     for id in &params.source_ids {
         if !found_ids.contains(id.as_str()) {
@@ -772,7 +762,7 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
         }
     }
 
-    let summary_id = ctx.stores.db().store_reflection(
+    let summary_id = ctx.stores.store_reflection(
         &params.title,
         &params.content,
         &params.source_ids,

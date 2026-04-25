@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use brain_lib::config::{ProviderEntry, brain_home, load_global_config, save_global_config};
+use brain_lib::ports::ProviderStore;
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::crypto;
 use brain_persistence::db::providers::InsertProvider;
@@ -47,23 +48,22 @@ pub fn run_set(
     // Check for duplicate
     let key_hash = crypto::hash_api_key(&key);
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
-    let db = stores.db();
 
-    if db.provider_exists(name, &key_hash)? {
+    if stores.provider_exists(name, &key_hash)? {
         println!("Provider '{name}' with this key already exists.");
         return Ok(());
     }
 
     // Encrypt and store
     let encrypted = crypto::encrypt(&master_key, &key)?;
-    let id = db.insert_provider(&InsertProvider {
+    let id = stores.insert_provider(&InsertProvider {
         name,
         api_key_encrypted: &encrypted,
         api_key_hash: &key_hash,
     })?;
 
     // Project to state_projection.toml
-    project_providers_to_config(db)?;
+    project_providers_to_config(&stores)?;
 
     println!("Provider '{name}' configured (id: {id})");
     Ok(())
@@ -72,8 +72,7 @@ pub fn run_set(
 /// `brain config provider list`
 pub fn run_list(sqlite_db: &Path, lance_db: Option<&Path>) -> Result<()> {
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
-    let db = stores.db();
-    let providers = db.list_providers()?;
+    let providers = stores.list_providers()?;
 
     if providers.is_empty() {
         println!("No providers configured.");
@@ -93,17 +92,16 @@ pub fn run_list(sqlite_db: &Path, lance_db: Option<&Path>) -> Result<()> {
 /// `brain config provider remove <target>`
 pub fn run_remove(sqlite_db: &Path, lance_db: Option<&Path>, target: &str) -> Result<()> {
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
-    let db = stores.db();
 
     // Try by ID first
-    if db.delete_provider(target)? {
-        project_providers_to_config(db)?;
+    if stores.delete_provider(target)? {
+        project_providers_to_config(&stores)?;
         println!("Removed provider {target}");
         return Ok(());
     }
 
     // Try by name — delete all entries for that provider name
-    let providers = db.list_providers()?;
+    let providers = stores.list_providers()?;
     let matching: Vec<_> = providers.iter().filter(|p| p.name == target).collect();
 
     if matching.is_empty() {
@@ -111,10 +109,10 @@ pub fn run_remove(sqlite_db: &Path, lance_db: Option<&Path>, target: &str) -> Re
     }
 
     for p in &matching {
-        db.delete_provider(&p.id)?;
+        stores.delete_provider(&p.id)?;
     }
 
-    project_providers_to_config(db)?;
+    project_providers_to_config(&stores)?;
     println!(
         "Removed {} provider{} for '{target}'",
         matching.len(),
@@ -125,8 +123,8 @@ pub fn run_remove(sqlite_db: &Path, lance_db: Option<&Path>, target: &str) -> Re
 }
 
 /// Sync the providers list from DB to state_projection.toml (metadata only).
-fn project_providers_to_config(db: &brain_persistence::db::Db) -> Result<()> {
-    let providers = db.list_providers()?;
+fn project_providers_to_config(stores: &BrainStores) -> Result<()> {
+    let providers = stores.list_providers()?;
     let entries: Vec<ProviderEntry> = providers
         .iter()
         .map(|p| ProviderEntry {

@@ -111,7 +111,7 @@ async fn mcp_handler_task_create_validation_default_priority_cross_brain() {
 
     ctx.ctx
         .stores
-        .db()
+        .db_for_tests()
         .ensure_brain_registered("brain-remote-1", "remote-brain")
         .expect("register remote brain");
 

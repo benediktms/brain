@@ -201,12 +201,12 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
                 .query_pipeline(&ctx.search.store, &ctx.search.embedder, &ctx.metrics);
         pipeline.search(&search_params).await?
     } else {
-        use brain_lib::config::{list_brain_keys, open_remote_search_context};
-        use brain_lib::query_pipeline::FederatedPipeline;
+        use brain_lib::config::open_remote_search_context;
         use brain_persistence::store::StoreReader;
 
         let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-            list_brain_keys(ctx.stores.db())?
+            ctx.stores
+                .list_brain_keys()?
                 .into_iter()
                 .map(|(name, _id)| name)
                 .collect()
@@ -241,12 +241,9 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
             }
         }
 
-        let federated = FederatedPipeline {
-            db: ctx.stores.db(),
-            brains,
-            embedder: &ctx.search.embedder,
-            metrics: &ctx.metrics,
-        };
+        let federated = ctx
+            .stores
+            .federated_pipeline(brains, &ctx.search.embedder, &ctx.metrics);
         federated.search(&search_params, false).await?
     };
 

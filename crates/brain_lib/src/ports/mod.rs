@@ -2151,6 +2151,27 @@ impl ProviderStore for Db {
     }
 }
 
+impl ProviderStore for crate::stores::BrainStores {
+    fn insert_provider(&self, input: &InsertProvider) -> Result<String> {
+        ProviderStore::insert_provider(self.inner_db(), input)
+    }
+    fn get_provider(&self, id: &str) -> Result<Option<ProviderRow>> {
+        ProviderStore::get_provider(self.inner_db(), id)
+    }
+    fn get_provider_by_name(&self, name: &str) -> Result<Option<ProviderRow>> {
+        ProviderStore::get_provider_by_name(self.inner_db(), name)
+    }
+    fn list_providers(&self) -> Result<Vec<ProviderRow>> {
+        ProviderStore::list_providers(self.inner_db())
+    }
+    fn delete_provider(&self, id: &str) -> Result<bool> {
+        ProviderStore::delete_provider(self.inner_db(), id)
+    }
+    fn provider_exists(&self, name: &str, api_key_hash: &str) -> Result<bool> {
+        ProviderStore::provider_exists(self.inner_db(), name, api_key_hash)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mock implementations for testing
 // ---------------------------------------------------------------------------

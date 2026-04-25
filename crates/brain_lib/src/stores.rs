@@ -178,18 +178,17 @@ impl BrainStores {
         ))
     }
 
-    /// Access the underlying Db handle.
-    ///
-    /// **MCP tool handlers**: prefer the delegation methods below (e.g.
-    /// `store_episode`, `list_brains`, `count_jobs_by_status`) instead of
-    /// calling methods on the raw `Db`.  Direct `db()` access is intended
-    /// for pipeline internals (`QueryPipeline`, `IndexPipeline`) and the
-    /// daemon/CLI layers that pre-date the port-trait boundary.
-    pub fn db(&self) -> &Db {
+    pub(crate) fn inner_db(&self) -> &Db {
         &self.db
     }
 
-    pub(crate) fn inner_db(&self) -> &Db {
+    /// Test-only accessor for the underlying `Db` handle.
+    ///
+    /// Available only when the `test-utils` feature is enabled. Production
+    /// code must use the port-trait impls or delegation methods on
+    /// `BrainStores` instead.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn db_for_tests(&self) -> &Db {
         &self.db
     }
 
@@ -242,6 +241,25 @@ impl BrainStores {
         crate::query_pipeline::QueryPipeline::new(&self.db, store, embedder, metrics)
     }
 
+    /// Construct a `FederatedPipeline` over the unified DB borrowed from this
+    /// store. Per-brain entries are `(brain_name, optional store)`.
+    pub fn federated_pipeline<'a, S>(
+        &'a self,
+        brains: Vec<(String, Option<S>)>,
+        embedder: &'a std::sync::Arc<dyn crate::embedder::Embed>,
+        metrics: &'a std::sync::Arc<crate::metrics::Metrics>,
+    ) -> crate::query_pipeline::FederatedPipeline<'a, S, Db>
+    where
+        S: crate::ports::ChunkSearcher + Send + Sync,
+    {
+        crate::query_pipeline::FederatedPipeline {
+            db: &self.db,
+            brains,
+            embedder,
+            metrics,
+        }
+    }
+
     // -- EpisodeWriter / EpisodeReader --
 
     /// Store an episode. Returns the `summary_id`.
@@ -280,6 +298,23 @@ impl BrainStores {
     ) -> Result<Vec<brain_persistence::db::summaries::SummaryRow>> {
         use crate::ports::EpisodeReader;
         EpisodeReader::get_summaries_by_ids(&self.db, ids)
+    }
+
+    /// Load a single summary by ID. Returns `None` if no row exists.
+    pub fn get_summary_by_id(
+        &self,
+        summary_id: &str,
+    ) -> Result<Option<brain_persistence::db::summaries::SummaryRow>> {
+        self.db.get_summary_by_id(summary_id)
+    }
+
+    /// Batch-load chunk rows by ID.
+    pub fn get_chunks_by_ids(
+        &self,
+        chunk_ids: &[String],
+    ) -> Result<Vec<brain_persistence::db::chunks::ChunkRow>> {
+        use crate::ports::ChunkMetaReader;
+        ChunkMetaReader::get_chunks_by_ids(&self.db, chunk_ids)
     }
 
     // -- ReflectionWriter --

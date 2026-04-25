@@ -431,12 +431,11 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // prefixes (e.g. set via `brain config set prefix`) are preserved via
     // COALESCE — generate_prefix() is only used as fallback for new brains.
     {
-        let shared_ctx = &brains
+        let _shared_ctx = &brains
             .values()
             .next()
             .expect("at least one brain")
             .mcp_context;
-        let shared_db = shared_ctx.stores.db();
 
         // Read existing prefixes from DB to preserve manual overrides.
         let existing_prefixes: std::collections::HashMap<String, String> = shared_db
@@ -477,7 +476,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         }
 
         // Sync prefixes from DB back to state_projection.toml (read-only projection).
-        sync_prefixes_to_config(shared_db, &brains);
+        sync_prefixes_to_config(&shared_db, &brains);
     }
 
     // ── 3c. Start IPC server ─────────────────────────────────────────────
@@ -983,11 +982,8 @@ async fn reload_and_project(
     // Load the freshest config after reload to build projections.
     let cfg = load_global_config()?;
 
-    let db = brains
-        .values()
-        .next()
-        .map(|inst| inst.mcp_context.stores.db())
-        .unwrap_or(shared_db);
+    // All brains share the unified ~/.brain/brain.db via `shared_db`.
+    let db = shared_db;
 
     // Read existing prefixes from DB to preserve manual overrides.
     let existing_prefixes: std::collections::HashMap<String, String> = db

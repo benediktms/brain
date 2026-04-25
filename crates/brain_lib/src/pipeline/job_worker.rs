@@ -656,14 +656,12 @@ pub fn enqueue_cluster_summary(
 /// Returns `Ok(Some(job_id))` if enqueued, `Ok(None)` if skipped (a
 /// non-terminal job for the same `object_uri` already exists).
 pub fn enqueue_l1_summarize(
-    db: &Db,
+    queue: &dyn crate::ports::JobQueue,
     object_uri: &str,
     brain_id: &str,
     source_content: &str,
     source_hash: &str,
 ) -> crate::error::Result<Option<String>> {
-    use crate::ports::JobQueue;
-
     if source_content.len() > 100_000 {
         warn!(
             object_uri = %object_uri,
@@ -673,7 +671,7 @@ pub fn enqueue_l1_summarize(
         return Ok(None);
     }
 
-    if db.has_active_lod_job(object_uri)? {
+    if queue.has_active_lod_job(object_uri)? {
         return Ok(None);
     }
 
@@ -690,7 +688,7 @@ pub fn enqueue_l1_summarize(
         metadata: serde_json::json!({}),
         scheduled_at: 0,
     };
-    let job_id = db.enqueue_job(&input)?;
+    let job_id = queue.enqueue_job(&input)?;
     Ok(Some(job_id))
 }
 

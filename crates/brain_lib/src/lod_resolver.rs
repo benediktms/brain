@@ -10,7 +10,6 @@ use crate::lod::{LodChunkStore, LodLevel};
 use crate::ranking::RankedResult;
 use crate::retrieval::derive_kind;
 use crate::uri::SynapseUri;
-use brain_persistence::db::Db;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -70,35 +69,45 @@ fn build_object_uri(ranked: &RankedResult, brain_name: &str) -> String {
 ///
 /// Returns a `Vec<LodResolution>` in the same order as `ranked`, plus
 /// aggregate [`LodDiagnostics`].
-pub fn resolve_lod_batch(
-    db: &Db,
+pub fn resolve_lod_batch<S>(
+    store: &S,
     ranked: &[RankedResult],
     requested_lod: LodLevel,
     brain_name: &str,
     brain_id: &str,
-) -> (Vec<LodResolution>, LodDiagnostics) {
+) -> (Vec<LodResolution>, LodDiagnostics)
+where
+    S: LodChunkStore + crate::ports::JobQueue,
+{
     let mut resolutions = Vec::with_capacity(ranked.len());
     let mut diag = LodDiagnostics::default();
 
     for result in ranked {
-        let resolution = resolve_single(db, result, requested_lod, brain_name, brain_id, &mut diag);
+        let resolution = resolve_single(
+            store,
+            result,
+            requested_lod,
+            brain_name,
+            brain_id,
+            &mut diag,
+        );
         resolutions.push(resolution);
     }
 
     (resolutions, diag)
 }
 
-fn resolve_single(
-    db: &Db,
+fn resolve_single<S>(
+    store: &S,
     ranked: &RankedResult,
     requested_lod: LodLevel,
     brain_name: &str,
     brain_id: &str,
     diag: &mut LodDiagnostics,
-) -> LodResolution {
-    // Use the trait explicitly to avoid name collision with Db's own get_lod_chunk method.
-    let store: &dyn LodChunkStore = db;
-
+) -> LodResolution
+where
+    S: LodChunkStore + crate::ports::JobQueue,
+{
     match requested_lod {
         LodLevel::L2 => {
             // Passthrough — always a hit, no DB lookup needed.
@@ -178,8 +187,14 @@ fn resolve_single(
                         }
                     } else {
                         // Stale L1 — serve it but enqueue regeneration.
-                        let enqueued =
-                            try_enqueue_l1(db, &uri, brain_id, &ranked.content, &source_hash, diag);
+                        let enqueued = try_enqueue_l1(
+                            store,
+                            &uri,
+                            brain_id,
+                            &ranked.content,
+                            &source_hash,
+                            diag,
+                        );
                         LodResolution {
                             content: chunk.content,
                             actual_lod: LodLevel::L1,
@@ -191,11 +206,11 @@ fn resolve_single(
                 }
                 Ok(None) => {
                     // L1 miss — try L0 fallback, then L2, and enqueue L1 generation.
-                    l1_miss_fallback(store, db, &uri, brain_id, ranked, &source_hash, diag)
+                    l1_miss_fallback(store, &uri, brain_id, ranked, &source_hash, diag)
                 }
                 Err(e) => {
                     warn!(uri = %uri, error = %e, "LOD L1 lookup failed, falling back");
-                    l1_miss_fallback(store, db, &uri, brain_id, ranked, &source_hash, diag)
+                    l1_miss_fallback(store, &uri, brain_id, ranked, &source_hash, diag)
                 }
             }
         }
@@ -203,16 +218,18 @@ fn resolve_single(
 }
 
 /// L1 miss fallback: try L0, then L2, and enqueue L1 generation.
-fn l1_miss_fallback(
-    store: &dyn LodChunkStore,
-    db: &Db,
+fn l1_miss_fallback<S>(
+    store: &S,
     uri: &str,
     brain_id: &str,
     ranked: &RankedResult,
     source_hash: &str,
     diag: &mut LodDiagnostics,
-) -> LodResolution {
-    let enqueued = try_enqueue_l1(db, uri, brain_id, &ranked.content, source_hash, diag);
+) -> LodResolution
+where
+    S: LodChunkStore + crate::ports::JobQueue,
+{
+    let enqueued = try_enqueue_l1(store, uri, brain_id, &ranked.content, source_hash, diag);
 
     match store.get_lod_chunk(uri, LodLevel::L0) {
         Ok(Some(l0_chunk)) => {
@@ -252,7 +269,7 @@ fn l1_miss_fallback(
 /// Attempt to enqueue an L1 summarization job. Best-effort: logs on error.
 /// Returns `true` if a job was actually enqueued.
 fn try_enqueue_l1(
-    db: &Db,
+    queue: &dyn crate::ports::JobQueue,
     object_uri: &str,
     brain_id: &str,
     source_content: &str,
@@ -260,7 +277,7 @@ fn try_enqueue_l1(
     diag: &mut LodDiagnostics,
 ) -> bool {
     match crate::pipeline::job_worker::enqueue_l1_summarize(
-        db,
+        queue,
         object_uri,
         brain_id,
         source_content,
@@ -290,15 +307,18 @@ fn try_enqueue_l1(
 ///
 /// `brain_id_resolver` maps brain_name → brain_id for L1 job enqueue. If
 /// resolution fails for a brain, L1 enqueue is skipped (LOD still resolves).
-pub fn resolve_lod_batch_federated(
-    db: &Db,
+pub fn resolve_lod_batch_federated<S>(
+    store: &S,
     ranked: &[RankedResult],
     requested_lod: LodLevel,
     chunk_brain: &HashMap<String, String>,
     default_brain_name: &str,
     default_brain_id: &str,
     brain_id_resolver: &dyn Fn(&str) -> Option<String>,
-) -> (Vec<LodResolution>, LodDiagnostics) {
+) -> (Vec<LodResolution>, LodDiagnostics)
+where
+    S: LodChunkStore + crate::ports::JobQueue,
+{
     let mut resolutions = Vec::with_capacity(ranked.len());
     let mut diag = LodDiagnostics::default();
 
@@ -310,8 +330,14 @@ pub fn resolve_lod_batch_federated(
         let brain_id =
             brain_id_resolver(brain_name).unwrap_or_else(|| default_brain_id.to_string());
 
-        let resolution =
-            resolve_single(db, result, requested_lod, brain_name, &brain_id, &mut diag);
+        let resolution = resolve_single(
+            store,
+            result,
+            requested_lod,
+            brain_name,
+            &brain_id,
+            &mut diag,
+        );
         resolutions.push(resolution);
     }
 
@@ -327,16 +353,18 @@ pub fn resolve_lod_batch_federated(
 /// Unlike [`resolve_lod_batch`], takes the object URI and raw source content
 /// directly instead of a [`RankedResult`]. Returns a single [`LodResolution`]
 /// plus aggregate [`LodDiagnostics`].
-pub fn resolve_single_lod(
-    db: &Db,
+pub fn resolve_single_lod<S>(
+    store: &S,
     object_uri: &str,
     source_content: &str,
     source_hash: &str,
     requested_lod: LodLevel,
     brain_id: &str,
-) -> (LodResolution, LodDiagnostics) {
+) -> (LodResolution, LodDiagnostics)
+where
+    S: LodChunkStore + crate::ports::JobQueue,
+{
     let mut diag = LodDiagnostics::default();
-    let store: &dyn LodChunkStore = db;
 
     let resolution = match requested_lod {
         LodLevel::L2 => {
@@ -405,7 +433,7 @@ pub fn resolve_single_lod(
                 } else {
                     // Stale — serve but enqueue regeneration.
                     let enqueued = try_enqueue_l1(
-                        db,
+                        store,
                         object_uri,
                         brain_id,
                         source_content,
@@ -424,7 +452,7 @@ pub fn resolve_single_lod(
             Ok(None) => {
                 // L1 miss — try L0, then L2, and enqueue.
                 let enqueued = try_enqueue_l1(
-                    db,
+                    store,
                     object_uri,
                     brain_id,
                     source_content,
@@ -468,7 +496,7 @@ pub fn resolve_single_lod(
             Err(e) => {
                 warn!(uri = %object_uri, error = %e, "LOD L1 lookup failed, falling back");
                 let enqueued = try_enqueue_l1(
-                    db,
+                    store,
                     object_uri,
                     brain_id,
                     source_content,

@@ -7,16 +7,15 @@ use brain_persistence::db::job::JobStatus;
 
 pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Result<()> {
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
-    let db = stores.db();
 
-    let pending = db.count_jobs_by_status(&JobStatus::Pending)?;
-    let running = db.count_jobs_by_status(&JobStatus::InProgress)?;
-    let done = db.count_jobs_by_status(&JobStatus::Done)?;
-    let failed = db.count_jobs_by_status(&JobStatus::Failed)?;
-    let ready = db.count_jobs_by_status(&JobStatus::Ready)?;
+    let pending = stores.count_jobs_by_status(&JobStatus::Pending)?;
+    let running = stores.count_jobs_by_status(&JobStatus::InProgress)?;
+    let done = stores.count_jobs_by_status(&JobStatus::Done)?;
+    let failed = stores.count_jobs_by_status(&JobStatus::Failed)?;
+    let ready = stores.count_jobs_by_status(&JobStatus::Ready)?;
 
-    let recent_jobs = db.list_jobs_by_status(&JobStatus::Failed, 10)?;
-    let stuck_jobs = db.list_stuck_jobs()?;
+    let recent_jobs = stores.list_jobs_by_status(&JobStatus::Failed, 10)?;
+    let stuck_jobs = stores.list_stuck_jobs()?;
 
     if json {
         let recent_failures_json: Vec<serde_json::Value> = recent_jobs
@@ -105,10 +104,9 @@ pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Resu
 
 pub fn run_retry(sqlite_db: &Path, lance_db: Option<&Path>, job_id: &str) -> Result<()> {
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
-    let db = stores.db();
 
-    let job = db
-        .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, job_id))
+    let job = stores
+        .get_job(job_id)
         .map_err(|e| anyhow::anyhow!("failed to get job: {e}"))?
         .ok_or_else(|| anyhow::anyhow!("job not found: {job_id}"))?;
 
@@ -120,7 +118,7 @@ pub fn run_retry(sqlite_db: &Path, lance_db: Option<&Path>, job_id: &str) -> Res
         );
     }
 
-    let reset = db.retry_failed_job(job_id)?;
+    let reset = stores.retry_failed_job(job_id)?;
     if !reset {
         anyhow::bail!("job {job_id} was not reset; it may have changed state concurrently");
     }
@@ -132,11 +130,10 @@ pub fn run_retry(sqlite_db: &Path, lance_db: Option<&Path>, job_id: &str) -> Res
 
 pub fn run_gc(sqlite_db: &Path, lance_db: Option<&Path>, older_than_days: u32) -> Result<()> {
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
-    let db = stores.db();
 
     let age_secs = older_than_days as i64 * 86400;
     let protected = brain_lib::pipeline::recurring_jobs::protected_kinds();
-    let deleted = db.gc_completed_jobs(age_secs, &protected)?;
+    let deleted = stores.gc_completed_jobs(age_secs, &protected)?;
 
     println!(
         "Deleted {deleted} completed job{} older than {} day{}.",

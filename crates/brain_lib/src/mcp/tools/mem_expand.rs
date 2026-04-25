@@ -162,7 +162,7 @@ mod tests {
         let record_file_id = "record:BRN-TEST01";
         let capsule_text = "This is the record capsule content for expand test.";
         ctx.stores
-            .db()
+            .db_for_tests()
             .upsert_record_chunk(record_file_id, capsule_text, "")
             .expect("upsert_record_chunk must succeed");
 

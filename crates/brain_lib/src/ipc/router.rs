@@ -89,7 +89,7 @@ mod tests {
             ctx.brain_id().to_string()
         };
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);
@@ -107,7 +107,7 @@ mod tests {
             ctx.brain_id().to_string()
         };
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);
@@ -132,7 +132,7 @@ mod tests {
             ctx.brain_id().to_string()
         };
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered(&brain_id, "test-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);
@@ -157,7 +157,7 @@ mod tests {
             ctx.brain_id().to_string()
         };
         ctx.stores
-            .db()
+            .db_for_tests()
             .ensure_brain_registered(&brain_id, "my-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);

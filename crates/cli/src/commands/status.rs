@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::Result;
-use brain_lib::ports::StatusReader;
 use brain_lib::stores::BrainStores;
 
 /// Show brain health status: task counts, index stats, brain ID.
@@ -18,8 +17,8 @@ pub fn run(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Result<()> 
     let done = stores.tasks.list_done()?.len();
 
     // Index stats from SQLite.
-    let stuck_files = stores.db().count_stuck_files()?;
-    let stale_hashes_prevented = stores.db().stale_hashes_prevented()?;
+    let stuck_files = stores.count_stuck_files()?;
+    let stale_hashes_prevented = stores.stale_hashes_prevented()?;
 
     if json {
         let output = serde_json::json!({
