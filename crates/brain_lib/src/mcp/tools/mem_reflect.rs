@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::query_pipeline::QueryPipeline;
 
 use crate::uri::SynapseUri;
 
@@ -62,7 +61,7 @@ impl MemReflect {
             return ToolCallResult::error("'topic' is required for prepare mode");
         }
 
-        let pipeline = QueryPipeline::new(ctx.stores.db(), store, embedder, &ctx.metrics);
+        let pipeline = ctx.stores.query_pipeline(store, embedder, &ctx.metrics);
 
         // Determine episode scope from `brains` parameter.
         // Note: the summaries table does not yet carry a brain_id column.

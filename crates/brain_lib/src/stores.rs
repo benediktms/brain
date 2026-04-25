@@ -223,6 +223,21 @@ impl BrainStores {
         self.db.resolve_brain(input)
     }
 
+    /// Construct a `QueryPipeline` over the unified DB borrowed from this
+    /// store. Callers supply the LanceDB-backed search store, embedder, and
+    /// metrics handle from their context.
+    pub fn query_pipeline<'a, S>(
+        &'a self,
+        store: &'a S,
+        embedder: &'a std::sync::Arc<dyn crate::embedder::Embed>,
+        metrics: &'a std::sync::Arc<crate::metrics::Metrics>,
+    ) -> crate::query_pipeline::QueryPipeline<'a, S, Db>
+    where
+        S: crate::ports::ChunkSearcher + Send + Sync,
+    {
+        crate::query_pipeline::QueryPipeline::new(&self.db, store, embedder, metrics)
+    }
+
     // -- EpisodeWriter / EpisodeReader --
 
     /// Store an episode. Returns the `summary_id`.

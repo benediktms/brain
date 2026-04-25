@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
+use crate::query_pipeline::{FederatedPipeline, SearchParams};
 use crate::retrieval::MemoryKind;
 use brain_persistence::store::VectorSearchMode;
 
@@ -197,7 +197,7 @@ impl McpTool for MemSearchMinimal {
 
             let search_result = if params.brains.is_empty() {
                 // Single-brain path.
-                let pipeline = QueryPipeline::new(ctx.stores.db(), store, embedder, &ctx.metrics);
+                let pipeline = ctx.stores.query_pipeline(store, embedder, &ctx.metrics);
                 if params.explain {
                     match pipeline.search_with_scores(&search_params).await {
                         Ok(r) => r,

@@ -10,7 +10,7 @@ use crate::lod_resolver::{resolve_lod_batch, resolve_lod_batch_federated, resolv
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::ports::ChunkMetaReader;
-use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
+use crate::query_pipeline::{FederatedPipeline, SearchParams};
 use crate::ranking::resolve_intent;
 use crate::retrieval::{MemoryKind, derive_kind};
 use crate::uri::{Domain, SynapseUri};
@@ -563,7 +563,7 @@ impl McpTool for MemRetrieve {
             }
 
             // Single-brain path.
-            let pipeline = QueryPipeline::new(ctx.stores.db(), store, embedder, &ctx.metrics);
+            let pipeline = ctx.stores.query_pipeline(store, embedder, &ctx.metrics);
 
             let (ranked, fusion, pipeline_diag) = match pipeline
                 .search_ranked_with_diagnostics(&search_params)

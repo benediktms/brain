@@ -9,7 +9,7 @@ use brain_lib::embedder::{Embed, Embedder, embed_batch_async};
 use brain_lib::metrics::Metrics;
 use brain_lib::ports::{EpisodeReader, EpisodeWriter, ReflectionWriter};
 use brain_lib::prelude::*;
-use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
+use brain_lib::query_pipeline::SearchParams;
 use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_lib::uri::SynapseUri;
@@ -77,12 +77,9 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
     );
 
     let result = if params.brains.is_empty() {
-        let pipeline = QueryPipeline::new(
-            ctx.stores.db(),
-            &ctx.search.store,
-            &ctx.search.embedder,
-            &ctx.metrics,
-        );
+        let pipeline =
+            ctx.stores
+                .query_pipeline(&ctx.search.store, &ctx.search.embedder, &ctx.metrics);
         if params.explain {
             pipeline.search_with_scores(&search_params).await?
         } else {
@@ -236,12 +233,9 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 pub async fn expand(ctx: &MemoryCtx, memory_ids: &[String], budget: usize) -> Result<()> {
-    let pipeline = QueryPipeline::new(
-        ctx.stores.db(),
-        &ctx.search.store,
-        &ctx.search.embedder,
-        &ctx.metrics,
-    );
+    let pipeline = ctx
+        .stores
+        .query_pipeline(&ctx.search.store, &ctx.search.embedder, &ctx.metrics);
     let result = pipeline.expand(memory_ids, budget).await?;
 
     if ctx.json {
@@ -656,12 +650,9 @@ pub async fn reflect_prepare(ctx: &MemoryCtx, params: ReflectPrepareParams) -> R
             .unwrap_or_default()
     };
 
-    let pipeline = QueryPipeline::new(
-        ctx.stores.db(),
-        &ctx.search.store,
-        &ctx.search.embedder,
-        &ctx.metrics,
-    );
+    let pipeline = ctx
+        .stores
+        .query_pipeline(&ctx.search.store, &ctx.search.embedder, &ctx.metrics);
     let result = pipeline
         .reflect_with_episodes(params.topic.clone(), params.budget, episodes)
         .await?;

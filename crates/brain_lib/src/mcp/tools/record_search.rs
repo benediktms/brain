@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::query_pipeline::{FederatedPipeline, QueryPipeline, SearchParams};
+use crate::query_pipeline::{FederatedPipeline, SearchParams};
 
 use crate::uri::SynapseUri;
 
@@ -113,7 +113,7 @@ impl McpTool for RecordSearch {
 
             let search_result = if params.brains.is_empty() {
                 // Single-brain path.
-                let pipeline = QueryPipeline::new(ctx.stores.db(), store, embedder, &ctx.metrics);
+                let pipeline = ctx.stores.query_pipeline(store, embedder, &ctx.metrics);
                 match pipeline.search(&search_params).await {
                     Ok(r) => r,
                     Err(e) => return ToolCallResult::error(format!("Search failed: {e}")),

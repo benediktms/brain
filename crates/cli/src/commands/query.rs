@@ -129,7 +129,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
             store: StoreReader::from_store(&store),
             embedder: embedder_arc.clone(),
         };
-        let pipeline = QueryPipeline::new(stores.db(), &search.store, &search.embedder, &metrics);
+        let pipeline = stores.query_pipeline(&search.store, &search.embedder, &metrics);
         let output = run_with_pipeline(&params, &pipeline).await?;
         print!("{output}");
         return Ok(());

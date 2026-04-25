@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use brain_lib::query_pipeline::{QueryPipeline, SearchParams};
+use brain_lib::query_pipeline::SearchParams;
 use brain_lib::records::integrity;
 use brain_lib::stores::BrainStores;
 use brain_lib::uri::SynapseUri;
@@ -196,12 +196,9 @@ pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> 
         SearchParams::new(&params.query, "lookup", params.budget, over_k, &params.tags);
 
     let search_result = if params.brains.is_empty() {
-        let pipeline = QueryPipeline::new(
-            ctx.stores.db(),
-            &ctx.search.store,
-            &ctx.search.embedder,
-            &ctx.metrics,
-        );
+        let pipeline =
+            ctx.stores
+                .query_pipeline(&ctx.search.store, &ctx.search.embedder, &ctx.metrics);
         pipeline.search(&search_params).await?
     } else {
         use brain_lib::config::{list_brain_keys, open_remote_search_context};
