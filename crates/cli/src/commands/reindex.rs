@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use brain_lib::ports::MaintenanceOps;
 use brain_lib::prelude::*;
 
 /// Re-index all files (clears content hashes, forces full re-embed).
@@ -24,7 +23,7 @@ pub async fn run_full(
     let stats = pipeline.reindex_full(&[notes_path]).await?;
 
     // Rebuild FTS5 summaries index after full reindex
-    let summaries_count = pipeline.db().reindex_summaries_fts()?;
+    let summaries_count = pipeline.reindex_summaries_fts()?;
 
     println!(
         "Reindex complete: {} indexed, {} skipped, {} deleted, {} errors",

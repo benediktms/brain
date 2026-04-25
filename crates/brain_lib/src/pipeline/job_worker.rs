@@ -251,8 +251,11 @@ pub async fn process_jobs(
 /// Reap stuck jobs, but skip any that are still actively running (present in
 /// the `active` set). This prevents the reaper from resetting jobs that are
 /// just slow, not actually stuck.
-pub fn reap_stuck_jobs_filtered(db: &Db, active: &ActiveJobs) -> crate::error::Result<usize> {
-    let stuck = db.list_stuck_jobs()?;
+pub fn reap_stuck_jobs_filtered(
+    queue: &dyn crate::ports::JobQueue,
+    active: &ActiveJobs,
+) -> crate::error::Result<usize> {
+    let stuck = queue.list_stuck_jobs()?;
     if stuck.is_empty() {
         return Ok(0);
     }
@@ -270,7 +273,7 @@ pub fn reap_stuck_jobs_filtered(db: &Db, active: &ActiveJobs) -> crate::error::R
     for job in &truly_stuck {
         // Call fail_job for ALL stuck jobs — it handles retryable vs exhausted
         // internally (reschedules if attempts remain, marks failed otherwise).
-        match db.fail_job(&job.job_id, "reaped: exceeded stuck threshold") {
+        match queue.fail_job(&job.job_id, "reaped: exceeded stuck threshold") {
             Ok(()) => count += 1,
             Err(e) => {
                 warn!(job_id = %job.job_id, error = %e, "failed to reap stuck job");

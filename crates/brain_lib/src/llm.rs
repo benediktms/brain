@@ -46,7 +46,7 @@ pub fn resolve_provider() -> Option<Box<dyn Summarize>> {
 ///
 /// `brain_home` is needed to locate the master key file for decryption.
 pub fn resolve_provider_with_db(
-    db: &brain_persistence::db::Db,
+    provider_store: &dyn crate::ports::ProviderStore,
     brain_home: &Path,
 ) -> Option<Box<dyn Summarize>> {
     // 1. Env vars take priority
@@ -55,7 +55,7 @@ pub fn resolve_provider_with_db(
     }
 
     // 2. Try DB-backed providers
-    if let Some(provider) = resolve_from_db(db, brain_home) {
+    if let Some(provider) = resolve_from_db(provider_store, brain_home) {
         return Some(provider);
     }
 
@@ -90,7 +90,7 @@ fn resolve_from_env() -> Option<Box<dyn Summarize>> {
 
 /// Try to resolve from DB-backed providers.
 fn resolve_from_db(
-    db: &brain_persistence::db::Db,
+    provider_store: &dyn crate::ports::ProviderStore,
     brain_home: &Path,
 ) -> Option<Box<dyn Summarize>> {
     use brain_persistence::db::crypto;
@@ -105,7 +105,7 @@ fn resolve_from_db(
 
     // Try anthropic first, then openai (same priority order as env vars)
     for provider_name in &["anthropic", "openai"] {
-        let row = match db.get_provider_by_name(provider_name) {
+        let row = match provider_store.get_provider_by_name(provider_name) {
             Ok(Some(row)) => row,
             Ok(None) => continue,
             Err(e) => {

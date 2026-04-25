@@ -100,7 +100,7 @@ async fn test_link_a_to_b_is_stored_after_indexing() {
 
     // The wiki-link [[b]] in a.md should resolve to target_path = "b"
     let link_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             conn.query_row(
                 "SELECT COUNT(*) FROM links WHERE target_path = 'b'",
@@ -115,7 +115,7 @@ async fn test_link_a_to_b_is_stored_after_indexing() {
 
     // There must be NO direct link from A to C
     let a_to_c_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             conn.query_row(
                 "SELECT COUNT(*) FROM links WHERE target_path = 'c'",
@@ -174,7 +174,7 @@ async fn test_1hop_graph_expansion_adds_linked_neighbour_to_results() {
     let store_reader = StoreReader::from_store(pipeline.store());
     let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
-    let qp = QueryPipeline::new(pipeline.db(), &store_reader, &embedder, &metrics);
+    let qp = QueryPipeline::new(pipeline.db_for_tests(), &store_reader, &embedder, &metrics);
 
     // Search WITH graph expansion — this is the RED assertion.
     // Once expansion is implemented, B must appear because A→B link is followed.
@@ -264,7 +264,7 @@ async fn test_1hop_expansion_does_not_follow_2hop_links() {
     let store_reader = StoreReader::from_store(pipeline.store());
     let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
-    let qp = QueryPipeline::new(pipeline.db(), &store_reader, &embedder, &metrics);
+    let qp = QueryPipeline::new(pipeline.db_for_tests(), &store_reader, &embedder, &metrics);
 
     let mut params = SearchParams::new(
         "quantum computing superposition entanglement",

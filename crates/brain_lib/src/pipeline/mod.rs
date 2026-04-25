@@ -210,9 +210,19 @@ where
         self.brain_id = brain_id;
     }
 
-    /// Get a reference to the SQLite database.
-    pub fn db(&self) -> &Db {
+    /// Test-only accessor for the underlying `Db` handle. Available only when
+    /// the `test-utils` feature is enabled. Production code must use the
+    /// inherent delegation methods (e.g. `wal_checkpoint`, `gc_completed_jobs`)
+    /// or pass the pipeline through port traits.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn db_for_tests(&self) -> &Db {
         &self.db
+    }
+
+    /// Clone the underlying `Db` handle. Used for spawning tasks that need
+    /// owned access to the database (e.g. `process_jobs`).
+    pub fn clone_db(&self) -> Db {
+        self.db.clone()
     }
 
     /// Get a reference to the LanceDB store (as the concrete type `S`).
@@ -243,5 +253,44 @@ where
     /// Get a reference to the optional summarizer.
     pub fn summarizer(&self) -> Option<&Arc<dyn Summarize>> {
         self.summarizer.as_ref()
+    }
+
+    pub fn wal_checkpoint(&self) -> crate::error::Result<()> {
+        self.db.wal_checkpoint()
+    }
+
+    pub fn reindex_summaries_fts(&self) -> crate::error::Result<usize> {
+        use crate::ports::MaintenanceOps;
+        MaintenanceOps::reindex_summaries_fts(&self.db)
+    }
+
+    pub fn gc_completed_jobs(
+        &self,
+        age_secs: i64,
+        protected_kinds: &[&str],
+    ) -> crate::error::Result<usize> {
+        use crate::ports::JobQueue;
+        JobQueue::gc_completed_jobs(&self.db, age_secs, protected_kinds)
+    }
+
+    pub fn find_stuck_files(&self) -> crate::error::Result<Vec<(String, String)>> {
+        self.db
+            .with_read_conn(brain_persistence::db::files::find_stuck_files)
+    }
+
+    /// View the underlying `Db` as a `&dyn JobQueue`. Use to pass the
+    /// pipeline's database to functions that take a JobQueue trait object.
+    pub fn job_queue(&self) -> &dyn crate::ports::JobQueue {
+        &self.db
+    }
+
+    /// View the underlying `Db` as a `&dyn ProviderStore`.
+    pub fn provider_store(&self) -> &dyn crate::ports::ProviderStore {
+        &self.db
+    }
+
+    /// View the underlying `Db` as a `&dyn EmbeddingResetter`.
+    pub fn embedding_resetter(&self) -> &dyn crate::ports::EmbeddingResetter {
+        &self.db
     }
 }

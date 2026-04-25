@@ -55,7 +55,7 @@ async fn test_index_file_stores_chunks_in_sqlite() {
 
     // Verify chunks are stored in SQLite
     let chunk_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
@@ -107,7 +107,7 @@ async fn test_index_file_utf8_multibyte_content() {
     assert!(result.unwrap(), "UTF-8 file should be indexed");
 
     let chunk_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
@@ -125,7 +125,7 @@ async fn test_index_file_empty_file_returns_true_no_chunks() {
     assert!(indexed, "empty file returns true (state was updated)");
 
     let chunk_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
@@ -146,7 +146,7 @@ async fn test_index_file_sqlite_and_lancedb_agree_on_file_id() {
     pipeline.index_file(&path).await.unwrap();
 
     let sqlite_ids: Vec<String> = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let pairs = files::get_all_active_paths(conn)?;
             Ok(pairs.into_iter().map(|(fid, _)| fid).collect())
@@ -205,7 +205,7 @@ async fn test_full_scan_idempotent_no_duplicate_chunks() {
     assert_eq!(stats1.indexed, 2);
 
     let chunk_count_after_first: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
@@ -218,7 +218,7 @@ async fn test_full_scan_idempotent_no_duplicate_chunks() {
     assert_eq!(stats2.skipped, 2, "both files should be skipped");
 
     let chunk_count_after_second: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
@@ -255,12 +255,12 @@ async fn test_full_scan_detects_deletion() {
 
     // Explicitly delete via the API
     pipeline
-        .db()
+        .db_for_tests()
         .handle_delete(&path.to_string_lossy())
         .unwrap();
 
     let active = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
         .unwrap();
     assert!(
@@ -269,7 +269,7 @@ async fn test_full_scan_detects_deletion() {
     );
 
     let active = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
         .unwrap();
     assert!(active.is_empty(), "soft-deleted file should not be active");
@@ -301,13 +301,13 @@ async fn test_vacuum_purges_soft_deleted_files() {
     std::fs::remove_file(&path).unwrap();
     // full_scan no longer detects deletions — use explicit handle_delete
     pipeline
-        .db()
+        .db_for_tests()
         .handle_delete(&path.to_string_lossy())
         .unwrap();
 
     // Verify it's soft-deleted (not active) but the row still exists
     let active = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
         .unwrap();
     assert!(
@@ -320,7 +320,7 @@ async fn test_vacuum_purges_soft_deleted_files() {
     // deletion must be strictly in the past relative to the cutoff.
     let two_days_ago = brain_lib::utils::now_ts() - 2 * 86400;
     pipeline
-        .db()
+        .db_for_tests()
         .with_write_conn(|conn| {
             conn.execute(
                 "UPDATE files SET deleted_at = ?1 WHERE deleted_at IS NOT NULL",
@@ -358,7 +358,7 @@ async fn test_vacuum_does_not_purge_active_files() {
     assert_eq!(stats.purged_files, 0, "active file should not be purged");
 
     let active = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
         .unwrap();
     assert_eq!(active.len(), 1, "active file should still be present");

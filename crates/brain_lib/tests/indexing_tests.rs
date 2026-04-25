@@ -176,7 +176,7 @@ async fn test_startup_recovery_reindexes_stuck_files() {
 
     // Simulate a crash: set indexing_state to 'indexing_started'
     pipeline
-        .db()
+        .db_for_tests()
         .with_write_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             assert_eq!(paths.len(), 1);
@@ -257,7 +257,7 @@ async fn test_multiple_scans_no_duplicates() {
 
     // Verify only one file tracked in SQLite
     let active = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
         .unwrap();
     assert_eq!(active.len(), 1);
@@ -282,7 +282,7 @@ async fn test_file_rename_preserves_identity() {
 
     // Grab the original file_id
     let original_id = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths[0].0.clone())
@@ -296,7 +296,7 @@ async fn test_file_rename_preserves_identity() {
 
     // Verify: same file_id, updated path
     let active = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
         .unwrap();
     assert_eq!(active.len(), 1);
@@ -329,7 +329,7 @@ async fn test_handle_event_created() {
 
     // Verify: file appears in SQLite with state=indexed
     let active = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             assert_eq!(paths.len(), 1);
@@ -373,7 +373,7 @@ async fn test_handle_event_deleted() {
 
     // Verify: soft-deleted (no active paths)
     let active = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
         .unwrap();
     assert!(active.is_empty());
@@ -394,7 +394,7 @@ async fn test_handle_event_renamed() {
         .unwrap();
 
     let (original_id, original_hash) = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             let hash = files::get_content_hash(conn, &paths[0].0)?;
@@ -415,7 +415,7 @@ async fn test_handle_event_renamed() {
 
     // Verify: path updated, same file_id, same content_hash (no re-embedding)
     let (found_id, found_path, found_hash) = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             assert_eq!(paths.len(), 1);
@@ -446,7 +446,7 @@ async fn test_delete_then_recreate_resurrects_id() {
         .await
         .unwrap();
     let original_id = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths[0].0.clone())
@@ -456,7 +456,7 @@ async fn test_delete_then_recreate_resurrects_id() {
     // Delete on disk — explicit handle_delete (full_scan no longer sweeps deletions)
     std::fs::remove_file(&path).unwrap();
     let deleted = pipeline
-        .db()
+        .db_for_tests()
         .handle_delete(&path.to_string_lossy())
         .unwrap();
     assert!(deleted.is_some(), "handle_delete should return the file_id");
@@ -477,7 +477,7 @@ async fn test_delete_then_recreate_resurrects_id() {
 
     // Verify: resurrected with the same file_id
     let resurrected_id = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             assert_eq!(paths.len(), 1);
@@ -508,7 +508,7 @@ async fn test_upsert_add_paragraph_adds_chunk() {
         .unwrap();
 
     let (file_id, count) = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             let fid = paths[0].0.clone();
@@ -538,7 +538,7 @@ async fn test_upsert_add_paragraph_adds_chunk() {
         .unwrap();
 
     let new_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c: i64 = conn
                 .query_row(
@@ -572,7 +572,7 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
         .unwrap();
 
     let (file_id, count) = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             let fid = paths[0].0.clone();
@@ -595,7 +595,7 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
     pipeline.full_scan(&[notes_dir]).await.unwrap();
 
     let new_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c: i64 = conn
                 .query_row(
@@ -744,7 +744,7 @@ async fn test_schema_version_mismatch_triggers_rebuild() {
 
     // with_embedder should have detected the mismatch, rebuilt, and stamped the new version
     let stored: Option<String> = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))
         .unwrap();
     assert_eq!(
@@ -827,7 +827,7 @@ async fn test_first_run_stamps_without_rebuild() {
 
     // Version should be stamped
     let stored: Option<String> = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))
         .unwrap();
     assert_eq!(
@@ -865,7 +865,7 @@ async fn test_unparseable_version_triggers_rebuild() {
 
     // Version should be stamped to current
     let stored: Option<String> = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))
         .unwrap();
     assert_eq!(

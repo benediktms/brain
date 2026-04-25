@@ -97,7 +97,7 @@ async fn test_batch_vs_single_equivalence() {
 
     // Both should have the same chunk count in SQLite
     let count_a: i64 = pipeline_a
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c: i64 = conn
                 .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
@@ -107,7 +107,7 @@ async fn test_batch_vs_single_equivalence() {
         .unwrap();
 
     let count_b: i64 = pipeline_b
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c: i64 = conn
                 .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
@@ -155,7 +155,7 @@ async fn test_backpressure_no_dropped_events() {
 
     // Verify SQLite: 150 active files, 300 chunks
     let active_count = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths.len())
@@ -164,7 +164,7 @@ async fn test_backpressure_no_dropped_events() {
     assert_eq!(active_count, 150);
 
     let chunk_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c: i64 = conn
                 .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
@@ -277,7 +277,7 @@ async fn test_concurrent_read_write_no_deadlocks() {
 
     // All 50 files should be indexed
     let total_files = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths.len())
@@ -405,7 +405,7 @@ async fn test_scan_watcher_race_idempotent() {
 
     // Still exactly 30 files (no duplicates)
     let active_count = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths.len())
@@ -415,7 +415,7 @@ async fn test_scan_watcher_race_idempotent() {
 
     // Still exactly 60 chunks (30 files × 2 chunks)
     let chunk_count: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             let c: i64 = conn
                 .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))

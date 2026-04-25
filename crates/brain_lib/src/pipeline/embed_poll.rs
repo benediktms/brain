@@ -636,8 +636,8 @@ pub async fn poll_stale_summaries(
 ///
 /// Returns `true` if a reset occurred (LanceDB was missing/inaccessible).
 pub async fn self_heal_if_lance_missing(
-    resetter: &impl EmbeddingResetter,
-    store: &impl crate::ports::SchemaMeta,
+    resetter: &(impl EmbeddingResetter + ?Sized),
+    store: &(impl crate::ports::SchemaMeta + ?Sized),
 ) -> bool {
     // Use schema() as a lightweight accessibility probe — it sends a trivial
     // request to the underlying table handle.

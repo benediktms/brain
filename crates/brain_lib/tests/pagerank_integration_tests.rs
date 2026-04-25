@@ -89,7 +89,7 @@ async fn test_pagerank_scores_populated_after_set_db_and_optimize() {
 
     // Verify links were created: hub should have 2 incoming links
     let backlinks: i64 = pipeline
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             conn.query_row(
                 "SELECT COUNT(*) FROM links WHERE target_file_id = \
@@ -106,7 +106,7 @@ async fn test_pagerank_scores_populated_after_set_db_and_optimize() {
     );
 
     // Before optimize: scores should be NULL (never computed yet)
-    let scores_before = get_pagerank_scores(pipeline.db());
+    let scores_before = get_pagerank_scores(pipeline.db_for_tests());
     assert_eq!(scores_before.len(), 3, "should have 3 files");
     for (path, score) in &scores_before {
         assert!(
@@ -116,12 +116,12 @@ async fn test_pagerank_scores_populated_after_set_db_and_optimize() {
     }
 
     // Attach DB and trigger optimize — this is the critical set_db call
-    let db_arc = Arc::new(pipeline.db().clone());
+    let db_arc = Arc::new(pipeline.db_for_tests().clone());
     pipeline.store_mut().set_db(db_arc);
     pipeline.store_mut().optimizer().force_optimize().await;
 
     // After optimize: all scores should be populated
-    let scores_after = get_pagerank_scores(pipeline.db());
+    let scores_after = get_pagerank_scores(pipeline.db_for_tests());
     assert_eq!(scores_after.len(), 3, "should still have 3 files");
 
     for (path, score) in &scores_after {
@@ -187,7 +187,7 @@ async fn test_pagerank_scores_remain_null_without_set_db() {
     pipeline.store_mut().optimizer().force_optimize().await;
 
     // Scores should remain NULL — PageRank was never computed
-    let scores = get_pagerank_scores(pipeline.db());
+    let scores = get_pagerank_scores(pipeline.db_for_tests());
     for (path, score) in &scores {
         assert!(
             score.is_none(),
@@ -235,14 +235,14 @@ async fn test_mcp_bootstrap_path_pagerank_via_manual_store_construction() {
     pipeline.full_scan(&[notes_dir]).await.unwrap();
 
     // This is the fix: set_db must be called (was missing in try_load_search_layer)
-    let db_arc = Arc::new(pipeline.db().clone());
+    let db_arc = Arc::new(pipeline.db_for_tests().clone());
     pipeline.store_mut().set_db(db_arc);
 
     // Trigger optimize as the MCP server would during normal operation
     pipeline.store_mut().optimizer().force_optimize().await;
 
     // All PageRank scores must be populated
-    let scores = get_pagerank_scores(pipeline.db());
+    let scores = get_pagerank_scores(pipeline.db_for_tests());
     assert_eq!(scores.len(), 3);
 
     for (path, score) in &scores {

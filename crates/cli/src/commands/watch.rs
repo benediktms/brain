@@ -17,7 +17,6 @@ use brain_lib::pipeline::IndexPipeline;
 use brain_lib::pipeline::embed_poll;
 use brain_lib::pipeline::job_worker;
 use brain_lib::pipeline::recurring_jobs;
-use brain_lib::ports::JobQueue;
 use brain_lib::prelude::*;
 use brain_persistence::db::Db;
 use brain_persistence::store::Store;
@@ -62,13 +61,15 @@ pub async fn run(
 
     // Resolve LLM provider: env vars first, then DB-backed credentials.
     let brain_home = brain_lib::config::brain_home().unwrap_or_else(|_| PathBuf::from("."));
-    if let Some(provider) = brain_lib::llm::resolve_provider_with_db(pipeline.db(), &brain_home) {
+    if let Some(provider) =
+        brain_lib::llm::resolve_provider_with_db(pipeline.provider_store(), &brain_home)
+    {
         pipeline.set_summarizer(Arc::from(provider));
     }
 
     // Startup self-heal: if LanceDB is missing, reset embedded_at so all
     // tasks and chunks will be re-embedded on the next EmbedPollSweep job.
-    embed_poll::self_heal_if_lance_missing(pipeline.db(), pipeline.store()).await;
+    embed_poll::self_heal_if_lance_missing(pipeline.embedding_resetter(), pipeline.store()).await;
 
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -162,15 +163,16 @@ pub async fn run(
                 let brain_infos = vec![recurring_jobs::BrainInfo {
                     brain_id: String::new(),
                 }];
-                if let Err(e) = recurring_jobs::reconcile_recurring_jobs(pipeline.db(), &brain_infos) {
+                if let Err(e) = recurring_jobs::reconcile_recurring_jobs(pipeline.job_queue(), &brain_infos) {
                     tracing::warn!(error = %e, "reconcile_recurring_jobs failed");
                 }
 
-                if let Err(e) = job_worker::reap_stuck_jobs_filtered(pipeline.db(), &active_jobs) {
+                if let Err(e) = job_worker::reap_stuck_jobs_filtered(pipeline.job_queue(), &active_jobs) {
                     tracing::warn!(error = %e, "reap_stuck_jobs failed");
                 }
+                let pipeline_db = pipeline.clone_db();
                 let n = job_worker::process_jobs(
-                    pipeline.db(),
+                    &pipeline_db,
                     pipeline.store(),
                     pipeline.embedder(),
                     &active_jobs,
@@ -180,7 +182,7 @@ pub async fn run(
                     info!(processed = n, "jobs dispatched");
                 }
                 let protected = recurring_jobs::protected_kinds();
-                if let Err(e) = pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
+                if let Err(e) = pipeline.gc_completed_jobs(7 * 86400, &protected) {
                     tracing::warn!(error = %e, "gc_completed_jobs failed");
                 }
             }
@@ -195,9 +197,7 @@ pub async fn run(
             _ = sigusr1.recv() => {
                 let mut snapshot = pipeline.metrics().snapshot();
                 // Enrich with stuck-file count via brain_lib's Db wrapper
-                let stuck_files = pipeline.db()
-                    .with_read_conn(brain_persistence::db::files::find_stuck_files)
-                    .unwrap_or_default();
+                let stuck_files = pipeline.find_stuck_files().unwrap_or_default();
                 snapshot.dual_store_stuck_files = stuck_files.len() as u64;
                 eprintln!("{}", serde_json::to_string_pretty(&snapshot).unwrap_or_default());
             }
@@ -257,7 +257,7 @@ pub async fn run(
     if !force_shutdown {
         // Phase 3: SQLite WAL checkpoint.
         info!("shutdown phase 3/5: checkpointing SQLite WAL");
-        if let Err(e) = pipeline.db().wal_checkpoint() {
+        if let Err(e) = pipeline.wal_checkpoint() {
             tracing::warn!(error = %e, "WAL checkpoint failed");
         }
 
@@ -513,8 +513,11 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     // Startup self-heal: reset embedded_at if LanceDB is missing.
     for instance in brains.values() {
-        embed_poll::self_heal_if_lance_missing(instance.pipeline.db(), instance.pipeline.store())
-            .await;
+        embed_poll::self_heal_if_lance_missing(
+            instance.pipeline.embedding_resetter(),
+            instance.pipeline.store(),
+        )
+        .await;
     }
 
     // ── 4. Build path-to-brain lookup (longest prefix first) ────────────
@@ -661,15 +664,16 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                     let brain_infos = vec![recurring_jobs::BrainInfo {
                         brain_id: instance.mcp_context.brain_id().to_string(),
                     }];
-                    if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.db(), &brain_infos) {
+                    if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.job_queue(), &brain_infos) {
                         tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
                     }
 
-                    if let Err(e) = job_worker::reap_stuck_jobs_filtered(instance.pipeline.db(), &active_jobs) {
+                    if let Err(e) = job_worker::reap_stuck_jobs_filtered(instance.pipeline.job_queue(), &active_jobs) {
                         tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
                     }
+                    let pipeline_db = instance.pipeline.clone_db();
                     let n = job_worker::process_jobs(
-                        instance.pipeline.db(),
+                        &pipeline_db,
                         instance.pipeline.store(),
                         instance.pipeline.embedder(),
                         &active_jobs,
@@ -679,7 +683,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                         info!(brain = %instance.name, processed = n, "jobs dispatched");
                     }
                     let protected = recurring_jobs::protected_kinds();
-                    if let Err(e) = instance.pipeline.db().gc_completed_jobs(7 * 86400, &protected) {
+                    if let Err(e) = instance.pipeline.gc_completed_jobs(7 * 86400, &protected) {
                         tracing::warn!(brain = %instance.name, error = %e, "gc_completed_jobs failed");
                     }
                 }
@@ -800,7 +804,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
         // Phase 4: SQLite WAL checkpoint for all brains
         info!("shutdown phase 4/5: checkpointing SQLite WAL");
         for instance in brains.values() {
-            if let Err(e) = instance.pipeline.db().wal_checkpoint() {
+            if let Err(e) = instance.pipeline.wal_checkpoint() {
                 warn!(brain = %instance.name, error = %e, "WAL checkpoint failed");
             }
         }
@@ -857,7 +861,9 @@ async fn init_brain_instance(
     // Resolve LLM provider: env vars first, then DB-backed credentials.
     let brain_home =
         brain_lib::config::brain_home().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    if let Some(provider) = brain_lib::llm::resolve_provider_with_db(pipeline.db(), &brain_home) {
+    if let Some(provider) =
+        brain_lib::llm::resolve_provider_with_db(pipeline.provider_store(), &brain_home)
+    {
         pipeline.set_summarizer(Arc::from(provider));
     }
 
@@ -876,7 +882,7 @@ async fn init_brain_instance(
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     let stores = brain_lib::stores::BrainStores::from_dbs(
-        pipeline.db().clone(),
+        pipeline.clone_db(),
         brain_id,
         &brain_data_dir,
         &brain_home_path,
