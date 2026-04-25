@@ -189,6 +189,10 @@ impl BrainStores {
         &self.db
     }
 
+    pub(crate) fn inner_db(&self) -> &Db {
+        &self.db
+    }
+
     // -----------------------------------------------------------------
     // Delegation methods — MCP handlers use these instead of .db()
     // -----------------------------------------------------------------

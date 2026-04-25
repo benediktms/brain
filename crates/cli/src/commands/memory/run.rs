@@ -565,28 +565,25 @@ pub async fn summarize_scope(
 
     let mut llm_pending = false;
 
+    let stores = &ctx.stores;
+
     let summary: DerivedSummary = if regenerate {
-        let generation =
-            generate_scope_summary_with_options(ctx.stores.db(), &st, scope_value, async_llm)?;
+        let generation = generate_scope_summary_with_options(stores, &st, scope_value, async_llm)?;
         llm_pending = generation.llm_pending;
-        get_scope_summary(ctx.stores.db(), &st, scope_value)?.ok_or_else(|| {
+        get_scope_summary(stores, &st, scope_value)?.ok_or_else(|| {
             anyhow::anyhow!(
                 "Generated summary '{}' not found after insert",
                 generation.id
             )
         })?
     } else {
-        match get_scope_summary(ctx.stores.db(), &st, scope_value)? {
+        match get_scope_summary(stores, &st, scope_value)? {
             Some(s) => s,
             None => {
-                let generation = generate_scope_summary_with_options(
-                    ctx.stores.db(),
-                    &st,
-                    scope_value,
-                    async_llm,
-                )?;
+                let generation =
+                    generate_scope_summary_with_options(stores, &st, scope_value, async_llm)?;
                 llm_pending = generation.llm_pending;
-                get_scope_summary(ctx.stores.db(), &st, scope_value)?.ok_or_else(|| {
+                get_scope_summary(stores, &st, scope_value)?.ok_or_else(|| {
                     anyhow::anyhow!(
                         "Generated summary '{}' not found after insert",
                         generation.id

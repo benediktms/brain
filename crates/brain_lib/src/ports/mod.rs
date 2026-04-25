@@ -1957,6 +1957,99 @@ impl JobQueue for Db {
     }
 }
 
+impl JobQueue for crate::stores::BrainStores {
+    fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>> {
+        JobQueue::claim_ready_jobs(self.inner_db(), limit)
+    }
+    fn advance_to_in_progress(&self, job_id: &str) -> Result<()> {
+        JobQueue::advance_to_in_progress(self.inner_db(), job_id)
+    }
+    fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()> {
+        JobQueue::complete_job(self.inner_db(), job_id, result)
+    }
+    fn fail_job(&self, job_id: &str, error_msg: &str) -> Result<()> {
+        JobQueue::fail_job(self.inner_db(), job_id, error_msg)
+    }
+    fn reap_stuck_jobs(&self) -> Result<usize> {
+        JobQueue::reap_stuck_jobs(self.inner_db())
+    }
+    fn enqueue_job(&self, input: &EnqueueJobInput) -> Result<String> {
+        JobQueue::enqueue_job(self.inner_db(), input)
+    }
+    fn gc_completed_jobs(&self, age_secs: i64, protected_kinds: &[&str]) -> Result<usize> {
+        JobQueue::gc_completed_jobs(self.inner_db(), age_secs, protected_kinds)
+    }
+    fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64> {
+        JobQueue::count_jobs_by_status(self.inner_db(), status)
+    }
+    fn list_jobs_by_status(&self, status: &JobStatus, limit: i32) -> Result<Vec<Job>> {
+        JobQueue::list_jobs_by_status(self.inner_db(), status, limit)
+    }
+    fn list_stuck_jobs(&self) -> Result<Vec<Job>> {
+        JobQueue::list_stuck_jobs(self.inner_db())
+    }
+    fn retry_failed_job(&self, job_id: &str) -> Result<bool> {
+        JobQueue::retry_failed_job(self.inner_db(), job_id)
+    }
+    fn get_job_by_kind(&self, kind: &str) -> Result<Option<Job>> {
+        JobQueue::get_job_by_kind(self.inner_db(), kind)
+    }
+    fn get_job(&self, job_id: &str) -> Result<Option<Job>> {
+        JobQueue::get_job(self.inner_db(), job_id)
+    }
+    fn update_job_status(&self, job_id: &str, status: &JobStatus) -> Result<bool> {
+        JobQueue::update_job_status(self.inner_db(), job_id, status)
+    }
+    fn ensure_singleton_job(&self, input: &EnqueueJobInput) -> Result<Option<String>> {
+        JobQueue::ensure_singleton_job(self.inner_db(), input)
+    }
+    fn reschedule_terminal_job(&self, kind: &str, brain_id: Option<&str>) -> Result<bool> {
+        JobQueue::reschedule_terminal_job(self.inner_db(), kind, brain_id)
+    }
+    fn enqueue_dedup_job(&self, input: &EnqueueJobInput) -> Result<(String, bool)> {
+        JobQueue::enqueue_dedup_job(self.inner_db(), input)
+    }
+    fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()> {
+        JobQueue::reconcile_singleton_job(self.inner_db(), input)
+    }
+    fn reconcile_singleton_job_with_delay(
+        &self,
+        input: &EnqueueJobInput,
+        delay_secs: i64,
+    ) -> Result<()> {
+        JobQueue::reconcile_singleton_job_with_delay(self.inner_db(), input, delay_secs)
+    }
+    fn has_active_lod_job(&self, object_uri: &str) -> Result<bool> {
+        JobQueue::has_active_lod_job(self.inner_db(), object_uri)
+    }
+}
+
+impl DerivedSummaryStore for crate::stores::BrainStores {
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<GeneratedScopeSummary> {
+        DerivedSummaryStore::generate_scope_summary(self.inner_db(), scope_type, scope_value)
+    }
+    fn get_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<Option<DerivedSummary>> {
+        DerivedSummaryStore::get_scope_summary(self.inner_db(), scope_type, scope_value)
+    }
+    fn mark_scope_stale(&self, scope_type: &ScopeType, scope_value: &str) -> Result<usize> {
+        DerivedSummaryStore::mark_scope_stale(self.inner_db(), scope_type, scope_value)
+    }
+    fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>> {
+        DerivedSummaryStore::search_derived_summaries(self.inner_db(), query, limit)
+    }
+    fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>> {
+        DerivedSummaryStore::list_stale_summaries(self.inner_db(), limit)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Provider store — used by llm::resolve_provider and CLI
 // ---------------------------------------------------------------------------

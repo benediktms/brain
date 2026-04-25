@@ -102,14 +102,14 @@ impl McpTool for MemSummarizeScope {
                 }
             };
 
-            let db = ctx.stores.db();
+            let stores = &ctx.stores;
 
             let mut llm_pending = false;
 
             if params.regenerate {
                 // Force-generate a fresh summary.
                 match generate_scope_summary_with_options(
-                    db,
+                    stores,
                     &scope_type,
                     &params.scope_value,
                     params.async_llm,
@@ -122,12 +122,12 @@ impl McpTool for MemSummarizeScope {
             }
 
             // Retrieve the (possibly just-generated) summary.
-            match get_scope_summary(db, &scope_type, &params.scope_value) {
+            match get_scope_summary(stores, &scope_type, &params.scope_value) {
                 Err(e) => ToolCallResult::error(format!("Failed to retrieve summary: {e}")),
                 Ok(None) => {
                     // No existing summary — generate one now.
                     match generate_scope_summary_with_options(
-                        db,
+                        stores,
                         &scope_type,
                         &params.scope_value,
                         params.async_llm,
@@ -135,7 +135,7 @@ impl McpTool for MemSummarizeScope {
                         Err(e) => ToolCallResult::error(format!("Failed to generate summary: {e}")),
                         Ok(generation) => {
                             llm_pending = generation.llm_pending;
-                            match get_scope_summary(db, &scope_type, &params.scope_value) {
+                            match get_scope_summary(stores, &scope_type, &params.scope_value) {
                                 Err(e) => ToolCallResult::error(format!(
                                     "Failed to retrieve summary after generation: {e}"
                                 )),
