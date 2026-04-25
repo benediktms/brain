@@ -198,12 +198,14 @@ impl McpContext {
         Ok((store, store_reader, embedder))
     }
 
-    /// Resolve a brain name or ID to a `(brain_name, brain_id)` pair via the DB.
+    /// Resolve a brain name or ID to a `(brain_id, brain_name)` pair via the DB.
+    ///
+    /// Tuple shape matches `BrainStores::resolve_brain` and the underlying
+    /// `Db::resolve_brain` (id first, then name).
     pub fn resolve_brain_id(&self, name_or_id: &str) -> crate::error::Result<(String, String)> {
-        let (id, name) = self.stores.resolve_brain(name_or_id).map_err(|e| {
+        self.stores.resolve_brain(name_or_id).map_err(|e| {
             crate::error::BrainCoreError::Config(format!("brain resolution failed: {e}"))
-        })?;
-        Ok((name, id))
+        })
     }
 
     /// Clone this context with a different brain_id.
@@ -538,7 +540,7 @@ async fn handle_request(
                     let session = session_brain_name.read().await.clone();
                     if session != ctx.brain_name() {
                         match ctx.resolve_brain_id(&session) {
-                            Ok((name, bid)) => match ctx.with_brain_id(&bid, &name) {
+                            Ok((bid, name)) => match ctx.with_brain_id(&bid, &name) {
                                 Ok(scoped_ctx) => {
                                     debug!(
                                         session_brain = %name,

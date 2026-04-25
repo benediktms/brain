@@ -463,6 +463,7 @@ pub fn update_job_status(conn: &Connection, job_id: &str, status: &JobStatus) ->
     )?;
     Ok(rows > 0)
 }
+
 /// Get a job by its `kind` column. Prefers active (non-terminal) jobs;
 /// falls back to the most recently updated row.
 pub fn get_job_by_kind(conn: &Connection, kind: &str) -> Result<Option<Job>> {

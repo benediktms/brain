@@ -41,7 +41,7 @@ impl RecordSaveSnapshot {
 
         // Resolve target brain (local or remote)
         let records = if let Some(ref brain_param) = params.brain {
-            let (brain_name, bid) = match ctx.resolve_brain_id(brain_param) {
+            let (bid, brain_name) = match ctx.resolve_brain_id(brain_param) {
                 Ok(r) => r,
                 Err(e) => return ToolCallResult::error(format!("Failed to resolve brain: {e}")),
             };
@@ -186,7 +186,7 @@ impl RecordSaveSnapshot {
 
         // If remote brain, include brain info in response
         if let Some(ref brain_param) = params.brain
-            && let Ok((brain_name, bid)) = ctx.resolve_brain_id(brain_param)
+            && let Ok((bid, brain_name)) = ctx.resolve_brain_id(brain_param)
         {
             result["brain_name"] = json!(brain_name);
             result["brain_id"] = json!(bid);

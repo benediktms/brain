@@ -147,7 +147,7 @@ impl TaskCreate {
 
         // Cross-brain path
         if let Some(ref brain) = params.brain {
-            let (remote_brain_name, bid) = match ctx.resolve_brain_id(brain) {
+            let (bid, remote_brain_name) = match ctx.resolve_brain_id(brain) {
                 Ok(r) => r,
                 Err(e) => {
                     return ToolCallResult::error(format!("Failed to resolve brain: {e}"));

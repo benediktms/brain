@@ -219,9 +219,21 @@ where
         &self.db
     }
 
-    /// Clone the underlying `Db` handle. Used for spawning tasks that need
-    /// owned access to the database (e.g. `process_jobs`).
-    pub fn clone_db(&self) -> Db {
+    /// Clone the underlying `Db` handle for use in contexts that need an
+    /// owned `Db` value rather than a borrow.
+    ///
+    /// Two legitimate use cases today:
+    ///
+    /// 1. `process_jobs` — spawns futures that take ownership of a `Db` clone
+    ///    (the spawned `tokio::task` outlives the `&self` borrow).
+    /// 2. Daemon startup — building a sibling [`crate::stores::BrainStores`]
+    ///    that shares the same unified `~/.brain/brain.db` as this pipeline.
+    ///
+    /// Prefer the inherent delegation methods (`wal_checkpoint`,
+    /// `gc_completed_jobs`, …) or the trait-object accessors
+    /// (`job_queue`, `provider_store`, `embedding_resetter`) for everything
+    /// else — those keep the concrete `Db` type out of caller code.
+    pub fn clone_db_for_spawn(&self) -> Db {
         self.db.clone()
     }
 

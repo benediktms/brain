@@ -205,7 +205,7 @@ pub fn is_brain_archived(conn: &Connection, brain_id: &str) -> Result<bool> {
             |row| row.get(0),
         )
         .optional()?;
-    Ok(archived.unwrap_or(0) == 1)
+    Ok(archived.unwrap_or(0) != 0)
 }
 
 /// List all brain rows, optionally filtered.

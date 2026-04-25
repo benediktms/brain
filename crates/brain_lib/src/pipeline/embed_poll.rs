@@ -476,12 +476,19 @@ pub fn upsert_domain_lod_l0(
     }
 }
 
-pub async fn poll_stale_summaries(
-    db: &Db,
+pub async fn poll_stale_summaries<D>(
+    db: &D,
     store: &impl crate::ports::SummaryStoreWriter,
     embedder: &Arc<dyn Embed>,
     brain_id: &str,
-) -> usize {
+) -> usize
+where
+    D: crate::ports::EmbeddingOps
+        + crate::lod::LodChunkStore
+        + crate::ports::JobQueue
+        + Send
+        + Sync,
+{
     debug!("embed_poll: scanning stale summaries");
 
     let rows: Vec<SummaryPollRow> = match db.find_stale_summaries_for_embedding(brain_id) {

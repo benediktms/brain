@@ -170,7 +170,7 @@ pub async fn run(
                 if let Err(e) = job_worker::reap_stuck_jobs_filtered(pipeline.job_queue(), &active_jobs) {
                     tracing::warn!(error = %e, "reap_stuck_jobs failed");
                 }
-                let pipeline_db = pipeline.clone_db();
+                let pipeline_db = pipeline.clone_db_for_spawn();
                 let n = job_worker::process_jobs(
                     &pipeline_db,
                     pipeline.store(),
@@ -388,6 +388,9 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     // Self-heal: reset embedded_at if LanceDB is empty so EmbedPollSweep
     // will re-embed everything.
+    //
+    // Uses `&shared_db` directly because per-brain `IndexPipeline`s aren't
+    // constructed yet (step 3 below).
     embed_poll::self_heal_if_lance_missing(&shared_db, &shared_store).await;
 
     // ── 3. Initialise per-brain pipelines ────────────────────────────────
@@ -431,12 +434,6 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // prefixes (e.g. set via `brain config set prefix`) are preserved via
     // COALESCE — generate_prefix() is only used as fallback for new brains.
     {
-        let _shared_ctx = &brains
-            .values()
-            .next()
-            .expect("at least one brain")
-            .mcp_context;
-
         // Read existing prefixes from DB to preserve manual overrides.
         let existing_prefixes: std::collections::HashMap<String, String> = shared_db
             .list_brains(false)
@@ -671,7 +668,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
                     if let Err(e) = job_worker::reap_stuck_jobs_filtered(instance.pipeline.job_queue(), &active_jobs) {
                         tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
                     }
-                    let pipeline_db = instance.pipeline.clone_db();
+                    let pipeline_db = instance.pipeline.clone_db_for_spawn();
                     let n = job_worker::process_jobs(
                         &pipeline_db,
                         instance.pipeline.store(),
@@ -882,7 +879,7 @@ async fn init_brain_instance(
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     let stores = brain_lib::stores::BrainStores::from_dbs(
-        pipeline.clone_db(),
+        pipeline.clone_db_for_spawn(),
         brain_id,
         &brain_data_dir,
         &brain_home_path,

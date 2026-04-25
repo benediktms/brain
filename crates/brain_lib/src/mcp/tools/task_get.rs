@@ -79,7 +79,7 @@ impl TaskGet {
         // Cross-brain path: try each specified brain in order
         if let Some(ref brain_names) = params.brains {
             for brain_ref in brain_names {
-                let (remote_brain_name, bid) = match ctx.resolve_brain_id(brain_ref) {
+                let (bid, remote_brain_name) = match ctx.resolve_brain_id(brain_ref) {
                     Ok(r) => r,
                     Err(e) => {
                         return ToolCallResult::error(format!(

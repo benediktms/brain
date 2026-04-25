@@ -42,7 +42,7 @@ impl RecordList {
 
         let remote_brain: Option<(String, crate::records::RecordStore)> =
             if let Some(ref brain) = params.brain {
-                let (brain_name, bid) = match ctx.resolve_brain_id(brain) {
+                let (bid, brain_name) = match ctx.resolve_brain_id(brain) {
                     Ok(r) => r,
                     Err(e) => {
                         return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
