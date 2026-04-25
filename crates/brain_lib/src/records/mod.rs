@@ -396,9 +396,28 @@ impl RecordStore {
         })
     }
 
-    /// Access the underlying database handle.
-    pub fn db(&self) -> &Db {
+    /// Test-only accessor for the underlying `Db` handle. Production code
+    /// must use the inherent delegation methods on `RecordStore` (or call
+    /// methods through port traits implemented on `Db`).
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn db_for_tests(&self) -> &Db {
         &self.db
+    }
+
+    /// Resolve a brain by name, brain_id, alias, or root path.
+    pub fn resolve_brain(&self, input: &str) -> Result<(String, String)> {
+        self.db.resolve_brain(input)
+    }
+
+    /// Check whether a brain has been archived.
+    pub fn is_brain_archived(&self, brain_id: &str) -> Result<bool> {
+        self.db.is_brain_archived(brain_id)
+    }
+
+    /// Construct a `RecordStore` scoped to a different brain on the same
+    /// underlying database. Used for cross-brain writes from CLI/MCP.
+    pub fn with_remote_brain_id(&self, brain_id: &str, brain_name: &str) -> Result<Self> {
+        Self::with_brain_id(self.db.clone(), brain_id, brain_name)
     }
 
     /// Import events from a JSONL file into the unified SQLite database.

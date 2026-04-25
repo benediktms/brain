@@ -1098,7 +1098,7 @@ fn test_record_store_apply_multiple_events() {
 
     // Verify projected state via DB
     let total: i64 = store
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
                 .map_err(Into::into)
@@ -1107,7 +1107,7 @@ fn test_record_store_apply_multiple_events() {
     assert_eq!(total, 2);
 
     let tag_count: i64 = store
-        .db()
+        .db_for_tests()
         .with_read_conn(|conn| {
             conn.query_row(
                 "SELECT COUNT(*) FROM record_tags WHERE record_id = ?1",

@@ -105,26 +105,14 @@ pub(super) fn priority_label(p: i32) -> &'static str {
 pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
     if let Some(ref brain) = params.brain {
         // Cross-brain task creation: resolve target brain and write into its scope.
-        let db = ctx.store.db();
-        let (bid, bname) = db.resolve_brain(brain)?;
+        let (bid, bname) = ctx.store.resolve_brain(brain)?;
 
         // Guard: reject writes to archived brains.
-        let archived = db.with_read_conn(|conn| {
-            let mut stmt =
-                conn.prepare_cached("SELECT archived FROM brains WHERE brain_id = ?1")?;
-            let mut rows = stmt.query([bid.as_str()])?;
-            if let Some(row) = rows.next()? {
-                let v: i64 = row.get(0)?;
-                Ok(v == 1)
-            } else {
-                Ok(false)
-            }
-        })?;
-        if archived {
+        if ctx.store.is_brain_archived(&bid)? {
             bail!("target brain '{bname}' is archived");
         }
 
-        let remote_store = TaskStore::with_brain_id(db.clone(), &bid, &bname)?;
+        let remote_store = ctx.store.with_remote_brain_id(&bid, &bname)?;
         let prefix = remote_store.get_project_prefix()?;
         let task_id = events::new_task_id(&prefix);
 

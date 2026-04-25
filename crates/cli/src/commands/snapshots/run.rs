@@ -98,29 +98,13 @@ pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
 
     let remote_brain_info: Option<(String, String)>;
     let remote_records = if let Some(ref brain) = params.brain {
-        let db = ctx.record_store.db();
-        let (bid, bname) = db.resolve_brain(brain)?;
+        let (bid, bname) = ctx.record_store.resolve_brain(brain)?;
         // Guard: reject writes to archived brains
-        let archived = db.with_read_conn(|conn| {
-            let mut stmt =
-                conn.prepare_cached("SELECT archived FROM brains WHERE brain_id = ?1")?;
-            let mut rows = stmt.query([bid.as_str()])?;
-            if let Some(row) = rows.next()? {
-                let v: i64 = row.get(0)?;
-                Ok(v != 0)
-            } else {
-                Ok(false)
-            }
-        })?;
-        if archived {
+        if ctx.record_store.is_brain_archived(&bid)? {
             bail!("Target brain '{bname}' is archived");
         }
         remote_brain_info = Some((bname.clone(), bid.clone()));
-        Some(brain_lib::records::RecordStore::with_brain_id(
-            db.clone(),
-            &bid,
-            &bname,
-        )?)
+        Some(ctx.record_store.with_remote_brain_id(&bid, &bname)?)
     } else {
         remote_brain_info = None;
         None
