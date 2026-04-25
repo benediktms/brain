@@ -200,7 +200,7 @@ impl McpContext {
 
     /// Resolve a brain name or ID to a `(brain_name, brain_id)` pair via the DB.
     pub fn resolve_brain_id(&self, name_or_id: &str) -> crate::error::Result<(String, String)> {
-        let (id, name) = self.stores.db().resolve_brain(name_or_id).map_err(|e| {
+        let (id, name) = self.stores.resolve_brain(name_or_id).map_err(|e| {
             crate::error::BrainCoreError::Config(format!("brain resolution failed: {e}"))
         })?;
         Ok((name, id))
@@ -399,7 +399,7 @@ async fn handle_request(
                 } => session_brain_name,
             };
             if let Some(roots) = req.params.get("roots")
-                && let Some(resolved) = resolve_brain_from_roots(roots, ctx.stores.db())
+                && let Some(resolved) = resolve_brain_from_roots(roots, &ctx.stores)
             {
                 info!(brain = %resolved, "session brain resolved from initialize roots");
                 *session_brain_name.write().await = resolved;

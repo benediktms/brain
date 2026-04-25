@@ -108,7 +108,7 @@ async fn handle_uri_mode(
     let (brain_id, brain_name) = if uri.brain == "_" {
         (ctx.brain_id().to_string(), ctx.brain_name().to_string())
     } else {
-        match db.resolve_brain(&uri.brain) {
+        match ctx.stores.resolve_brain(&uri.brain) {
             Ok((id, name)) => (id, name),
             Err(e) => {
                 return ToolCallResult::error(format!("Unknown brain {:?}: {e}", uri.brain));
@@ -457,7 +457,8 @@ impl McpTool for MemRetrieve {
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .filter_map(|name| {
-                        db.resolve_brain(name)
+                        ctx.stores
+                            .resolve_brain(name)
                             .ok()
                             .map(|(id, _)| (name.clone(), id))
                     })

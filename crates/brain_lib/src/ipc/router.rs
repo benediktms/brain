@@ -45,7 +45,7 @@ impl BrainRouter {
         let (brain_id, brain_name) = match brain.filter(|s| !s.is_empty()) {
             Some(input) => {
                 // DB lookup via resolve_brain (name, id, alias, or root path)
-                match self.ctx.stores.db().resolve_brain(input) {
+                match self.ctx.stores.resolve_brain(input) {
                     Ok(pair) => pair,
                     Err(_) => {
                         return ToolCallResult::error(format!("Brain not found: {input}"));
@@ -54,7 +54,7 @@ impl BrainRouter {
             }
             None => {
                 // Default brain — resolve by ID
-                match self.ctx.stores.db().resolve_brain(&self.default_brain_id) {
+                match self.ctx.stores.resolve_brain(&self.default_brain_id) {
                     Ok(pair) => pair,
                     Err(_) => (self.default_brain_id.clone(), String::new()),
                 }

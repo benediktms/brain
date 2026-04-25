@@ -977,6 +977,23 @@ impl BrainRegistry for Db {
     }
 }
 
+impl BrainRegistry for crate::stores::BrainStores {
+    fn is_brain_archived(&self, brain_id: &str) -> Result<bool> {
+        crate::stores::BrainStores::is_brain_archived(self, brain_id)
+    }
+
+    fn list_brains(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<brain_persistence::db::schema::BrainRow>> {
+        crate::stores::BrainStores::list_brains(self, active_only)
+    }
+
+    fn list_brain_keys(&self) -> Result<Vec<(String, String)>> {
+        crate::stores::BrainStores::list_brain_keys(self)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SQLite status queries — used by MCP status tool
 // ---------------------------------------------------------------------------

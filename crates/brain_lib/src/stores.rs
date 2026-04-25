@@ -216,6 +216,13 @@ impl BrainStores {
         BrainRegistry::list_brain_keys(&self.db)
     }
 
+    /// Resolve a brain by name, brain_id, alias, or root path.
+    ///
+    /// Returns `(brain_id, name)`. Resolution order: name → id → alias → root path.
+    pub fn resolve_brain(&self, input: &str) -> Result<(String, String)> {
+        self.db.resolve_brain(input)
+    }
+
     // -- EpisodeWriter / EpisodeReader --
 
     /// Store an episode. Returns the `summary_id`.
