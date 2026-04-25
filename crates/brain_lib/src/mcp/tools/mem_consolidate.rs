@@ -106,7 +106,7 @@ impl McpTool for MemConsolidate {
             let result = consolidate_episodes(episodes, params.gap_seconds);
             let jobs_enqueued = if params.auto_summarize {
                 match enqueue_cluster_summarization(
-                    ctx.stores.db(),
+                    &ctx.stores,
                     &result.clusters,
                     effective_brain_id,
                 ) {
