@@ -1705,6 +1705,50 @@ impl LodChunkStore for Db {
     }
 }
 
+impl LodChunkStore for crate::stores::BrainStores {
+    fn upsert_lod_chunk(&self, input: &UpsertLodChunk<'_>) -> Result<String> {
+        LodChunkStore::upsert_lod_chunk(self.inner_db(), input)
+    }
+    fn get_lod_chunk(&self, object_uri: &str, lod_level: LodLevel) -> Result<Option<LodChunk>> {
+        LodChunkStore::get_lod_chunk(self.inner_db(), object_uri, lod_level)
+    }
+    fn get_lod_chunks_for_uri(&self, object_uri: &str) -> Result<Vec<LodChunk>> {
+        LodChunkStore::get_lod_chunks_for_uri(self.inner_db(), object_uri)
+    }
+    fn delete_lod_chunks_for_uri(&self, object_uri: &str) -> Result<usize> {
+        LodChunkStore::delete_lod_chunks_for_uri(self.inner_db(), object_uri)
+    }
+    fn delete_expired_lod_chunks(&self, now_iso: &str) -> Result<usize> {
+        LodChunkStore::delete_expired_lod_chunks(self.inner_db(), now_iso)
+    }
+    fn is_lod_fresh(
+        &self,
+        object_uri: &str,
+        lod_level: LodLevel,
+        current_source_hash: &str,
+    ) -> Result<bool> {
+        LodChunkStore::is_lod_fresh(self.inner_db(), object_uri, lod_level, current_source_hash)
+    }
+    fn is_l1_fresh(&self, object_uri: &str, current_source_hash: &str) -> Result<bool> {
+        LodChunkStore::is_l1_fresh(self.inner_db(), object_uri, current_source_hash)
+    }
+    fn count_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        lod_level: Option<LodLevel>,
+    ) -> Result<usize> {
+        LodChunkStore::count_lod_chunks_by_brain(self.inner_db(), brain_id, lod_level)
+    }
+    fn list_lod_chunks_by_brain(
+        &self,
+        brain_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<LodChunk>> {
+        LodChunkStore::list_lod_chunks_by_brain(self.inner_db(), brain_id, limit, offset)
+    }
+}
+
 fn row_to_lod_chunk(row: brain_persistence::db::lod_chunks::LodChunkRow) -> Result<LodChunk> {
     let lod_level = LodLevel::parse(&row.lod_level).ok_or_else(|| {
         BrainCoreError::Database(format!(

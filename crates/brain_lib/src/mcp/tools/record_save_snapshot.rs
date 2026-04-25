@@ -168,7 +168,7 @@ impl RecordSaveSnapshot {
             );
         }
         upsert_domain_lod_l0(
-            ctx.stores.db(),
+            &ctx.stores,
             &record_file_id,
             &abstract_text,
             ctx.brain_id(),

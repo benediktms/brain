@@ -19,7 +19,6 @@ use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
 use brain_persistence::db::chunks::ChunkPollRow;
-use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::db::summaries::SummaryPollRow;
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
@@ -440,7 +439,7 @@ pub async fn poll_stale_records(
 /// Uses the chunk_id format (`{file_id}:0`) for the URI to match the lookup
 /// path in `lod_resolver::build_object_uri`.
 pub fn upsert_domain_lod_l0(
-    db: &Db,
+    store: &dyn crate::lod::LodChunkStore,
     file_id: &str,
     capsule_text: &str,
     brain_id: &str,
@@ -456,25 +455,17 @@ pub fn upsert_domain_lod_l0(
     };
     let source_hash = crate::utils::content_hash(capsule_text);
     let token_est = estimate_tokens(capsule_text) as i64;
-    let now = chrono::Utc::now().to_rfc3339();
-    if let Err(e) = db.with_write_conn(|conn| {
-        lod_chunks::upsert_lod_chunk(
-            conn,
-            &InsertLodChunk {
-                id: &ulid::Ulid::new().to_string(),
-                object_uri: &lod_uri,
-                brain_id,
-                lod_level: "L0",
-                content: capsule_text,
-                token_est: Some(token_est),
-                method: "extractive",
-                model_id: None,
-                source_hash: &source_hash,
-                created_at: &now,
-                expires_at: None,
-                job_id: None,
-            },
-        )
+    if let Err(e) = store.upsert_lod_chunk(&crate::lod::UpsertLodChunk {
+        object_uri: &lod_uri,
+        brain_id,
+        lod_level: crate::lod::LodLevel::L0,
+        content: capsule_text,
+        token_est: Some(token_est),
+        method: crate::lod::LodMethod::Extractive,
+        model_id: None,
+        source_hash: &source_hash,
+        expires_at: None,
+        job_id: None,
     }) {
         warn!(
             file_id = %file_id,
