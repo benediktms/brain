@@ -692,7 +692,7 @@ mod tests {
         let tools = parsed["result"]["tools"]
             .as_array()
             .expect("checked in test assertions");
-        assert_eq!(tools.len(), 31);
+        assert_eq!(tools.len(), 33);
 
         let names: Vec<&str> = tools
             .iter()

@@ -80,10 +80,9 @@ pub async fn seed_test_task(ctx: &TestHarnessContext) -> String {
 pub async fn seed_test_record(ctx: &TestHarnessContext) -> String {
     let result = call_tool(
         ctx,
-        "records.create_artifact",
+        "records.create_document",
         json!({
             "title": "seed test record",
-            "kind": "document",
             "text": "seed payload"
         }),
     )
@@ -92,7 +91,7 @@ pub async fn seed_test_record(ctx: &TestHarnessContext) -> String {
     let parsed = parse_tool_json(&result);
     parsed["record_id"]
         .as_str()
-        .expect("records.create_artifact should return record_id")
+        .expect("records.create_document should return record_id")
         .to_string()
 }
 

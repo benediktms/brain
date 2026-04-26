@@ -4,7 +4,7 @@
 //!
 //! 1. Output: `tasks.create` response includes a `uri` field of the form
 //!    `synapse://<brain>/task/<id>`.
-//! 2. Output: `records.create_artifact` response includes a `uri` field of
+//! 2. Output: `records.create_document` response includes a `uri` field of
 //!    the form `synapse://<brain>/record/<id>`.
 //! 3. Input: `tasks.get` accepts a `synapse://` URI as `task_id` and resolves
 //!    the correct task.
@@ -73,19 +73,18 @@ async fn test_tasks_create_returns_uri_field() {
     );
 }
 
-/// `records.create_artifact` must include a `uri` field shaped
+/// `records.create_document` must include a `uri` field shaped
 /// `synapse://<brain>/record/<id>`.
 #[tokio::test]
-async fn test_records_create_artifact_returns_uri_field() {
+async fn test_records_create_document_returns_uri_field() {
     let (_tmp, ctx) = make_ctx().await;
     let registry = ToolRegistry::new();
 
     let result = registry
         .dispatch(
-            "records.create_artifact",
+            "records.create_document",
             json!({
-                "title": "URI test artifact",
-                "kind": "document",
+                "title": "URI test document",
                 "text": "probe data"
             }),
             &ctx,
@@ -96,7 +95,7 @@ async fn test_records_create_artifact_returns_uri_field() {
 
     assert!(
         parsed["uri"].is_string(),
-        "expected `uri` string field in records.create_artifact response, got: {parsed}"
+        "expected `uri` string field in records.create_document response, got: {parsed}"
     );
 
     let uri = parsed["uri"].as_str().unwrap();
@@ -156,10 +155,9 @@ async fn test_records_get_accepts_brain_uri_as_record_id() {
     // Create a record first.
     let create_result = registry
         .dispatch(
-            "records.create_artifact",
+            "records.create_document",
             json!({
                 "title": "URI input record",
-                "kind": "document",
                 "text": "assimilation data"
             }),
             &ctx,

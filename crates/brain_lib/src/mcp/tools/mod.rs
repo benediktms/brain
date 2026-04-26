@@ -12,7 +12,6 @@ mod mem_write_episode;
 mod mem_write_procedure;
 mod record_archive;
 mod record_create_analysis;
-mod record_create_artifact;
 mod record_create_document;
 mod record_create_plan;
 mod record_fetch_content;
@@ -108,7 +107,9 @@ impl ToolRegistry {
                 Box::new(task_list::TaskList),
                 Box::new(task_next::TaskNext),
                 Box::new(status::Status),
-                Box::new(record_create_artifact::RecordCreateArtifact),
+                Box::new(record_create_document::RecordCreateDocument),
+                Box::new(record_create_analysis::RecordCreateAnalysis),
+                Box::new(record_create_plan::RecordCreatePlan),
                 Box::new(record_save_snapshot::RecordSaveSnapshot),
                 Box::new(record_get::RecordGet),
                 Box::new(record_list::RecordList),
@@ -152,7 +153,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 31);
+        assert_eq!(defs.len(), 33);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
@@ -164,6 +165,10 @@ pub(crate) mod tests {
         assert!(names.contains(&"tasks.get"));
         assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));
+        assert!(names.contains(&"records.create_document"));
+        assert!(names.contains(&"records.create_analysis"));
+        assert!(names.contains(&"records.create_plan"));
+        assert!(!names.contains(&"records.create_artifact"));
         assert!(!names.contains(&"tasks.create_remote"));
 
         // All should have valid JSON schemas

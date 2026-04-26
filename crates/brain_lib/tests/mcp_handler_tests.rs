@@ -346,16 +346,15 @@ async fn mcp_handler_task_get_returns_expected_fields_by_id() {
 }
 
 #[tokio::test]
-async fn mcp_handler_record_create_artifact_and_retrieve() {
+async fn mcp_handler_record_create_document_and_retrieve() {
     let ctx = make_test_context().await;
 
     let create = call_tool(
         &ctx,
-        "records.create_artifact",
+        "records.create_document",
         json!({
-            "title": "handler artifact",
-            "kind": "document",
-            "text": "artifact payload from handler test",
+            "title": "handler document",
+            "text": "document payload from handler test",
             "tags": ["mcp", "artifact-test"]
         }),
     )
@@ -365,7 +364,7 @@ async fn mcp_handler_record_create_artifact_and_retrieve() {
 
     let fetched = call_tool(&ctx, "records.get", json!({ "record_id": record_id })).await;
     let fetched_json = success_json(&fetched);
-    assert_eq!(fetched_json["title"], "handler artifact");
+    assert_eq!(fetched_json["title"], "handler document");
     assert_eq!(fetched_json["kind"], "document");
 
     let content = call_tool(
@@ -376,7 +375,7 @@ async fn mcp_handler_record_create_artifact_and_retrieve() {
     .await;
     let content_json = success_json(&content);
     assert_eq!(content_json["encoding"], "utf-8");
-    assert_eq!(content_json["text"], "artifact payload from handler test");
+    assert_eq!(content_json["text"], "document payload from handler test");
 }
 
 #[tokio::test]
