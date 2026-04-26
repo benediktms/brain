@@ -642,6 +642,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Documents { .. } => anyhow::bail!("documents subcommands are not implemented yet"),
+        Command::Analyses { .. } => anyhow::bail!("analyses subcommands are not implemented yet"),
+        Command::Plans { .. } => anyhow::bail!("plans subcommands are not implemented yet"),
         Command::Migrate {
             yes,
             cleanup,

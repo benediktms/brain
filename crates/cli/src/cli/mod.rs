@@ -1,6 +1,9 @@
+mod analyses;
 mod artifacts;
+mod documents;
 mod jobs;
 mod memory;
+mod plans;
 mod record_common;
 mod records;
 mod snapshots;
@@ -10,9 +13,12 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 
+pub(crate) use analyses::*;
 pub(crate) use artifacts::*;
+pub(crate) use documents::*;
 pub(crate) use jobs::*;
 pub(crate) use memory::*;
+pub(crate) use plans::*;
 pub(crate) use record_common::*;
 pub(crate) use records::*;
 pub(crate) use snapshots::*;
@@ -410,6 +416,36 @@ pub(crate) enum Command {
 
         #[command(subcommand)]
         action: ArtifactsAction,
+    },
+
+    /// Manage documents
+    Documents {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: DocumentsAction,
+    },
+
+    /// Manage analyses
+    Analyses {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: AnalysesAction,
+    },
+
+    /// Manage plans
+    Plans {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: PlansAction,
     },
 
     /// Manage records storage (verify, gc, evict, pin)
