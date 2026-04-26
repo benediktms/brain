@@ -29,18 +29,18 @@ Notes are Markdown files managed by humans and indexed by Brain. Records are mac
 
 Records and tasks can cross-reference each other. A `RecordCreated` event can carry a `task_id` linking the record to the task that produced it. A record can also hold a `chunk_id` referencing the note that it summarizes or documents. These are soft references — no foreign-key validation at write time, consistent with how `NoteLinked` events work in the tasks domain.
 
-Records are standalone-valid when Brain is used without any orchestrator runtime. A snapshot stored in the object store is an opaque byte bundle — Brain makes no assumptions about its internal format. An artifact is a structured document — Brain stores metadata and content references but does not interpret content beyond what is needed for retrieval.
+Records are standalone-valid when Brain is used without any orchestrator runtime. A snapshot stored in the object store is an opaque byte bundle — Brain makes no assumptions about its internal format. Typed records such as documents, analyses, plans, implementations, reviews, and summaries are structured outputs — Brain stores metadata and content references and applies deterministic per-kind retrieval policy.
 
 ---
 
 ## Domain Model
 
-### Artifact
+### Typed Record
 
-A durable work product with known structure and semantics. Artifacts are things an agent or tool explicitly creates as outputs: reports, diffs, exports, structured analyses, generated documents.
+A durable work product with known structure and semantics. Typed records are things an agent or tool explicitly creates as outputs: generated documents, structured analyses, implementation plans, summaries, implementation artifacts, and reviews.
 
 Key properties:
-- Has a `RecordKind` that describes its category (e.g., `report`, `diff`, `export`, `analysis`)
+- Has a `RecordKind` that describes its category (for example `document`, `analysis`, `plan`, `implementation`, `review`, `summary`)
 - Has a `title` and optional `description` for human-readable identification
 - Has a `ContentRef` pointing to the payload in the object store
 - Has a `RecordStatus` tracking its lifecycle (active, archived)
@@ -52,7 +52,7 @@ Key properties:
 A generic saved state bundle. Snapshots are opaque to Brain core — the internal format is defined by the creator (an agent, a CLI command, or an external tool). Brain stores the bytes, the hash, and the metadata, but does not parse or interpret the content.
 
 Key properties:
-- Same metadata structure as Artifact (id, title, tags, links, status)
+- Same metadata structure as a typed record (id, title, tags, links, status)
 - `RecordKind::Snapshot` always
 - Content is opaque — Brain does not assume any internal format
 - NOT a Brain-native workflow checkpoint. Snapshots are not coupled to any orchestrator's execution model. They are generic state bundles that any caller can write and retrieve.
@@ -73,15 +73,32 @@ The `hash` field doubles as the storage key. Two records with identical payloads
 ### RecordKind
 
 ```
-report      — Structured analysis or summary produced by an agent
-diff        — A patch or change set (text or structured)
-export      — A serialized data export (JSON, CSV, etc.)
-analysis    — Quantitative or qualitative analysis result
-document    — A generated prose document
-snapshot    — Opaque saved state bundle (see Snapshot above)
+document        — A generated prose document
+analysis        — Quantitative or qualitative analysis result
+plan            — An execution plan or implementation outline
+summary         — A concise synthesized summary
+implementation  — A concrete implementation output or patch payload
+review          — Review notes or evaluation output
+snapshot        — Opaque saved state bundle (see Snapshot above)
+custom          — Escape hatch for searchable custom kinds
 ```
 
-This list is extensible. The kind is stored as a string in both the event log and the SQLite projection.
+These canonical kinds are enforced by `RecordKind`, with `custom` preserved as an escape hatch. The kind is stored as a string in both the event log and the SQLite projection.
+
+### Record Kinds and Policy
+
+| Kind | Embedded | Included in scope summaries | Searchable |
+|---|---|---|---|
+| `document` | Yes | Yes | Yes |
+| `analysis` | Yes | Yes | Yes |
+| `plan` | Yes | Yes | Yes |
+| `summary` | Yes | Yes | Yes |
+| `implementation` | Yes | No | Yes |
+| `review` | Yes | No | Yes |
+| `snapshot` | No | No | No |
+| `custom` | Yes | No | Yes |
+
+The typed MCP creation tools map directly onto this policy: `records.create_document`, `records.create_analysis`, and `records.create_plan` always create embedded, searchable records that are included in scope summaries, while `records.save_snapshot` creates non-embedded, non-summarized state captures.
 
 ### RecordStatus
 
@@ -379,34 +396,41 @@ The `content_encoding` column in the projection records whether the stored blob 
 
 ## CLI Reference
 
-### brain artifacts (alias: art)
+### brain documents / analyses / plans
 
 ```
-brain artifacts create --title <title> [--kind <kind>] [--file <path>|--stdin]
-    Create a new artifact. Reads payload from file or stdin.
+brain documents create --title <title> [--file <path>|--stdin]
+    Create a document record. Reads payload from file or stdin.
+
+brain analyses create --title <title> [--file <path>|--stdin]
+    Create an analysis record. Reads payload from file or stdin.
+
+brain plans create --title <title> [--file <path>|--stdin]
+    Create a plan record. Reads payload from file or stdin.
+
     Options: --description <text>, --task <task_id>, --tag <tag>..., --media-type <mime>
-    Default kind: document
+    Per-kind policy: documents, analyses, and plans are embedded, searchable, and included in scope summaries.
 
 brain artifacts list [--kind <kind>] [--tag <tag>] [--status active|archived] [--limit <n>]
-    List artifacts, filtered by kind, tag, or status. Default status: active. Default limit: 50.
+    List artifact records, filtered by kind, tag, or status. Default status: active. Default limit: 50.
 
 brain artifacts get <record_id>
-    Show full metadata for an artifact (tags, links, hash, size, actor, timestamps).
+    Show full metadata for an artifact record (tags, links, hash, size, actor, timestamps).
 
 brain artifacts archive <record_id> [--reason <text>]
-    Mark an artifact as archived.
+    Mark an artifact record as archived.
 
 brain artifacts tag add <record_id> <tag>
-    Add a tag to an artifact.
+    Add a tag to an artifact record.
 
 brain artifacts tag remove <record_id> <tag>
-    Remove a tag from an artifact.
+    Remove a tag from an artifact record.
 
 brain artifacts link add <record_id> [--task <task_id>] [--chunk <chunk_id>]
-    Add a link from an artifact to a task or note chunk.
+    Add a link from an artifact record to a task or note chunk.
 
 brain artifacts link remove <record_id> [--task <task_id>] [--chunk <chunk_id>]
-    Remove a link from an artifact to a task or note chunk.
+    Remove a link from an artifact record to a task or note chunk.
 ```
 
 ### brain snapshots (alias: snap)
@@ -477,11 +501,14 @@ All commands support `--json` for machine-readable output.
 ### Usage Examples
 
 ```bash
-# Create a report artifact from a file
-brain artifacts create --title "Q1 analysis" --kind report --file report.json
+# Create an analysis record from a file
+brain analyses create --title "Q1 analysis" --file report.json
 
 # Create a document from stdin
-echo "Summary text" | brain artifacts create --title "Meeting notes" --stdin
+echo "Summary text" | brain documents create --title "Meeting notes" --stdin
+
+# Create a plan from a file
+brain plans create --title "Migration plan" --file rollout.md
 
 # List active artifacts
 brain artifacts list
@@ -528,16 +555,51 @@ brain records pin BRN-01KK
 
 ## MCP Tools Reference
 
-The records domain exposes 10 tools via the MCP stdio JSON-RPC interface.
+The records domain exposes typed creation tools plus retrieval, archival, tagging, linking, and snapshot storage via the MCP stdio JSON-RPC interface.
 
-### records.create_artifact
+### records.create_document
 
-Creates a new artifact record. Writes data to the object store and appends a `RecordCreated` event.
+Creates a new document record. Writes data to the object store, appends a `RecordCreated` event, and marks the record for embedding, search, and scope summarization.
 
 ```
 Input:
   title       string    (required) — Human-readable title
-  kind        string    (optional, default "document") — report|diff|export|analysis|document|custom
+  data        string    (optional) — Base64-encoded content bytes. Provide 'data' or 'text', not both. Omit both for metadata-only record.
+  text        string    (optional) — Plain-text content (server encodes internally). Provide 'text' or 'data', not both.
+  description string    (optional) — Free-text description
+  task_id     string    (optional) — Soft link to originating task
+  tags        string[]  (optional) — Initial tags
+  media_type  string    (optional) — MIME type hint. Defaults to 'text/plain' for text, 'application/octet-stream' for data.
+
+Output:
+  record_id, content_hash, size
+```
+
+### records.create_analysis
+
+Creates a new analysis record. Writes data to the object store, appends a `RecordCreated` event, and marks the record for embedding, search, and scope summarization.
+
+```
+Input:
+  title       string    (required) — Human-readable title
+  data        string    (optional) — Base64-encoded content bytes. Provide 'data' or 'text', not both. Omit both for metadata-only record.
+  text        string    (optional) — Plain-text content (server encodes internally). Provide 'text' or 'data', not both.
+  description string    (optional) — Free-text description
+  task_id     string    (optional) — Soft link to originating task
+  tags        string[]  (optional) — Initial tags
+  media_type  string    (optional) — MIME type hint. Defaults to 'text/plain' for text, 'application/octet-stream' for data.
+
+Output:
+  record_id, content_hash, size
+```
+
+### records.create_plan
+
+Creates a new plan record. Writes data to the object store, appends a `RecordCreated` event, and marks the record for embedding, search, and scope summarization.
+
+```
+Input:
+  title       string    (required) — Human-readable title
   data        string    (optional) — Base64-encoded content bytes. Provide 'data' or 'text', not both. Omit both for metadata-only record.
   text        string    (optional) — Plain-text content (server encodes internally). Provide 'text' or 'data', not both.
   description string    (optional) — Free-text description
@@ -551,7 +613,7 @@ Output:
 
 ### records.save_snapshot
 
-Saves a new snapshot record. Kind is always `"snapshot"`.
+Saves a new snapshot record. Kind is always `"snapshot"`. Snapshots are stored durably but are never embedded, searched, or included in scope summaries.
 
 ```
 Input:

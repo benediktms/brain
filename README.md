@@ -39,7 +39,7 @@ An event-sourced task system with dependencies, labels, and comments. Tasks are 
 Hybrid retrieval combining vector search (LanceDB) and keyword search (SQLite FTS5). Supports episodic memory (episodes), procedural memory (procedures), and reflective synthesis (reflections).
 
 ### Records
-Content-addressed storage for artifacts and snapshots. Records can be linked to tasks or note chunks, providing a durable audit trail of work products.
+Content-addressed storage for typed work products and snapshots. Records can be linked to tasks or note chunks, providing a durable audit trail of documents, analyses, plans, and state captures.
 
 ### Notes
 Markdown-based knowledge base. brain watches your note directories and incrementally indexes changes, extracting wiki-links, tags, and heading-aware chunks.
@@ -139,7 +139,9 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 | `tasks.list`            | List tasks filtered by status (`all`, `ready`, `blocked`) or fetch specific tasks by ID. Supports `brain` param for cross-brain listing. |
 | `tasks.close`           | Close one or more tasks by ID. Supports `brain` param for cross-brain close.                  |
 | `tasks.next`            | Return highest-priority ready tasks, sorted by priority or due date.                          |
-| `records.create_artifact` | Create a new artifact record with `text` (plain) or `data` (base64) content.               |
+| `records.create_document` | Create a document record with `text` (plain) or `data` (base64) content. Embedded, searchable, and included in scope summaries. |
+| `records.create_analysis` | Create an analysis record with `text` (plain) or `data` (base64) content. Embedded, searchable, and included in scope summaries. |
+| `records.create_plan` | Create a plan record with `text` (plain) or `data` (base64) content. Embedded, searchable, and included in scope summaries. |
 | `records.save_snapshot` | Save a snapshot record with `text` (plain) or `data` (base64) content.                        |
 | `records.get`           | Get a record by ID with full metadata, tags, and links. Supports prefix resolution and `brain` param for cross-brain access. |
 | `records.list`          | List records with optional filters (kind, status, tag, task\_id). Supports `brain` param for cross-brain access. |
@@ -150,6 +152,12 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 | `records.link_add`      | Link a record to a task or note chunk.                                                        |
 | `records.link_remove`   | Remove a link from a record to a task or note chunk.                                          |
 | `status`                | Get runtime health metrics: latency percentiles, token usage, queue depth, stuck files.       |
+
+### Record Kinds and Policy
+
+- `records.create_document`, `records.create_analysis`, and `records.create_plan` create typed records with deterministic policy: they are embedded into LanceDB, searchable via records and memory retrieval, and included in scope summaries.
+- `records.save_snapshot` creates snapshot records for opaque state capture; snapshots are stored durably but are not embedded or summarized.
+- Other canonical kinds follow the same per-kind policy: `summary` is embedded + summarized + searchable, `implementation` and `review` are embedded + searchable only, and `custom` defaults to embedded + searchable.
 
 ### Progressive Retrieval Pattern
 
