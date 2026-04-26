@@ -5,7 +5,7 @@ pub mod objects;
 pub mod projections;
 pub mod queries;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::Result;
 use brain_persistence::db::Db;
@@ -93,21 +93,22 @@ impl std::fmt::Display for RecordDomain {
 ///
 /// Stored as a string in both the event log and SQLite projection so the list
 /// is open for extension without schema changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordKind {
-    /// Structured analysis or summary produced by an agent.
-    Report,
-    /// A patch or change set (text or structured).
-    Diff,
-    /// A serialized data export (JSON, CSV, etc.).
-    Export,
-    /// Quantitative or qualitative analysis result.
-    Analysis,
     /// A generated prose document.
     Document,
+    /// Structured analysis or summary produced by an agent.
+    Analysis,
+    /// A plan or roadmap.
+    Plan,
     /// Opaque saved state bundle.
     Snapshot,
+    /// An implementation note or build artifact.
+    Implementation,
+    /// A review or critique artifact.
+    Review,
+    /// A short synthesized summary.
+    Summary,
     /// Custom kind with an arbitrary string identifier.
     Custom(String),
 }
@@ -115,13 +116,42 @@ pub enum RecordKind {
 impl RecordKind {
     pub fn as_str(&self) -> &str {
         match self {
-            RecordKind::Report => "report",
-            RecordKind::Diff => "diff",
-            RecordKind::Export => "export",
-            RecordKind::Analysis => "analysis",
             RecordKind::Document => "document",
+            RecordKind::Analysis => "analysis",
+            RecordKind::Plan => "plan",
             RecordKind::Snapshot => "snapshot",
+            RecordKind::Implementation => "implementation",
+            RecordKind::Review => "review",
+            RecordKind::Summary => "summary",
             RecordKind::Custom(s) => s.as_str(),
+        }
+    }
+
+    pub fn policy(&self) -> KindPolicy {
+        match self {
+            RecordKind::Document
+            | RecordKind::Analysis
+            | RecordKind::Plan
+            | RecordKind::Summary => KindPolicy {
+                embed: true,
+                summarize: true,
+                searchable: true,
+            },
+            RecordKind::Implementation | RecordKind::Review => KindPolicy {
+                embed: true,
+                summarize: false,
+                searchable: true,
+            },
+            RecordKind::Snapshot => KindPolicy {
+                embed: false,
+                summarize: false,
+                searchable: false,
+            },
+            RecordKind::Custom(_) => KindPolicy {
+                embed: true,
+                summarize: false,
+                searchable: true,
+            },
         }
     }
 }
@@ -135,12 +165,13 @@ impl std::fmt::Display for RecordKind {
 impl From<&str> for RecordKind {
     fn from(s: &str) -> Self {
         match s {
-            "report" => RecordKind::Report,
-            "diff" => RecordKind::Diff,
-            "export" => RecordKind::Export,
-            "analysis" => RecordKind::Analysis,
             "document" => RecordKind::Document,
+            "analysis" => RecordKind::Analysis,
+            "plan" => RecordKind::Plan,
             "snapshot" => RecordKind::Snapshot,
+            "implementation" => RecordKind::Implementation,
+            "review" => RecordKind::Review,
+            "summary" => RecordKind::Summary,
             other => RecordKind::Custom(other.to_string()),
         }
     }
@@ -150,6 +181,32 @@ impl From<String> for RecordKind {
     fn from(s: String) -> Self {
         RecordKind::from(s.as_str())
     }
+}
+
+impl Serialize for RecordKind {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RecordKind {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(RecordKind::from(s))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KindPolicy {
+    pub embed: bool,
+    pub summarize: bool,
+    pub searchable: bool,
 }
 
 /// Lifecycle status of a record.
@@ -689,12 +746,13 @@ mod tests {
 
     #[test]
     fn test_record_kind_as_str() {
-        assert_eq!(RecordKind::Report.as_str(), "report");
-        assert_eq!(RecordKind::Diff.as_str(), "diff");
-        assert_eq!(RecordKind::Export.as_str(), "export");
-        assert_eq!(RecordKind::Analysis.as_str(), "analysis");
         assert_eq!(RecordKind::Document.as_str(), "document");
+        assert_eq!(RecordKind::Analysis.as_str(), "analysis");
+        assert_eq!(RecordKind::Plan.as_str(), "plan");
         assert_eq!(RecordKind::Snapshot.as_str(), "snapshot");
+        assert_eq!(RecordKind::Implementation.as_str(), "implementation");
+        assert_eq!(RecordKind::Review.as_str(), "review");
+        assert_eq!(RecordKind::Summary.as_str(), "summary");
         assert_eq!(
             RecordKind::Custom("custom_kind".to_string()).as_str(),
             "custom_kind"
@@ -703,8 +761,16 @@ mod tests {
 
     #[test]
     fn test_record_kind_from_str() {
-        assert_eq!(RecordKind::from("report"), RecordKind::Report);
+        assert_eq!(RecordKind::from("document"), RecordKind::Document);
+        assert_eq!(RecordKind::from("analysis"), RecordKind::Analysis);
+        assert_eq!(RecordKind::from("plan"), RecordKind::Plan);
         assert_eq!(RecordKind::from("snapshot"), RecordKind::Snapshot);
+        assert_eq!(
+            RecordKind::from("implementation"),
+            RecordKind::Implementation
+        );
+        assert_eq!(RecordKind::from("review"), RecordKind::Review);
+        assert_eq!(RecordKind::from("summary"), RecordKind::Summary);
         assert_eq!(
             RecordKind::from("unknown"),
             RecordKind::Custom("unknown".to_string())
@@ -713,11 +779,88 @@ mod tests {
 
     #[test]
     fn test_record_kind_serde_round_trip() {
-        let kind = RecordKind::Analysis;
-        let json = serde_json::to_string(&kind).unwrap();
-        assert_eq!(json, "\"analysis\"");
-        let back: RecordKind = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, kind);
+        for kind in [
+            RecordKind::Document,
+            RecordKind::Analysis,
+            RecordKind::Plan,
+            RecordKind::Snapshot,
+            RecordKind::Implementation,
+            RecordKind::Review,
+            RecordKind::Summary,
+            RecordKind::Custom("custom_kind".to_string()),
+        ] {
+            let json = serde_json::to_string(&kind).unwrap();
+            let back: RecordKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, kind);
+        }
+    }
+
+    #[test]
+    fn test_record_kind_policy() {
+        assert_eq!(
+            RecordKind::Document.policy(),
+            KindPolicy {
+                embed: true,
+                summarize: true,
+                searchable: true,
+            }
+        );
+        assert_eq!(
+            RecordKind::Analysis.policy(),
+            KindPolicy {
+                embed: true,
+                summarize: true,
+                searchable: true,
+            }
+        );
+        assert_eq!(
+            RecordKind::Plan.policy(),
+            KindPolicy {
+                embed: true,
+                summarize: true,
+                searchable: true,
+            }
+        );
+        assert_eq!(
+            RecordKind::Snapshot.policy(),
+            KindPolicy {
+                embed: false,
+                summarize: false,
+                searchable: false,
+            }
+        );
+        assert_eq!(
+            RecordKind::Implementation.policy(),
+            KindPolicy {
+                embed: true,
+                summarize: false,
+                searchable: true,
+            }
+        );
+        assert_eq!(
+            RecordKind::Review.policy(),
+            KindPolicy {
+                embed: true,
+                summarize: false,
+                searchable: true,
+            }
+        );
+        assert_eq!(
+            RecordKind::Summary.policy(),
+            KindPolicy {
+                embed: true,
+                summarize: true,
+                searchable: true,
+            }
+        );
+        assert_eq!(
+            RecordKind::Custom("custom_kind".to_string()).policy(),
+            KindPolicy {
+                embed: true,
+                summarize: false,
+                searchable: true,
+            }
+        );
     }
 
     #[test]
