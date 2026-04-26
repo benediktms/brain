@@ -13,7 +13,13 @@
 
 use std::fs::OpenOptions;
 use std::io::Write as IoWrite;
+use std::sync::Arc;
 
+use brain_lib::embedder::MockEmbedder;
+use brain_lib::mcp::McpContext;
+use brain_lib::mcp::protocol::ToolCallResult;
+use brain_lib::mcp::tools::ToolRegistry;
+use brain_lib::metrics::Metrics;
 use brain_lib::records::events::{
     ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
     RecordEventType, RecordUpdatedPayload, TagPayload, append_event, new_record_id,
@@ -22,7 +28,11 @@ use brain_lib::records::events::{
 use brain_lib::records::objects::ObjectStore;
 use brain_lib::records::projections::{apply_event, rebuild};
 use brain_lib::records::{RecordStatus, RecordStore};
+use brain_lib::search_service::SearchService;
+use brain_lib::stores::BrainStores;
 use brain_persistence::db::Db;
+use brain_persistence::store::{Store, StoreReader};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -1074,7 +1084,7 @@ fn test_record_store_apply_event_and_query() {
 #[test]
 fn test_record_store_apply_multiple_events() {
     let db = Db::open_in_memory().unwrap();
-    let store = RecordStore::new(db);
+    let store = RecordStore::new(db.clone());
 
     let r1 = new_record_id("BRN");
     let r2 = new_record_id("BRN");
@@ -1097,8 +1107,7 @@ fn test_record_store_apply_multiple_events() {
         .unwrap();
 
     // Verify projected state via DB
-    let total: i64 = store
-        .db_for_tests()
+    let total: i64 = db
         .with_read_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
                 .map_err(Into::into)
@@ -1106,8 +1115,7 @@ fn test_record_store_apply_multiple_events() {
         .unwrap();
     assert_eq!(total, 2);
 
-    let tag_count: i64 = store
-        .db_for_tests()
+    let tag_count: i64 = db
         .with_read_conn(|conn| {
             conn.query_row(
                 "SELECT COUNT(*) FROM record_tags WHERE record_id = ?1",
@@ -1134,4 +1142,170 @@ fn test_record_status_from_str() {
         RecordStatus::Archived
     );
     assert!(RecordStatus::from_str("invalid").is_err());
+}
+
+mod typed_creation_policy_tests {
+    use super::*;
+
+    struct TestHarnessContext {
+        _tmp: TempDir,
+        ctx: McpContext,
+        registry: ToolRegistry,
+    }
+
+    async fn make_test_context() -> TestHarnessContext {
+        let (tmp, stores) = BrainStores::in_memory().expect("create in-memory stores");
+
+        let lance_path = tmp.path().join("test_lance");
+        let writable_store = Store::open_or_create(&lance_path)
+            .await
+            .expect("open writable LanceDB");
+
+        let store_reader = StoreReader::from_store(&writable_store);
+        let search = SearchService {
+            store: store_reader,
+            embedder: Arc::new(MockEmbedder),
+        };
+
+        let ctx = McpContext {
+            stores,
+            search: Some(search),
+            writable_store: Some(writable_store),
+            metrics: Arc::new(Metrics::new()),
+        };
+
+        TestHarnessContext {
+            _tmp: tmp,
+            ctx,
+            registry: ToolRegistry::new(),
+        }
+    }
+
+    async fn call_tool(ctx: &TestHarnessContext, tool_name: &str, params: Value) -> ToolCallResult {
+        ctx.registry.dispatch(tool_name, params, &ctx.ctx).await
+    }
+
+    fn success_json(result: &ToolCallResult) -> Value {
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "tool returned error: {}",
+            result.content[0].text
+        );
+        serde_json::from_str(&result.content[0].text).expect("tool output should be JSON")
+    }
+
+    #[tokio::test]
+    async fn test_create_document_via_mcp_yields_kind_document() {
+        let ctx = make_test_context().await;
+
+        let created = call_tool(
+            &ctx,
+            "records.create_document",
+            json!({
+                "title": "typed document",
+                "text": "document body"
+            }),
+        )
+        .await;
+        let created_json = success_json(&created);
+        let record_id = created_json["record_id"]
+            .as_str()
+            .expect("record_id string");
+
+        let fetched = call_tool(&ctx, "records.get", json!({ "record_id": record_id })).await;
+        let fetched_json = success_json(&fetched);
+
+        assert_eq!(fetched_json["kind"], "document");
+    }
+
+    #[tokio::test]
+    async fn test_create_analysis_yields_kind_analysis() {
+        let ctx = make_test_context().await;
+
+        let created = call_tool(
+            &ctx,
+            "records.create_analysis",
+            json!({
+                "title": "typed analysis",
+                "text": "analysis body"
+            }),
+        )
+        .await;
+        let created_json = success_json(&created);
+        let record_id = created_json["record_id"]
+            .as_str()
+            .expect("record_id string");
+
+        let fetched = call_tool(&ctx, "records.get", json!({ "record_id": record_id })).await;
+        let fetched_json = success_json(&fetched);
+
+        assert_eq!(fetched_json["kind"], "analysis");
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_yields_kind_plan() {
+        let ctx = make_test_context().await;
+
+        let created = call_tool(
+            &ctx,
+            "records.create_plan",
+            json!({
+                "title": "typed plan",
+                "text": "plan body"
+            }),
+        )
+        .await;
+        let created_json = success_json(&created);
+        let record_id = created_json["record_id"]
+            .as_str()
+            .expect("record_id string");
+
+        let fetched = call_tool(&ctx, "records.get", json!({ "record_id": record_id })).await;
+        let fetched_json = success_json(&fetched);
+
+        assert_eq!(fetched_json["kind"], "plan");
+    }
+
+    #[tokio::test]
+    async fn test_create_snapshot_yields_kind_snapshot_and_no_lance_row() {
+        let ctx = make_test_context().await;
+
+        let created = call_tool(
+            &ctx,
+            "records.save_snapshot",
+            json!({
+                "title": "typed snapshot",
+                "text": "snapshot body"
+            }),
+        )
+        .await;
+        let created_json = success_json(&created);
+        let record_id = created_json["record_id"]
+            .as_str()
+            .expect("record_id string");
+
+        let fetched = call_tool(&ctx, "records.get", json!({ "record_id": record_id })).await;
+        let fetched_json = success_json(&fetched);
+
+        assert_eq!(fetched_json["kind"], "snapshot");
+    }
+
+    #[tokio::test]
+    async fn test_create_artifact_tool_unknown() {
+        let ctx = make_test_context().await;
+
+        let result = call_tool(
+            &ctx,
+            "records.create_artifact",
+            json!({
+                "title": "legacy artifact",
+                "text": "artifact body"
+            }),
+        )
+        .await;
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].text.contains("Unknown tool"));
+    }
 }
