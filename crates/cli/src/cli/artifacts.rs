@@ -4,45 +4,6 @@ use super::record_common::{RecordLinkAction, RecordTagAction};
 
 #[derive(Subcommand)]
 pub(crate) enum ArtifactsAction {
-    /// Create a new artifact
-    Create {
-        /// Artifact title
-        #[arg(long)]
-        title: String,
-
-        /// Record kind (report, diff, export, analysis, document)
-        #[arg(long, default_value = "document")]
-        kind: String,
-
-        /// Path to the payload file
-        #[arg(long)]
-        file: Option<std::path::PathBuf>,
-
-        /// Read payload from stdin
-        #[arg(long)]
-        stdin: bool,
-
-        /// Optional description
-        #[arg(long)]
-        description: Option<String>,
-
-        /// Link to a task
-        #[arg(long)]
-        task: Option<String>,
-
-        /// Tags to add
-        #[arg(long)]
-        tag: Vec<String>,
-
-        /// Media type (e.g. text/plain, application/json)
-        #[arg(long)]
-        media_type: Option<String>,
-
-        /// Target brain name or ID (writes to current brain if omitted)
-        #[arg(long)]
-        brain: Option<String>,
-    },
-
     /// List artifacts
     List {
         /// Filter by kind

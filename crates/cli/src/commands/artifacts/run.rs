@@ -1,17 +1,14 @@
-use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::DateTime;
 use chrono::Utc;
 use serde_json::json;
 
 use brain_lib::records::events::{
-    ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
-    RecordEventType, TagPayload,
+    LinkPayload, RecordArchivedPayload, RecordEvent, RecordEventType, TagPayload,
 };
-use brain_lib::records::objects::COMPRESSION_THRESHOLD;
 use brain_lib::records::queries::RecordFilter;
 use brain_lib::stores::BrainStores;
 
@@ -55,125 +52,6 @@ fn format_size(bytes: i64) -> String {
     } else {
         format!("{:.1} GB", bytes / (1024.0 * 1024.0 * 1024.0))
     }
-}
-
-// -- create --
-
-pub struct CreateParams {
-    pub title: String,
-    pub kind: String,
-    pub file: Option<std::path::PathBuf>,
-    pub stdin: bool,
-    pub description: Option<String>,
-    pub task: Option<String>,
-    pub tags: Vec<String>,
-    pub media_type: Option<String>,
-    pub brain: Option<String>,
-}
-
-pub fn create(ctx: &ArtifactCtx, params: CreateParams) -> Result<()> {
-    // Read payload
-    let data: Vec<u8> = if let Some(ref path) = params.file {
-        std::fs::read(path).with_context(|| format!("Failed to read file: {}", path.display()))?
-    } else if params.stdin {
-        let mut buf = Vec::new();
-        std::io::stdin()
-            .read_to_end(&mut buf)
-            .context("Failed to read from stdin")?;
-        buf
-    } else {
-        bail!("Must provide either --file <path> or --stdin to supply payload");
-    };
-
-    // Write to object store (with transparent zstd compression)
-    let (content_ref, encoding, original_size) = ctx
-        .object_store
-        .write_compressed(&data, params.media_type.clone(), COMPRESSION_THRESHOLD)
-        .context("Failed to write to object store")?;
-
-    // Convert ContentRef to ContentRefPayload
-    let content_ref_payload = ContentRefPayload::compressed(
-        content_ref.hash.clone(),
-        content_ref.size,
-        content_ref.media_type.clone(),
-        encoding,
-        original_size,
-    );
-
-    // Resolve target brain (if --brain provided)
-    let remote_brain_info: Option<(String, String)>;
-    let remote_records = if let Some(ref brain) = params.brain {
-        let (bid, bname) = ctx
-            .record_store
-            .resolve_brain(brain)
-            .with_context(|| format!("Failed to resolve brain: {brain}"))?;
-        // Guard: reject writes to archived brains
-        if ctx.record_store.is_brain_archived(&bid)? {
-            bail!("Target brain '{bname}' is archived");
-        }
-        remote_brain_info = Some((bname.clone(), bid.clone()));
-        Some(ctx.record_store.with_remote_brain_id(&bid, &bname)?)
-    } else {
-        remote_brain_info = None;
-        None
-    };
-    let record_store = remote_records.as_ref().unwrap_or(&ctx.record_store);
-
-    // Generate record ID
-    let prefix = record_store
-        .get_project_prefix()
-        .context("Failed to get project prefix")?;
-    let record_id = brain_lib::records::events::new_record_id(&prefix);
-
-    // Build event
-    let event = RecordEvent::from_payload(
-        &record_id,
-        "cli",
-        RecordCreatedPayload {
-            title: params.title.clone(),
-            kind: params.kind.clone(),
-            content_ref: content_ref_payload,
-            description: params.description.clone(),
-            task_id: params.task.clone(),
-            tags: params.tags.clone(),
-            scope_type: params.task.as_ref().map(|_| "task".to_string()),
-            scope_id: params.task.clone(),
-            retention_class: None,
-            producer: None,
-        },
-    );
-
-    record_store
-        .apply_event(&event)
-        .context("Failed to apply and append record event")?;
-
-    if ctx.json {
-        let mut out = json!({
-            "record_id": record_id,
-            "content_hash": content_ref.hash,
-            "size": content_ref.size,
-            "media_type": content_ref.media_type,
-        });
-        if let Some((ref bname, ref bid)) = remote_brain_info {
-            out["brain_name"] = json!(bname);
-            out["brain_id"] = json!(bid);
-        }
-        println!("{}", serde_json::to_string_pretty(&out)?);
-    } else {
-        println!("Created artifact {record_id}");
-        if let Some((ref bname, _)) = remote_brain_info {
-            println!("  Brain: {bname}");
-        }
-        println!("  Title: {}", params.title);
-        println!("  Kind:  {}", params.kind);
-        println!("  Size:  {}", format_size(content_ref.size as i64));
-        println!("  Hash:  {}", &content_ref.hash[..16]);
-        if !params.tags.is_empty() {
-            println!("  Tags:  {}", params.tags.join(", "));
-        }
-    }
-
-    Ok(())
 }
 
 // -- list --

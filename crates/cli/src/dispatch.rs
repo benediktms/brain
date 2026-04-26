@@ -573,32 +573,6 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             let ctx = ArtifactCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
 
             match action {
-                ArtifactsAction::Create {
-                    title,
-                    kind,
-                    file,
-                    stdin,
-                    description,
-                    task,
-                    tag,
-                    media_type,
-                    brain,
-                } => {
-                    commands::artifacts::run::create(
-                        &ctx,
-                        commands::artifacts::run::CreateParams {
-                            title,
-                            kind,
-                            file,
-                            stdin,
-                            description,
-                            task,
-                            tags: tag,
-                            media_type,
-                            brain,
-                        },
-                    )?;
-                }
                 ArtifactsAction::List {
                     kind,
                     tag,
@@ -642,9 +616,108 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::Documents { .. } => anyhow::bail!("documents subcommands are not implemented yet"),
-        Command::Analyses { .. } => anyhow::bail!("analyses subcommands are not implemented yet"),
-        Command::Plans { .. } => anyhow::bail!("plans subcommands are not implemented yet"),
+        Command::Documents { json, action } => {
+            let ctx = commands::documents::run::DocumentCtx::new(
+                &cli.sqlite_db,
+                Some(&cli.lance_db),
+                json,
+            )?;
+            match action {
+                DocumentsAction::Create {
+                    title,
+                    file,
+                    stdin,
+                    text,
+                    description,
+                    task,
+                    tag,
+                    media_type,
+                    brain,
+                } => {
+                    commands::documents::run::create(
+                        &ctx,
+                        commands::documents::run::CreateParams {
+                            title,
+                            file,
+                            stdin,
+                            text,
+                            description,
+                            task,
+                            tags: tag,
+                            media_type,
+                            brain,
+                        },
+                    )?;
+                }
+            }
+        }
+        Command::Analyses { json, action } => {
+            let ctx = commands::analyses::run::AnalysisCtx::new(
+                &cli.sqlite_db,
+                Some(&cli.lance_db),
+                json,
+            )?;
+            match action {
+                AnalysesAction::Create {
+                    title,
+                    file,
+                    stdin,
+                    text,
+                    description,
+                    task,
+                    tag,
+                    media_type,
+                    brain,
+                } => {
+                    commands::analyses::run::create(
+                        &ctx,
+                        commands::analyses::run::CreateParams {
+                            title,
+                            file,
+                            stdin,
+                            text,
+                            description,
+                            task,
+                            tags: tag,
+                            media_type,
+                            brain,
+                        },
+                    )?;
+                }
+            }
+        }
+        Command::Plans { json, action } => {
+            let ctx =
+                commands::plans::run::PlanCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+            match action {
+                PlansAction::Create {
+                    title,
+                    file,
+                    stdin,
+                    text,
+                    description,
+                    task,
+                    tag,
+                    media_type,
+                    brain,
+                } => {
+                    commands::plans::run::create(
+                        &ctx,
+                        commands::plans::run::CreateParams {
+                            title,
+                            file,
+                            stdin,
+                            text,
+                            description,
+                            task,
+                            tags: tag,
+                            media_type,
+                            brain,
+                        },
+                    )?;
+                }
+            }
+        }
         Command::Migrate {
             yes,
             cleanup,

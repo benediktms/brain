@@ -1,8 +1,10 @@
 pub mod agent_schema;
 pub mod alias;
+pub mod analyses;
 pub mod artifacts;
 pub mod backfill_tasks;
 pub mod config;
+pub mod documents;
 
 pub mod daemon;
 pub mod daemon_service;
@@ -19,6 +21,7 @@ pub mod mcp;
 pub mod mcp_setup;
 pub mod memory;
 pub mod migrate;
+pub mod plans;
 pub mod plugin;
 pub mod provider;
 pub mod query;
