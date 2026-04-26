@@ -14,6 +14,7 @@ mod record_archive;
 mod record_create_analysis;
 mod record_create_artifact;
 mod record_create_document;
+mod record_create_plan;
 mod record_fetch_content;
 mod record_get;
 mod record_link;
