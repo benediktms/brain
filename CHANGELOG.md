@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- `records.create_document`, `records.create_analysis`, `records.create_plan` MCP tools (per-kind embedding/summarization policy: document/analysis/plan/summary are embedded into LanceDB and included in scope summaries).
+- `brain documents create`, `brain analyses create`, `brain plans create` CLI subcommands.
+- SQLite migration v41→v42 normalizing legacy `dispatch-brief`→`document`, `conversation`→`snapshot`, `report`→`document` and re-deriving `records.searchable`.
+- `RecordKind` enum with `KindPolicy` (embed/summarize/searchable) on every variant.
+- Operator note: pulling this change requires reinstalling the daemon binary because the database moves to schema v42 (the prior binary refuses to open a newer DB).
+
+### Removed (BREAKING)
+- `records.create_artifact` MCP tool — replaced by the three typed creation tools above.
+- `brain artifacts create` CLI subcommand — replaced by the three typed CLI commands above.
+
 ## [0.3.5] - 2026-03-31
 
 ### Bug Fixes
@@ -409,4 +422,3 @@ All notable changes to this project will be documented in this file.
 - Perf and concurrency test (#17)
 - Add smoke tests for current chunk, embed and hash-gate pipeline
 - Add-testing-fixtures
-
