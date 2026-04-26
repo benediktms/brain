@@ -37,7 +37,10 @@ pub fn generate_scope_summary(
 ) -> Result<GeneratedScopeSummaryRow> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let sources: Vec<(String, String)> = match scope_type {
+    // Mirrors brain_lib::records::RecordKind::policy().summarize and must stay in sync.
+    const SUMMARIZE_RECORD_KINDS_SQL: &str = "'document', 'analysis', 'plan', 'summary'";
+
+    let sources: Vec<(String, String, String)> = match scope_type {
         "directory" => {
             let pattern = format!("{}%", scope_value);
             let mut stmt = conn.prepare(
@@ -48,7 +51,11 @@ pub fn generate_scope_summary(
                  ORDER BY f.path, c.chunk_ord",
             )?;
             stmt.query_map(params![pattern], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    "chunk".to_string(),
+                ))
             })
             .map_err(|e| BrainCoreError::Database(e.to_string()))?
             .collect::<std::result::Result<Vec<_>, _>>()
@@ -56,14 +63,38 @@ pub fn generate_scope_summary(
         }
         "tag" => {
             let pattern = format!("%{}%", scope_value);
-            let mut stmt = conn.prepare(
-                "SELECT summary_id, content
-                 FROM summaries
-                 WHERE tags LIKE ?1
-                 ORDER BY created_at",
-            )?;
-            stmt.query_map(params![pattern], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            let sql = format!(
+                "SELECT source_id, content, source_type
+                 FROM (
+                     SELECT summary_id AS source_id,
+                            content,
+                            'episode' AS source_type,
+                            created_at AS sort_ts
+                     FROM summaries
+                     WHERE tags LIKE ?1
+
+                     UNION ALL
+
+                     SELECT 'record:' || r.record_id AS source_id,
+                            c.content,
+                            'chunk' AS source_type,
+                            r.created_at AS sort_ts
+                     FROM records r
+                     JOIN record_tags rt ON r.record_id = rt.record_id
+                     JOIN chunks c ON c.file_id = 'record:' || r.record_id
+                     WHERE rt.tag = ?2
+                       AND r.kind IN ({SUMMARIZE_RECORD_KINDS_SQL})
+                       AND r.status = 'active'
+                 )
+                 ORDER BY sort_ts, source_id"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            stmt.query_map(params![pattern, scope_value], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })
             .map_err(|e| BrainCoreError::Database(e.to_string()))?
             .collect::<std::result::Result<Vec<_>, _>>()
@@ -76,8 +107,7 @@ pub fn generate_scope_summary(
         }
     };
 
-    let source_ids: Vec<&str> = sources.iter().map(|(id, _)| id.as_str()).collect();
-    let contents: Vec<&str> = sources.iter().map(|(_, c)| c.as_str()).collect();
+    let contents: Vec<&str> = sources.iter().map(|(_, c, _)| c.as_str()).collect();
     let source_content = contents.join("\n\n");
     let new_hash = blake3::hash(source_content.as_bytes()).to_hex().to_string();
 
@@ -138,12 +168,6 @@ pub fn generate_scope_summary(
 
     let id = existing_id.unwrap_or_else(|| ulid::Ulid::new().to_string());
 
-    let source_type = match scope_type {
-        "directory" => "chunk",
-        "tag" => "episode",
-        _ => unreachable!("validated scope_type in source fetch"),
-    };
-
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| BrainCoreError::Database(e.to_string()))?;
@@ -180,7 +204,7 @@ pub fn generate_scope_summary(
                  VALUES (?1, ?2, ?3, ?4)",
             )
             .map_err(|e| BrainCoreError::Database(e.to_string()))?;
-        for src_id in source_ids {
+        for (src_id, _, source_type) in &sources {
             stmt.execute(params![id, src_id, source_type, now])
                 .map_err(|e| BrainCoreError::Database(e.to_string()))?;
         }
@@ -319,6 +343,37 @@ mod tests {
         .unwrap();
     }
 
+    fn insert_record(conn: &Connection, record_id: &str, kind: &str, status: &str) {
+        conn.execute(
+            "INSERT INTO records
+                  (record_id, brain_id, title, kind, status, description,
+                   content_hash, content_size, media_type,
+                   task_id, actor, created_at, updated_at,
+                   retention_class, pinned, payload_available, content_encoding, original_size,
+                   searchable)
+             VALUES (?1, '', 'title', ?2, ?3, NULL,
+                      'hash', 10, 'text/plain',
+                      NULL, 'tester', 1, 1,
+                      'standard', 0, 1, 'utf-8', 10,
+                      1)",
+            params![record_id, kind, status],
+        )
+        .unwrap();
+    }
+
+    fn insert_record_tag(conn: &Connection, record_id: &str, tag: &str) {
+        conn.execute(
+            "INSERT INTO record_tags (record_id, tag) VALUES (?1, ?2)",
+            params![record_id, tag],
+        )
+        .unwrap();
+    }
+
+    fn insert_record_chunk(conn: &Connection, record_id: &str, chunk_id: &str, content: &str) {
+        let record_file_id = format!("record:{record_id}");
+        insert_chunk(conn, &record_file_id, &record_file_id, chunk_id, content);
+    }
+
     #[test]
     fn test_generate_scope_summary_directory_round_trip_and_no_change_short_circuit() {
         let conn = setup();
@@ -344,6 +399,114 @@ mod tests {
         assert!(first.source_content.contains("second chunk content"));
 
         let second = generate_scope_summary(&conn, "directory", "notes/").unwrap();
+        assert!(!second.content_changed);
+        assert_eq!(first.id, second.id);
+    }
+
+    #[test]
+    fn test_tag_scope_includes_document_records() {
+        let conn = setup();
+        insert_record(&conn, "rec-doc-1", "document", "active");
+        insert_record_tag(&conn, "rec-doc-1", "project:alpha");
+        insert_record_chunk(
+            &conn,
+            "rec-doc-1",
+            "chunk-rec-doc-1",
+            "document record chunk text",
+        );
+
+        let generated = generate_scope_summary(&conn, "tag", "project:alpha").unwrap();
+
+        assert!(
+            generated
+                .source_content
+                .contains("document record chunk text")
+        );
+
+        let source: (String, String) = conn
+            .query_row(
+                "SELECT source_id, source_type
+                 FROM summary_sources
+                 WHERE summary_id = ?1 AND source_id = 'record:rec-doc-1'",
+                params![generated.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(source.0, "record:rec-doc-1");
+        assert_eq!(source.1, "chunk");
+    }
+
+    #[test]
+    fn test_tag_scope_excludes_snapshot_records() {
+        let conn = setup();
+        insert_record(&conn, "rec-snapshot-1", "snapshot", "active");
+        insert_record_tag(&conn, "rec-snapshot-1", "project:beta");
+        insert_record_chunk(
+            &conn,
+            "rec-snapshot-1",
+            "chunk-rec-snapshot-1",
+            "snapshot record chunk text",
+        );
+
+        let generated = generate_scope_summary(&conn, "tag", "project:beta").unwrap();
+
+        assert!(
+            !generated
+                .source_content
+                .contains("snapshot record chunk text")
+        );
+    }
+
+    #[test]
+    fn test_tag_scope_excludes_implementation_records() {
+        let conn = setup();
+        insert_record(&conn, "rec-implementation-1", "implementation", "active");
+        insert_record_tag(&conn, "rec-implementation-1", "project:gamma");
+        insert_record_chunk(
+            &conn,
+            "rec-implementation-1",
+            "chunk-rec-implementation-1",
+            "implementation record chunk text",
+        );
+
+        let generated = generate_scope_summary(&conn, "tag", "project:gamma").unwrap();
+
+        assert!(
+            !generated
+                .source_content
+                .contains("implementation record chunk text")
+        );
+    }
+
+    #[test]
+    fn test_directory_scope_unchanged() {
+        let conn = setup();
+        insert_chunk(
+            &conn,
+            "file-dir-1",
+            "/x/a.md",
+            "chunk-dir-1",
+            "directory chunk text",
+        );
+        insert_record(&conn, "rec-dir-1", "document", "active");
+        insert_record_tag(&conn, "rec-dir-1", "project:delta");
+        insert_record_chunk(
+            &conn,
+            "rec-dir-1",
+            "chunk-rec-dir-1",
+            "record chunk that must stay out of directory scope",
+        );
+
+        let first = generate_scope_summary(&conn, "directory", "/x/").unwrap();
+        assert!(first.content_changed);
+        assert!(first.source_content.contains("directory chunk text"));
+        assert!(
+            !first
+                .source_content
+                .contains("record chunk that must stay out of directory scope")
+        );
+
+        let second = generate_scope_summary(&conn, "directory", "/x/").unwrap();
         assert!(!second.content_changed);
         assert_eq!(first.id, second.id);
     }
