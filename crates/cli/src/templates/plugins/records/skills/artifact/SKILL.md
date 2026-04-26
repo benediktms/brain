@@ -1,18 +1,24 @@
 ---
-description: Create an artifact record
+description: Create a typed record
 allowed-tools: "mcp__brain__*"
 ---
 
-Create a new artifact record in brain.
+Create a new typed record in brain.
 
-Use the `records_create_artifact` tool with:
-- `title` (required): Artifact title
+Use one of these tools based on the record you are creating:
+- `records_create_document` for generated prose, specs, and reusable documents
+- `records_create_analysis` for reports, investigations, and analytic outputs
+- `records_create_plan` for implementation plans and execution outlines
+- `records_save_snapshot` for point-in-time state captures
+
+The typed creation tools support:
+- `title` (required): Record title
 - `text`: Plain text content
 - `data`: Base64-encoded binary content
 - `description`: Optional description
 - `tags`: Optional tags array
 - `brain`: Target brain for cross-brain writes
 
-If no content is provided, ask the user for the artifact content.
+If no content is provided, ask the user for the record content.
 
-Artifacts are stored in brain's content-addressed object store and can be linked to tasks.
+Documents, analyses, and plans are embedded for search. Snapshots are stored without embedding or summarization.

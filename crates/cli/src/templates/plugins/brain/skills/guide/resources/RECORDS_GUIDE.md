@@ -1,13 +1,20 @@
 # Records Guide
 
-## Artifacts vs Snapshots
+## Typed Records vs Snapshots
 
-| | Artifacts | Snapshots |
+| | Typed records | Snapshots |
 |---|---|---|
-| Purpose | Work products, deliverables | Point-in-time state captures |
-| Examples | Reports, analysis, generated code | Config state, debug dumps, test results |
-| Create | `records_create_artifact` | `records_save_snapshot` |
+| Purpose | Durable work products and structured outputs | Point-in-time state captures |
+| Examples | Documents, analyses, plans, summaries | Config state, debug dumps, test results |
+| Create | `records_create_document`, `records_create_analysis`, `records_create_plan` | `records_save_snapshot` |
 | Content | `text` (plain) or `data` (base64) | `text` (plain) or `data` (base64) |
+
+## Record Kind Policy
+
+- `records_create_document` → searchable document records, embedded and included in summaries
+- `records_create_analysis` → searchable analysis records, embedded and included in summaries
+- `records_create_plan` → searchable plan records, embedded and included in summaries
+- `records_save_snapshot` → snapshot records, never embedded or summarized
 
 ## Content-Addressed Storage
 
@@ -19,7 +26,7 @@ Records can be linked to tasks and note chunks:
 - `records_link_add`: Link a record to a task or chunk
 - `records_link_remove`: Remove a link
 
-This creates traceability between work products and the tasks that produced them.
+This creates traceability between durable outputs and the tasks that produced them.
 
 ## Tagging
 

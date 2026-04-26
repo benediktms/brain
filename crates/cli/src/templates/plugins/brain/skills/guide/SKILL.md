@@ -47,7 +47,7 @@ Local-first knowledge base combining semantic search, task management, and recor
 |--------|-----------|---------|
 | Tasks | `tasks_next`, `tasks_create`, `tasks_get`, `tasks_close` | Work tracking, dependencies, priorities |
 | Memory | `memory_search_minimal`, `memory_expand`, `memory_write_episode` | Semantic search, episode recording |
-| Records | `records_create_artifact`, `records_save_snapshot`, `records_list` | Work products, point-in-time captures |
+| Records | `records_create_document`, `records_create_analysis`, `records_create_plan`, `records_save_snapshot`, `records_list` | Typed work products, snapshots, and per-kind retrieval policy |
 | Brain | `status`, `brains_list`, `jobs_status` | Health checks, brain registry, job queue |
 
 ## Resources
@@ -56,5 +56,5 @@ Local-first knowledge base combining semantic search, task management, and recor
 |----------|---------|
 | [TASK_WORKFLOW.md](resources/TASK_WORKFLOW.md) | Task lifecycle, dependencies, labels |
 | [MEMORY_PATTERNS.md](resources/MEMORY_PATTERNS.md) | Search intents, episodes, cross-brain |
-| [RECORDS_GUIDE.md](resources/RECORDS_GUIDE.md) | Artifacts vs snapshots, linking |
+| [RECORDS_GUIDE.md](resources/RECORDS_GUIDE.md) | Typed records vs snapshots, linking, policy |
 | [TROUBLESHOOTING.md](resources/TROUBLESHOOTING.md) | Common issues and fixes |
