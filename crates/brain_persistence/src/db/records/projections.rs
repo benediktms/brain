@@ -7,6 +7,11 @@ use super::events::{
     RecordEventType, RecordUpdatedPayload, RetentionClassSetPayload, TagPayload,
 };
 
+fn searchable_for_kind(kind: &str) -> bool {
+    // Mirrors brain_lib::records::RecordKind::policy().searchable and must stay in sync.
+    !matches!(kind, "snapshot")
+}
+
 /// Apply a single event to the SQLite records projection tables.
 ///
 /// `brain_id` is stamped on the `records` row for all `RecordCreated` events.
@@ -31,10 +36,10 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
                      content_hash, content_size, media_type,
                      task_id, actor, created_at, updated_at,
                      retention_class, pinned, payload_available, content_encoding, original_size,
-                     searchable)
-                 VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                         ?13, 0, 1, ?14, ?15,
-                         CASE WHEN ?4 IN ('snapshot', 'dispatch-brief') THEN 0 ELSE 1 END)",
+                      searchable)
+                  VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                          ?13, 0, 1, ?14, ?15,
+                          ?16)",
                 rusqlite::params![
                     event.record_id,
                     brain_id,
@@ -51,6 +56,7 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
                     p.retention_class,
                     p.content_ref.content_encoding,
                     original_size,
+                    searchable_for_kind(&p.kind),
                 ],
             )?;
 
@@ -440,50 +446,27 @@ mod tests {
     fn test_searchable_default_by_kind() {
         let conn = setup();
 
-        // Analysis → searchable = 1
-        let ev = make_created_event("r-analysis", "Analysis", "analysis");
-        apply_event(&conn, &ev, "").unwrap();
+        for (id, title, kind, expected) in [
+            ("r-document", "Document", "document", 1),
+            ("r-analysis", "Analysis", "analysis", 1),
+            ("r-plan", "Plan", "plan", 1),
+            ("r-summary", "Summary", "summary", 1),
+            ("r-implementation", "Implementation", "implementation", 1),
+            ("r-review", "Review", "review", 1),
+            ("r-snapshot", "Snapshot", "snapshot", 0),
+            ("r-custom", "Custom", "my-custom-kind", 1),
+        ] {
+            let ev = make_created_event(id, title, kind);
+            apply_event(&conn, &ev, "").unwrap();
 
-        // Snapshot → searchable = 0
-        let ev = make_created_event("r-snap", "Snapshot", "snapshot");
-        apply_event(&conn, &ev, "").unwrap();
-
-        // dispatch-brief → searchable = 0
-        let ev = make_created_event("r-disp", "Dispatch", "dispatch-brief");
-        apply_event(&conn, &ev, "").unwrap();
-
-        // Custom kind → searchable = 1
-        let ev = make_created_event("r-custom", "Custom", "my-custom-kind");
-        apply_event(&conn, &ev, "").unwrap();
-
-        let get_searchable = |id: &str| -> i32 {
-            conn.query_row(
-                "SELECT searchable FROM records WHERE record_id = ?1",
-                [id],
-                |row| row.get(0),
-            )
-            .unwrap()
-        };
-
-        assert_eq!(
-            get_searchable("r-analysis"),
-            1,
-            "analysis should be searchable"
-        );
-        assert_eq!(
-            get_searchable("r-snap"),
-            0,
-            "snapshot should be unsearchable"
-        );
-        assert_eq!(
-            get_searchable("r-disp"),
-            0,
-            "dispatch-brief should be unsearchable"
-        );
-        assert_eq!(
-            get_searchable("r-custom"),
-            1,
-            "unknown kind should default to searchable"
-        );
+            let searchable: i32 = conn
+                .query_row(
+                    "SELECT searchable FROM records WHERE record_id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(searchable, expected, "{kind} searchable mismatch");
+        }
     }
 }
