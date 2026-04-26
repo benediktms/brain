@@ -123,6 +123,58 @@ impl RecordGet {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::super::ToolRegistry;
+    use super::super::tests::create_test_context;
+
+    #[tokio::test]
+    async fn test_record_get_returns_canonical_kind() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let create_result = registry
+            .dispatch(
+                "records.create_document",
+                json!({
+                    "title": "Canonical Kind Document",
+                    "text": "preserve canonical kind"
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert_ne!(
+            create_result.is_error,
+            Some(true),
+            "tool returned error: {create_result:?}"
+        );
+
+        let created: Value = serde_json::from_str(&create_result.content[0].text)
+            .expect("create_document response should be valid JSON");
+        let record_id = created["record_id"]
+            .as_str()
+            .expect("record_id should be present")
+            .to_string();
+
+        let get_result = registry
+            .dispatch("records.get", json!({ "record_id": record_id }), &ctx)
+            .await;
+
+        assert_ne!(
+            get_result.is_error,
+            Some(true),
+            "tool returned error: {get_result:?}"
+        );
+
+        let fetched: Value = serde_json::from_str(&get_result.content[0].text)
+            .expect("records.get response should be valid JSON");
+        assert_eq!(fetched["kind"], "document");
+    }
+}
+
 impl McpTool for RecordGet {
     fn name(&self) -> &'static str {
         "records.get"
