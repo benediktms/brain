@@ -466,8 +466,11 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
 **Records tools:**
-- `records.create_artifact` — Create a new artifact record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes. Records created cross-brain are stored immediately but may not appear in vector search until the target brain's daemon indexes them.
+- `records.create_document` — Create a document record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes.
+- `records.create_analysis` — Create an analysis record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes.
+- `records.create_plan` — Create a plan record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes.
 - `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes.
+- Per-kind policy: document/analysis/plan/summary are embedded and summarized; implementation/review/custom are embedded and searchable; snapshots are stored without embedding or summarization.
 - `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution). Supports `brain` param for cross-brain access.
 - `records.list` — List records with optional filters (kind, status, tag, task_id). Supports `brain` param for cross-brain access.
 - `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata. Supports `brain` param for cross-brain access.
@@ -529,8 +532,9 @@ brain memory reflect --topic "architecture"  # Prepare: get source material
 brain memory reflect --commit --title "..." --content "..." --source-ids ep1,ep2
 
 # Records (cross-brain writes supported via --brain)
-brain artifacts create --title "Report" --file report.md
-brain artifacts create --title "Report" --brain other-brain --stdin
+brain documents create --title "Report" --file report.md
+brain analyses create --title "Investigation" --brain other-brain --stdin
+brain plans create --title "Rollout" --file rollout.md
 brain snapshots save --title "State" --file state.json
 brain snapshots save --title "State" --brain other-brain --stdin
 brain artifacts restore <id>          # Print artifact content to stdout
