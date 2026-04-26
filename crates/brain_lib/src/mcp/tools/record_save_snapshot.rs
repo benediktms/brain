@@ -10,6 +10,7 @@ use crate::l0_abstract::generate_l0_abstract;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::pipeline::embed_poll::upsert_domain_lod_l0;
+use crate::records::RecordKind;
 use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
 use crate::records::objects::COMPRESSION_THRESHOLD;
 
@@ -157,9 +158,11 @@ impl RecordSaveSnapshot {
         let tags_refs: Vec<&str> = tags_for_capsule.iter().map(|s| s.as_str()).collect();
         let abstract_text = generate_l0_abstract(&title_for_capsule, &content, &tags_refs);
         let record_file_id = format!("record:{record_id}");
-        if let Err(e) = ctx
-            .stores
-            .upsert_record_chunk(&record_file_id, &abstract_text)
+        let policy = RecordKind::from("snapshot").policy();
+        if policy.searchable
+            && let Err(e) = ctx
+                .stores
+                .upsert_record_chunk(&record_file_id, &abstract_text)
         {
             tracing::warn!(
                 record_id = %record_id,
@@ -167,13 +170,15 @@ impl RecordSaveSnapshot {
                 "record_save_snapshot: failed to write L0 abstract to FTS"
             );
         }
-        upsert_domain_lod_l0(
-            &ctx.stores,
-            &record_file_id,
-            &abstract_text,
-            ctx.brain_id(),
-            "record",
-        );
+        if policy.embed {
+            upsert_domain_lod_l0(
+                &ctx.stores,
+                &record_file_id,
+                &abstract_text,
+                ctx.brain_id(),
+                "record",
+            );
+        }
 
         let uri = SynapseUri::for_record(ctx.brain_name(), &record_id).to_string();
 
@@ -193,6 +198,72 @@ impl RecordSaveSnapshot {
         }
 
         json_response(&result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::super::ToolRegistry;
+    use super::super::tests::create_test_context;
+
+    #[tokio::test]
+    async fn test_save_snapshot_skips_fts_and_lod() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let result = registry
+            .dispatch(
+                "records.save_snapshot",
+                json!({
+                    "title": "Snapshot Title",
+                    "text": "Snapshot payload that should not be indexed"
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "tool returned error: {result:?}"
+        );
+
+        let parsed: Value =
+            serde_json::from_str(&result.content[0].text).expect("result should be valid JSON");
+        let record_id = parsed["record_id"]
+            .as_str()
+            .expect("record_id should be present");
+        let record_file_id = format!("record:{record_id}");
+
+        let chunk_count: i64 = ctx
+            .stores
+            .db_for_tests()
+            .with_read_conn(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM chunks WHERE file_id LIKE 'record:%' AND file_id = ?1",
+                    [&record_file_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+            })
+            .expect("chunk query should succeed");
+        assert_eq!(
+            chunk_count, 0,
+            "snapshot record should not write any FTS chunk"
+        );
+
+        let lod_uri = format!("synapse://{}/record/{}:0", ctx.brain_id(), record_file_id);
+        let lod = ctx
+            .stores
+            .db_for_tests()
+            .get_lod_chunk(&lod_uri, "L0")
+            .expect("LOD query should succeed");
+        assert!(
+            lod.is_none(),
+            "snapshot record should not write L0 LOD chunk"
+        );
     }
 }
 
