@@ -68,33 +68,6 @@ fn parse_tool_json(result: &ToolCallResult) -> Value {
     serde_json::from_str(&result.content[0].text).expect("tool result should be JSON")
 }
 
-pub async fn seed_test_task(ctx: &TestHarnessContext) -> String {
-    let result = call_tool(ctx, "tasks.create", json!({ "title": "seed test task" })).await;
-    let parsed = parse_tool_json(&result);
-    parsed["task_id"]
-        .as_str()
-        .expect("tasks.create should return task_id")
-        .to_string()
-}
-
-pub async fn seed_test_record(ctx: &TestHarnessContext) -> String {
-    let result = call_tool(
-        ctx,
-        "records.create_document",
-        json!({
-            "title": "seed test record",
-            "text": "seed payload"
-        }),
-    )
-    .await;
-
-    let parsed = parse_tool_json(&result);
-    parsed["record_id"]
-        .as_str()
-        .expect("records.create_document should return record_id")
-        .to_string()
-}
-
 pub async fn seed_test_chunks(ctx: &TestHarnessContext) -> usize {
     let note_path = ctx.notes_dir.join("seed_note.md");
     std::fs::write(
