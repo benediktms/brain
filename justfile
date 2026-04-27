@@ -70,14 +70,14 @@ alias c := check
 # Run tests (e.g. just t -p brain-lib, just t -- --nocapture)
 
 test *args:
-    cargo test --features brain-lib/test-utils {{args}}
+    cargo test {{args}}
 
 alias t := test
 
 # Run fd-heavy perf tests serially with raised fd limit
 [group('dev')]
 test-perf:
-    ulimit -n 4096 && cargo test -p brain-lib --features test-utils --test perf_tests -- --ignored --test-threads=1
+    ulimit -n 4096 && cargo test -p brain-lib --test perf_tests -- --ignored --test-threads=1
 
 # Check formatting + run clippy
 [group('dev')]
