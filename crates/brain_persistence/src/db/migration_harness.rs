@@ -23,6 +23,7 @@ use super::migrations::{
     migrate_v30_to_v31, migrate_v31_to_v32, migrate_v32_to_v33, migrate_v33_to_v34,
     migrate_v34_to_v35, migrate_v35_to_v36, migrate_v36_to_v37, migrate_v37_to_v38,
     migrate_v38_to_v39, migrate_v39_to_v40, migrate_v40_to_v41, migrate_v41_to_v42,
+    migrate_v42_to_v43,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -81,6 +82,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             39 => migrate_v39_to_v40(&conn).unwrap(),
             40 => migrate_v40_to_v41(&conn).unwrap(),
             41 => migrate_v41_to_v42(&conn).unwrap(),
+            42 => migrate_v42_to_v43(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -189,6 +191,8 @@ const EXPECTED_TABLES: &[&str] = &[
     "providers",
     "summary_sources",
     "lod_chunks",
+    "tag_cluster_runs",
+    "tag_aliases",
 ];
 
 /// All named indexes that must exist at the current schema version.
@@ -216,6 +220,8 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_summary_sources_source",
     "idx_lod_chunks_brain",
     "idx_lod_chunks_exp",
+    "idx_tag_aliases_canonical",
+    "idx_tag_aliases_cluster",
 ];
 
 /// FTS5 triggers that must exist.

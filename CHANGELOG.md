@@ -8,8 +8,9 @@ All notable changes to this project will be documented in this file.
 - `records.create_document`, `records.create_analysis`, `records.create_plan` MCP tools (per-kind embedding/summarization policy: document/analysis/plan/summary are embedded into LanceDB and included in scope summaries).
 - `brain documents create`, `brain analyses create`, `brain plans create` CLI subcommands.
 - SQLite migration v41→v42 normalizing legacy `dispatch-brief`→`document`, `conversation`→`snapshot`, `report`→`document` and re-deriving `records.searchable`.
+- SQLite migration v42→v43 adding `tag_aliases` and `tag_cluster_runs` tables (foundation for synonym clustering, parent task `brn-83a.7.2`); read-only `db::tags::collect_raw_tags()` helper enumerating raw tag strings with reference counts.
 - `RecordKind` enum with `KindPolicy` (embed/summarize/searchable) on every variant.
-- Operator note: pulling this change requires reinstalling the daemon binary because the database moves to schema v42 (the prior binary refuses to open a newer DB).
+- Operator note: pulling this change requires reinstalling the daemon binary because the database moves to schema v43 (the prior binary refuses to open a newer DB).
 
 ### Removed (BREAKING)
 - `records.create_artifact` MCP tool — replaced by the three typed creation tools above.
