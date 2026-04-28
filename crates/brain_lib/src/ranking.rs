@@ -215,9 +215,12 @@ fn recency_score(age_seconds: f64) -> f64 {
 /// Compute the alias-aware tag-match score.
 ///
 /// Blends literal Jaccard overlap (full slot) with same-cluster-only overlap
-/// (`alias_discount` slot, default 0.7). When `alias_lookup` is empty every
-/// tag is its own canonical class and the formula collapses to today's
-/// case-sensitive literal Jaccard — pinned by
+/// (`alias_discount` slot, default 0.7). Inputs are lowercased before
+/// scoring to match the filter stage in `query_pipeline` and the lowercased
+/// alias-lookup boundary, so mixed-case query/chunk tags get correct
+/// alias-discount credit (`brn-83a.7.2.4.6`). When `alias_lookup` is empty
+/// every tag is its own canonical class and the formula collapses to a
+/// pure case-insensitive literal Jaccard — pinned by
 /// `tag_match_literal_only_with_empty_alias_map`.
 ///
 /// score = (literal_overlap + alias_discount × same_cluster_only) / union_classes
@@ -234,6 +237,13 @@ fn tag_match_score(
         return 0.0;
     }
 
+    // Lowercase inputs once so all downstream comparisons (literal sets,
+    // canonical-class lookup, union/intersection) operate in the same
+    // namespace as the alias_lookup keys (which are already lowercased
+    // at the boundary by `alias_lookup_for_brain`).
+    let q_lower: Vec<String> = query_tags.iter().map(|s| s.to_lowercase()).collect();
+    let c_lower: Vec<String> = chunk_tags.iter().map(|s| s.to_lowercase()).collect();
+
     let canonical_of = |t: &str| -> String {
         alias_lookup
             .get(t)
@@ -241,12 +251,12 @@ fn tag_match_score(
             .unwrap_or_else(|| t.to_string())
     };
 
-    let q_lit: std::collections::HashSet<&str> = query_tags.iter().map(|s| s.as_str()).collect();
-    let c_lit: std::collections::HashSet<&str> = chunk_tags.iter().map(|s| s.as_str()).collect();
+    let q_lit: std::collections::HashSet<&str> = q_lower.iter().map(|s| s.as_str()).collect();
+    let c_lit: std::collections::HashSet<&str> = c_lower.iter().map(|s| s.as_str()).collect();
     let q_canon: std::collections::HashSet<String> =
-        query_tags.iter().map(|t| canonical_of(t)).collect();
+        q_lower.iter().map(|t| canonical_of(t)).collect();
     let c_canon: std::collections::HashSet<String> =
-        chunk_tags.iter().map(|t| canonical_of(t)).collect();
+        c_lower.iter().map(|t| canonical_of(t)).collect();
 
     let literal_overlap = q_lit.intersection(&c_lit).count();
     let canon_overlap = q_canon.intersection(&c_canon).count();
@@ -669,6 +679,51 @@ mod tests {
         let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
         let score = tag_match_score(&query, &chunk, &lookup, 0.0);
         assert_eq!(score, 0.0);
+    }
+
+    // ─── Case-insensitive scoring (`brn-83a.7.2.4.6`) ─────────────────
+
+    #[test]
+    fn tag_match_uppercase_query_matches_lowercase_chunk() {
+        // Empty alias_lookup ⇒ score is pure literal Jaccard, but
+        // case-insensitive: `["BUG"]` matches `["bug"]` perfectly.
+        let query = vec!["BUG".to_string()];
+        let chunk = vec!["bug".to_string()];
+        let score = tag_match_score(&query, &chunk, &std::collections::HashMap::new(), 0.7);
+        assert!(
+            (score - 1.0).abs() < 1e-9,
+            "case-insensitive literal match should score 1.0 (got {score})"
+        );
+    }
+
+    #[test]
+    fn tag_match_mixed_case_alias_match() {
+        // The alias-discount slot must fire for mixed-case query inputs
+        // — alias_lookup keys are lowercased at the boundary, so the
+        // scoring path needs to lowercase its inputs to hit them.
+        let query = vec!["BUG".to_string()];
+        let chunk = vec!["bugs".to_string()];
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let score = tag_match_score(&query, &chunk, &lookup, 0.7);
+        assert!(
+            (score - 0.7).abs() < 1e-9,
+            "mixed-case query should still get same-cluster discount (got {score})"
+        );
+    }
+
+    #[test]
+    fn tag_match_mixed_case_chunk_tags() {
+        // Symmetric to the previous test: chunk tags from frontmatter may
+        // be mixed-case (`#Bug`, `#BUGS`) — they must lowercase before
+        // alias lookup so the cluster match still fires.
+        let query = vec!["bug".to_string()];
+        let chunk = vec!["BUGS".to_string()];
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let score = tag_match_score(&query, &chunk, &lookup, 0.7);
+        assert!(
+            (score - 0.7).abs() < 1e-9,
+            "mixed-case chunk tag should still get same-cluster discount (got {score})"
+        );
     }
 
     #[test]
