@@ -2182,38 +2182,45 @@ impl ProviderStore for crate::stores::BrainStores {
 /// (Tx-1, Tx-2, Tx-3) lands in `TagAliasWriter` in subsequent commits
 /// within the same task.
 pub trait TagAliasReader: Send + Sync {
-    /// Per-brain raw-tag collector. Folds across `record_tags` and
-    /// `task_labels` into a single `Vec<DedupedRawTag>`. The duplication
-    /// against `brain_persistence::db::tags::collect_raw_tags` is a
-    /// brain-scoping workaround — see the function's doc-comment for why.
-    fn collect_raw_tags_for_brain(
+    /// Per-brain raw-tag collector. Calls
+    /// `brain_persistence::db::tags::collect_raw_tags` with `Some(brain_id)`,
+    /// then folds the resulting `Vec<RawTag>` across `(tag, source)` pairs
+    /// into a `Vec<DedupedRawTag>` keyed by tag string.
+    fn collect_raw_tags(
         &self,
         brain_id: &str,
     ) -> Result<Vec<brain_persistence::db::tag_aliases::DedupedRawTag>>;
 
-    /// Snapshot every `tag_aliases` row keyed by `raw_tag`.
+    /// Snapshot every `tag_aliases` row for the given brain, keyed by
+    /// `raw_tag`.
     fn read_alias_snapshot(
         &self,
+        brain_id: &str,
     ) -> Result<HashMap<String, brain_persistence::db::tag_aliases::ExistingAlias>>;
 }
 
 // -- TagAliasReader for Db -------------------------------------------------
 
 impl TagAliasReader for Db {
-    fn collect_raw_tags_for_brain(
+    fn collect_raw_tags(
         &self,
         brain_id: &str,
     ) -> Result<Vec<brain_persistence::db::tag_aliases::DedupedRawTag>> {
         let brain_id = brain_id.to_string();
         self.with_read_conn(move |conn| {
-            brain_persistence::db::tag_aliases::collect_raw_tags_for_brain(conn, &brain_id)
+            let raw = brain_persistence::db::tags::collect_raw_tags(conn, Some(&brain_id))?;
+            Ok(brain_persistence::db::tag_aliases::dedupe_by_tag(raw))
         })
     }
 
     fn read_alias_snapshot(
         &self,
+        brain_id: &str,
     ) -> Result<HashMap<String, brain_persistence::db::tag_aliases::ExistingAlias>> {
-        self.with_read_conn(brain_persistence::db::tag_aliases::read_alias_snapshot)
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::tag_aliases::read_alias_snapshot(conn, &brain_id)
+        })
     }
 }
 
@@ -2235,10 +2242,13 @@ pub trait TagAliasWriter: Send + Sync {
     /// Tx-1: INSERT a `tag_cluster_runs` row with `finished_at = NULL`.
     fn insert_run(&self, input: brain_persistence::db::tag_aliases::InsertRun) -> Result<()>;
 
-    /// Tx-2: atomic UPSERT of all alias rows + finalize the run row.
+    /// Tx-2: atomic UPSERT of all alias rows for the given run, DELETE of
+    /// `stale` rows scoped to `brain_id`, and finalize the run row.
     fn apply_alias_upserts(
         &self,
+        brain_id: &str,
         upserts: Vec<brain_persistence::db::tag_aliases::AliasUpsert>,
+        stale: Vec<String>,
         finalize: brain_persistence::db::tag_aliases::FinalizeRun,
     ) -> Result<()>;
 
@@ -2257,11 +2267,16 @@ impl TagAliasWriter for Db {
 
     fn apply_alias_upserts(
         &self,
+        brain_id: &str,
         upserts: Vec<brain_persistence::db::tag_aliases::AliasUpsert>,
+        stale: Vec<String>,
         finalize: brain_persistence::db::tag_aliases::FinalizeRun,
     ) -> Result<()> {
+        let brain_id = brain_id.to_string();
         self.with_write_conn(move |conn| {
-            brain_persistence::db::tag_aliases::apply_alias_upserts(conn, &upserts, &finalize)
+            brain_persistence::db::tag_aliases::apply_alias_upserts(
+                conn, &brain_id, &upserts, &stale, &finalize,
+            )
         })
     }
 
