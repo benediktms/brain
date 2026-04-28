@@ -21,6 +21,7 @@ mod record_list;
 mod record_save_snapshot;
 mod record_search;
 mod record_tag;
+mod scope;
 mod status;
 mod task_apply_event;
 mod task_close;
@@ -33,6 +34,7 @@ mod task_list;
 mod task_next;
 
 pub use helpers::*;
+pub use scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, Scope, resolve_scope, resolve_single_scope};
 
 use std::future::Future;
 use std::pin::Pin;
