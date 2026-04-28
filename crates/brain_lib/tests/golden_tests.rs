@@ -448,7 +448,7 @@ fn golden_generate() {
     for intent in ["lookup", "planning", "reflection", "synthesis"] {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
-        let results = rank_candidates(&signals, &weights, &[]);
+        let results = rank_candidates(&signals, &weights, &[], &HashMap::new());
         let order: Vec<String> = results.iter().map(|r| r.chunk_id.clone()).collect();
         expected_orders.insert(intent.to_string(), order);
     }
@@ -659,7 +659,7 @@ fn golden_intent_ranking() {
     for (intent, expected_order) in &expected.expected_orders {
         let profile = resolve_intent(intent);
         let weights = Weights::from_profile(profile);
-        let results = rank_candidates(&signals, &weights, &[]);
+        let results = rank_candidates(&signals, &weights, &[], &HashMap::new());
         let actual_order: Vec<String> = results.iter().map(|r| r.chunk_id.clone()).collect();
         assert_eq!(
             &actual_order, expected_order,

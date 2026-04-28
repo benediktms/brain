@@ -336,11 +336,14 @@ fn test_hybrid_ranking_signal_combination() {
         },
     ];
 
+    let alias_lookup = std::collections::HashMap::new();
+
     // Lookup profile: should prefer keyword_champ
     let lookup = rank_candidates(
         &candidates,
         &Weights::from_profile(WeightProfile::Lookup),
         &[],
+        &alias_lookup,
     );
     assert_eq!(
         lookup[0].chunk_id, "keyword_champ",
@@ -352,6 +355,7 @@ fn test_hybrid_ranking_signal_combination() {
         &candidates,
         &Weights::from_profile(WeightProfile::Synthesis),
         &[],
+        &alias_lookup,
     );
     assert_eq!(
         synthesis[0].chunk_id, "vector_champ",
@@ -363,6 +367,7 @@ fn test_hybrid_ranking_signal_combination() {
         &candidates,
         &Weights::from_profile(WeightProfile::Planning),
         &[],
+        &alias_lookup,
     );
     assert_eq!(
         planning[0].chunk_id, "fresh_one",
