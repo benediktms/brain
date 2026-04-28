@@ -1154,7 +1154,8 @@ mod typed_creation_policy_tests {
     }
 
     async fn make_test_context() -> TestHarnessContext {
-        let (tmp, stores) = BrainStores::in_memory().expect("create in-memory stores");
+        let (tmp, stores) = BrainStores::in_memory_with_brain("test-brain-id", "test-brain", "TST")
+            .expect("create in-memory stores");
 
         let lance_path = tmp.path().join("test_lance");
         let writable_store = Store::open_or_create(&lance_path)

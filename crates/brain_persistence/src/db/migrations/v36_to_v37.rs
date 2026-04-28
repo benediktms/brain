@@ -97,7 +97,7 @@ fn backfill_files_from_brain_roots(conn: &Connection) -> Result<()> {
     }
 
     // Sort by root path length descending (longest prefix first).
-    brain_roots.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    brain_roots.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
 
     // Update files for each root, skipping already-assigned files.
     let mut update_stmt = conn.prepare(

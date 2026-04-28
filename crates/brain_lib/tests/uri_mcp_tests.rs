@@ -22,7 +22,8 @@ use serde_json::{Value, json};
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async fn make_ctx() -> (tempfile::TempDir, McpContext) {
-    let (tmp, stores) = BrainStores::in_memory().unwrap();
+    let (tmp, stores) =
+        BrainStores::in_memory_with_brain("test-brain-id", "test-brain", "TST").unwrap();
     let ctx = McpContext {
         stores,
         search: None,
