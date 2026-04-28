@@ -138,6 +138,48 @@ pub fn read_alias_snapshot(
     Ok(out)
 }
 
+/// Per-brain `(raw_tag → canonical_tag)` projection for read-time alias
+/// expansion in the query path (`brn-83a.7.2.4`).
+///
+/// Returns the **lowercased** projection (both keys and values). Original
+/// casing is not preserved by design — see plan `brn-83a.7.2.4`
+/// "Write-side normalization": the filter block in `query_pipeline.rs`
+/// already lowercases candidate tags, so the read-side lookup must match.
+/// A future case-sensitive caller adds a peer `alias_lookup_raw_for_brain`.
+///
+/// Returns an empty map for brains that have never been reclustered (no
+/// rows in `tag_aliases` for `brain_id`) — that case must remain
+/// bit-identical to today's literal-only behavior.
+pub fn alias_lookup_for_brain(
+    conn: &Connection,
+    brain_id: &str,
+) -> Result<HashMap<String, String>> {
+    let started = std::time::Instant::now();
+    let mut stmt = conn.prepare(
+        "SELECT raw_tag, canonical_tag
+         FROM tag_aliases
+         WHERE brain_id = ?1",
+    )?;
+    let mut rows = stmt.query(params![brain_id])?;
+
+    let mut out = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let raw_tag: String = row.get(0)?;
+        let canonical_tag: String = row.get(1)?;
+        out.insert(raw_tag.to_lowercase(), canonical_tag.to_lowercase());
+    }
+
+    tracing::debug!(
+        target: "brain_persistence::tag_aliases",
+        brain_id = brain_id,
+        row_count = out.len(),
+        elapsed_us = started.elapsed().as_micros() as u64,
+        "alias_lookup_for_brain"
+    );
+
+    Ok(out)
+}
+
 /// Tx-1: insert a `tag_cluster_runs` row with `finished_at = NULL` so the
 /// `tag_aliases.last_run_id` FK can resolve when Tx-2 runs.
 pub fn insert_run(conn: &Connection, input: &InsertRun) -> Result<()> {
@@ -427,9 +469,52 @@ pub fn override_alias_embedder_version(conn: &Connection, version: &str) -> Resu
     .map_err(BrainCoreError::from)
 }
 
+/// Seed `tag_aliases` rows for a single brain in tests. Inserts a stub
+/// `tag_cluster_runs` row first to satisfy the `last_run_id` FK target,
+/// then bulk-inserts the supplied `(raw_tag, canonical_tag, cluster_id)`
+/// triples. Reuses the same synthetic run row across all triples so
+/// callers can compose multi-cluster fixtures with a single call.
+///
+/// Used by the query-path alias-expansion tests in `brn-83a.7.2.4`. Not
+/// used by production code paths.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn seed_tag_aliases(
+    conn: &Connection,
+    brain_id: &str,
+    rows: &[(&str, &str, &str)],
+) -> Result<()> {
+    let run_id = format!("test-run-{brain_id}");
+    let updated_at = "1970-01-01T00:00:00Z";
+    conn.execute(
+        "INSERT OR IGNORE INTO tag_cluster_runs
+             (run_id, brain_id, started_at, finished_at, source_count, cluster_count,
+              embedder_version, threshold, triggered_by, notes)
+         VALUES (?1, ?2, ?3, ?3, 0, 0, 'test-embedder-v1', 0.85, 'test', NULL)",
+        params![run_id, brain_id, updated_at],
+    )?;
+    for (raw_tag, canonical_tag, cluster_id) in rows {
+        conn.execute(
+            "INSERT INTO tag_aliases
+                 (brain_id, raw_tag, canonical_tag, cluster_id, last_run_id,
+                  embedding, embedder_version, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, 'test-embedder-v1', ?6)",
+            params![
+                brain_id,
+                raw_tag,
+                canonical_tag,
+                cluster_id,
+                run_id,
+                updated_at
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Db;
 
     #[test]
     fn encode_decode_roundtrip() {
@@ -452,5 +537,58 @@ mod tests {
     fn decode_empty_yields_empty() {
         let out = decode_embedding(&[]).unwrap();
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn alias_lookup_empty_table_returns_empty() {
+        let db = Db::open_in_memory().unwrap();
+        let out = db
+            .with_read_conn(|conn| alias_lookup_for_brain(conn, "brain-a"))
+            .unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn alias_lookup_lowercases_mixed_case_rows() {
+        let db = Db::open_in_memory().unwrap();
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(conn, "brain-a", &[("Bug", "Bugs", "c1")])?;
+            Ok(())
+        })
+        .unwrap();
+        let out = db
+            .with_read_conn(|conn| alias_lookup_for_brain(conn, "brain-a"))
+            .unwrap();
+        assert_eq!(out.get("bug").map(String::as_str), Some("bugs"));
+        // Original-case key must NOT be present — see "Write-side normalization"
+        // in plan brn-83a.7.2.4: read-side projection is lowercase-only.
+        assert!(!out.contains_key("Bug"));
+    }
+
+    #[test]
+    fn alias_lookup_filters_by_brain_id() {
+        let db = Db::open_in_memory().unwrap();
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(
+                conn,
+                "brain-a",
+                &[("bug", "bug", "c1"), ("bugs", "bug", "c1")],
+            )?;
+            seed_tag_aliases(conn, "brain-b", &[("perf", "perf", "c2")])?;
+            Ok(())
+        })
+        .unwrap();
+        let a = db
+            .with_read_conn(|conn| alias_lookup_for_brain(conn, "brain-a"))
+            .unwrap();
+        let b = db
+            .with_read_conn(|conn| alias_lookup_for_brain(conn, "brain-b"))
+            .unwrap();
+        assert_eq!(a.len(), 2);
+        assert!(a.contains_key("bug"));
+        assert!(a.contains_key("bugs"));
+        assert!(!a.contains_key("perf"));
+        assert_eq!(b.len(), 1);
+        assert!(b.contains_key("perf"));
     }
 }
