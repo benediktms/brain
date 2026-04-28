@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -12,9 +13,10 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
 use crate::tasks::enrichment::enrich_task_list;
 use crate::tasks::events::TaskType;
-use crate::tasks::queries::{TaskFilter, apply_filters};
+use crate::tasks::queries::{TaskFilter, TaskRow, apply_filters};
 use crate::uri::SynapseUri;
 
+use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -62,7 +64,11 @@ struct Params {
     include_description: bool,
     #[serde(default = "default_limit")]
     limit: u64,
+    /// Deprecated: use `brains` instead. When set, treated as `brains: [brain]`.
     brain: Option<String>,
+    /// Brains to query. See `BRAINS_PARAM_DESCRIPTION`.
+    #[serde(default)]
+    brains: Option<Vec<String>>,
 }
 
 pub(super) struct TaskList;
@@ -74,34 +80,219 @@ impl TaskList {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        // Remote brain path
-        if let Some(ref brain) = params.brain {
-            let (bid, remote_brain_name) = match ctx.resolve_brain_id(brain) {
-                Ok(r) => r,
+        // `brain` (singular) is a back-compat alias for `brains: [brain]`.
+        let brains_arg: Option<Vec<String>> = match (&params.brains, &params.brain) {
+            (Some(bs), _) => Some(bs.clone()),
+            (None, Some(b)) => Some(vec![b.clone()]),
+            (None, None) => None,
+        };
+
+        let scope = match resolve_scope(ctx, brains_arg.as_deref()) {
+            Ok(s) => s,
+            Err(err) => return err,
+        };
+
+        // Build per-brain ctxs once.
+        let mut per_brain: Vec<(BrainRef, Arc<McpContext>)> = Vec::new();
+        for brain_ref in scope.brains() {
+            let scoped_ctx = match ctx.with_brain_id(&brain_ref.brain_id, &brain_ref.brain_name) {
+                Ok(c) => c,
                 Err(e) => {
-                    return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
+                    return ToolCallResult::error(format!(
+                        "Failed to scope to brain '{}': {e}",
+                        brain_ref.brain_name
+                    ));
                 }
             };
-            let remote_tasks = match ctx.stores.with_brain_id(&bid, &remote_brain_name) {
-                Ok(s) => s.tasks,
-                Err(e) => {
-                    return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
-                }
-            };
-            let mut result = Self::execute_with_store(params, &remote_tasks, &remote_brain_name);
-            // Inject brain name into response
-            if let Ok(ref mut val) =
-                serde_json::from_str::<serde_json::Value>(&result.content[0].text)
-            {
-                if let Some(obj) = val.as_object_mut() {
-                    obj.insert("brain".into(), json!(remote_brain_name));
-                }
-                result.content[0].text = val.to_string();
-            }
-            return result;
+            per_brain.push((brain_ref.clone(), scoped_ctx));
         }
 
-        Self::execute_with_store(params, &ctx.stores.tasks, ctx.brain_name())
+        if scope.is_federated() {
+            Self::execute_federated(&params, &per_brain)
+        } else {
+            // Single-brain path preserves current shape, with a `brain` field
+            // added to the response so callers know what was queried.
+            let (brain_ref, scoped_ctx) = &per_brain[0];
+            let mut result =
+                Self::execute_with_store(params, &scoped_ctx.stores.tasks, &brain_ref.brain_name);
+            if let Ok(ref mut val) =
+                serde_json::from_str::<serde_json::Value>(&result.content[0].text)
+                && let Some(obj) = val.as_object_mut()
+            {
+                obj.insert("brain".into(), json!(brain_ref.brain_name));
+                result.content[0].text = val.to_string();
+            }
+            result
+        }
+    }
+
+    /// Federated path: gather tasks per brain (each tagged with its brain),
+    /// merge, apply the global limit, and emit a single combined response with
+    /// per-task `brain` fields and a top-level `brains` array.
+    fn execute_federated(
+        params: &Params,
+        per_brain: &[(BrainRef, Arc<McpContext>)],
+    ) -> ToolCallResult {
+        let limit = params.limit as usize;
+
+        // Parse per-field filters once (validation errors fire eagerly).
+        let task_type = match params.task_type {
+            Some(ref s) => match s.parse::<TaskType>() {
+                Ok(tt) => Some(tt),
+                Err(e) => return ToolCallResult::error(e),
+            },
+            None => None,
+        };
+        let filter = TaskFilter {
+            priority: params.priority,
+            task_type,
+            assignee: params.assignee.clone(),
+            label: params.label.clone(),
+            search: params.search.clone(),
+        };
+
+        let mut all_tasks: Vec<(BrainRef, Arc<McpContext>, TaskRow)> = Vec::new();
+        let mut warnings = Vec::new();
+        let mut total_ready: usize = 0;
+        let mut total_blocked: usize = 0;
+
+        for (brain_ref, scoped_ctx) in per_brain {
+            let store = &scoped_ctx.stores.tasks;
+
+            // task_ids batch path: look up each id in this brain's store.
+            if let Some(ref ids) = params.task_ids {
+                for id in ids {
+                    let resolved = match store.resolve_task_id(id) {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+                    if let Ok(Some(t)) = store.get_task(&resolved) {
+                        all_tasks.push((brain_ref.clone(), scoped_ctx.clone(), t));
+                    }
+                }
+                continue;
+            }
+
+            let fts_ids = if let Some(ref query) = filter.search {
+                match store.search_fts(query, 1000) {
+                    Ok(ids) => Some(ids.into_iter().collect::<HashSet<String>>()),
+                    Err(e) => {
+                        error!(brain = %brain_ref.brain_name, error = %e, "FTS failed");
+                        return ToolCallResult::error(format!(
+                            "Full-text search failed for brain '{}': {e}",
+                            brain_ref.brain_name
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
+
+            let tasks = match params.status {
+                StatusFilter::Open => store.list_open(),
+                StatusFilter::Ready => store.list_ready(),
+                StatusFilter::Blocked => store.list_blocked(),
+                StatusFilter::Done => store.list_done(),
+                StatusFilter::InProgress => store.list_in_progress(),
+                StatusFilter::Cancelled => store.list_cancelled(),
+            };
+            let tasks = match tasks {
+                Ok(t) => t,
+                Err(e) => {
+                    error!(brain = %brain_ref.brain_name, error = %e, "list failed");
+                    return ToolCallResult::error(format!(
+                        "Failed to list tasks for brain '{}': {e}",
+                        brain_ref.brain_name
+                    ));
+                }
+            };
+
+            let filtered = if filter.is_empty() {
+                tasks
+            } else {
+                let labels_map = if filter.label.is_some() {
+                    let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+                    match store.get_labels_for_tasks(&task_ids) {
+                        Ok(map) => Some(map),
+                        Err(e) => {
+                            return ToolCallResult::error(format!(
+                                "Failed to fetch labels for brain '{}': {e}",
+                                brain_ref.brain_name
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                apply_filters(tasks, &filter, fts_ids.as_ref(), labels_map.as_ref())
+            };
+
+            for t in filtered {
+                all_tasks.push((brain_ref.clone(), scoped_ctx.clone(), t));
+            }
+
+            // Aggregate ready/blocked counts (best-effort; warns on error).
+            let (r, b) = store_or_warn(
+                store.count_ready_blocked(),
+                "count_ready_blocked",
+                &mut warnings,
+            );
+            total_ready += r;
+            total_blocked += b;
+        }
+
+        let total = all_tasks.len();
+        let capped = if limit > 0 && total > limit {
+            all_tasks.into_iter().take(limit).collect::<Vec<_>>()
+        } else {
+            all_tasks
+        };
+        let count = capped.len();
+        let has_more = limit > 0 && total > limit;
+
+        // Enrich per-brain (compact_id and labels need the brain's store).
+        let mut tasks_json: Vec<Value> = Vec::with_capacity(capped.len());
+        for (brain_ref, scoped_ctx, row) in &capped {
+            let store = &scoped_ctx.stores.tasks;
+            let task_ids = [row.task_id.as_str()];
+            let labels_map = store_or_warn(
+                store.get_labels_for_tasks(&task_ids),
+                "get_labels_for_tasks",
+                &mut warnings,
+            );
+            let (mut json_vec, _r, _b) =
+                enrich_task_list(store, std::slice::from_ref(row), &labels_map);
+            for task_val in &mut json_vec {
+                if let Some(obj) = task_val.as_object_mut() {
+                    if let Some(tid) = obj.get("task_id").and_then(|v| v.as_str()) {
+                        let uri = SynapseUri::for_task(&brain_ref.brain_name, tid).to_string();
+                        obj.insert("uri".into(), json!(uri));
+                    }
+                    if !params.include_description {
+                        obj.remove("description");
+                    }
+                    obj.insert("brain".into(), json!(brain_ref.brain_name));
+                }
+            }
+            tasks_json.extend(json_vec);
+        }
+
+        let brain_names: Vec<&str> = per_brain
+            .iter()
+            .map(|(b, _)| b.brain_name.as_str())
+            .collect();
+
+        let mut response = json!({
+            "tasks": tasks_json,
+            "count": count,
+            "total": total,
+            "has_more": has_more,
+            "ready_count": total_ready,
+            "blocked_count": total_blocked,
+            "brains": brain_names,
+        });
+        inject_warnings(&mut response, warnings);
+        json_response(&response)
     }
 
     fn execute_with_store(params: Params, store: &TaskStore, brain_name: &str) -> ToolCallResult {
@@ -325,7 +516,12 @@ impl McpTool for TaskList {
                     },
                     "brain": {
                         "type": "string",
-                        "description": "Target brain name or ID. When provided, lists tasks from that brain instead of locally."
+                        "description": "DEPRECATED: use `brains` instead. Equivalent to `brains: [brain]`."
+                    },
+                    "brains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": BRAINS_PARAM_DESCRIPTION
                     }
                 }
             }),
@@ -1231,5 +1427,98 @@ mod tests {
         );
         assert_eq!(parsed["tasks"][0]["title"], "Task in brain B");
         assert_eq!(parsed["brain"], "brain-b");
+    }
+
+    /// Federated `brains: ["all"]` returns rows from every active brain,
+    /// each tagged with its `brain` field, plus a top-level `brains` array.
+    #[tokio::test]
+    async fn test_list_federated_all_returns_tasks_from_every_brain() {
+        let (_dir, base_ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        for (id, name, prefix) in [
+            ("brain-a-id", "brain-a", "AAA"),
+            ("brain-b-id", "brain-b", "BBB"),
+        ] {
+            base_ctx
+                .stores
+                .db_for_tests()
+                .upsert_brain(&BrainUpsert {
+                    brain_id: id,
+                    name,
+                    prefix,
+                    roots_json: "[]",
+                    notes_json: "[]",
+                    aliases_json: "[]",
+                    archived: false,
+                })
+                .unwrap();
+        }
+        let ctx = base_ctx.with_brain_id("brain-a-id", "brain-a").unwrap();
+
+        for (brain_id, brain_name, task_id, title) in [
+            ("brain-a-id", "brain-a", "task-in-a", "Task in A"),
+            ("brain-b-id", "brain-b", "task-in-b", "Task in B"),
+        ] {
+            let store =
+                TaskStore::with_brain_id(ctx.stores.db_for_tests().clone(), brain_id, brain_name)
+                    .unwrap();
+            store
+                .append(&TaskEvent::from_payload(
+                    task_id,
+                    "test",
+                    TaskCreatedPayload {
+                        title: title.into(),
+                        description: None,
+                        priority: 2,
+                        status: TaskStatus::Open,
+                        due_ts: None,
+                        task_type: None,
+                        assignee: None,
+                        defer_until: None,
+                        parent_task_id: None,
+                        display_id: None,
+                    },
+                ))
+                .unwrap();
+        }
+
+        let result = registry
+            .dispatch(
+                "tasks.list",
+                json!({ "status": "open", "brains": ["all"] }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "federated tasks.list should not error: {}",
+            result.content[0].text
+        );
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(
+            parsed["count"], 2,
+            "federated should see both tasks: {parsed}"
+        );
+        let titles: Vec<&str> = parsed["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["title"].as_str().unwrap())
+            .collect();
+        assert!(titles.contains(&"Task in A"));
+        assert!(titles.contains(&"Task in B"));
+        for t in parsed["tasks"].as_array().unwrap() {
+            assert!(
+                t.get("brain").is_some(),
+                "federated task must have brain field: {t}"
+            );
+        }
+        let brains_arr = parsed["brains"]
+            .as_array()
+            .expect("federated has brains array");
+        let brain_names: Vec<&str> = brains_arr.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(brain_names.contains(&"brain-a"));
+        assert!(brain_names.contains(&"brain-b"));
     }
 }
