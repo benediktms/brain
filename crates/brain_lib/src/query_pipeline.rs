@@ -1258,7 +1258,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_alias_table_yields_today_behavior_filter() {
+    async fn empty_tag_aliases_table_yields_today_behavior() {
         // Brain has never been reclustered: alias_lookup is empty. A query
         // for ["bug"] against a chunk tagged ["bugs"] must NOT match — same
         // as today's literal-equality filter.
@@ -1273,7 +1273,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filter_require_expands_through_aliases() {
+    async fn seeded_alias_table_expands_filter() {
         let brain_id = "brain-a";
         let (db, chunk_id) = seed_chunk_with_tags(brain_id, &["bugs"]);
         db.with_write_conn(|conn| {
@@ -1293,7 +1293,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filter_exclude_expands_through_aliases() {
+    async fn seeded_alias_table_expands_exclude() {
         let brain_id = "brain-a";
         let (db, chunk_id) = seed_chunk_with_tags(brain_id, &["bugs"]);
         db.with_write_conn(|conn| {
@@ -1328,6 +1328,264 @@ mod tests {
         assert!(
             surviving.contains(&chunk_id),
             "mixed-case alias rows must lowercase end-to-end — ['BUG'] should retain chunk tagged ['bugs']"
+        );
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Regression suite (`brn-83a.7.2.4.5`) — pin every contract from the
+    // parent plan's "Success criteria":
+    //   • read-only audit invariant (record_tags / task_labels counts)
+    //   • federated per-brain alias isolation (no cluster leakage)
+    //   • federated `["all"]` / `["*"]` over a mix of scanned + unscanned brains
+    // ───────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn audit_invariant_record_tags_unchanged() {
+        // The query path is supposed to be a pure read — `record_tags` and
+        // `task_labels` row counts must NOT change as a side-effect of an
+        // alias-expanding query. Pin the read-only contract.
+        let brain_id = "brain-a";
+        let (db, chunk_id) = seed_chunk_with_tags(brain_id, &["bugs"]);
+        db.with_write_conn(|conn| {
+            // Register the brain so records/tasks FK targets exist.
+            conn.execute(
+                "INSERT INTO brains (brain_id, name, prefix, created_at)
+                 VALUES (?1, 'test-brain', 'TST', strftime('%s', 'now'))",
+                rusqlite::params![brain_id],
+            )?;
+            seed_tag_aliases(
+                conn,
+                brain_id,
+                &[("bug", "bug", "c1"), ("bugs", "bug", "c1")],
+            )?;
+            // Seed a record + task with tags so the count is non-zero and we
+            // would notice an accidental delete/insert.
+            brain_persistence::db::tag_aliases::seed_record_with_tags(
+                conn,
+                "rec-1",
+                brain_id,
+                1_700_000_000,
+                &["bug", "bugs"],
+            )?;
+            brain_persistence::db::tag_aliases::seed_task_with_labels(
+                conn,
+                "task-1",
+                brain_id,
+                1_700_000_000,
+                &["bug"],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let count = |sql: &'static str| -> i64 {
+            db.with_read_conn(|conn| {
+                let c: i64 = conn.query_row(sql, [], |r| r.get(0))?;
+                Ok(c)
+            })
+            .unwrap()
+        };
+        let before_record_tags = count("SELECT COUNT(*) FROM record_tags");
+        let before_task_labels = count("SELECT COUNT(*) FROM task_labels");
+        assert!(
+            before_record_tags > 0 && before_task_labels > 0,
+            "fixture must seed non-zero counts so this test is meaningful"
+        );
+
+        // Run a query that triggers alias expansion.
+        let _ = run_filter(&db, &chunk_id, brain_id, &[String::from("bug")], &[]).await;
+
+        let after_record_tags = count("SELECT COUNT(*) FROM record_tags");
+        let after_task_labels = count("SELECT COUNT(*) FROM task_labels");
+        assert_eq!(
+            before_record_tags, after_record_tags,
+            "record_tags row count must be unchanged across an alias-expanding query"
+        );
+        assert_eq!(
+            before_task_labels, after_task_labels,
+            "task_labels row count must be unchanged across an alias-expanding query"
+        );
+    }
+
+    /// Helper: seed a brain (file + chunk) inside an existing shared `Db`.
+    /// Used by the federated regression tests where multiple brains share the
+    /// same SQLite handle — the `brain_id` column on `files` is the
+    /// per-brain partition.
+    fn seed_brain_with_chunk(
+        db: &Db,
+        brain_id: &str,
+        file_id: &str,
+        path: &str,
+        chunk_id: &str,
+        file_tags: &[&str],
+    ) {
+        let tags_json = serde_json::to_string(file_tags).unwrap();
+        db.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT INTO files (file_id, path, indexing_state, brain_id, tags)
+                 VALUES (?1, ?2, 'idle', ?3, ?4)",
+                rusqlite::params![file_id, path, brain_id, tags_json],
+            )?;
+            conn.execute(
+                "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content)
+                 VALUES (?1, ?2, 0, 'h0', 'arbitrary content for the test fixture')",
+                rusqlite::params![chunk_id, file_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn mock_searcher_for_chunk(chunk_id: &str, file_id: &str, path: &str) -> MockChunkSearcher {
+        MockChunkSearcher::with_results(vec![QueryResult {
+            chunk_id: chunk_id.to_string(),
+            file_id: file_id.to_string(),
+            file_path: path.to_string(),
+            chunk_ord: 0,
+            content: "arbitrary content for the test fixture".to_string(),
+            score: Some(0.05),
+            brain_id: String::new(),
+        }])
+    }
+
+    #[tokio::test]
+    async fn federated_per_brain_alias_isolation() {
+        // Per-brain alias provenance: brain A clusters bug↔bugs, brain B
+        // clusters bug↔defect. Cross-brain query for ["bug"] must return
+        // both chunks (each via its own cluster), and brain A's `bugs`
+        // chunk must NOT match when querying brain B alone — i.e. clusters
+        // do not leak across brains even on a shared `Db`.
+        let db = Db::open_in_memory().unwrap();
+        seed_brain_with_chunk(&db, "brain-a", "fa", "/a.md", "fa:0", &["bugs"]);
+        seed_brain_with_chunk(&db, "brain-b", "fb", "/b.md", "fb:0", &["defect"]);
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(
+                conn,
+                "brain-a",
+                &[("bug", "bug", "ca"), ("bugs", "bug", "ca")],
+            )?;
+            seed_tag_aliases(
+                conn,
+                "brain-b",
+                &[("bug", "bug", "cb"), ("defect", "bug", "cb")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let store_a = mock_searcher_for_chunk("fa:0", "fa", "/a.md");
+        let store_b = mock_searcher_for_chunk("fb:0", "fb", "/b.md");
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let metrics = Arc::new(Metrics::new());
+
+        let federated = FederatedPipeline {
+            db: &db,
+            brains: vec![
+                ("brain-a".into(), "brain-a".into(), Some(store_a)),
+                ("brain-b".into(), "brain-b".into(), Some(store_b)),
+            ],
+            embedder: &embedder,
+            metrics: &metrics,
+        };
+
+        let require = vec![String::from("bug")];
+        let sp = SearchParams::new("ignored", "lookup", 0, 0, &[]).with_tags_require(&require);
+        let result = federated.search_ranked_federated(&sp).await.unwrap();
+
+        let attribution: std::collections::HashMap<&str, &str> = result
+            .chunk_brain
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            attribution.get("fa:0"),
+            Some(&"brain-a"),
+            "brain A's `bugs`-tagged chunk must come back attributed to brain A"
+        );
+        assert_eq!(
+            attribution.get("fb:0"),
+            Some(&"brain-b"),
+            "brain B's `defect`-tagged chunk must come back attributed to brain B"
+        );
+
+        // Per-brain isolation: querying brain B in isolation must NOT match
+        // brain A's `bugs` chunk through brain B's `defect` cluster.
+        let surviving_b_only = run_filter(&db, "fa:0", "brain-b", &require, &[]).await;
+        assert!(
+            !surviving_b_only.contains(&"fa:0".to_string()),
+            "brain B's alias map must not bleed into brain A's chunks"
+        );
+    }
+
+    #[tokio::test]
+    async fn federated_all_brains_includes_unscanned() {
+        // `brains: ["all"]` over a mix of scanned (A, B) and unscanned (C)
+        // brains. A and B return alias-expanded matches. C — which has no
+        // `tag_aliases` rows — returns only literal-match chunks; nothing
+        // leaks into C from A's or B's clusters. Pins the parent plan's
+        // "all-brains expansion" success criterion.
+        let db = Db::open_in_memory().unwrap();
+        seed_brain_with_chunk(&db, "brain-a", "fa", "/a.md", "fa:0", &["bugs"]);
+        seed_brain_with_chunk(&db, "brain-b", "fb", "/b.md", "fb:0", &["defect"]);
+        seed_brain_with_chunk(&db, "brain-c", "fc", "/c.md", "fc:0", &["bug"]);
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(
+                conn,
+                "brain-a",
+                &[("bug", "bug", "ca"), ("bugs", "bug", "ca")],
+            )?;
+            seed_tag_aliases(
+                conn,
+                "brain-b",
+                &[("bug", "bug", "cb"), ("defect", "bug", "cb")],
+            )?;
+            // brain-c: NO alias rows — degenerate "never-reclustered" brain.
+            Ok(())
+        })
+        .unwrap();
+
+        let store_a = mock_searcher_for_chunk("fa:0", "fa", "/a.md");
+        let store_b = mock_searcher_for_chunk("fb:0", "fb", "/b.md");
+        let store_c = mock_searcher_for_chunk("fc:0", "fc", "/c.md");
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let metrics = Arc::new(Metrics::new());
+
+        let federated = FederatedPipeline {
+            db: &db,
+            brains: vec![
+                ("brain-a".into(), "brain-a".into(), Some(store_a)),
+                ("brain-b".into(), "brain-b".into(), Some(store_b)),
+                ("brain-c".into(), "brain-c".into(), Some(store_c)),
+            ],
+            embedder: &embedder,
+            metrics: &metrics,
+        };
+
+        let require = vec![String::from("bug")];
+        let sp = SearchParams::new("ignored", "lookup", 0, 0, &[]).with_tags_require(&require);
+        let result = federated.search_ranked_federated(&sp).await.unwrap();
+
+        let chunks: std::collections::HashSet<&str> =
+            result.ranked.iter().map(|r| r.chunk_id.as_str()).collect();
+        assert!(
+            chunks.contains("fa:0"),
+            "brain A's `bugs` chunk must be returned via alias expansion"
+        );
+        assert!(
+            chunks.contains("fb:0"),
+            "brain B's `defect` chunk must be returned via alias expansion"
+        );
+        assert!(
+            chunks.contains("fc:0"),
+            "brain C's literal `bug` chunk must be returned (literal match — no recluster needed)"
+        );
+
+        // brain-c's chunk must be attributed to brain-c (proves the literal
+        // path went through the brain-c branch, not blended in from another).
+        assert_eq!(
+            result.chunk_brain.get("fc:0").map(|s| s.as_str()),
+            Some("brain-c"),
+            "brain C's chunk must be attributed to brain C, not blended from another brain"
         );
     }
 }
