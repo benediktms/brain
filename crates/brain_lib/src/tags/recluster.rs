@@ -73,42 +73,11 @@ pub struct ReclusterReport {
     pub embedder_version: String,
 }
 
-/// Per-tag fold of `RawTag` rows (from
-/// `crates/brain_persistence/src/db/tags.rs`) across the (Records, Tasks)
-/// sources. Internal to this module.
-#[allow(dead_code)] // populated in subsequent commits within `brn-83a.7.2.3`
-#[derive(Debug, Clone)]
-struct DedupedRawTag {
-    tag: String,
-    total_reference_count: i64,
-    last_seen_at: i64,
-}
-
-/// Snapshot row read from `tag_aliases` before computing the new clusters.
-/// Internal to this module.
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-struct ExistingAlias {
-    raw_tag: String,
-    canonical_tag: String,
-    cluster_id: String,
-    last_run_id: String,
-    embedding: Option<Vec<f32>>,
-    embedder_version: Option<String>,
-    updated_at: String,
-}
-
-/// One row of upsert intent produced by the diff phase. Internal to this
-/// module.
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-struct AliasUpsert {
-    raw_tag: String,
-    canonical_tag: String,
-    cluster_id: String,
-    embedding: Vec<f32>,
-    embedder_version: String,
-}
+// Persistence types (`DedupedRawTag`, `ExistingAlias`, `AliasUpsert`) and
+// the encode/decode codec live in `brain_persistence::db::tag_aliases`. The
+// recluster module reaches them through the `TagAliasReader` /
+// `TagAliasWriter` port traits in `crate::ports`. SQL belongs in
+// `brain_persistence`; see `crates/brain_lib/clippy.toml`.
 
 /// Run a synonym-clustering pass over the calling brain's raw tags.
 ///
