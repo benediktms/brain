@@ -288,3 +288,210 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> String {
     }
     s[..end].to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embedder::MockEmbedder;
+    use brain_persistence::db::tag_aliases as ta;
+
+    /// Seed three records and two tasks producing distinct raw tags
+    /// `bug`, `perf`, `performance` after dedupe across (records, tasks).
+    fn seed_demo_brain(stores: &BrainStores) {
+        let brain_id = stores.brain_id.clone();
+        stores
+            .db_for_tests()
+            .with_write_conn(move |conn| {
+                ta::seed_record_with_tags(conn, "r1", &brain_id, 1000, &["bug", "perf"])?;
+                ta::seed_record_with_tags(conn, "r2", &brain_id, 2000, &["bug"])?;
+                ta::seed_record_with_tags(conn, "r3", &brain_id, 1500, &["bug"])?;
+                ta::seed_task_with_labels(conn, "t1", &brain_id, 3000, &["bug", "perf"])?;
+                ta::seed_task_with_labels(conn, "t2", &brain_id, 4000, &["performance"])?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn recluster_happy_path() {
+        let (_tmp, stores) = BrainStores::in_memory_with_brain_id("happy-brain").unwrap();
+        seed_demo_brain(&stores);
+
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let report = run_recluster(&stores, &embedder, ClusterParams::default())
+            .await
+            .unwrap();
+
+        assert_eq!(report.source_count, 3, "{report:?}");
+        assert!(report.cluster_count >= 1);
+        assert_eq!(report.new_aliases, 3);
+        assert_eq!(report.updated_aliases, 0);
+        assert_eq!(report.stale_aliases, 0);
+        assert_eq!(report.embedder_version, EMBEDDER_VERSION);
+
+        let snapshot = stores.inner_db().read_alias_snapshot().unwrap();
+        assert_eq!(snapshot.len(), 3, "expected 3 alias rows, got {snapshot:?}");
+        for tag in ["bug", "perf", "performance"] {
+            let row = snapshot.get(tag).unwrap_or_else(|| panic!("missing {tag}"));
+            assert_eq!(row.embedder_version.as_deref(), Some(EMBEDDER_VERSION));
+            assert!(
+                row.embedding.as_ref().is_some_and(|v| v.len() == 384),
+                "expected 384-dim cached embedding for {tag}",
+            );
+        }
+
+        let run = stores
+            .db_for_tests()
+            .with_read_conn(|conn| ta::get_run(conn, &report.run_id))
+            .unwrap()
+            .expect("run row should exist");
+        assert!(run.finished_at.is_some());
+        assert!(run.notes.is_none());
+        assert_eq!(run.source_count, Some(3));
+        assert_eq!(run.embedder_version, EMBEDDER_VERSION);
+        assert_eq!(run.triggered_by, "manual");
+    }
+
+    #[tokio::test]
+    async fn recluster_idempotent() {
+        let (_tmp, stores) = BrainStores::in_memory_with_brain_id("idem-brain").unwrap();
+        seed_demo_brain(&stores);
+
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+
+        let r1 = run_recluster(&stores, &embedder, ClusterParams::default())
+            .await
+            .unwrap();
+        let snapshot_before = stores.inner_db().read_alias_snapshot().unwrap();
+
+        let r2 = run_recluster(&stores, &embedder, ClusterParams::default())
+            .await
+            .unwrap();
+        let snapshot_after = stores.inner_db().read_alias_snapshot().unwrap();
+
+        assert_ne!(r1.run_id, r2.run_id);
+        assert_eq!(r2.new_aliases, 0, "idempotent: no new rows on rerun");
+        assert_eq!(r2.updated_aliases, 0, "idempotent: no updates on rerun");
+        assert_eq!(snapshot_before.len(), snapshot_after.len());
+        for (tag, before) in &snapshot_before {
+            let after = snapshot_after
+                .get(tag)
+                .unwrap_or_else(|| panic!("alias {tag} disappeared on rerun"));
+            assert_eq!(before.canonical_tag, after.canonical_tag);
+            assert_eq!(before.cluster_id, after.cluster_id);
+            assert_eq!(before.embedder_version, after.embedder_version);
+        }
+    }
+
+    #[tokio::test]
+    async fn recluster_invalidates_cache_on_version_change() {
+        let (_tmp, stores) = BrainStores::in_memory_with_brain_id("ver-brain").unwrap();
+        seed_demo_brain(&stores);
+
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+
+        let r1 = run_recluster(&stores, &embedder, ClusterParams::default())
+            .await
+            .unwrap();
+        assert!(r1.new_aliases > 0);
+
+        // Stamp every tag_aliases row with a stale embedder_version.
+        let updated = stores
+            .db_for_tests()
+            .with_write_conn(|conn| ta::override_alias_embedder_version(conn, "outdated-v0"))
+            .unwrap();
+        assert_eq!(updated, r1.new_aliases);
+
+        let r2 = run_recluster(&stores, &embedder, ClusterParams::default())
+            .await
+            .unwrap();
+        assert_eq!(r2.new_aliases, 0, "rows already exist");
+        assert_eq!(
+            r2.updated_aliases, r1.source_count,
+            "version mismatch should mark every row as updated",
+        );
+
+        let snapshot = stores.inner_db().read_alias_snapshot().unwrap();
+        for alias in snapshot.values() {
+            assert_eq!(
+                alias.embedder_version.as_deref(),
+                Some(EMBEDDER_VERSION),
+                "expected re-stamped version on every row",
+            );
+        }
+    }
+
+    /// Returns `BrainCoreError::Embedding` from `embed_batch` so the
+    /// failure path triggers between Tx-1 and Tx-2.
+    struct FailingEmbedder;
+
+    impl Embed for FailingEmbedder {
+        fn embed_batch(&self, _texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+            Err(crate::error::BrainCoreError::Embedding(
+                "simulated failure for brn-83a.7.2.3 test".to_string(),
+            ))
+        }
+
+        fn hidden_size(&self) -> usize {
+            384
+        }
+    }
+
+    #[tokio::test]
+    async fn recluster_failure_records_run_row() {
+        let (_tmp, stores) = BrainStores::in_memory_with_brain_id("fail-brain").unwrap();
+        seed_demo_brain(&stores);
+
+        let embedder: Arc<dyn Embed> = Arc::new(FailingEmbedder);
+        let outcome = run_recluster(&stores, &embedder, ClusterParams::default()).await;
+        assert!(outcome.is_err(), "FailingEmbedder must propagate");
+
+        let snapshot = stores.inner_db().read_alias_snapshot().unwrap();
+        assert!(
+            snapshot.is_empty(),
+            "Tx-2 never opened, tag_aliases should be empty: {snapshot:?}",
+        );
+
+        let runs = stores.db_for_tests().with_read_conn(ta::list_runs).unwrap();
+        assert_eq!(runs.len(), 1, "exactly one tag_cluster_runs row");
+        let run = &runs[0];
+        assert!(run.finished_at.is_some(), "Tx-3 must set finished_at");
+        let notes = run.notes.as_deref().expect("Tx-3 must populate notes");
+        assert!(
+            notes.contains("simulated failure"),
+            "notes should carry the embedder error, got {notes:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn recluster_brain_scoping() {
+        let (_tmp, stores_a) = BrainStores::in_memory_with_brain_id("brain-a").unwrap();
+        // Register brain-b directly so the FK from records.brain_id resolves.
+        stores_a
+            .db_for_tests()
+            .ensure_brain_registered("brain-b", "brain-b")
+            .unwrap();
+
+        stores_a
+            .db_for_tests()
+            .with_write_conn(|conn| {
+                ta::seed_record_with_tags(conn, "ra", "brain-a", 1000, &["alpha"])?;
+                ta::seed_record_with_tags(conn, "rb", "brain-b", 1000, &["beta"])?;
+                Ok(())
+            })
+            .unwrap();
+
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let report = run_recluster(&stores_a, &embedder, ClusterParams::default())
+            .await
+            .unwrap();
+
+        assert_eq!(report.source_count, 1, "brain-a sees only its own tag");
+        let snapshot = stores_a.inner_db().read_alias_snapshot().unwrap();
+        assert!(snapshot.contains_key("alpha"));
+        assert!(
+            !snapshot.contains_key("beta"),
+            "brain-b's tag must not leak into brain-a's run",
+        );
+    }
+}

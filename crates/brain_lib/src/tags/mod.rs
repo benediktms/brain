@@ -5,18 +5,16 @@
 //! - [`recluster`] wires that algorithm into the v43 schema as a runnable
 //!   per-brain job (`brn-83a.7.2.3`).
 
-// `clustering` and `recluster` carry `#[allow(dead_code)]` while
-// `brn-83a.7.2.3` is being implemented incrementally. Both annotations
-// come off in the final commit of that task once `run_recluster` calls
-// `cluster_tags` and exercises the helper types.
+// `clustering` and `recluster` are reachable only from the test mod inside
+// `recluster.rs` until sibling `brn-83a.7.2.5` (MCP/CLI surface) wires
+// `run_recluster` into a non-test caller. Until then the dead-code lint
+// would cascade across every private helper inside `recluster.rs`. Both
+// allows lift in `.2.5`.
 #[allow(dead_code)]
 pub(crate) mod clustering;
 #[allow(dead_code)]
 pub mod recluster;
 
-// `pub use` re-exports trigger `unused_imports` until sibling
-// `brn-83a.7.2.5` (MCP/CLI surface) consumes them. The allow comes off
-// when that task lands.
 #[allow(unused_imports)]
 pub use clustering::ClusterParams;
 #[allow(unused_imports)]

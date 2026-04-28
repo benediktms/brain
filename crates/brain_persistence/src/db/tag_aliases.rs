@@ -305,6 +305,156 @@ pub(crate) fn decode_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// Test/integration helpers (gated behind `test-utils` for brain_lib tests)
+// ---------------------------------------------------------------------------
+
+/// Inspect a single `tag_cluster_runs` row by `run_id`. Returns `None` if
+/// the run is absent (e.g. Tx-1 never committed).
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Debug, Clone)]
+pub struct TagClusterRunRow {
+    pub run_id: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub source_count: Option<i64>,
+    pub cluster_count: Option<i64>,
+    pub embedder_version: String,
+    pub threshold: f32,
+    pub triggered_by: String,
+    pub notes: Option<String>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn get_run(conn: &Connection, run_id: &str) -> Result<Option<TagClusterRunRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT run_id, started_at, finished_at, source_count, cluster_count,
+                embedder_version, threshold, triggered_by, notes
+         FROM tag_cluster_runs WHERE run_id = ?1",
+    )?;
+    let mut rows = stmt.query(params![run_id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(TagClusterRunRow {
+            run_id: row.get(0)?,
+            started_at: row.get(1)?,
+            finished_at: row.get(2)?,
+            source_count: row.get(3)?,
+            cluster_count: row.get(4)?,
+            embedder_version: row.get(5)?,
+            threshold: row.get(6)?,
+            triggered_by: row.get(7)?,
+            notes: row.get(8)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// List every `tag_cluster_runs` row, newest first by `started_at`. Used
+/// by tests that want to inspect run state without knowing the run_id
+/// (e.g. the failure path).
+#[cfg(any(test, feature = "test-utils"))]
+pub fn list_runs(conn: &Connection) -> Result<Vec<TagClusterRunRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT run_id, started_at, finished_at, source_count, cluster_count,
+                embedder_version, threshold, triggered_by, notes
+         FROM tag_cluster_runs ORDER BY started_at DESC",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(TagClusterRunRow {
+            run_id: row.get(0)?,
+            started_at: row.get(1)?,
+            finished_at: row.get(2)?,
+            source_count: row.get(3)?,
+            cluster_count: row.get(4)?,
+            embedder_version: row.get(5)?,
+            threshold: row.get(6)?,
+            triggered_by: row.get(7)?,
+            notes: row.get(8)?,
+        });
+    }
+    Ok(out)
+}
+
+/// Seed a minimal `records` row with associated `record_tags` entries for
+/// integration tests. Mirrors only the columns required by
+/// `collect_raw_tags_for_brain`: `record_id`, `brain_id`, `updated_at`,
+/// plus the FK target columns set to safe defaults.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn seed_record_with_tags(
+    conn: &Connection,
+    record_id: &str,
+    brain_id: &str,
+    updated_at: i64,
+    tags: &[&str],
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO records (
+             record_id, title, kind, status, description, content_hash,
+             content_size, media_type, task_id, actor, created_at, updated_at,
+             retention_class, pinned, payload_available, content_encoding,
+             original_size, brain_id, searchable, embedded_at
+         ) VALUES (
+             ?1, ?2, 'document', 'active', NULL, 'hash',
+             4, 'text/plain', NULL, 'test-agent', ?3, ?3,
+             NULL, 0, 1, 'identity',
+             NULL, ?4, 1, NULL
+         )",
+        params![
+            record_id,
+            format!("record {record_id}"),
+            updated_at,
+            brain_id
+        ],
+    )?;
+    for tag in tags {
+        conn.execute(
+            "INSERT INTO record_tags (record_id, tag) VALUES (?1, ?2)",
+            params![record_id, tag],
+        )?;
+    }
+    Ok(())
+}
+
+/// Seed a minimal `tasks` row with associated `task_labels` entries for
+/// integration tests.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn seed_task_with_labels(
+    conn: &Connection,
+    task_id: &str,
+    brain_id: &str,
+    updated_at: i64,
+    labels: &[&str],
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO tasks (task_id, title, status, priority, task_type,
+                            brain_id, created_at, updated_at)
+         VALUES (?1, ?2, 'open', 1, 'task', ?3, ?4, ?4)",
+        params![task_id, format!("task {task_id}"), brain_id, updated_at,],
+    )?;
+    for label in labels {
+        conn.execute(
+            "INSERT INTO task_labels (task_id, label) VALUES (?1, ?2)",
+            params![task_id, label],
+        )?;
+    }
+    Ok(())
+}
+
+/// Test-only: stamp a different `embedder_version` onto every
+/// `tag_aliases` row so the next `run_recluster` sees the cache as stale
+/// and re-embeds. Used by the cache-invalidation test.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn override_alias_embedder_version(conn: &Connection, version: &str) -> Result<usize> {
+    conn.execute(
+        "UPDATE tag_aliases SET embedder_version = ?1",
+        params![version],
+    )
+    .map_err(BrainCoreError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

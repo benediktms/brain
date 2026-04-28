@@ -26,6 +26,13 @@ aes-gcm = { workspace = true }
 rand = { workspace = true }
 base64 = "0.22"
 
+[features]
+default = []
+# Exposes seed/inspect helpers (e.g. tag_aliases::seed_record_with_tags)
+# for cross-crate integration tests. Enable from brain_lib's matching
+# feature; not for production use.
+test-utils = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"
