@@ -677,9 +677,16 @@ mod tests {
         //   literal-match `["bug"]`   → tag_match=1.0
         //   alias-match   `["bugs"]`  → tag_match=0.7
         //   no-match      `["unrel"]` → tag_match=0.0
-        // Under WeightProfile::Default (1/6 weight each), the hybrid score
-        // separates by `(1.0 − 0.7) × 1/6 = 0.05` and `0.7 × 1/6 ≈ 0.117` —
-        // the ordering literal > alias > none must hold.
+        // All non-tag signals are zeroed below so the only contribution to
+        // hybrid_score is `tag_match × tag_match_weight`. Under
+        // `WeightProfile::Default` (1/6 each) the separation between literal
+        // and alias is `(1.0 − alias_discount) × tag_match_weight = 0.05`
+        // and between alias and none is `alias_discount × tag_match_weight
+        // ≈ 0.117`. The bound `(1 − alias_discount) × tag_match_weight > 0`
+        // is what guarantees the ordering — when other signals carry weight
+        // (e.g. a real query mixing vector / bm25), the invariant only holds
+        // for chunks that are otherwise tied. Pinning the zeroed-signals
+        // baseline here is enough to catch regressions in the discount math.
         let make = |id: &str, tag: &str| CandidateSignals {
             chunk_id: id.into(),
             sim_vector: 0.0,
