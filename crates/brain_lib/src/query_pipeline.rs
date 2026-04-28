@@ -1599,4 +1599,122 @@ mod tests {
             "brain C's chunk must be attributed to brain C, not blended from another brain"
         );
     }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Edge cases (`brn-83a.7.2.4.7`):
+    //   • exclude-side cross-brain isolation (mirror of the require-side test)
+    //   • `Some("")` brain_id collapses to no-alias semantics, matching the
+    //     contract documented on `SearchParams.brain_id`
+    // ───────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn federated_exclude_per_brain_isolation() {
+        // Mirror of `federated_per_brain_alias_isolation` with `tags_exclude`.
+        // Each brain must use its OWN cluster for exclude expansion — A's
+        // `bug↔bugs` mapping must drop A's `bugs` chunk; B's `bug↔defect`
+        // mapping must drop B's `defect` chunk; nothing leaks across.
+        let db = Db::open_in_memory().unwrap();
+        seed_brain_with_chunk(&db, "brain-a", "fa", "/a.md", "fa:0", &["bugs"]);
+        seed_brain_with_chunk(&db, "brain-b", "fb", "/b.md", "fb:0", &["defect"]);
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(
+                conn,
+                "brain-a",
+                &[("bug", "bug", "ca"), ("bugs", "bug", "ca")],
+            )?;
+            seed_tag_aliases(
+                conn,
+                "brain-b",
+                &[("bug", "bug", "cb"), ("defect", "bug", "cb")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let store_a = mock_searcher_for_chunk("fa:0", "fa", "/a.md");
+        let store_b = mock_searcher_for_chunk("fb:0", "fb", "/b.md");
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let metrics = Arc::new(Metrics::new());
+
+        let federated = FederatedPipeline {
+            db: &db,
+            brains: vec![
+                ("brain-a".into(), "brain-a".into(), Some(store_a)),
+                ("brain-b".into(), "brain-b".into(), Some(store_b)),
+            ],
+            embedder: &embedder,
+            metrics: &metrics,
+        };
+
+        let exclude = vec![String::from("bug")];
+        let sp = SearchParams::new("ignored", "lookup", 0, 0, &[]).with_tags_exclude(&exclude);
+        let result = federated.search_ranked_federated(&sp).await.unwrap();
+
+        let chunks: std::collections::HashSet<&str> =
+            result.ranked.iter().map(|r| r.chunk_id.as_str()).collect();
+        assert!(
+            !chunks.contains("fa:0"),
+            "brain A's `bugs` chunk must be excluded via brain A's bug↔bugs cluster"
+        );
+        assert!(
+            !chunks.contains("fb:0"),
+            "brain B's `defect` chunk must be excluded via brain B's bug↔defect cluster"
+        );
+
+        // Per-brain isolation: querying brain B alone with exclude=["bug"]
+        // against brain A's `bugs`-tagged chunk must NOT drop it through
+        // brain B's `defect` cluster — brain B's exclude expansion is
+        // {bug, defect}, not {bug, bugs}. The chunk should pass through.
+        let surviving_b_only = run_filter(&db, "fa:0", "brain-b", &[], &exclude).await;
+        assert!(
+            surviving_b_only.contains(&"fa:0".to_string()),
+            "brain B's exclude expansion must NOT drop a chunk tagged `bugs` — \
+             that mapping lives in brain A's cluster, not brain B's"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_brain_id_collapses_to_no_alias_expansion() {
+        // The contract on `SearchParams.brain_id` says `Some("")` MUST be
+        // treated as `None` — the empty string is reserved for "caller
+        // could not resolve a brain", not "all brains". Pin this so a
+        // future refactor that drops the `is_empty()` guard at
+        // `query_pipeline.rs:371` cannot silently start passing the empty
+        // string through to `alias_lookup_for_brain`.
+        let brain_id = "brain-a";
+        let (db, chunk_id) = seed_chunk_with_tags(brain_id, &["bugs"]);
+        // Seed an alias map for the real brain. If the empty-string path
+        // accidentally activated alias expansion, the chunk tagged `bugs`
+        // would be retained for `tags_require=["bug"]` — exactly what the
+        // assertion below rules out.
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(
+                conn,
+                brain_id,
+                &[("bug", "bug", "c1"), ("bugs", "bug", "c1")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        // brain_id="" — Some("") should behave like None: no alias path.
+        let surviving_empty = run_filter(&db, &chunk_id, "", &[String::from("bug")], &[]).await;
+        assert!(
+            !surviving_empty.contains(&chunk_id),
+            "Some(\"\") brain_id must NOT activate alias expansion — chunk tagged \
+             `bugs` should be filtered out for tags_require=[\"bug\"]"
+        );
+
+        // Sanity: the SAME setup with brain_id="brain-a" DOES retain the
+        // chunk via alias expansion. Proves the test fixture is meaningful
+        // (i.e. the Some("") result above is from the empty-string path,
+        // not from a degenerate setup).
+        let surviving_real =
+            run_filter(&db, &chunk_id, brain_id, &[String::from("bug")], &[]).await;
+        assert!(
+            surviving_real.contains(&chunk_id),
+            "fixture sanity: with brain_id=\"brain-a\" the chunk must be retained \
+             via alias expansion — otherwise the previous assertion is vacuous"
+        );
+    }
 }
