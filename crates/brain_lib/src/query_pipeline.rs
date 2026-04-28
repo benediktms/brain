@@ -14,7 +14,9 @@ use crate::capsule::generate_stub_capsule;
 use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
-use crate::ports::{ChunkMetaReader, ChunkSearcher, EpisodeReader, FtsSearcher, GraphLinkReader};
+use crate::ports::{
+    ChunkMetaReader, ChunkSearcher, EpisodeReader, FtsSearcher, GraphLinkReader, TagAliasReader,
+};
 use crate::ranking::{
     CandidateSignals, FusionConfidence, RerankCandidate, Reranker, RerankerPolicy, Weights,
     compute_fusion_confidence, rank_candidates, resolve_intent,
@@ -30,6 +32,65 @@ use brain_persistence::store::VectorSearchMode;
 use brain_persistence::store::{DEFAULT_NPROBES, StoreReader};
 
 const CANDIDATE_LIMIT: usize = 50;
+
+/// Expand a caller-supplied tag list through a per-brain alias projection.
+///
+/// For each input tag (lowercased), looks up its canonical form in
+/// `alias_lookup`. If found, every raw tag in the same canonical class is
+/// included; otherwise the tag passes through verbatim (as its own class).
+/// Output is deduplicated and entirely lowercase. Idempotent on
+/// re-application.
+///
+/// `alias_lookup` is expected to come from
+/// `TagAliasReader::alias_lookup_for_brain`, which already lowercases its
+/// keys and values. An empty map collapses this to a pure lowercasing pass —
+/// the bit-for-bit behavior brains without a recluster run get.
+fn expand_tags_via_aliases(
+    input: &[String],
+    alias_lookup: &std::collections::HashMap<String, String>,
+) -> Vec<String> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+    let lowered: Vec<String> = input.iter().map(|t| t.to_lowercase()).collect();
+    if alias_lookup.is_empty() {
+        let mut out = lowered;
+        out.sort();
+        out.dedup();
+        return out;
+    }
+    // Build the inverse: canonical_tag → set of raw_tags sharing it.
+    let mut by_canonical: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (raw, canonical) in alias_lookup {
+        by_canonical
+            .entry(canonical.as_str())
+            .or_default()
+            .push(raw.as_str());
+    }
+    let mut out: Vec<String> = Vec::with_capacity(lowered.len());
+    for tag in &lowered {
+        match alias_lookup.get(tag.as_str()) {
+            Some(canonical) => {
+                // The tag is known — emit the canonical itself plus every
+                // raw_tag that maps to it. The canonical may not appear as
+                // a key in `alias_lookup` (e.g. when the recluster job
+                // chose a representative tag that has no separate raw row),
+                // so it must be unioned in explicitly.
+                out.push(canonical.clone());
+                if let Some(members) = by_canonical.get(canonical.as_str()) {
+                    out.extend(members.iter().map(|s| (*s).to_string()));
+                }
+            }
+            None => {
+                // Unknown tag — passes through as its own (singleton) class.
+                out.push(tag.clone());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
 
 /// Result of a reflect call.
 #[derive(Debug)]
@@ -190,7 +251,13 @@ impl<'a> SearchParams<'a> {
 pub struct QueryPipeline<'a, S = StoreReader, D = Db>
 where
     S: ChunkSearcher + Send + Sync,
-    D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
+    D: ChunkMetaReader
+        + FtsSearcher
+        + EpisodeReader
+        + GraphLinkReader
+        + TagAliasReader
+        + Send
+        + Sync,
 {
     /// SQLite database — abstracted via port traits.
     db: &'a D,
@@ -205,7 +272,13 @@ where
 impl<'a, S, D> QueryPipeline<'a, S, D>
 where
     S: ChunkSearcher + Send + Sync,
-    D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
+    D: ChunkMetaReader
+        + FtsSearcher
+        + EpisodeReader
+        + GraphLinkReader
+        + TagAliasReader
+        + Send
+        + Sync,
 {
     pub fn new(
         db: &'a D,
@@ -288,6 +361,28 @@ where
         let brain_ids = params.brain_ids;
         let profile = resolve_intent(params.intent);
         let weights = Weights::from_profile(profile);
+
+        // 0. Read-time alias projection: build the per-brain (raw_tag →
+        //    canonical_tag) map and pre-expand tags_require / tags_exclude
+        //    through it. Empty `brain_id` (or empty alias table) collapses
+        //    to today's literal-match behavior. Held in scope through the
+        //    rank stage — `brn-83a.7.2.4.4` will pass it to `tag_match_score`.
+        let alias_lookup = match params.brain_id {
+            Some(b) if !b.is_empty() => self.db.alias_lookup_for_brain(b).unwrap_or_default(),
+            _ => HashMap::new(),
+        };
+        // Per-input-tag cluster expansions for the require side. Each entry
+        // is the full canonical-class membership of one input tag, lowercased.
+        // Filter semantics: AND across these vectors, OR within each. Empty
+        // alias table ⇒ each cluster is just `[input_lower]` (literal-only).
+        let tags_require_clusters: Vec<Vec<String>> = params
+            .tags_require
+            .iter()
+            .map(|t| expand_tags_via_aliases(std::slice::from_ref(t), &alias_lookup))
+            .collect();
+        // Exclude side: union of every cluster's members. Filter semantics:
+        // chunk must contain NONE of these. Flat vector is correct here.
+        let tags_exclude_expanded = expand_tags_via_aliases(params.tags_exclude, &alias_lookup);
 
         // 1. Embed query
         let vecs =
@@ -496,21 +591,21 @@ where
                         return false;
                     }
                 }
-                // Tag filters — compute lowercase tags once for both checks
-                if !params.tags_require.is_empty() || !params.tags_exclude.is_empty() {
+                // Tag filters — clusters / expanded vectors precomputed above.
+                if !tags_require_clusters.is_empty() || !tags_exclude_expanded.is_empty() {
                     let lower_tags: Vec<String> = c.tags.iter().map(|t| t.to_lowercase()).collect();
-                    // Require (AND): all must be present
-                    if !params.tags_require.iter().all(|req| {
-                        let req_lower = req.to_lowercase();
-                        lower_tags.iter().any(|t| t == &req_lower)
-                    }) {
+                    // Require: AND across input tags, OR within each cluster.
+                    if !tags_require_clusters
+                        .iter()
+                        .all(|cluster| cluster.iter().any(|m| lower_tags.iter().any(|t| t == m)))
+                    {
                         return false;
                     }
-                    // Exclude (NOR): none may be present
-                    if params.tags_exclude.iter().any(|exc| {
-                        let exc_lower = exc.to_lowercase();
-                        lower_tags.iter().any(|t| t == &exc_lower)
-                    }) {
+                    // Exclude (NOR): none of the expanded set may be present.
+                    if tags_exclude_expanded
+                        .iter()
+                        .any(|exc| lower_tags.iter().any(|t| t == exc))
+                    {
                         return false;
                     }
                 }
@@ -811,7 +906,13 @@ where
 pub struct FederatedPipeline<'a, S = StoreReader, D = Db>
 where
     S: ChunkSearcher + Send + Sync,
-    D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
+    D: ChunkMetaReader
+        + FtsSearcher
+        + EpisodeReader
+        + GraphLinkReader
+        + TagAliasReader
+        + Send
+        + Sync,
 {
     /// Shared unified SQLite database — abstracted via port traits.
     pub db: &'a D,
@@ -831,7 +932,13 @@ where
 impl<'a, S, D> FederatedPipeline<'a, S, D>
 where
     S: ChunkSearcher + Send + Sync,
-    D: ChunkMetaReader + FtsSearcher + EpisodeReader + GraphLinkReader + Send + Sync,
+    D: ChunkMetaReader
+        + FtsSearcher
+        + EpisodeReader
+        + GraphLinkReader
+        + TagAliasReader
+        + Send
+        + Sync,
 {
     /// Search across all configured brains, returning merged ranked results
     /// with brain attribution before packing into stubs.
@@ -990,5 +1097,235 @@ where
         search_result.fusion_confidence = federated.fusion_confidence;
 
         Ok(search_result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| (*x).to_string()).collect()
+    }
+
+    fn alias_map(rows: &[(&str, &str)]) -> HashMap<String, String> {
+        rows.iter()
+            .map(|(raw, canonical)| (raw.to_string(), canonical.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn expand_tags_via_aliases_empty_alias_map_passthrough() {
+        let out = expand_tags_via_aliases(&s(&["Bug", "perf"]), &HashMap::new());
+        assert_eq!(out, s(&["bug", "perf"]));
+    }
+
+    #[test]
+    fn expand_tags_via_aliases_empty_input_empty_output() {
+        let out = expand_tags_via_aliases(&[], &HashMap::new());
+        assert!(out.is_empty());
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let out2 = expand_tags_via_aliases(&[], &lookup);
+        assert!(out2.is_empty());
+    }
+
+    #[test]
+    fn expand_tags_via_aliases_single_cluster() {
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug"), ("defect", "bug")]);
+        let out = expand_tags_via_aliases(&s(&["bug"]), &lookup);
+        assert_eq!(out, s(&["bug", "bugs", "defect"]));
+    }
+
+    #[test]
+    fn expand_tags_via_aliases_multi_cluster() {
+        let lookup = alias_map(&[
+            ("bug", "bug"),
+            ("bugs", "bug"),
+            ("perf", "perf"),
+            ("performance", "perf"),
+        ]);
+        let out = expand_tags_via_aliases(&s(&["bug", "perf"]), &lookup);
+        assert_eq!(out, s(&["bug", "bugs", "perf", "performance"]));
+    }
+
+    #[test]
+    fn expand_tags_via_aliases_unknown_tag_passthrough() {
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let out = expand_tags_via_aliases(&s(&["bug", "novel"]), &lookup);
+        assert_eq!(out, s(&["bug", "bugs", "novel"]));
+    }
+
+    #[test]
+    fn expand_tags_via_aliases_lowercases_caller_input() {
+        // The lookup is already lowercased (per `alias_lookup_for_brain`'s
+        // contract), but caller-supplied tags may be mixed-case.
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let out = expand_tags_via_aliases(&s(&["BUG"]), &lookup);
+        assert_eq!(out, s(&["bug", "bugs"]));
+    }
+
+    #[test]
+    fn expand_tags_via_aliases_canonical_not_in_raw_keys() {
+        // Recluster may pick a canonical tag that itself has no raw_tag row
+        // — e.g. seed inserts ("Bug", "Bugs") meaning raw "bug" maps to
+        // canonical "bugs", but "bugs" is not separately a raw_tag key in
+        // the lookup. The cluster must still include the canonical.
+        let lookup = alias_map(&[("bug", "bugs")]);
+        let out = expand_tags_via_aliases(&s(&["bug"]), &lookup);
+        assert_eq!(out, s(&["bug", "bugs"]));
+    }
+
+    #[test]
+    fn expand_tags_via_aliases_idempotent() {
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug"), ("defect", "bug")]);
+        let once = expand_tags_via_aliases(&s(&["bug"]), &lookup);
+        let twice = expand_tags_via_aliases(&once, &lookup);
+        assert_eq!(once, twice);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Filter integration tests — drive `search_ranked_with_diagnostics`
+    // against an in-memory `Db` with a hand-stuffed file+chunk row, a
+    // `MockChunkSearcher` returning that chunk_id, and seeded `tag_aliases`.
+    // No LanceDB I/O. Exercises the actual filter wiring under the alias
+    // expansion built above.
+    // ───────────────────────────────────────────────────────────────────────
+
+    use crate::embedder::{Embed, MockEmbedder};
+    use crate::metrics::Metrics;
+    use crate::ports::mock::MockChunkSearcher;
+    use brain_persistence::db::Db;
+    use brain_persistence::db::tag_aliases::seed_tag_aliases;
+    use brain_persistence::store::QueryResult;
+    use std::sync::Arc;
+
+    /// Seed an in-memory `Db` with a single file (carrying `tags`) plus a
+    /// single chunk. Returns `(db, chunk_id)`.
+    fn seed_chunk_with_tags(brain_id: &str, file_tags: &[&str]) -> (Db, String) {
+        let db = Db::open_in_memory().unwrap();
+        let tags_json = serde_json::to_string(file_tags).unwrap();
+        db.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT INTO files (file_id, path, indexing_state, brain_id, tags)
+                 VALUES ('f1', '/test.md', 'idle', ?1, ?2)",
+                rusqlite::params![brain_id, tags_json],
+            )?;
+            conn.execute(
+                "INSERT INTO chunks (chunk_id, file_id, chunk_ord, chunk_hash, content)
+                 VALUES ('f1:0', 'f1', 0, 'h0', 'arbitrary content for the test fixture')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        (db, "f1:0".to_string())
+    }
+
+    fn mock_searcher_for(chunk_id: &str) -> MockChunkSearcher {
+        MockChunkSearcher::with_results(vec![QueryResult {
+            chunk_id: chunk_id.to_string(),
+            file_id: "f1".to_string(),
+            file_path: "/test.md".to_string(),
+            chunk_ord: 0,
+            content: "arbitrary content for the test fixture".to_string(),
+            score: Some(0.05),
+            brain_id: String::new(),
+        }])
+    }
+
+    /// Run `search_ranked_with_diagnostics` against the seeded db with the
+    /// given require/exclude filters, returning the chunk_ids that survive.
+    async fn run_filter(
+        db: &Db,
+        chunk_id: &str,
+        brain_id: &str,
+        tags_require: &[String],
+        tags_exclude: &[String],
+    ) -> Vec<String> {
+        let store = mock_searcher_for(chunk_id);
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let metrics = Arc::new(Metrics::new());
+        let pipeline = QueryPipeline::new(db, &store, &embedder, &metrics);
+        let sp = SearchParams::new("ignored-by-mock", "lookup", 0, 0, &[])
+            .with_brain_id(Some(brain_id))
+            .with_tags_require(tags_require)
+            .with_tags_exclude(tags_exclude);
+        let (ranked, _confidence, _diag) =
+            pipeline.search_ranked_with_diagnostics(&sp).await.unwrap();
+        ranked.into_iter().map(|r| r.chunk_id).collect()
+    }
+
+    #[tokio::test]
+    async fn empty_alias_table_yields_today_behavior_filter() {
+        // Brain has never been reclustered: alias_lookup is empty. A query
+        // for ["bug"] against a chunk tagged ["bugs"] must NOT match — same
+        // as today's literal-equality filter.
+        let brain_id = "brain-empty";
+        let (db, chunk_id) = seed_chunk_with_tags(brain_id, &["bugs"]);
+        // No tag_aliases rows seeded.
+        let surviving = run_filter(&db, &chunk_id, brain_id, &[String::from("bug")], &[]).await;
+        assert!(
+            !surviving.contains(&chunk_id),
+            "candidate must be filtered out when alias table is empty (literal-only)"
+        );
+    }
+
+    #[tokio::test]
+    async fn filter_require_expands_through_aliases() {
+        let brain_id = "brain-a";
+        let (db, chunk_id) = seed_chunk_with_tags(brain_id, &["bugs"]);
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(
+                conn,
+                brain_id,
+                &[("bug", "bug", "c1"), ("bugs", "bug", "c1")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let surviving = run_filter(&db, &chunk_id, brain_id, &[String::from("bug")], &[]).await;
+        assert!(
+            surviving.contains(&chunk_id),
+            "candidate tagged 'bugs' must be retained for tags_require=['bug'] when bug↔bugs cluster"
+        );
+    }
+
+    #[tokio::test]
+    async fn filter_exclude_expands_through_aliases() {
+        let brain_id = "brain-a";
+        let (db, chunk_id) = seed_chunk_with_tags(brain_id, &["bugs"]);
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(
+                conn,
+                brain_id,
+                &[("bug", "bug", "c1"), ("bugs", "bug", "c1")],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let surviving = run_filter(&db, &chunk_id, brain_id, &[], &[String::from("bug")]).await;
+        assert!(
+            !surviving.contains(&chunk_id),
+            "candidate tagged 'bugs' must be excluded by tags_exclude=['bug'] when bug↔bugs cluster"
+        );
+    }
+
+    #[tokio::test]
+    async fn filter_handles_mixed_case_alias_rows() {
+        // alias_lookup_for_brain lowercases keys/values at the boundary,
+        // so a row inserted as ("Bug", "Bugs") behaves like ("bug", "bugs")
+        // and a query for ["BUG"] retains a chunk tagged ["bugs"].
+        let brain_id = "brain-a";
+        let (db, chunk_id) = seed_chunk_with_tags(brain_id, &["bugs"]);
+        db.with_write_conn(|conn| {
+            seed_tag_aliases(conn, brain_id, &[("Bug", "Bugs", "c1")])?;
+            Ok(())
+        })
+        .unwrap();
+        let surviving = run_filter(&db, &chunk_id, brain_id, &[String::from("BUG")], &[]).await;
+        assert!(
+            surviving.contains(&chunk_id),
+            "mixed-case alias rows must lowercase end-to-end — ['BUG'] should retain chunk tagged ['bugs']"
+        );
     }
 }
