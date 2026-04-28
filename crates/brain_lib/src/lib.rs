@@ -30,6 +30,7 @@ pub mod scanner;
 pub mod search_service;
 pub mod stores;
 pub mod summarizer;
+pub(crate) mod tags;
 pub mod tasks;
 pub mod tokens;
 pub mod uri;

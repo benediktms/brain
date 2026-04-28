@@ -916,7 +916,7 @@ fn build_prefix_map(brains: &HashMap<String, BrainInstance>) -> Vec<(PathBuf, St
         .collect();
 
     // Sort by path component count descending (longest prefix first)
-    map.sort_by(|(a, _), (b, _)| b.components().count().cmp(&a.components().count()));
+    map.sort_by_key(|(p, _)| std::cmp::Reverse(p.components().count()));
 
     map
 }

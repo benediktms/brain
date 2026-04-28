@@ -319,11 +319,8 @@ mod integration_tests {
         let sock = tmp.path().join("client_test.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let default_brain_id = ctx.brain_id().to_string();
+        let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
         let token = server.cancellation_token();
         tokio::spawn(async move { server.run().await });
@@ -345,11 +342,8 @@ mod integration_tests {
         let sock = tmp.path().join("avail_test.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let default_brain_id = ctx.brain_id().to_string();
+        let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
         let token = server.cancellation_token();
         tokio::spawn(async move { server.run().await });
@@ -395,11 +389,8 @@ mod integration_tests {
         let sock = tmp.path().join("backoff_ok.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let default_brain_id = ctx.brain_id().to_string();
+        let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
         let token = server.cancellation_token();
         tokio::spawn(async move { server.run().await });
@@ -423,10 +414,6 @@ mod integration_tests {
 
         // Pre-create the context so the spawned task only needs to bind.
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
 
         // Start the server after 100ms — first attempt at 0ms fails,
         // second attempt at ~200ms succeeds.

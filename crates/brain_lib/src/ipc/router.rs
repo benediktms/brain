@@ -156,9 +156,10 @@ mod tests {
         } else {
             ctx.brain_id().to_string()
         };
+        // Register a SECOND brain "my-brain" with a distinct id, then dispatch to it.
         ctx.stores
             .db_for_tests()
-            .ensure_brain_registered(&brain_id, "my-brain")
+            .ensure_brain_registered("my-brain-id", "my-brain")
             .unwrap();
         let router = BrainRouter::new(Arc::new(ctx), brain_id);
 

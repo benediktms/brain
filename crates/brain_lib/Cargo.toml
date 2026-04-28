@@ -6,9 +6,10 @@ edition.workspace = true
 [features]
 default = []
 accelerate = ["candle-core/accelerate"]
-# Exposes test-only accessors (e.g. BrainStores::db_for_tests). Enable from
-# integration tests that need direct DB access; not for production use.
-test-utils = []
+# Exposes test-only accessors (e.g. BrainStores::db_for_tests) and the
+# matching brain-persistence seed helpers. Enable from integration tests
+# that need direct DB access; not for production use.
+test-utils = ["brain-persistence/test-utils"]
 
 [dependencies]
 brain-persistence = { path = "../brain_persistence" }
@@ -60,6 +61,13 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 ulid = { workspace = true }
 wiremock = "0.6"
+# Self-reference activates the `test-utils` feature for integration tests in
+# `tests/*.rs`. Cargo compiles `brain-lib` as a regular dependency for those
+# tests (cfg(test) = false), so without this dep the `db_for_tests()` accessors
+# gated by `#[cfg(any(test, feature = "test-utils"))]` are invisible. Production
+# builds don't pull dev-dependencies, so the gate still keeps these accessors
+# out of shipped binaries.
+brain-lib = { path = ".", features = ["test-utils"] }
 
 [[bench]]
 name = "latency"

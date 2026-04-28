@@ -21,6 +21,7 @@ mod record_list;
 mod record_save_snapshot;
 mod record_search;
 mod record_tag;
+mod scope;
 mod status;
 mod task_apply_event;
 mod task_close;
@@ -33,6 +34,7 @@ mod task_list;
 mod task_next;
 
 pub use helpers::*;
+pub use scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, Scope, resolve_scope, resolve_single_scope};
 
 use std::future::Future;
 use std::pin::Pin;
@@ -214,8 +216,13 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
+        // Use a non-empty brain_id so the strict ambient-resolution check in
+        // `resolve_scope` succeeds. Use prefix "TST" so it does not collide
+        // with the v22 "(unscoped)" sentinel brain (whose prefix is also "NSX")
+        // in `resolve_brain_from_prefix` lookups during task ID resolution.
         let (tmp, stores) =
-            crate::stores::BrainStores::in_memory().expect("checked in test assertions");
+            crate::stores::BrainStores::in_memory_with_brain("test-brain-id", "test-brain", "TST")
+                .expect("checked in test assertions");
 
         let lance_path = tmp.path().join("test_lance");
         let store = brain_persistence::store::Store::open_or_create(&lance_path)

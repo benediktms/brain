@@ -693,6 +693,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "blake3",
+ "brain-lib",
  "brain-persistence",
  "candle-core",
  "candle-nn",

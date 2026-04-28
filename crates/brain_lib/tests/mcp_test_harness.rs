@@ -22,7 +22,12 @@ pub struct TestHarnessContext {
 }
 
 pub async fn make_test_context() -> TestHarnessContext {
-    let (tmp, stores) = BrainStores::in_memory().expect("create in-memory stores");
+    // Register a brain up front so the strict ambient-resolution check in
+    // `mcp::tools::scope::resolve_scope` succeeds. Mirror the unit-test
+    // scaffolding in `create_test_context` (`crates/brain_lib/src/mcp/tools/mod.rs`):
+    // brain_id `test-brain-id` with prefix `TST` so compact IDs render `tst-...`.
+    let (tmp, stores) = BrainStores::in_memory_with_brain("test-brain-id", "test-brain", "TST")
+        .expect("create in-memory stores");
 
     let lance_path = tmp.path().join("test_lance");
     let writable_store = Store::open_or_create(&lance_path)
@@ -68,33 +73,6 @@ fn parse_tool_json(result: &ToolCallResult) -> Value {
     serde_json::from_str(&result.content[0].text).expect("tool result should be JSON")
 }
 
-pub async fn seed_test_task(ctx: &TestHarnessContext) -> String {
-    let result = call_tool(ctx, "tasks.create", json!({ "title": "seed test task" })).await;
-    let parsed = parse_tool_json(&result);
-    parsed["task_id"]
-        .as_str()
-        .expect("tasks.create should return task_id")
-        .to_string()
-}
-
-pub async fn seed_test_record(ctx: &TestHarnessContext) -> String {
-    let result = call_tool(
-        ctx,
-        "records.create_document",
-        json!({
-            "title": "seed test record",
-            "text": "seed payload"
-        }),
-    )
-    .await;
-
-    let parsed = parse_tool_json(&result);
-    parsed["record_id"]
-        .as_str()
-        .expect("records.create_document should return record_id")
-        .to_string()
-}
-
 pub async fn seed_test_chunks(ctx: &TestHarnessContext) -> usize {
     let note_path = ctx.notes_dir.join("seed_note.md");
     std::fs::write(
@@ -107,9 +85,12 @@ pub async fn seed_test_chunks(ctx: &TestHarnessContext) -> usize {
     let store = Store::open_or_create(&ctx.lance_path)
         .await
         .expect("open LanceDB for indexing");
-    let pipeline = IndexPipeline::with_embedder(db, store, Arc::new(MockEmbedder))
+    let mut pipeline = IndexPipeline::with_embedder(db, store, Arc::new(MockEmbedder))
         .await
         .expect("build index pipeline");
+    // Match the brain_id `make_test_context` registers so seeded chunks live
+    // in the same brain the MCP handlers query under.
+    pipeline.set_brain_id(ctx.ctx.brain_id().to_string());
 
     let stats = pipeline
         .full_scan(std::slice::from_ref(&ctx.notes_dir))

@@ -15,6 +15,8 @@ pub mod providers;
 pub mod records;
 pub mod schema;
 pub mod summaries;
+pub mod tag_aliases;
+pub mod tags;
 pub mod tasks;
 
 use std::path::Path;

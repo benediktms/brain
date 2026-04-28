@@ -433,12 +433,12 @@ mod tests {
     use super::super::tests::create_test_context;
 
     /// Compute the expected compact ID for a task created via in_memory stores.
-    /// In-memory stores use brain_id = "" which maps to the "(unscoped)" sentinel
-    /// brain inserted by migration v21→v22. That brain's prefix is "NSX" (derived
-    /// from generate_prefix("(unscoped)")), so compact IDs are "nsx-{hash}".
+    /// `create_test_context` registers brain "test-brain" (id "test-brain-id")
+    /// with prefix "TST", so newly-created tasks get display_id = first 3 hex
+    /// chars of blake3(task_id) and compact IDs render as "tst-{hash}".
     fn compact_id_for(task_id: &str) -> String {
         let hex = blake3::hash(task_id.as_bytes()).to_hex().to_string();
-        format!("nsx-{}", &hex[..3])
+        format!("tst-{}", &hex[..3])
     }
 
     async fn dispatch(
@@ -1123,9 +1123,12 @@ mod tests {
     async fn test_embedding_skipped_without_store() {
         use std::sync::Arc;
 
-        // Build a context with no store and no embedder (tasks-only mode)
+        // Build a context with no store and no embedder (tasks-only mode).
+        // Use the same brain setup as `create_test_context` so the
+        // `compact_id_for` helper's "tst-" prefix matches.
         let (_tmp, stores) =
-            crate::stores::BrainStores::in_memory().expect("checked in test assertions");
+            crate::stores::BrainStores::in_memory_with_brain("test-brain-id", "test-brain", "TST")
+                .expect("checked in test assertions");
         let ctx = crate::mcp::McpContext {
             stores,
             search: None,
