@@ -352,12 +352,12 @@ mod tests {
     use brain_persistence::db::schema::BrainUpsert;
 
     /// Compute the expected compact ID for a task created via in_memory stores.
-    /// In-memory stores use brain_id = "" which maps to the "(unscoped)" sentinel
-    /// brain inserted by migration v21→v22. That brain's prefix is "NSX" (derived
-    /// from generate_prefix("(unscoped)")), so compact IDs are "nsx-{hash}".
+    /// `create_test_context` registers brain "test-brain" (id "test-brain-id")
+    /// with prefix "TST", so newly-created tasks get display_id = first 3 hex
+    /// chars of blake3(task_id) and compact IDs render as "tst-{hash}".
     fn compact_id_for(task_id: &str) -> String {
         let hex = blake3::hash(task_id.as_bytes()).to_hex().to_string();
-        format!("nsx-{}", &hex[..3])
+        format!("tst-{}", &hex[..3])
     }
 
     async fn apply(registry: &ToolRegistry, ctx: &crate::mcp::McpContext, params: Value) {

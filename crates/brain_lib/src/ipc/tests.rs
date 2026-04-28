@@ -25,11 +25,10 @@ async fn start_server(
     sock: &std::path::Path,
 ) -> (tempfile::TempDir, tokio_util::sync::CancellationToken) {
     let (dir, ctx) = create_test_context().await;
-    ctx.stores
-        .db_for_tests()
-        .ensure_brain_registered("test-brain", "test-brain")
-        .unwrap();
-    let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+    // create_test_context already registers brain "test-brain" with id
+    // "test-brain-id" — reuse that brain_id as the router default.
+    let default_brain_id = ctx.brain_id().to_string();
+    let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
     let server = IpcServer::bind(sock, router).expect("bind failed");
     let token = server.cancellation_token();
     let token2 = token.clone();
@@ -436,11 +435,8 @@ async fn ipc_stale_socket_cleanup() {
 
     // Bind should detect the stale file, remove it, and succeed.
     let (dir, ctx) = create_test_context().await;
-    ctx.stores
-        .db_for_tests()
-        .ensure_brain_registered("test-brain", "test-brain")
-        .unwrap();
-    let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+    let default_brain_id = ctx.brain_id().to_string();
+    let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
 
     let server = IpcServer::bind(&sock, router).expect("bind should succeed after stale removal");
     let token = server.cancellation_token();
@@ -511,11 +507,8 @@ async fn ipc_graceful_shutdown() {
     let sock = tmp.path().join("shutdown.sock");
 
     let (dir, ctx) = create_test_context().await;
-    ctx.stores
-        .db_for_tests()
-        .ensure_brain_registered("test-brain", "test-brain")
-        .unwrap();
-    let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+    let default_brain_id = ctx.brain_id().to_string();
+    let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
 
     let server = IpcServer::bind(&sock, router).expect("bind failed");
     let token = server.cancellation_token();

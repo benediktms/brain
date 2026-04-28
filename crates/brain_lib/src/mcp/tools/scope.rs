@@ -148,6 +148,8 @@ fn unresolvable_default_error(ctx: &McpContext) -> ToolCallResult {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::mcp::McpContext;
     use crate::mcp::tools::tests::create_test_context;
@@ -169,11 +171,34 @@ mod tests {
             .expect("upsert_brain should succeed");
     }
 
+    /// Build an `McpContext` with empty `brain_id` for testing the strict
+    /// ambient-resolution error path.
+    async fn unscoped_ctx() -> (tempfile::TempDir, McpContext) {
+        let (tmp, stores) =
+            crate::stores::BrainStores::in_memory().expect("in_memory should succeed");
+        let lance_path = tmp.path().join("lance");
+        let store = brain_persistence::store::Store::open_or_create(&lance_path)
+            .await
+            .expect("lance store");
+        let store_reader = brain_persistence::store::StoreReader::from_store(&store);
+        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(crate::embedder::MockEmbedder);
+        let ctx = McpContext {
+            stores,
+            search: Some(crate::search_service::SearchService {
+                store: store_reader,
+                embedder,
+            }),
+            writable_store: Some(store),
+            metrics: Arc::new(crate::metrics::Metrics::new()),
+        };
+        (tmp, ctx)
+    }
+
     #[tokio::test]
     async fn ambient_brain_errors_when_ctx_unscoped() {
-        let (_dir, ctx) = create_test_context().await;
-        // Default in-memory ctx has brain_id="". Ambient resolution must surface
-        // a helpful error instead of silently returning empty results.
+        let (_dir, ctx) = unscoped_ctx().await;
+        // brain_id="" — ambient resolution must surface a helpful error
+        // instead of silently returning empty results.
         let err = resolve_scope(&ctx, None).expect_err("unscoped ctx should error");
         assert!(err.content[0].text.contains("No brain context"));
     }
@@ -258,14 +283,14 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_single_scope_errors_when_unscoped() {
-        let (_dir, ctx) = create_test_context().await;
+        let (_dir, ctx) = unscoped_ctx().await;
         let err = resolve_single_scope(&ctx, None).expect_err("unscoped ctx should error");
         assert!(err.content[0].text.contains("No brain context"));
     }
 
     #[tokio::test]
     async fn unresolvable_default_error_lists_registered_brains() {
-        let (_dir, ctx) = create_test_context().await;
+        let (_dir, ctx) = unscoped_ctx().await;
         register_active(&ctx, "brain-a-id", "brain-a");
 
         let err = resolve_scope(&ctx, None).expect_err("ctx is unscoped");

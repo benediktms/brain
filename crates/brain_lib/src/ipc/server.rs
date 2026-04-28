@@ -263,11 +263,8 @@ mod tests {
 
     async fn start_test_server(socket_path: &Path) -> CancellationToken {
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let default_brain_id = ctx.brain_id().to_string();
+        let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
         let server = IpcServer::bind(socket_path, router).expect("bind failed");
         let token = server.cancellation_token();
         let token2 = token.clone();
@@ -348,11 +345,8 @@ mod tests {
         let sock = tmp.path().join("accessor.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let default_brain_id = ctx.brain_id().to_string();
+        let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
         assert_eq!(server.socket_path(), sock);
         server.cancellation_token().cancel();
@@ -364,11 +358,8 @@ mod tests {
         let sock = tmp.path().join("own.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let default_brain_id = ctx.brain_id().to_string();
+        let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
         server.cancellation_token().cancel();
 
@@ -390,12 +381,8 @@ mod tests {
 
         // Server A binds.
         let (_dir_a, ctx_a) = create_test_context().await;
-        ctx_a
-            .stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router_a = BrainRouter::new(Arc::new(ctx_a), "test-brain".to_string());
+        let id_a = ctx_a.brain_id().to_string();
+        let router_a = BrainRouter::new(Arc::new(ctx_a), id_a);
         let server_a = IpcServer::bind(&sock, router_a).expect("bind A failed");
         server_a.cancellation_token().cancel();
 
@@ -404,12 +391,8 @@ mod tests {
 
         // Server B binds at the same path (new daemon).
         let (_dir_b, ctx_b) = create_test_context().await;
-        ctx_b
-            .stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router_b = BrainRouter::new(Arc::new(ctx_b), "test-brain".to_string());
+        let id_b = ctx_b.brain_id().to_string();
+        let router_b = BrainRouter::new(Arc::new(ctx_b), id_b);
         let _server_b = IpcServer::bind(&sock, router_b).expect("bind B failed");
 
         // Now A's late cleanup runs — must NOT delete B's socket.
@@ -429,11 +412,8 @@ mod tests {
         let sock = tmp.path().join("missing.sock");
 
         let (_dir, ctx) = create_test_context().await;
-        ctx.stores
-            .db_for_tests()
-            .ensure_brain_registered("test-brain", "test-brain")
-            .unwrap();
-        let router = BrainRouter::new(Arc::new(ctx), "test-brain".to_string());
+        let default_brain_id = ctx.brain_id().to_string();
+        let router = BrainRouter::new(Arc::new(ctx), default_brain_id);
         let server = IpcServer::bind(&sock, router).expect("bind failed");
 
         // Delete behind the server's back.

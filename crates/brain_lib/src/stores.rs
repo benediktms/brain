@@ -140,6 +140,54 @@ impl BrainStores {
         Self::in_memory_with_brain_id("")
     }
 
+    /// In-memory stores with an explicit registered brain (id, name, prefix).
+    ///
+    /// Forces the brain to exist in the `brains` table with the given prefix
+    /// before any TaskStore/RecordStore is created, so `ensure_brain_registered`
+    /// preserves it via COALESCE. Used by test scaffolding that needs a
+    /// non-empty `brain_id` (so the strict ambient-resolution check in
+    /// `mcp::tools::scope` succeeds) while keeping a known prefix for compact-ID
+    /// assertions.
+    pub fn in_memory_with_brain(
+        brain_id: &str,
+        brain_name: &str,
+        prefix: &str,
+    ) -> Result<(TempDir, Self)> {
+        let tmp = TempDir::new().map_err(BrainCoreError::Io)?;
+        let db_path = tmp.path().join("brain.db");
+        let db = Db::open(&db_path)?;
+
+        db.upsert_brain(&brain_persistence::db::schema::BrainUpsert {
+            brain_id,
+            name: brain_name,
+            prefix,
+            roots_json: "[]",
+            notes_json: "[]",
+            aliases_json: "[]",
+            archived: false,
+        })?;
+
+        let tasks = TaskStore::with_brain_id(db.clone(), brain_id, brain_name)?;
+        let records = RecordStore::with_brain_id(db.clone(), brain_id, brain_name)?;
+
+        let objects_dir = tmp.path().join("objects");
+        let objects = ObjectStore::new(&objects_dir)?;
+
+        let brain_home = tmp.path().to_path_buf();
+        Ok((
+            tmp,
+            Self {
+                db,
+                tasks,
+                records,
+                objects,
+                brain_id: brain_id.to_string(),
+                brain_name: brain_name.to_string(),
+                brain_home,
+            },
+        ))
+    }
+
     /// In-memory with explicit brain_id for scoped testing.
     pub fn in_memory_with_brain_id(brain_id: &str) -> Result<(TempDir, Self)> {
         let tmp = TempDir::new().map_err(BrainCoreError::Io)?;
