@@ -347,6 +347,9 @@ mod tests {
 
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
+    use crate::tasks::TaskStore;
+    use crate::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus};
+    use brain_persistence::db::schema::BrainUpsert;
 
     /// Compute the expected compact ID for a task created via in_memory stores.
     /// In-memory stores use brain_id = "" which maps to the "(unscoped)" sentinel
@@ -1139,5 +1142,94 @@ mod tests {
             "parent_task_id should be compact form, got: {}",
             child_task["parent_task_id"]
         );
+    }
+
+    /// Regression for brn-a3e: explicit `brain: "<name>"` must scope `tasks.list`
+    /// to that brain's rows. Sets up an ambient ctx scoped to brain A, registers
+    /// brain B, writes a task into B, then asserts:
+    ///   - Default (no brain param) returns 0 (brain A is empty).
+    ///   - Explicit brain="brain-b" returns the brain-b task.
+    /// Validates the in-handler rescoping path at lines 78-101.
+    #[tokio::test]
+    async fn test_list_with_explicit_brain_returns_target_brain_tasks() {
+        let (_dir, base_ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // Register both brains as active.
+        for (id, name, prefix) in [
+            ("brain-a-id", "brain-a", "AAA"),
+            ("brain-b-id", "brain-b", "BBB"),
+        ] {
+            base_ctx
+                .stores
+                .db_for_tests()
+                .upsert_brain(&BrainUpsert {
+                    brain_id: id,
+                    name,
+                    prefix,
+                    roots_json: "[]",
+                    notes_json: "[]",
+                    aliases_json: "[]",
+                    archived: false,
+                })
+                .unwrap();
+        }
+
+        // Rescope ctx to brain A so the ambient query filters to brain A only.
+        let ctx = base_ctx.with_brain_id("brain-a-id", "brain-a").unwrap();
+
+        // Insert a task scoped to brain B (NOT brain A).
+        let brain_b_tasks =
+            TaskStore::with_brain_id(ctx.stores.db_for_tests().clone(), "brain-b-id", "brain-b")
+                .unwrap();
+        brain_b_tasks
+            .append(&TaskEvent::from_payload(
+                "task-in-b",
+                "test",
+                TaskCreatedPayload {
+                    title: "Task in brain B".into(),
+                    description: None,
+                    priority: 2,
+                    status: TaskStatus::Open,
+                    due_ts: None,
+                    task_type: None,
+                    assignee: None,
+                    defer_until: None,
+                    parent_task_id: None,
+                    display_id: None,
+                },
+            ))
+            .unwrap();
+
+        // Default scope (brain A) does not see the brain-b task.
+        let result = registry
+            .dispatch("tasks.list", json!({"status": "open"}), &ctx)
+            .await;
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(
+            parsed["count"], 0,
+            "brain-a should not see brain-b tasks: {parsed}"
+        );
+
+        // Explicit brain="brain-b" must surface the brain-b task.
+        let result = registry
+            .dispatch(
+                "tasks.list",
+                json!({"status": "open", "brain": "brain-b"}),
+                &ctx,
+            )
+            .await;
+        assert!(
+            result.is_error.is_none(),
+            "tasks.list with brain param should not error: {:?}",
+            result.content[0].text
+        );
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(
+            parsed["count"], 1,
+            "tasks.list with brain='brain-b' should return the brain-b task: {parsed}"
+        );
+        assert_eq!(parsed["tasks"][0]["title"], "Task in brain B");
+        assert_eq!(parsed["brain"], "brain-b");
     }
 }
