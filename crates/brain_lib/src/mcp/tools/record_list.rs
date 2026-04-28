@@ -72,12 +72,21 @@ impl RecordList {
             per_brain.push((brain_ref.clone(), scoped_ctx));
         }
 
+        // For federated reads we drop the per-brain SQL LIMIT — otherwise each
+        // brain's result is truncated independently and the merged response is
+        // biased toward whichever brain is iterated first. The global limit
+        // applies once on the merged set below.
+        let per_brain_limit = if scope.is_federated() {
+            None
+        } else {
+            Some(params.limit)
+        };
         let filter = RecordFilter {
             kind: params.kind.clone(),
             status: Some(params.status.clone()),
             tag: params.tag.clone(),
             task_id: params.task_id.clone(),
-            limit: Some(params.limit),
+            limit: per_brain_limit,
             brain_id: None,
         };
 
@@ -122,6 +131,17 @@ impl RecordList {
                     "updated_at": r.updated_at,
                 }));
             }
+        }
+
+        // Sort merged results by `updated_at DESC` so the global limit picks
+        // the most-recent records across brains, matching the single-brain
+        // SQL ORDER BY in `records::queries::list_records`.
+        if scope.is_federated() {
+            all_records.sort_by(|a, b| {
+                let a_ts = a.get("updated_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                let b_ts = b.get("updated_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                b_ts.cmp(&a_ts)
+            });
         }
 
         // Apply global limit after merging across brains.

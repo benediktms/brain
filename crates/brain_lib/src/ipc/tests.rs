@@ -207,7 +207,7 @@ async fn ipc_task_close_by_prefix() {
         .and_then(|v| v.as_str())
         .expect("task_id missing from create result");
 
-    // The compact_id is "{prefix}-{3-char-hash}" (e.g. "nsx-a3f").
+    // The compact_id is "{prefix}-{3-char-hash}" (e.g. "tst-a3f").
     // Use only the 3-char hash as a prefix — should still resolve uniquely.
     // Format: the prefix part before the hyphen contains the brain prefix (e.g. "nsx").
     // We test closing by the full compact_id (unique) and then by the hash-only prefix.

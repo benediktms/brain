@@ -63,14 +63,46 @@ pub fn resolve_scope(
     ctx: &McpContext,
     brains_param: Option<&[String]>,
 ) -> Result<Scope, ToolCallResult> {
-    match brains_param {
-        Some(refs) if refs.iter().any(|s| s == "all" || s == "*") => {
+    // Drop empty strings up front. An empty entry (`brains: [""]`, or the
+    // back-compat `brain: ""` → `brains: [""]`) would otherwise resolve via
+    // the unscoped sentinel row (brain_id = "") and silently produce an
+    // unfiltered cross-brain query.
+    let cleaned: Option<Vec<&String>> =
+        brains_param.map(|refs| refs.iter().filter(|s| !s.trim().is_empty()).collect());
+
+    let has_sentinel = cleaned
+        .as_ref()
+        .map(|refs| {
+            refs.iter()
+                .any(|s| s.as_str() == "all" || s.as_str() == "*")
+        })
+        .unwrap_or(false);
+    let has_named = cleaned
+        .as_ref()
+        .map(|refs| {
+            refs.iter()
+                .any(|s| s.as_str() != "all" && s.as_str() != "*")
+        })
+        .unwrap_or(false);
+
+    if has_sentinel && has_named {
+        return Err(ToolCallResult::error(
+            "Cannot mix the \"all\" / \"*\" sentinel with named brains. \
+             Pass either `brains: [\"all\"]` to query every registered brain, \
+             or a list of brain names — not both."
+                .to_string(),
+        ));
+    }
+
+    match cleaned {
+        Some(refs) if has_sentinel => {
             let pairs = ctx.stores.list_brain_keys().map_err(|e| {
                 ToolCallResult::error(format!("Failed to list registered brains: {e}"))
             })?;
             if pairs.is_empty() {
                 return Err(no_brains_registered_error());
             }
+            let _ = refs; // sentinel resolution ignores any other entries
             Ok(Scope::Federated(
                 pairs
                     .into_iter()
@@ -87,7 +119,9 @@ pub fn resolve_scope(
                 resolved.push(BrainRef::new(brain_id, brain_name));
             }
             if resolved.len() == 1 {
-                Ok(Scope::Single(resolved.into_iter().next().unwrap()))
+                Ok(Scope::Single(
+                    resolved.into_iter().next().expect("checked len == 1"),
+                ))
             } else {
                 Ok(Scope::Federated(resolved))
             }
@@ -286,6 +320,56 @@ mod tests {
         let (_dir, ctx) = unscoped_ctx().await;
         let err = resolve_single_scope(&ctx, None).expect_err("unscoped ctx should error");
         assert!(err.content[0].text.contains("No brain context"));
+    }
+
+    #[tokio::test]
+    async fn empty_string_in_brains_array_is_ignored() {
+        let (_dir, ctx) = create_test_context().await;
+        register_active(&ctx, "brain-a-id", "brain-a");
+
+        // `brains: [""]` should NOT silently match the unscoped sentinel
+        // (brain_id = "") and produce a cross-brain unfiltered query. After
+        // empty-string filtering the array is empty, so resolution falls
+        // through to the ambient brain.
+        let scope = resolve_scope(&ctx, Some(&["".to_string()]))
+            .expect("empty-only array should resolve to ambient");
+        match scope {
+            Scope::Single(b) => assert_eq!(b.brain_name, "test-brain"),
+            Scope::Federated(_) => panic!("expected Single ambient"),
+        }
+
+        // `brains: ["", "brain-a"]` should treat the empty string as noise
+        // and resolve to the named brain only.
+        let scope = resolve_scope(&ctx, Some(&["".to_string(), "brain-a".to_string()]))
+            .expect("named brain after empty entry resolves");
+        match scope {
+            Scope::Single(b) => assert_eq!(b.brain_name, "brain-a"),
+            Scope::Federated(_) => panic!("expected Single brain-a"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mixing_all_sentinel_with_named_brains_errors() {
+        let (_dir, ctx) = create_test_context().await;
+        register_active(&ctx, "brain-a-id", "brain-a");
+
+        let err = resolve_scope(&ctx, Some(&["all".to_string(), "brain-a".to_string()]))
+            .expect_err("mixed sentinel + named must error");
+        let msg = &err.content[0].text;
+        assert!(
+            msg.contains("mix") && msg.contains("\"all\""),
+            "error should explain the conflict: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_single_scope_treats_empty_string_as_ambient() {
+        let (_dir, ctx) = create_test_context().await;
+        // `brain: ""` (empty string after deserialization) must NOT match the
+        // unscoped sentinel — it falls through to the ambient brain instead.
+        let r = resolve_single_scope(&ctx, Some("")).expect("empty brain falls through");
+        assert_eq!(r.brain_name, "test-brain");
+        assert!(!r.brain_id.is_empty());
     }
 
     #[tokio::test]
