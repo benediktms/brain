@@ -1378,32 +1378,43 @@ mod tests {
         })
         .unwrap();
 
-        let count = |sql: &'static str| -> i64 {
-            db.with_read_conn(|conn| {
-                let c: i64 = conn.query_row(sql, [], |r| r.get(0))?;
-                Ok(c)
-            })
-            .unwrap()
-        };
-        let before_record_tags = count("SELECT COUNT(*) FROM record_tags");
-        let before_task_labels = count("SELECT COUNT(*) FROM task_labels");
+        // Content snapshot, not just count — protects against a
+        // hypothetical bug that does `delete + insert` of a different row
+        // (counts would balance and slip through). Each call returns a
+        // deterministic string of `key:value` rows ordered by rowid.
+        let snapshot =
+            |table: &'static str, key_col: &'static str, val_col: &'static str| -> String {
+                db.with_read_conn(|conn| {
+                    let sql = format!(
+                        "SELECT COALESCE(GROUP_CONCAT({key_col} || ':' || {val_col}, '|'
+                                                  ORDER BY rowid), '')
+                     FROM {table}"
+                    );
+                    let s: String = conn.query_row(&sql, [], |r| r.get(0))?;
+                    Ok(s)
+                })
+                .unwrap()
+            };
+        let before_record_tags = snapshot("record_tags", "record_id", "tag");
+        let before_task_labels = snapshot("task_labels", "task_id", "label");
         assert!(
-            before_record_tags > 0 && before_task_labels > 0,
-            "fixture must seed non-zero counts so this test is meaningful"
+            !before_record_tags.is_empty() && !before_task_labels.is_empty(),
+            "fixture must seed non-empty rows so this test is meaningful"
         );
 
         // Run a query that triggers alias expansion.
         let _ = run_filter(&db, &chunk_id, brain_id, &[String::from("bug")], &[]).await;
 
-        let after_record_tags = count("SELECT COUNT(*) FROM record_tags");
-        let after_task_labels = count("SELECT COUNT(*) FROM task_labels");
+        let after_record_tags = snapshot("record_tags", "record_id", "tag");
+        let after_task_labels = snapshot("task_labels", "task_id", "label");
         assert_eq!(
             before_record_tags, after_record_tags,
-            "record_tags row count must be unchanged across an alias-expanding query"
+            "record_tags content must be byte-identical across an alias-expanding query \
+             (catches delete+insert that would balance row counts)"
         );
         assert_eq!(
             before_task_labels, after_task_labels,
-            "task_labels row count must be unchanged across an alias-expanding query"
+            "task_labels content must be byte-identical across an alias-expanding query"
         );
     }
 
