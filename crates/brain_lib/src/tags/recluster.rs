@@ -27,6 +27,7 @@ use std::sync::Arc;
 use brain_persistence::db::tag_aliases::{
     AliasUpsert, DedupedRawTag, ExistingAlias, FinalizeRun, InsertRun,
 };
+use tracing::{debug, info, warn};
 
 use crate::embedder::{Embed, embed_batch_async};
 use crate::error::Result;
@@ -86,6 +87,18 @@ pub struct ReclusterReport {
 /// See the module-level docs for the three-transaction model. This is the
 /// only public-callable symbol in [`crate::tags::recluster`]; sibling task
 /// `brn-83a.7.2.5` will wrap it for MCP/CLI exposure.
+///
+/// # Concurrency
+///
+/// **Callers must serialize invocations per brain.** Concurrent calls
+/// against the same brain are not data-unsafe — `with_write_conn`
+/// serializes Tx-1, Tx-2, and Tx-3 on the writer mutex, and the UPSERT
+/// makes last-write-wins safe — but they produce duplicate
+/// `tag_cluster_runs` rows and report counters that double-count work
+/// done by the racing call. The plan for sibling task `brn-83a.7.2.5`
+/// (MCP/CLI surface) introduces a per-brain in-flight guard if needed;
+/// until then, callers must enforce the "one run at a time per brain"
+/// invariant themselves.
 pub async fn run_recluster(
     stores: &BrainStores,
     embedder: &Arc<dyn Embed>,
@@ -94,6 +107,14 @@ pub async fn run_recluster(
     let started_at = std::time::Instant::now();
     let run_id = ulid::Ulid::new().to_string();
     let started_at_iso = chrono::Utc::now().to_rfc3339();
+
+    info!(
+        brain_id = %stores.brain_id,
+        run_id = %run_id,
+        threshold = params.cosine_threshold,
+        embedder_version = EMBEDDER_VERSION,
+        "recluster run starting",
+    );
 
     let outcome = run_inner(
         stores,
@@ -106,13 +127,28 @@ pub async fn run_recluster(
     .await;
 
     if let Err(ref e) = outcome {
+        warn!(
+            brain_id = %stores.brain_id,
+            run_id = %run_id,
+            error = %e,
+            "recluster run failed; recording on tag_cluster_runs",
+        );
         // Best-effort: record the failure on the run row so operators can
         // grep for `notes IS NOT NULL` to find broken runs. Tx-1 may or
         // may not have committed; if it didn't, this UPDATE matches zero
-        // rows and is a harmless no-op.
+        // rows and is a harmless no-op. We still surface a Tx-3 failure
+        // via tracing so an operator-visible signal exists when the
+        // failure-recording itself is broken (e.g. mutex poisoned).
         let now = chrono::Utc::now().to_rfc3339();
         let notes = truncate_utf8(&e.to_string(), MAX_NOTES_BYTES);
-        let _ = stores.inner_db().record_run_failure(&run_id, &now, &notes);
+        if let Err(tx3_err) = stores.inner_db().record_run_failure(&run_id, &now, &notes) {
+            warn!(
+                brain_id = %stores.brain_id,
+                run_id = %run_id,
+                tx3_error = %tx3_err,
+                "Tx-3 failed to record run failure on tag_cluster_runs",
+            );
+        }
     }
 
     outcome
@@ -143,6 +179,14 @@ async fn run_inner(
 
     let candidates = build_candidates(&raw_tags, &snapshot, embedder).await?;
 
+    debug!(
+        brain_id = %stores.brain_id,
+        run_id = %run_id,
+        source_count = raw_tags.len(),
+        snapshot_size = snapshot.len(),
+        "compute phase: candidates built, clustering next",
+    );
+
     // Map each member back to its embedding for the diff phase. Cheap
     // (≤10k tags per brain) and lets the diff loop stay tag-keyed.
     let candidates_by_tag: HashMap<String, Vec<f32>> = candidates
@@ -171,7 +215,7 @@ async fn run_inner(
         },
     )?;
 
-    Ok(ReclusterReport {
+    let report = ReclusterReport {
         run_id,
         source_count: raw_tags.len(),
         cluster_count: clusters.len(),
@@ -180,7 +224,20 @@ async fn run_inner(
         stale_aliases,
         duration_ms: started_at.elapsed().as_millis() as u64,
         embedder_version: EMBEDDER_VERSION.to_string(),
-    })
+    };
+
+    info!(
+        brain_id = %stores.brain_id,
+        run_id = %report.run_id,
+        duration_ms = report.duration_ms,
+        source_count = report.source_count,
+        cluster_count = report.cluster_count,
+        new_aliases = report.new_aliases,
+        updated_aliases = report.updated_aliases,
+        "recluster run complete",
+    );
+
+    Ok(report)
 }
 
 /// Build the `Vec<TagCandidate>` for [`cluster_tags`] from the raw-tag set,
@@ -216,6 +273,9 @@ async fn build_candidates(
         }
     }
 
+    let cache_hits = candidates.len();
+    let to_embed = to_embed_tags.len();
+
     if !to_embed_tags.is_empty() {
         let fresh = embed_batch_async(embedder, to_embed_tags.clone()).await?;
         for (idx, embedding) in fresh.into_iter().enumerate() {
@@ -226,6 +286,13 @@ async fn build_candidates(
             });
         }
     }
+
+    debug!(
+        cache_hits,
+        to_embed,
+        total_candidates = candidates.len(),
+        "build_candidates: cache partition complete",
+    );
 
     Ok(candidates)
 }
@@ -245,10 +312,12 @@ fn diff_clusters_against_snapshot(
 
     for cluster in clusters {
         for member in &cluster.members {
-            let embedding = candidates_by_tag
-                .get(member)
-                .cloned()
-                .expect("cluster member must come from the candidates we just computed");
+            let embedding = candidates_by_tag.get(member).cloned().unwrap_or_else(|| {
+                panic!(
+                    "cluster member {member:?} missing from candidates_by_tag — \
+                     cluster_tags must only emit members it received as input",
+                )
+            });
             let row = AliasUpsert {
                 raw_tag: member.clone(),
                 canonical_tag: cluster.canonical.clone(),
