@@ -250,19 +250,43 @@ impl TaskList {
         let count = capped.len();
         let has_more = limit > 0 && total > limit;
 
-        // Enrich per-brain (compact_id and labels need the brain's store).
-        let mut tasks_json: Vec<Value> = Vec::with_capacity(capped.len());
-        for (brain_ref, scoped_ctx, row) in &capped {
-            let store = &scoped_ctx.stores.tasks;
-            let task_ids = [row.task_id.as_str()];
+        // Enrich per-brain in batches: group `capped` by brain so each brain's
+        // store handles `get_labels_for_tasks` + `enrich_task_list` once for
+        // all of its tasks (avoids N+1 vs. enriching per-row).
+        // We track each row's original index so the final response preserves
+        // the merged-and-capped order rather than the per-brain group order.
+        type EnrichEntry<'a> = (usize, &'a TaskRow, &'a BrainRef);
+        let mut by_brain: std::collections::BTreeMap<&str, Vec<EnrichEntry<'_>>> =
+            std::collections::BTreeMap::new();
+        let mut store_for_brain: std::collections::HashMap<&str, &TaskStore> =
+            std::collections::HashMap::new();
+        for (idx, (brain_ref, scoped_ctx, row)) in capped.iter().enumerate() {
+            by_brain
+                .entry(brain_ref.brain_id.as_str())
+                .or_default()
+                .push((idx, row, brain_ref));
+            store_for_brain
+                .entry(brain_ref.brain_id.as_str())
+                .or_insert(&scoped_ctx.stores.tasks);
+        }
+
+        let mut tasks_json: Vec<Value> = vec![Value::Null; capped.len()];
+        for (brain_id, entries) in &by_brain {
+            let store = store_for_brain
+                .get(brain_id)
+                .copied()
+                .expect("store inserted with key above");
+            let task_ids: Vec<&str> = entries.iter().map(|(_, r, _)| r.task_id.as_str()).collect();
             let labels_map = store_or_warn(
                 store.get_labels_for_tasks(&task_ids),
                 "get_labels_for_tasks",
                 &mut warnings,
             );
-            let (mut json_vec, _r, _b) =
-                enrich_task_list(store, std::slice::from_ref(row), &labels_map);
-            for task_val in &mut json_vec {
+            let rows: Vec<TaskRow> = entries.iter().map(|(_, r, _)| (*r).clone()).collect();
+            let (mut json_vec, _r, _b) = enrich_task_list(store, &rows, &labels_map);
+            for ((orig_idx, _row, brain_ref), mut task_val) in
+                entries.iter().zip(json_vec.drain(..))
+            {
                 if let Some(obj) = task_val.as_object_mut() {
                     if let Some(tid) = obj.get("task_id").and_then(|v| v.as_str()) {
                         let uri = SynapseUri::for_task(&brain_ref.brain_name, tid).to_string();
@@ -273,8 +297,8 @@ impl TaskList {
                     }
                     obj.insert("brain".into(), json!(brain_ref.brain_name));
                 }
+                tasks_json[*orig_idx] = task_val;
             }
-            tasks_json.extend(json_vec);
         }
 
         let brain_names: Vec<&str> = per_brain
