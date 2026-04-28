@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, params};
 
+use crate::db::tags::RawTag;
 use crate::error::{BrainCoreError, Result};
 
 /// Per-tag fold of `RawTag` rows across the (Records, Tasks) sources for a
@@ -19,6 +20,28 @@ pub struct DedupedRawTag {
     pub tag: String,
     pub total_reference_count: i64,
     pub last_seen_at: i64,
+}
+
+/// Fold a `Vec<RawTag>` (one row per `(tag, source)` pair) into a
+/// `Vec<DedupedRawTag>` keyed by tag string: sum reference counts, take
+/// max of last-seen timestamps. Clustering is a property of the tag
+/// string, not the source.
+pub fn dedupe_by_tag(raw_tags: Vec<RawTag>) -> Vec<DedupedRawTag> {
+    let mut folded: HashMap<String, DedupedRawTag> = HashMap::new();
+    for raw in raw_tags {
+        folded
+            .entry(raw.tag.clone())
+            .and_modify(|t| {
+                t.total_reference_count += raw.reference_count;
+                t.last_seen_at = t.last_seen_at.max(raw.last_seen_at);
+            })
+            .or_insert(DedupedRawTag {
+                tag: raw.tag,
+                total_reference_count: raw.reference_count,
+                last_seen_at: raw.last_seen_at,
+            });
+    }
+    folded.into_values().collect()
 }
 
 /// Snapshot row read from `tag_aliases` before computing new clusters.
@@ -38,6 +61,7 @@ pub struct ExistingAlias {
 /// schema columns of `tag_aliases` minus the audit metadata.
 #[derive(Debug, Clone)]
 pub struct AliasUpsert {
+    pub brain_id: String,
     pub raw_tag: String,
     pub canonical_tag: String,
     pub cluster_id: String,
@@ -50,6 +74,7 @@ pub struct AliasUpsert {
 #[derive(Debug, Clone)]
 pub struct InsertRun {
     pub run_id: String,
+    pub brain_id: String,
     pub started_at_iso: String,
     pub embedder_version: String,
     pub threshold: f32,
@@ -65,91 +90,22 @@ pub struct FinalizeRun {
     pub cluster_count: i64,
 }
 
-/// Per-brain raw-tag collector. Folds across (Records, Tasks) sources.
+/// Per-brain snapshot of `tag_aliases` for a given `brain_id`.
 ///
-/// **Why this duplicates [`super::tags::collect_raw_tags`].** The public
-/// collector is brain-unscoped: `tag_cluster_runs` and `tag_aliases` (v43)
-/// have no `brain_id` column, so the read side could not be safely
-/// brain-scoped without conflating brains. We add `WHERE r.brain_id = ?1`
-/// / `WHERE t.brain_id = ?1` filters to the same SELECTs here as a
-/// contained workaround.
-///
-/// **Lifecycle.** Removed when the v44 schema migration (`brn-83a.7.2.7`)
-/// adds `brain_id` to both tables; at that point the public
-/// `collect_raw_tags` gains its own `brain_id: Option<&str>` parameter and
-/// callers switch to it. Introduced by `brn-83a.7.2.3`.
-pub fn collect_raw_tags_for_brain(conn: &Connection, brain_id: &str) -> Result<Vec<DedupedRawTag>> {
-    let mut folded: HashMap<String, DedupedRawTag> = HashMap::new();
-
-    {
-        let mut stmt = conn.prepare(
-            "SELECT rt.tag, COUNT(*), COALESCE(MAX(r.updated_at), 0)
-             FROM record_tags rt
-             JOIN records r ON r.record_id = rt.record_id
-             WHERE r.brain_id = ?1
-             GROUP BY rt.tag",
-        )?;
-        let mut rows = stmt.query(params![brain_id])?;
-        while let Some(row) = rows.next()? {
-            let tag: String = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            let last_seen: i64 = row.get(2)?;
-            folded
-                .entry(tag.clone())
-                .and_modify(|t| {
-                    t.total_reference_count += count;
-                    t.last_seen_at = t.last_seen_at.max(last_seen);
-                })
-                .or_insert(DedupedRawTag {
-                    tag,
-                    total_reference_count: count,
-                    last_seen_at: last_seen,
-                });
-        }
-    }
-
-    {
-        let mut stmt = conn.prepare(
-            "SELECT tl.label, COUNT(*), COALESCE(MAX(t.updated_at), 0)
-             FROM task_labels tl
-             JOIN tasks t ON t.task_id = tl.task_id
-             WHERE t.brain_id = ?1
-             GROUP BY tl.label",
-        )?;
-        let mut rows = stmt.query(params![brain_id])?;
-        while let Some(row) = rows.next()? {
-            let tag: String = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            let last_seen: i64 = row.get(2)?;
-            folded
-                .entry(tag.clone())
-                .and_modify(|t| {
-                    t.total_reference_count += count;
-                    t.last_seen_at = t.last_seen_at.max(last_seen);
-                })
-                .or_insert(DedupedRawTag {
-                    tag,
-                    total_reference_count: count,
-                    last_seen_at: last_seen,
-                });
-        }
-    }
-
-    Ok(folded.into_values().collect())
-}
-
-/// Read every `tag_aliases` row into an in-memory map keyed by `raw_tag`.
-///
-/// `tag_aliases` has no `brain_id` column today, so this returns the
-/// global table — callers must use the per-brain raw-tag set to bound the
-/// diff (see `collect_raw_tags_for_brain`).
-pub fn read_alias_snapshot(conn: &Connection) -> Result<HashMap<String, ExistingAlias>> {
+/// Filters by `brain_id` so the diff phase compares only this brain's
+/// existing aliases against its freshly-collected raw tags. Cross-brain
+/// rows stay in place and are invisible to the caller.
+pub fn read_alias_snapshot(
+    conn: &Connection,
+    brain_id: &str,
+) -> Result<HashMap<String, ExistingAlias>> {
     let mut stmt = conn.prepare(
         "SELECT raw_tag, canonical_tag, cluster_id, last_run_id,
                 embedding, embedder_version, updated_at
-         FROM tag_aliases",
+         FROM tag_aliases
+         WHERE brain_id = ?1",
     )?;
-    let mut rows = stmt.query([])?;
+    let mut rows = stmt.query(params![brain_id])?;
 
     let mut out = HashMap::new();
     while let Some(row) = rows.next()? {
@@ -187,11 +143,12 @@ pub fn read_alias_snapshot(conn: &Connection) -> Result<HashMap<String, Existing
 pub fn insert_run(conn: &Connection, input: &InsertRun) -> Result<()> {
     conn.execute(
         "INSERT INTO tag_cluster_runs
-             (run_id, started_at, finished_at, source_count, cluster_count,
+             (run_id, brain_id, started_at, finished_at, source_count, cluster_count,
               embedder_version, threshold, triggered_by, notes)
-         VALUES (?1, ?2, NULL, NULL, NULL, ?3, ?4, ?5, NULL)",
+         VALUES (?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?6, NULL)",
         params![
             input.run_id,
+            input.brain_id,
             input.started_at_iso,
             input.embedder_version,
             input.threshold,
@@ -201,25 +158,33 @@ pub fn insert_run(conn: &Connection, input: &InsertRun) -> Result<()> {
     Ok(())
 }
 
-/// Tx-2: atomic UPSERT of all `tag_aliases` rows for the given run plus
-/// finalization of the matching `tag_cluster_runs` row.
+/// Tx-2: atomic UPSERT of all `tag_aliases` rows for the given run, DELETE
+/// of stale rows scoped to `brain_id`, plus finalization of the matching
+/// `tag_cluster_runs` row.
 ///
-/// Both happen inside a single rusqlite transaction so the alias state and
-/// the audit-row finalization commit atomically. Rolls back via `Drop` if
-/// any prepared-statement execution returns `Err`.
+/// All three happen inside a single rusqlite transaction so the alias state
+/// and the audit-row finalization commit atomically. Rolls back via `Drop`
+/// if any prepared-statement execution returns `Err`.
+///
+/// `stale` is the set of `raw_tag` values present in this brain's snapshot
+/// but absent from the brain's freshly-collected raw-tag set. They are
+/// DELETEd inside the same transaction so `tag_aliases` stays a faithful
+/// projection of the current canonical-pick.
 pub fn apply_alias_upserts(
     conn: &Connection,
+    brain_id: &str,
     upserts: &[AliasUpsert],
+    stale: &[String],
     finalize: &FinalizeRun,
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     {
         let mut stmt = tx.prepare(
             "INSERT INTO tag_aliases
-                 (raw_tag, canonical_tag, cluster_id, last_run_id,
+                 (brain_id, raw_tag, canonical_tag, cluster_id, last_run_id,
                   embedding, embedder_version, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(raw_tag) DO UPDATE SET
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(brain_id, raw_tag) DO UPDATE SET
                  canonical_tag    = excluded.canonical_tag,
                  cluster_id       = excluded.cluster_id,
                  last_run_id      = excluded.last_run_id,
@@ -229,6 +194,7 @@ pub fn apply_alias_upserts(
         )?;
         for u in upserts {
             stmt.execute(params![
+                u.brain_id,
                 u.raw_tag,
                 u.canonical_tag,
                 u.cluster_id,
@@ -237,6 +203,12 @@ pub fn apply_alias_upserts(
                 u.embedder_version,
                 finalize.finished_at_iso,
             ])?;
+        }
+    }
+    {
+        let mut del = tx.prepare("DELETE FROM tag_aliases WHERE brain_id = ?1 AND raw_tag = ?2")?;
+        for tag in stale {
+            del.execute(params![brain_id, tag])?;
         }
     }
     tx.execute(
@@ -380,8 +352,8 @@ pub fn list_runs(conn: &Connection) -> Result<Vec<TagClusterRunRow>> {
 
 /// Seed a minimal `records` row with associated `record_tags` entries for
 /// integration tests. Mirrors only the columns required by
-/// `collect_raw_tags_for_brain`: `record_id`, `brain_id`, `updated_at`,
-/// plus the FK target columns set to safe defaults.
+/// [`crate::db::tags::collect_raw_tags`]: `record_id`, `brain_id`,
+/// `updated_at`, plus the FK target columns set to safe defaults.
 #[cfg(any(test, feature = "test-utils"))]
 pub fn seed_record_with_tags(
     conn: &Connection,

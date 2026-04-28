@@ -5,7 +5,7 @@
 //! last-seen timestamps. Downstream tasks consume this to seed clustering;
 //! this module is read-only and does not write to `tag_aliases`.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 use crate::db::collect_rows;
 use crate::error::Result;
@@ -32,42 +32,71 @@ pub struct RawTag {
 /// Both join tables have FKs to their parent (`record_tags → records`,
 /// `task_labels → tasks ON DELETE CASCADE`), so orphan rows cannot exist
 /// and INNER JOIN is sufficient on both sides.
-pub fn collect_raw_tags(conn: &Connection) -> Result<Vec<RawTag>> {
+///
+/// `brain_id` filters: `Some(b)` adds `WHERE r.brain_id = b` /
+/// `WHERE t.brain_id = b`. **Production callers MUST pass `Some(brain_id)`**
+/// — `None` returns globally-unfiltered rows and is intended for tests
+/// only. Per-brain consolidation is a non-negotiable invariant of the brain
+/// data model (see `feedback_per_brain_consolidation.md`).
+pub fn collect_raw_tags(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<RawTag>> {
     let mut out = Vec::new();
 
-    {
-        let mut stmt = conn.prepare(
+    let (records_sql, tasks_sql) = match brain_id {
+        Some(_) => (
+            "SELECT rt.tag, COUNT(*), COALESCE(MAX(r.updated_at), 0)
+             FROM record_tags rt
+             JOIN records r ON r.record_id = rt.record_id
+             WHERE r.brain_id = ?1
+             GROUP BY rt.tag",
+            "SELECT tl.label, COUNT(*), COALESCE(MAX(t.updated_at), 0)
+             FROM task_labels tl
+             JOIN tasks t ON t.task_id = tl.task_id
+             WHERE t.brain_id = ?1
+             GROUP BY tl.label",
+        ),
+        None => (
             "SELECT rt.tag, COUNT(*), COALESCE(MAX(r.updated_at), 0)
              FROM record_tags rt
              JOIN records r ON r.record_id = rt.record_id
              GROUP BY rt.tag",
-        )?;
-        let rows = stmt.query_map([], |row| {
+            "SELECT tl.label, COUNT(*), COALESCE(MAX(t.updated_at), 0)
+             FROM task_labels tl
+             JOIN tasks t ON t.task_id = tl.task_id
+             GROUP BY tl.label",
+        ),
+    };
+
+    {
+        let mut stmt = conn.prepare(records_sql)?;
+        let map_row = |row: &rusqlite::Row<'_>| {
             Ok(RawTag {
                 tag: row.get(0)?,
                 source: TagSource::Records,
                 reference_count: row.get(1)?,
                 last_seen_at: row.get(2)?,
             })
-        })?;
+        };
+        let rows = match brain_id {
+            Some(b) => stmt.query_map(params![b], map_row)?,
+            None => stmt.query_map([], map_row)?,
+        };
         out.extend(collect_rows(rows)?);
     }
 
     {
-        let mut stmt = conn.prepare(
-            "SELECT tl.label, COUNT(*), COALESCE(MAX(t.updated_at), 0)
-             FROM task_labels tl
-             JOIN tasks t ON t.task_id = tl.task_id
-             GROUP BY tl.label",
-        )?;
-        let rows = stmt.query_map([], |row| {
+        let mut stmt = conn.prepare(tasks_sql)?;
+        let map_row = |row: &rusqlite::Row<'_>| {
             Ok(RawTag {
                 tag: row.get(0)?,
                 source: TagSource::Tasks,
                 reference_count: row.get(1)?,
                 last_seen_at: row.get(2)?,
             })
-        })?;
+        };
+        let rows = match brain_id {
+            Some(b) => stmt.query_map(params![b], map_row)?,
+            None => stmt.query_map([], map_row)?,
+        };
         out.extend(collect_rows(rows)?);
     }
 
@@ -139,7 +168,7 @@ mod tests {
     #[test]
     fn empty_db_returns_empty_vec() {
         let conn = setup();
-        let out = collect_raw_tags(&conn).unwrap();
+        let out = collect_raw_tags(&conn, None).unwrap();
         assert!(out.is_empty(), "expected no rows, got {out:?}");
     }
 
@@ -159,7 +188,7 @@ mod tests {
         insert_task_label(&conn, "t1", "shared");
         insert_task_label(&conn, "t2", "tasks-only");
 
-        let out = collect_raw_tags(&conn).unwrap();
+        let out = collect_raw_tags(&conn, None).unwrap();
         assert_eq!(out.len(), 4, "expected 4 rows, got {out:?}");
 
         let shared_records = find(&out, "shared", TagSource::Records);
@@ -189,13 +218,13 @@ mod tests {
         insert_task(&conn, "t-tmp", 1000);
         insert_task_label(&conn, "t-tmp", "transient");
 
-        let before = collect_raw_tags(&conn).unwrap();
+        let before = collect_raw_tags(&conn, None).unwrap();
         assert!(before.iter().any(|r| r.tag == "transient"));
 
         conn.execute("DELETE FROM tasks WHERE task_id = 't-tmp'", [])
             .unwrap();
 
-        let after = collect_raw_tags(&conn).unwrap();
+        let after = collect_raw_tags(&conn, None).unwrap();
         assert!(
             after.iter().all(|r| r.tag != "transient"),
             "label should be cascade-deleted, got {after:?}"
