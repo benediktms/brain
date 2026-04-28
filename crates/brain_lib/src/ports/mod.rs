@@ -2197,6 +2197,12 @@ pub trait TagAliasReader: Send + Sync {
         &self,
         brain_id: &str,
     ) -> Result<HashMap<String, brain_persistence::db::tag_aliases::ExistingAlias>>;
+
+    /// Per-brain `(raw_tag → canonical_tag)` lookup for read-time alias
+    /// expansion in the query path (`brn-83a.7.2.4`). Both keys and values
+    /// are lowercased — see `brain_persistence::db::tag_aliases::alias_lookup_for_brain`.
+    /// Returns an empty map for brains that have never been reclustered.
+    fn alias_lookup_for_brain(&self, brain_id: &str) -> Result<HashMap<String, String>>;
 }
 
 // -- TagAliasReader for Db -------------------------------------------------
@@ -2220,6 +2226,13 @@ impl TagAliasReader for Db {
         let brain_id = brain_id.to_string();
         self.with_read_conn(move |conn| {
             brain_persistence::db::tag_aliases::read_alias_snapshot(conn, &brain_id)
+        })
+    }
+
+    fn alias_lookup_for_brain(&self, brain_id: &str) -> Result<HashMap<String, String>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::tag_aliases::alias_lookup_for_brain(conn, &brain_id)
         })
     }
 }

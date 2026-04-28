@@ -26,7 +26,7 @@ use super::{
     BrainManager, ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher,
     DerivedSummaryReader, DerivedSummaryWriter, EmbeddingOps, EmbeddingResetter, EpisodeReader,
     EpisodeWriter, FileMetaReader, FileMetaWriter, FtsSearcher, GraphLinkReader, JobPersistence,
-    JobQueue, LinkWriter, MaintenanceOps, SchemaMeta, SummaryReader, SummaryWriter,
+    JobQueue, LinkWriter, MaintenanceOps, SchemaMeta, SummaryReader, SummaryWriter, TagAliasReader,
 };
 use brain_persistence::db::chunks::ChunkPollRow;
 use brain_persistence::db::job::{Job, JobStatus};
@@ -1348,6 +1348,69 @@ impl MaintenanceOps for MockMaintenanceOps {
     }
 }
 
+// ---------------------------------------------------------------------------
+// MockTagAliasReader
+// ---------------------------------------------------------------------------
+
+/// In-memory mock for `TagAliasReader`.
+///
+/// Backs `alias_lookup_for_brain` with an in-memory `(brain_id → (raw_tag →
+/// canonical_tag))` map so query-path tests can exercise alias-expansion
+/// behavior without bootstrapping a SQLite schema.
+///
+/// `collect_raw_tags` and `read_alias_snapshot` are not implemented because
+/// no current consumer mocks those methods. Add them on demand.
+#[derive(Default)]
+pub struct MockTagAliasReader {
+    /// `(brain_id, raw_tag) → canonical_tag`. Keys/values stored exactly as
+    /// inserted; the trait contract for `alias_lookup_for_brain` returns
+    /// the lowercased projection, so the impl normalizes on read to match
+    /// the production helper.
+    pub aliases: Mutex<HashMap<String, HashMap<String, String>>>,
+}
+
+impl MockTagAliasReader {
+    /// Insert a single alias row keyed by `(brain_id, raw_tag)`.
+    pub fn seed(&self, brain_id: &str, raw_tag: &str, canonical_tag: &str) {
+        self.aliases
+            .lock()
+            .unwrap()
+            .entry(brain_id.to_string())
+            .or_default()
+            .insert(raw_tag.to_string(), canonical_tag.to_string());
+    }
+}
+
+impl TagAliasReader for MockTagAliasReader {
+    fn collect_raw_tags(
+        &self,
+        _brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::tag_aliases::DedupedRawTag>> {
+        unimplemented!("MockTagAliasReader::collect_raw_tags not used by current tests")
+    }
+
+    fn read_alias_snapshot(
+        &self,
+        _brain_id: &str,
+    ) -> Result<HashMap<String, brain_persistence::db::tag_aliases::ExistingAlias>> {
+        unimplemented!("MockTagAliasReader::read_alias_snapshot not used by current tests")
+    }
+
+    fn alias_lookup_for_brain(&self, brain_id: &str) -> Result<HashMap<String, String>> {
+        Ok(self
+            .aliases
+            .lock()
+            .unwrap()
+            .get(brain_id)
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.to_lowercase(), v.to_lowercase()))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1778,5 +1841,30 @@ mod tests {
 
         let chunks = store.writer.chunks.lock().unwrap();
         assert!(chunks.contains_key("f1"));
+    }
+
+    #[test]
+    fn mock_db_alias_lookup_default_empty() {
+        let reader = MockTagAliasReader::default();
+        let out = reader.alias_lookup_for_brain("brain-a").unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn mock_db_alias_lookup_seeded_returns_seeded() {
+        let reader = MockTagAliasReader::default();
+        reader.seed("brain-a", "Bug", "Bugs");
+        reader.seed("brain-a", "defect", "bug");
+        reader.seed("brain-b", "perf", "perf");
+
+        let a = reader.alias_lookup_for_brain("brain-a").unwrap();
+        // Trait contract: keys/values are lowercased.
+        assert_eq!(a.get("bug").map(String::as_str), Some("bugs"));
+        assert_eq!(a.get("defect").map(String::as_str), Some("bug"));
+        assert_eq!(a.len(), 2);
+
+        let b = reader.alias_lookup_for_brain("brain-b").unwrap();
+        assert_eq!(b.get("perf").map(String::as_str), Some("perf"));
+        assert_eq!(b.len(), 1);
     }
 }
