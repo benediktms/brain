@@ -97,9 +97,10 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             params.brains.clone()
         };
 
-        let mut brains: Vec<(String, Option<StoreReader>)> = Vec::new();
+        let mut brains: Vec<(String, String, Option<StoreReader>)> = Vec::new();
         brains.push((
             ctx.stores.brain_name.clone(),
+            ctx.stores.brain_id.clone(),
             Some(ctx.search.store.clone()),
         ));
 
@@ -116,7 +117,7 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
             .await?
             {
                 Some(remote) => {
-                    brains.push((remote.brain_name, remote.store));
+                    brains.push((remote.brain_name, remote.brain_id, remote.store));
                 }
                 None => {
                     eprintln!("warning: brain '{key}' not found in registry, skipping");

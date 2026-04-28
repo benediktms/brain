@@ -109,7 +109,8 @@ impl McpTool for RecordSearch {
                 params.budget_tokens as usize,
                 over_k,
                 &params.tags,
-            );
+            )
+            .with_brain_id(Some(ctx.brain_id()));
 
             let search_result = if params.brains.is_empty() {
                 // Single-brain path.

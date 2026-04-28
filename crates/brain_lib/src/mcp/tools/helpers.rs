@@ -57,7 +57,9 @@ pub fn inject_warnings(response: &mut Value, warnings: Vec<Warning>) {
 /// - Skipping the local brain (already present in the callerʼs pipeline).
 /// - Opening each remote brain's search context; unresolvable brains are warned and skipped.
 ///
-/// Returns a `Vec<(brain_name, Option<StoreReader>)>` suitable for `FederatedPipeline::brains`.
+/// Returns a `Vec<(brain_name, brain_id, Option<StoreReader>)>` suitable for
+/// `FederatedPipeline::brains`. The `brain_id` is what the federated pipeline
+/// threads into each per-brain `SearchParams` for read-time projections.
 /// The local brain is always prepended as the first entry.
 ///
 /// Callers must have already resolved `store` and `embedder` from the `McpContext` before
@@ -67,7 +69,7 @@ pub async fn build_federated_brains(
     store: StoreReader,
     embedder: &Arc<dyn Embed>,
     brain_keys_input: &[String],
-) -> Result<Vec<(String, Option<StoreReader>)>, String> {
+) -> Result<Vec<(String, String, Option<StoreReader>)>, String> {
     let brain_keys: Vec<String> = if brain_keys_input.iter().any(|b| b == "all") {
         match ctx.stores.list_brain_keys() {
             Ok(pairs) => pairs.into_iter().map(|(name, _id)| name).collect(),
@@ -77,8 +79,12 @@ pub async fn build_federated_brains(
         brain_keys_input.to_vec()
     };
 
-    let mut brains: Vec<(String, Option<StoreReader>)> = Vec::new();
-    brains.push((ctx.brain_name().to_string(), Some(store)));
+    let mut brains: Vec<(String, String, Option<StoreReader>)> = Vec::new();
+    brains.push((
+        ctx.brain_name().to_string(),
+        ctx.brain_id().to_string(),
+        Some(store),
+    ));
 
     for key in &brain_keys {
         if key == ctx.brain_name() {
@@ -93,7 +99,7 @@ pub async fn build_federated_brains(
         .await
         {
             Ok(Some(remote)) => {
-                brains.push((remote.brain_name, remote.store));
+                brains.push((remote.brain_name, remote.brain_id, remote.store));
             }
             Ok(None) => {
                 tracing::warn!(brain = %key, "brain not found in registry, skipping");
