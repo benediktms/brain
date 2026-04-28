@@ -45,6 +45,26 @@ pub struct AliasUpsert {
     pub embedder_version: String,
 }
 
+/// Owned input for [`insert_run`]: the `tag_cluster_runs` row inserted by
+/// Tx-1 with `finished_at = NULL` and `notes = NULL`.
+#[derive(Debug, Clone)]
+pub struct InsertRun {
+    pub run_id: String,
+    pub started_at_iso: String,
+    pub embedder_version: String,
+    pub threshold: f32,
+    pub triggered_by: String,
+}
+
+/// Owned finalize-run payload consumed by [`apply_alias_upserts`] in Tx-2.
+#[derive(Debug, Clone)]
+pub struct FinalizeRun {
+    pub run_id: String,
+    pub finished_at_iso: String,
+    pub source_count: i64,
+    pub cluster_count: i64,
+}
+
 /// Per-brain raw-tag collector. Folds across (Records, Tasks) sources.
 ///
 /// **Why this duplicates [`super::tags::collect_raw_tags`].** The public
@@ -162,6 +182,96 @@ pub fn read_alias_snapshot(conn: &Connection) -> Result<HashMap<String, Existing
     Ok(out)
 }
 
+/// Tx-1: insert a `tag_cluster_runs` row with `finished_at = NULL` so the
+/// `tag_aliases.last_run_id` FK can resolve when Tx-2 runs.
+pub fn insert_run(conn: &Connection, input: &InsertRun) -> Result<()> {
+    conn.execute(
+        "INSERT INTO tag_cluster_runs
+             (run_id, started_at, finished_at, source_count, cluster_count,
+              embedder_version, threshold, triggered_by, notes)
+         VALUES (?1, ?2, NULL, NULL, NULL, ?3, ?4, ?5, NULL)",
+        params![
+            input.run_id,
+            input.started_at_iso,
+            input.embedder_version,
+            input.threshold,
+            input.triggered_by,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Tx-2: atomic UPSERT of all `tag_aliases` rows for the given run plus
+/// finalization of the matching `tag_cluster_runs` row.
+///
+/// Both happen inside a single rusqlite transaction so the alias state and
+/// the audit-row finalization commit atomically. Rolls back via `Drop` if
+/// any prepared-statement execution returns `Err`.
+pub fn apply_alias_upserts(
+    conn: &Connection,
+    upserts: &[AliasUpsert],
+    finalize: &FinalizeRun,
+) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO tag_aliases
+                 (raw_tag, canonical_tag, cluster_id, last_run_id,
+                  embedding, embedder_version, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(raw_tag) DO UPDATE SET
+                 canonical_tag    = excluded.canonical_tag,
+                 cluster_id       = excluded.cluster_id,
+                 last_run_id      = excluded.last_run_id,
+                 embedding        = excluded.embedding,
+                 embedder_version = excluded.embedder_version,
+                 updated_at       = excluded.updated_at",
+        )?;
+        for u in upserts {
+            stmt.execute(params![
+                u.raw_tag,
+                u.canonical_tag,
+                u.cluster_id,
+                finalize.run_id,
+                encode_embedding(&u.embedding),
+                u.embedder_version,
+                finalize.finished_at_iso,
+            ])?;
+        }
+    }
+    tx.execute(
+        "UPDATE tag_cluster_runs
+         SET finished_at = ?1, source_count = ?2, cluster_count = ?3
+         WHERE run_id = ?4",
+        params![
+            finalize.finished_at_iso,
+            finalize.source_count,
+            finalize.cluster_count,
+            finalize.run_id,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Tx-3: record a failed run on the existing `tag_cluster_runs` row.
+/// Called only if `run_recluster` returns `Err` after [`insert_run`]
+/// committed but before/while Tx-2 was being attempted.
+pub fn record_run_failure(
+    conn: &Connection,
+    run_id: &str,
+    finished_at_iso: &str,
+    notes: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE tag_cluster_runs
+         SET finished_at = ?1, notes = ?2
+         WHERE run_id = ?3",
+        params![finished_at_iso, notes, run_id],
+    )?;
+    Ok(())
+}
+
 /// Encode an L2-normalized embedding as a little-endian f32 byte run for
 /// the `tag_aliases.embedding` BLOB column.
 ///
@@ -170,7 +280,6 @@ pub fn read_alias_snapshot(conn: &Connection) -> Result<HashMap<String, Existing
 /// We deliberately avoid `bytemuck::cast_slice` to keep the dependency
 /// tree small — the loop has no `unsafe` and matches native endianness on
 /// darwin x86_64/aarch64.
-#[allow(dead_code)] // wired by the Tx-2 writer in subsequent commits within `brn-83a.7.2.3`
 pub(crate) fn encode_embedding(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);
     for x in v {
