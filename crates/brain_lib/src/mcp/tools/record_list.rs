@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -9,6 +10,7 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::records::queries::RecordFilter;
 use crate::uri::SynapseUri;
 
+use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
 #[derive(Deserialize)]
@@ -20,7 +22,11 @@ struct Params {
     task_id: Option<String>,
     #[serde(default = "default_limit")]
     limit: usize,
+    /// Deprecated: use `brains` instead. When set, treated as `brains: [brain]`.
     brain: Option<String>,
+    /// Brains to query. See `BRAINS_PARAM_DESCRIPTION`.
+    #[serde(default)]
+    brains: Option<Vec<String>>,
 }
 
 fn default_status() -> String {
@@ -40,65 +46,71 @@ impl RecordList {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let remote_brain: Option<(String, crate::records::RecordStore)> =
-            if let Some(ref brain) = params.brain {
-                let (bid, brain_name) = match ctx.resolve_brain_id(brain) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return ToolCallResult::error(format!("Failed to resolve brain: {e}"));
-                    }
-                };
-                match ctx.stores.with_brain_id(&bid, &brain_name) {
-                    Ok(s) => Some((brain_name, s.records)),
-                    Err(e) => {
-                        return ToolCallResult::error(format!("Failed to open brain stores: {e}"));
-                    }
+        // `brain` (singular) is a back-compat alias for `brains: [brain]`.
+        let brains_arg: Option<Vec<String>> = match (&params.brains, &params.brain) {
+            (Some(bs), _) => Some(bs.clone()),
+            (None, Some(b)) => Some(vec![b.clone()]),
+            (None, None) => None,
+        };
+
+        let scope = match resolve_scope(ctx, brains_arg.as_deref()) {
+            Ok(s) => s,
+            Err(err) => return err,
+        };
+
+        let mut per_brain: Vec<(BrainRef, Arc<McpContext>)> = Vec::new();
+        for brain_ref in scope.brains() {
+            let scoped_ctx = match ctx.with_brain_id(&brain_ref.brain_id, &brain_ref.brain_name) {
+                Ok(c) => c,
+                Err(e) => {
+                    return ToolCallResult::error(format!(
+                        "Failed to scope to brain '{}': {e}",
+                        brain_ref.brain_name
+                    ));
                 }
-            } else {
-                None
             };
-        let (records, remote_brain_name): (&crate::records::RecordStore, Option<String>) =
-            match remote_brain {
-                Some((ref name, ref recs)) => (recs, Some(name.clone())),
-                None => (&ctx.stores.records, None),
-            };
+            per_brain.push((brain_ref.clone(), scoped_ctx));
+        }
 
         let filter = RecordFilter {
-            kind: params.kind,
-            status: Some(params.status),
-            tag: params.tag,
-            task_id: params.task_id,
+            kind: params.kind.clone(),
+            status: Some(params.status.clone()),
+            tag: params.tag.clone(),
+            task_id: params.task_id.clone(),
             limit: Some(params.limit),
             brain_id: None,
         };
 
-        let record_list = match records.list_records(&filter) {
-            Ok(r) => r,
-            Err(e) => return ToolCallResult::error(format!("Failed to list records: {e}")),
-        };
-
         let mut warnings: Vec<Warning> = Vec::new();
-        let compact_ids = store_or_warn(
-            records.compact_record_ids(),
-            "compact_record_ids",
-            &mut warnings,
-        );
-        let list_brain_name = match remote_brain_name.as_deref() {
-            Some(name) => name,
-            None => ctx.brain_name(),
-        };
+        let mut all_records: Vec<Value> = Vec::new();
 
-        let records_json: Vec<Value> = record_list
-            .iter()
-            .map(|r| {
-                let compact_id = match compact_ids.get(&r.record_id) {
-                    Some(id) => id.clone(),
-                    None => r.record_id.clone(),
-                };
-                let uri = SynapseUri::for_record(list_brain_name, &compact_id).to_string();
-                json!({
+        for (brain_ref, scoped_ctx) in &per_brain {
+            let records = &scoped_ctx.stores.records;
+            let record_list = match records.list_records(&filter) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolCallResult::error(format!(
+                        "Failed to list records for brain '{}': {e}",
+                        brain_ref.brain_name
+                    ));
+                }
+            };
+            let compact_ids = store_or_warn(
+                records.compact_record_ids(),
+                "compact_record_ids",
+                &mut warnings,
+            );
+
+            for r in record_list {
+                let compact_id = compact_ids
+                    .get(&r.record_id)
+                    .cloned()
+                    .unwrap_or_else(|| r.record_id.clone());
+                let uri = SynapseUri::for_record(&brain_ref.brain_name, &compact_id).to_string();
+                all_records.push(json!({
                     "record_id": compact_id,
                     "uri": uri,
+                    "brain": brain_ref.brain_name,
                     "title": r.title,
                     "kind": r.kind,
                     "status": r.status,
@@ -108,21 +120,38 @@ impl RecordList {
                     "task_id": r.task_id,
                     "created_at": r.created_at,
                     "updated_at": r.updated_at,
-                })
-            })
-            .collect();
+                }));
+            }
+        }
+
+        // Apply global limit after merging across brains.
+        let total = all_records.len();
+        let capped = if all_records.len() > params.limit {
+            all_records
+                .into_iter()
+                .take(params.limit)
+                .collect::<Vec<_>>()
+        } else {
+            all_records
+        };
 
         let mut result = json!({
-            "records": records_json,
-            "count": records_json.len(),
+            "records": capped,
+            "count": capped.len(),
+            "total": total,
         });
 
-        if let Some(name) = remote_brain_name {
-            result["brain"] = json!(name);
+        if scope.is_federated() {
+            let brain_names: Vec<&str> = per_brain
+                .iter()
+                .map(|(b, _)| b.brain_name.as_str())
+                .collect();
+            result["brains"] = json!(brain_names);
+        } else {
+            result["brain"] = json!(per_brain[0].0.brain_name);
         }
 
         inject_warnings(&mut result, warnings);
-
         json_response(&result)
     }
 }
@@ -135,7 +164,7 @@ impl McpTool for RecordList {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "List records with optional filters. Returns compact IDs.".into(),
+            description: "List records with optional filters. Returns compact IDs. Supports cross-brain queries via the `brains` parameter.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -164,7 +193,12 @@ impl McpTool for RecordList {
                     },
                     "brain": {
                         "type": "string",
-                        "description": "Target brain name or ID. When provided, lists records from that brain."
+                        "description": "DEPRECATED: use `brains` instead. Equivalent to `brains: [brain]`."
+                    },
+                    "brains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": BRAINS_PARAM_DESCRIPTION
                     }
                 }
             }),
