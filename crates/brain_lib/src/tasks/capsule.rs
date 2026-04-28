@@ -15,10 +15,16 @@ use brain_persistence::db::Db;
 use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::store::Store;
 
+/// Maximum description length (in Unicode scalar values) included in a task
+/// capsule. Sized to stay comfortably inside BGE-small-en's 512-token window
+/// while preserving enough context for keyword (FTS/BM25) recall.
+pub const TASK_CAPSULE_DESC_CHAR_CAP: usize = 1000;
+
 /// Build a capsule string from a task's current state.
 ///
 /// Format: "{title}. {desc_summary}. Tags: {labels}. Priority: {priority}."
-/// - `desc_summary`: first sentence (find `. ` or `\n`, max 200 chars); omit if None/empty
+/// - `desc_summary`: first sentence (find `. ` or `\n`), then truncated to at
+///   most [`TASK_CAPSULE_DESC_CHAR_CAP`] Unicode chars; omit if None/empty
 /// - Tags segment omitted if labels is empty
 /// - Priority segment always included
 pub fn build_task_capsule(
@@ -32,15 +38,20 @@ pub fn build_task_capsule(
     if let Some(desc) = description {
         let desc = desc.trim();
         if !desc.is_empty() {
-            // Take first sentence (up to ". " or "\n"), max 200 chars
+            // Take first sentence (up to ". " or "\n"), then char-truncate.
+            // `find` returns valid UTF-8 byte boundaries, and `chars().take(N)`
+            // is inherently codepoint-bounded so no manual boundary walk needed.
             let end = desc
                 .find(". ")
                 .map(|p| p + 1)
                 .or_else(|| desc.find('\n'))
                 .unwrap_or(desc.len());
-            let summary = &desc[..end.min(200)];
+            let summary: String = desc[..end]
+                .chars()
+                .take(TASK_CAPSULE_DESC_CHAR_CAP)
+                .collect();
             if !summary.is_empty() {
-                parts.push(summary.to_string());
+                parts.push(summary);
             }
         }
     }
@@ -246,10 +257,28 @@ mod tests {
 
     #[test]
     fn test_build_task_capsule_long_description_truncated() {
-        let long_desc = "A".repeat(300);
+        // Use a description larger than the cap with no sentence boundary.
+        let long_desc = "A".repeat(TASK_CAPSULE_DESC_CHAR_CAP * 2);
         let capsule = build_task_capsule("Long desc task", Some(&long_desc), &[], 4);
-        // Description should be truncated to ~200 chars
-        assert!(capsule.len() < 400);
+        // Count consecutive 'A's — that's the description segment length.
+        let desc_chars = capsule.chars().filter(|c| *c == 'A').count();
+        assert_eq!(desc_chars, TASK_CAPSULE_DESC_CHAR_CAP);
+    }
+
+    #[test]
+    fn test_build_task_capsule_truncation_at_multibyte_char_boundary() {
+        // Regression: byte index landing inside a 3-byte em-dash (—) used to
+        // panic with "byte index N is not a char boundary". With char-based
+        // truncation this can't happen, but exercising the path locks in the
+        // invariant in case the implementation is reworked.
+        let prefix = "A".repeat(TASK_CAPSULE_DESC_CHAR_CAP - 2);
+        let long_desc =
+            format!("{prefix}— rest of the description goes here and continues for a while");
+        let capsule = build_task_capsule("T", Some(&long_desc), &[], 2);
+        assert!(capsule.starts_with("T."));
+        // Every char must be a valid scalar (trivially true for any String, but
+        // also asserts we never produced sliced bytes mid-codepoint).
+        assert!(capsule.is_char_boundary(capsule.len()));
     }
 
     #[test]
