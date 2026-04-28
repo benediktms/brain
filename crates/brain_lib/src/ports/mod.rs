@@ -2173,6 +2173,114 @@ impl ProviderStore for crate::stores::BrainStores {
 }
 
 // ---------------------------------------------------------------------------
+// SQLite read path — synonym clustering (tag_aliases / tag_cluster_runs)
+// ---------------------------------------------------------------------------
+
+/// Read-side operations for the synonym-clustering job (`brn-83a.7.2.3`).
+///
+/// Consumers: `brain_lib::tags::recluster::run_recluster`. The write side
+/// (Tx-1, Tx-2, Tx-3) lands in `TagAliasWriter` in subsequent commits
+/// within the same task.
+pub trait TagAliasReader: Send + Sync {
+    /// Per-brain raw-tag collector. Folds across `record_tags` and
+    /// `task_labels` into a single `Vec<DedupedRawTag>`. The duplication
+    /// against `brain_persistence::db::tags::collect_raw_tags` is a
+    /// brain-scoping workaround — see the function's doc-comment for why.
+    fn collect_raw_tags_for_brain(
+        &self,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::tag_aliases::DedupedRawTag>>;
+
+    /// Snapshot every `tag_aliases` row keyed by `raw_tag`.
+    fn read_alias_snapshot(
+        &self,
+    ) -> Result<HashMap<String, brain_persistence::db::tag_aliases::ExistingAlias>>;
+}
+
+// -- TagAliasReader for Db -------------------------------------------------
+
+impl TagAliasReader for Db {
+    fn collect_raw_tags_for_brain(
+        &self,
+        brain_id: &str,
+    ) -> Result<Vec<brain_persistence::db::tag_aliases::DedupedRawTag>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::tag_aliases::collect_raw_tags_for_brain(conn, &brain_id)
+        })
+    }
+
+    fn read_alias_snapshot(
+        &self,
+    ) -> Result<HashMap<String, brain_persistence::db::tag_aliases::ExistingAlias>> {
+        self.with_read_conn(brain_persistence::db::tag_aliases::read_alias_snapshot)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQLite write path — synonym clustering (tag_aliases / tag_cluster_runs)
+// ---------------------------------------------------------------------------
+
+/// Write-side operations for the synonym-clustering job (`brn-83a.7.2.3`).
+///
+/// Three transactions, in order:
+/// - [`insert_run`](TagAliasWriter::insert_run): Tx-1, FK precondition.
+/// - [`apply_alias_upserts`](TagAliasWriter::apply_alias_upserts): Tx-2,
+///   atomic upsert + run-row finalize.
+/// - [`record_run_failure`](TagAliasWriter::record_run_failure): Tx-3,
+///   error path only.
+///
+/// Consumer: `brain_lib::tags::recluster::run_recluster`.
+pub trait TagAliasWriter: Send + Sync {
+    /// Tx-1: INSERT a `tag_cluster_runs` row with `finished_at = NULL`.
+    fn insert_run(&self, input: brain_persistence::db::tag_aliases::InsertRun) -> Result<()>;
+
+    /// Tx-2: atomic UPSERT of all alias rows + finalize the run row.
+    fn apply_alias_upserts(
+        &self,
+        upserts: Vec<brain_persistence::db::tag_aliases::AliasUpsert>,
+        finalize: brain_persistence::db::tag_aliases::FinalizeRun,
+    ) -> Result<()>;
+
+    /// Tx-3: record a failure on the existing run row.
+    fn record_run_failure(&self, run_id: &str, finished_at_iso: &str, notes: &str) -> Result<()>;
+}
+
+// -- TagAliasWriter for Db -------------------------------------------------
+
+impl TagAliasWriter for Db {
+    fn insert_run(&self, input: brain_persistence::db::tag_aliases::InsertRun) -> Result<()> {
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::tag_aliases::insert_run(conn, &input)
+        })
+    }
+
+    fn apply_alias_upserts(
+        &self,
+        upserts: Vec<brain_persistence::db::tag_aliases::AliasUpsert>,
+        finalize: brain_persistence::db::tag_aliases::FinalizeRun,
+    ) -> Result<()> {
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::tag_aliases::apply_alias_upserts(conn, &upserts, &finalize)
+        })
+    }
+
+    fn record_run_failure(&self, run_id: &str, finished_at_iso: &str, notes: &str) -> Result<()> {
+        let run_id = run_id.to_string();
+        let finished_at_iso = finished_at_iso.to_string();
+        let notes = notes.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::db::tag_aliases::record_run_failure(
+                conn,
+                &run_id,
+                &finished_at_iso,
+                &notes,
+            )
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock implementations for testing
 // ---------------------------------------------------------------------------
 
