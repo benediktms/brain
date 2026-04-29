@@ -28,6 +28,12 @@ fn brain_id_filter_bare(brain_id: Option<&str>) -> (String, Vec<String>) {
 /// and all dependencies are done or cancelled.
 ///
 /// Ordered by priority ASC, epics first within tier, due_ts ASC NULLS LAST, updated_at DESC.
+///
+/// Cross-brain model: all brains share one `tasks` table (single-DB). A dependency
+/// on a task from another brain is satisfied by the same JOIN — no per-brain routing
+/// is needed. If `depends_on` references a task ID that does not exist at all (orphaned
+/// dep, unregistered brain), the LEFT JOIN produces a NULL row which is treated as
+/// still-blocking so the depending task is never mis-classified as ready.
 pub fn list_ready(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
     let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
@@ -39,9 +45,9 @@ pub fn list_ready(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskR
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
                SELECT 1 FROM task_deps d
-               JOIN tasks dep ON dep.task_id = d.depends_on
+               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
                WHERE d.task_id = t.task_id
-                 AND dep.status NOT IN ('done', 'cancelled')
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
            {brain_clause}
@@ -69,9 +75,9 @@ pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Resul
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
                SELECT 1 FROM task_deps d
-               JOIN tasks dep ON dep.task_id = d.depends_on
+               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
                WHERE d.task_id = t.task_id
-                 AND dep.status NOT IN ('done', 'cancelled')
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
            {brain_clause}
@@ -85,7 +91,12 @@ pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Resul
     crate::db::collect_rows(rows)
 }
 
-/// List tasks that are blocked: have unresolved deps or an explicit blocked_reason.
+/// List tasks that are blocked: have unresolved deps, an explicit blocked_reason,
+/// a future defer_until, or a blocked ancestor.
+///
+/// An orphaned dep (depends_on references a non-existent task) counts as blocking;
+/// the LEFT JOIN + NULL check ensures such tasks appear here rather than in the
+/// ready list.
 pub fn list_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
     let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
@@ -98,9 +109,9 @@ pub fn list_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<Tas
                OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
                OR EXISTS (
                    SELECT 1 FROM task_deps d
-                   JOIN tasks dep ON dep.task_id = d.depends_on
+                   LEFT JOIN tasks dep ON dep.task_id = d.depends_on
                    WHERE d.task_id = t.task_id
-                     AND dep.status NOT IN ('done', 'cancelled')
+                     AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
                )
                OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
            )
@@ -209,6 +220,10 @@ pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
 /// List task IDs that became unblocked because `completed_task_id` was just
 /// marked done or cancelled. Returns IDs of tasks that depended on the
 /// completed task and now have all dependencies resolved.
+///
+/// Uses LEFT JOIN so that orphaned dep entries (depends_on references a missing
+/// task) are treated as still-blocking — such tasks are excluded from the
+/// unblocked set until the orphan is cleaned up.
 pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Result<Vec<String>> {
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
@@ -220,9 +235,9 @@ pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Resul
            AND t.blocked_reason IS NULL
            AND NOT EXISTS (
                SELECT 1 FROM task_deps d2
-               JOIN tasks dep ON dep.task_id = d2.depends_on
+               LEFT JOIN tasks dep ON dep.task_id = d2.depends_on
                WHERE d2.task_id = d.task_id
-                 AND dep.status NOT IN ('done', 'cancelled')
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)"
     );

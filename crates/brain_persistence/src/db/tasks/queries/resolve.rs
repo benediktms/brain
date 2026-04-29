@@ -326,11 +326,19 @@ fn compact_id_ulid(conn: &Connection, task_id: &str) -> Result<String> {
 /// For children with `parent_task_id` + `child_seq`, returns dot notation
 /// (e.g., `brn-a3f.1`). Recurses through the parent chain so grandchildren
 /// get `brn-a3f.1.2`. Falls back to ULID prefix for pre-migration tasks.
+///
+/// If `task_id` does not exist in the `tasks` table (orphan dep, deleted target),
+/// returns the raw ID unchanged — the ULID-prefix fallback is only valid for
+/// tasks that exist but lack a `display_id`, not for missing tasks.
 pub fn compact_id(conn: &Connection, task_id: &str) -> Result<String> {
+    // Orphan / non-existent task: no compaction possible, return raw.
+    let task = match get_task(conn, task_id)? {
+        Some(t) => t,
+        None => return Ok(task_id.to_string()),
+    };
+
     // Dot notation for any child with parent + child_seq
-    if let Some(task) = get_task(conn, task_id)?
-        && let (Some(parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq)
-    {
+    if let (Some(parent_id), Some(seq)) = (&task.parent_task_id, task.child_seq) {
         let parent_compact = compact_id(conn, parent_id)?;
         return Ok(format!("{parent_compact}.{seq}"));
     }

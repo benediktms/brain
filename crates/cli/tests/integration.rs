@@ -851,3 +851,86 @@ fn snapshot_prefix_uses_brain_db() {
         "Snapshot ID should use prefix 'SNP', got: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Orphan-dep readiness (brn-6f4)
+// ---------------------------------------------------------------------------
+//
+// A task whose only dep references a nonexistent task_id (orphaned dep) must:
+//   - NOT appear in `brain tasks ready`
+//   - NOT appear in `brain tasks next`
+//
+// We inject the orphan dep directly via rusqlite after creating the task via
+// the CLI, because the event layer correctly rejects deps on missing tasks.
+
+#[test]
+fn tasks_orphan_dep_not_in_ready_list() {
+    let (project, home) = setup_brain();
+    let _ = project;
+    let db = sqlite_db_path(home.path());
+
+    // Create a task via CLI.
+    let create_out = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "create", "--title", "Orphan dep task"])
+        .output()
+        .unwrap();
+    assert!(create_out.status.success(), "task create should succeed");
+    let create_stdout = String::from_utf8(create_out.stdout).unwrap();
+
+    // Extract the task_id from the create output (format: "Created task <id>").
+    let task_id = create_stdout
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            if line.starts_with("Created") || line.contains("Created task") {
+                line.split_whitespace().last().map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            // Fallback: query the DB directly for the task_id.
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.query_row(
+                "SELECT task_id FROM tasks WHERE title = 'Orphan dep task' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+        });
+
+    // Inject an orphan dep directly into the DB (FK checks off during insert).
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, 'ghost-nonexistent-task')",
+            rusqlite::params![task_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+    }
+
+    // `brain tasks ready` must NOT show "Orphan dep task".
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "ready"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Orphan dep task").not());
+
+    // `brain tasks next` must NOT show "Orphan dep task".
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "next"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Orphan dep task").not());
+}

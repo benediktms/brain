@@ -396,3 +396,195 @@ async fn mcp_handler_status_returns_expected_json_fields() {
     assert!(parsed["lancedb_unoptimized_rows"].is_u64());
     assert!(parsed["dual_store_stuck_files"].is_u64());
 }
+
+// ---------------------------------------------------------------------------
+// Cross-brain dep + orphan-dep readiness tests (brn-6f4)
+// ---------------------------------------------------------------------------
+//
+// The persistence layer uses a LEFT JOIN so that:
+//   (a) Cross-brain deps (dep in different brain partition, same DB) block correctly.
+//   (b) Orphan deps (depends_on references a nonexistent task_id) stay blocked.
+//
+// These tests exercise the MCP surface — tasks.next, tasks.list, tasks.get —
+// and confirm the fix propagates end-to-end.
+
+/// Inject an orphan dep row directly (bypassing the event layer which enforces
+/// task_exists). FK checks are disabled for the insert.
+fn inject_orphan_dep(db: &brain_persistence::db::Db, task_id: &str, depends_on: &str) {
+    db.with_write_conn(|conn| {
+        conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+        conn.execute(
+            "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, ?2)",
+            rusqlite::params![task_id, depends_on],
+        )?;
+        conn.execute_batch("PRAGMA foreign_keys = ON")?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// `tasks.next` must exclude a task that has a dep on a nonexistent (orphan) task.
+#[tokio::test]
+async fn mcp_tasks_next_excludes_task_with_orphan_dep() {
+    let ctx = make_test_context().await;
+
+    // Create a task with no deps — should be ready.
+    call_tool(
+        &ctx,
+        "tasks.apply_event",
+        json!({
+            "event_type": "task_created",
+            "task_id": "orphan-t1",
+            "payload": { "title": "Ready task", "priority": 2 }
+        }),
+    )
+    .await;
+
+    // Create a task that will get an orphan dep injected.
+    call_tool(
+        &ctx,
+        "tasks.apply_event",
+        json!({
+            "event_type": "task_created",
+            "task_id": "orphan-t2",
+            "payload": { "title": "Has orphan dep", "priority": 1 }
+        }),
+    )
+    .await;
+
+    // Inject orphan dep (ghost-task doesn't exist).
+    inject_orphan_dep(ctx.ctx.stores.db_for_tests(), "orphan-t2", "ghost-task");
+
+    let result = call_tool(&ctx, "tasks.next", json!({ "k": 10 })).await;
+    let parsed = success_json(&result);
+
+    let tasks: Vec<&Value> = parsed["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|g| g["tasks"].as_array().unwrap().iter())
+        .collect();
+
+    let titles: Vec<&str> = tasks.iter().filter_map(|t| t["title"].as_str()).collect();
+
+    assert!(
+        !titles.contains(&"Has orphan dep"),
+        "task with orphan dep must NOT appear in tasks.next: {titles:?}"
+    );
+    assert!(
+        titles.contains(&"Ready task"),
+        "ready task must appear in tasks.next: {titles:?}"
+    );
+
+    // Counts should reflect one blocked, one ready.
+    assert_eq!(
+        parsed["ready_count"], 1,
+        "ready_count should be 1: {parsed}"
+    );
+    assert_eq!(
+        parsed["blocked_count"], 1,
+        "blocked_count should be 1: {parsed}"
+    );
+}
+
+/// `tasks.list` with `status: "blocked"` includes tasks with orphan deps;
+/// `status: "ready"` excludes them.
+#[tokio::test]
+async fn mcp_tasks_list_orphan_dep_in_blocked_not_in_ready() {
+    let ctx = make_test_context().await;
+
+    call_tool(
+        &ctx,
+        "tasks.apply_event",
+        json!({
+            "event_type": "task_created",
+            "task_id": "list-t1",
+            "payload": { "title": "Orphan dep task", "priority": 1 }
+        }),
+    )
+    .await;
+
+    inject_orphan_dep(ctx.ctx.stores.db_for_tests(), "list-t1", "nonexistent-task");
+
+    // Check "ready" list — must not include list-t1.
+    let ready_result = call_tool(
+        &ctx,
+        "tasks.list",
+        json!({ "status": "ready", "limit": 100 }),
+    )
+    .await;
+    let ready_json = success_json(&ready_result);
+    let ready_tasks = ready_json["tasks"].as_array().unwrap();
+    let ready_ids: Vec<&str> = ready_tasks
+        .iter()
+        .filter_map(|t| t["task_id"].as_str())
+        .collect();
+    assert!(
+        !ready_ids.iter().any(|id| id.contains("list-t1")),
+        "task with orphan dep must NOT appear in ready list: {ready_ids:?}"
+    );
+
+    // Check "blocked" list — must include list-t1.
+    let blocked_result = call_tool(
+        &ctx,
+        "tasks.list",
+        json!({ "status": "blocked", "limit": 100 }),
+    )
+    .await;
+    let blocked_json = success_json(&blocked_result);
+    let blocked_tasks = blocked_json["tasks"].as_array().unwrap();
+    let blocked_titles: Vec<&str> = blocked_tasks
+        .iter()
+        .filter_map(|t| t["title"].as_str())
+        .collect();
+    assert!(
+        blocked_titles.contains(&"Orphan dep task"),
+        "task with orphan dep must appear in blocked list: {blocked_titles:?}"
+    );
+}
+
+/// `tasks.get` dependency_summary includes orphan dep in total_deps and blocking_task_ids.
+#[tokio::test]
+async fn mcp_tasks_get_orphan_dep_in_dependency_summary() {
+    let ctx = make_test_context().await;
+
+    call_tool(
+        &ctx,
+        "tasks.apply_event",
+        json!({
+            "event_type": "task_created",
+            "task_id": "get-t1",
+            "payload": { "title": "Task with orphan dep", "priority": 1 }
+        }),
+    )
+    .await;
+
+    inject_orphan_dep(ctx.ctx.stores.db_for_tests(), "get-t1", "phantom-task");
+
+    let result = call_tool(&ctx, "tasks.get", json!({ "task_id": "get-t1" })).await;
+    let parsed = success_json(&result);
+
+    let dep_summary = &parsed["dependency_summary"];
+    assert_eq!(
+        dep_summary["total_deps"], 1,
+        "orphan dep must count in total_deps: {dep_summary}"
+    );
+    assert_eq!(
+        dep_summary["done_deps"], 0,
+        "orphan dep is not done: {dep_summary}"
+    );
+    let blocking = dep_summary["blocking_task_ids"]
+        .as_array()
+        .expect("blocking_task_ids is array");
+    assert_eq!(
+        blocking.len(),
+        1,
+        "orphan dep appears in blocking_task_ids: {dep_summary}"
+    );
+    // The blocking ID is the raw orphan task ID (compact_id falls back to raw when not in DB).
+    let blocking_id = blocking[0].as_str().unwrap();
+    assert!(
+        blocking_id.contains("phantom-task") || blocking_id == "phantom-task",
+        "blocking_task_ids contains orphan dep ID: {blocking_id}"
+    );
+}

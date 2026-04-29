@@ -14,11 +14,16 @@ pub struct DependencySummary {
 }
 
 /// Get the dependency summary for a task.
+///
+/// Uses LEFT JOIN so that orphaned `depends_on` references (target task absent
+/// from the DB — e.g. unregistered cross-brain task) still count toward
+/// `total_deps` and appear in `blocking_task_ids`. Callers see a non-zero
+/// blocking count rather than a misleadingly empty summary.
 pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<DependencySummary> {
     let mut stmt = conn.prepare(
         "SELECT d.depends_on, t.status
          FROM task_deps d
-         JOIN tasks t ON t.task_id = d.depends_on
+         LEFT JOIN tasks t ON t.task_id = d.depends_on
          WHERE d.task_id = ?1",
     )?;
 
@@ -27,16 +32,20 @@ pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<Depend
     let mut blocking_task_ids = Vec::new();
 
     let rows = stmt.query_map([task_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
     })?;
 
     for row in rows {
-        let (dep_id, status) = row?;
+        let (dep_id, status_opt) = row?;
         total_deps += 1;
-        if status == TaskStatus::Done.as_ref() || status == TaskStatus::Cancelled.as_ref() {
-            done_deps += 1;
-        } else {
-            blocking_task_ids.push(dep_id);
+        match status_opt.as_deref() {
+            Some(s) if s == TaskStatus::Done.as_ref() || s == TaskStatus::Cancelled.as_ref() => {
+                done_deps += 1;
+            }
+            _ => {
+                // None means orphaned dep (target not in DB) — counts as blocking.
+                blocking_task_ids.push(dep_id);
+            }
         }
     }
 
@@ -114,6 +123,9 @@ pub fn count_by_status(conn: &Connection) -> Result<StatusCounts> {
 }
 
 /// Count of ready and blocked tasks (for response metadata).
+///
+/// Mirrors the LEFT JOIN semantics from `list_ready` / `list_blocked`: orphaned
+/// dep entries (depends_on references a missing task) count as blocking.
 pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<(usize, usize)> {
     let (brain_clause, brain_params) = super::listing::brain_id_filter(brain_id);
     let ready_sql = format!(
@@ -124,9 +136,9 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
                SELECT 1 FROM task_deps d
-               JOIN tasks dep ON dep.task_id = d.depends_on
+               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
                WHERE d.task_id = t.task_id
-                 AND dep.status NOT IN ('done', 'cancelled')
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
            {brain_clause}"
@@ -147,9 +159,9 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
                OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
                OR EXISTS (
                    SELECT 1 FROM task_deps d
-                   JOIN tasks dep ON dep.task_id = d.depends_on
+                   LEFT JOIN tasks dep ON dep.task_id = d.depends_on
                    WHERE d.task_id = t.task_id
-                     AND dep.status NOT IN ('done', 'cancelled')
+                     AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
                )
                OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
            )
