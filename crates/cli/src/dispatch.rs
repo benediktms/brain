@@ -811,8 +811,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Memory { json, action } => {
             use commands::memory::run::{
-                MemoryCtx, ReflectCommitParams, ReflectPrepareParams, SearchParams2,
-                WriteEpisodeParams, WriteProcedureParams,
+                MemoryCtx, ReflectCommitParams, ReflectPrepareParams, RetrieveParams,
+                SearchParams2, WriteEpisodeParams, WriteProcedureParams,
             };
             let ctx = MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
 
@@ -847,6 +847,43 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags_require,
                             tags_exclude,
                             brains,
+                            explain,
+                        },
+                    )
+                    .await?;
+                }
+                MemoryAction::Retrieve {
+                    query,
+                    uri,
+                    lod,
+                    count,
+                    strategy,
+                    brains,
+                    time_scope,
+                    time_after,
+                    time_before,
+                    tags,
+                    tags_require,
+                    tags_exclude,
+                    kinds,
+                    explain,
+                } => {
+                    commands::memory::run::retrieve(
+                        &ctx,
+                        RetrieveParams {
+                            query,
+                            uri,
+                            lod,
+                            count,
+                            strategy,
+                            brains,
+                            time_scope,
+                            time_after,
+                            time_before,
+                            tags,
+                            tags_require,
+                            tags_exclude,
+                            kinds,
                             explain,
                         },
                     )
