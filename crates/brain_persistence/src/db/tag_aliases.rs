@@ -415,24 +415,31 @@ pub fn list_aliases_for_brain(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<AliasRow>> {
+    // Build SQL with explicit numbered placeholders so the bind order is
+    // unambiguous regardless of which optional filters are present. Mixing
+    // numbered (`?1`) and bare (`?`) placeholders works in rusqlite but is
+    // a maintenance trap — a later WHERE-clause edit can silently shift
+    // the LIMIT/OFFSET binds.
     let mut sql = String::from(
         "SELECT raw_tag, canonical_tag, cluster_id, last_run_id,
                 embedder_version, updated_at
          FROM tag_aliases
          WHERE brain_id = ?1",
     );
+    let mut next_idx = 2;
     if canonical.is_some() {
-        sql.push_str(" AND canonical_tag = ?2");
+        sql.push_str(&format!(" AND canonical_tag = ?{next_idx}"));
+        next_idx += 1;
     }
     if cluster_id.is_some() {
-        // Bind index depends on whether `canonical` is present. Compute below.
-        if canonical.is_some() {
-            sql.push_str(" AND cluster_id = ?3");
-        } else {
-            sql.push_str(" AND cluster_id = ?2");
-        }
+        sql.push_str(&format!(" AND cluster_id = ?{next_idx}"));
+        next_idx += 1;
     }
-    sql.push_str(" ORDER BY canonical_tag, raw_tag LIMIT ? OFFSET ?");
+    sql.push_str(&format!(
+        " ORDER BY canonical_tag, raw_tag LIMIT ?{} OFFSET ?{}",
+        next_idx,
+        next_idx + 1,
+    ));
 
     let mut stmt = conn.prepare(&sql)?;
     let mut binds: Vec<&dyn rusqlite::ToSql> = vec![&brain_id];
@@ -474,26 +481,21 @@ pub struct AliasCounts {
 /// Aggregate counts over `tag_aliases` for a brain. Returns zeros for
 /// brains that have never been reclustered.
 pub fn count_aliases_for_brain(conn: &Connection, brain_id: &str) -> Result<AliasCounts> {
-    let raw_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tag_aliases WHERE brain_id = ?1",
+    conn.query_row(
+        "SELECT COUNT(*),
+                COUNT(DISTINCT canonical_tag),
+                COUNT(DISTINCT cluster_id)
+         FROM tag_aliases WHERE brain_id = ?1",
         params![brain_id],
-        |row| row.get(0),
-    )?;
-    let canonical_count: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT canonical_tag) FROM tag_aliases WHERE brain_id = ?1",
-        params![brain_id],
-        |row| row.get(0),
-    )?;
-    let cluster_count: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT cluster_id) FROM tag_aliases WHERE brain_id = ?1",
-        params![brain_id],
-        |row| row.get(0),
-    )?;
-    Ok(AliasCounts {
-        raw_count,
-        canonical_count,
-        cluster_count,
-    })
+        |row| {
+            Ok(AliasCounts {
+                raw_count: row.get(0)?,
+                canonical_count: row.get(1)?,
+                cluster_count: row.get(2)?,
+            })
+        },
+    )
+    .map_err(BrainCoreError::from)
 }
 
 // ---------------------------------------------------------------------------

@@ -1410,6 +1410,9 @@ impl TagAliasReader for MockTagAliasReader {
             .unwrap_or_default())
     }
 
+    /// Fresh-brain default: no rows. Mirrors `alias_lookup_for_brain`'s
+    /// "empty map for un-reclustered brains" contract so mock-based tests
+    /// don't need to seed `tag_aliases` to call status/list tools.
     fn list_aliases_for_brain(
         &self,
         _brain_id: &str,
@@ -1418,21 +1421,27 @@ impl TagAliasReader for MockTagAliasReader {
         _limit: i64,
         _offset: i64,
     ) -> Result<Vec<brain_persistence::db::tag_aliases::AliasRow>> {
-        unimplemented!("MockTagAliasReader::list_aliases_for_brain not used by current tests")
+        Ok(Vec::new())
     }
 
+    /// Fresh-brain default: zeros across the board.
     fn count_aliases_for_brain(
         &self,
         _brain_id: &str,
     ) -> Result<brain_persistence::db::tag_aliases::AliasCounts> {
-        unimplemented!("MockTagAliasReader::count_aliases_for_brain not used by current tests")
+        Ok(brain_persistence::db::tag_aliases::AliasCounts {
+            raw_count: 0,
+            canonical_count: 0,
+            cluster_count: 0,
+        })
     }
 
+    /// Fresh-brain default: no run yet.
     fn latest_run_for_brain(
         &self,
         _brain_id: &str,
     ) -> Result<Option<brain_persistence::db::tag_aliases::TagClusterRunRow>> {
-        unimplemented!("MockTagAliasReader::latest_run_for_brain not used by current tests")
+        Ok(None)
     }
 }
 

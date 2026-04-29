@@ -128,9 +128,21 @@ pub fn status(ctx: &TagsCtx, model_dir: Option<&Path>) -> Result<()> {
 
     // Try to load the runtime embedder so we can report what the *next*
     // recluster would stamp. Failure is tolerated — the model may be
-    // missing on a fresh checkout.
+    // missing on a fresh checkout — but we surface the underlying error
+    // on stderr so an operator troubleshooting "why didn't the new model
+    // load?" sees the actual failure reason rather than a silent
+    // "(not loaded)".
     let current_embedder_version = match model_dir {
-        Some(dir) => Embedder::load(dir).ok().map(|e| e.version().to_string()),
+        Some(dir) => match Embedder::load(dir) {
+            Ok(e) => Some(e.version().to_string()),
+            Err(err) => {
+                eprintln!(
+                    "warning: could not load runtime embedder from {}: {err}",
+                    dir.display()
+                );
+                None
+            }
+        },
         None => None,
     };
 

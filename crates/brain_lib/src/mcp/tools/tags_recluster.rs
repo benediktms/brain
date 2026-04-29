@@ -67,6 +67,13 @@ impl McpTool for TagsRecluster {
 
             let mut cluster_params = ClusterParams::default();
             if let Some(threshold) = parsed.threshold {
+                if !(0.0..=1.0).contains(&threshold) {
+                    return ToolCallResult::error(format!(
+                        "threshold must be between 0.0 and 1.0 (got {threshold}); \
+                         values outside this range produce all-singleton clusters \
+                         and write a misleading 'successful' run row"
+                    ));
+                }
                 cluster_params.cosine_threshold = threshold;
             }
 
@@ -127,5 +134,34 @@ mod tests {
             .dispatch("tags.recluster", json!({ "threshold": 0.9 }), &ctx)
             .await;
         assert!(result.is_error.is_none(), "{}", result.content[0].text);
+    }
+
+    #[tokio::test]
+    async fn recluster_rejects_threshold_above_one() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch("tags.recluster", json!({ "threshold": 1.5 }), &ctx)
+            .await;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "out-of-range threshold must error"
+        );
+        assert!(
+            result.content[0].text.contains("between 0.0 and 1.0"),
+            "error must explain the bound: {}",
+            result.content[0].text,
+        );
+    }
+
+    #[tokio::test]
+    async fn recluster_rejects_negative_threshold() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let result = registry
+            .dispatch("tags.recluster", json!({ "threshold": -0.1 }), &ctx)
+            .await;
+        assert_eq!(result.is_error, Some(true), "negative threshold must error");
     }
 }
