@@ -38,7 +38,15 @@ pub(super) const TASK_COLUMNS: &str = "task_id, title, description, status, prio
 
 /// Reusable `WITH RECURSIVE` CTE that produces `has_blocked_ancestor(tid)` — the set
 /// of task IDs whose parent chain contains at least one blocked ancestor.
-/// An ancestor is blocking if it has unresolved deps, a `blocked_reason`, or a future `defer_until`.
+/// An ancestor is blocking if it has unresolved deps, an unresolved external blocker,
+/// a `blocked_reason`, or a future `defer_until`.
+///
+/// The dep check uses a LEFT JOIN so that an orphaned `depends_on` reference (target
+/// task not present in the DB) is treated as still-blocking rather than silently dropped.
+///
+/// The external-blocker clause (`NOT EXISTS … task_external_ids x …`) sits ALONGSIDE
+/// the dep clause: a task with any unresolved external blocker is treated as blocked
+/// regardless of whether its `task_deps` set is empty.
 pub(super) const ANCESTOR_BLOCKED_CTE: &str = "\
 WITH RECURSIVE ancestor_chain(tid, ancestor_id) AS (
     SELECT task_id, parent_task_id FROM tasks WHERE parent_task_id IS NOT NULL
@@ -58,9 +66,15 @@ has_blocked_ancestor(tid) AS (
           OR (a.defer_until IS NOT NULL AND a.defer_until > strftime('%s', 'now'))
           OR EXISTS (
               SELECT 1 FROM task_deps d
-              JOIN tasks dep ON dep.task_id = d.depends_on
+              LEFT JOIN tasks dep ON dep.task_id = d.depends_on
               WHERE d.task_id = a.task_id
-                AND dep.status NOT IN ('done', 'cancelled')
+                AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+          )
+          OR EXISTS (
+              SELECT 1 FROM task_external_ids x
+              WHERE x.task_id = a.task_id
+                AND x.blocking = 1
+                AND x.resolved_at IS NULL
           )
       )
 ) ";
@@ -880,5 +894,436 @@ mod tests {
                 "task_type '{type_str}' should round-trip correctly"
             );
         }
+    }
+
+    // -- Cross-brain dependency and orphan-dep tests --
+    //
+    // All brains share one `tasks` table (single-DB model). Cross-brain deps
+    // are just rows where `t.brain_id` differs from `dep.brain_id` — the
+    // queries work without federation. Orphan deps (depends_on references a
+    // nonexistent task_id) must keep the depending task out of the ready list.
+
+    /// Insert a row directly into `task_deps` with FK checks disabled so we
+    /// can create orphaned deps (depends_on has no matching tasks row).
+    fn insert_orphan_dep(conn: &Connection, task_id: &str, depends_on: &str) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, ?2)",
+            rusqlite::params![task_id, depends_on],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+    }
+
+    /// Create a task scoped to a specific brain_id. Registers the brain in the
+    /// `brains` table first (required by the FK constraint on `tasks.brain_id`).
+    fn create_task_in_brain(
+        conn: &Connection,
+        task_id: &str,
+        title: &str,
+        priority: i32,
+        brain_id: &str,
+    ) {
+        // Register the brain so the FK on tasks.brain_id is satisfied.
+        crate::db::schema::ensure_brain_registered(conn, brain_id, brain_id).unwrap();
+
+        let ev = TaskEvent::from_payload(
+            task_id,
+            "user",
+            TaskCreatedPayload {
+                title: title.to_string(),
+                description: None,
+                priority,
+                status: TaskStatus::Open,
+                due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: None,
+                display_id: None,
+            },
+        );
+        // Apply with the target brain_id so the task lands in that partition.
+        apply_event(conn, &ev, brain_id).unwrap();
+    }
+
+    /// A task in brain-a depending on an open task in brain-b is NOT ready.
+    #[test]
+    fn test_cross_brain_dep_blocks_ready() {
+        let conn = setup();
+        create_task_in_brain(&conn, "b-blocker", "Blocker in B", 2, "brain-b");
+        create_task_in_brain(&conn, "a-dependent", "Dependent in A", 1, "brain-a");
+
+        // Add dep: a-dependent depends on b-blocker.
+        add_dep(&conn, "a-dependent", "b-blocker");
+
+        // When querying brain-a without brain filter, a-dependent is NOT ready.
+        let ready = list_ready(&conn, None).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            !ids.contains(&"a-dependent"),
+            "a-dependent should NOT be ready while cross-brain blocker is open: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"b-blocker"),
+            "b-blocker itself should be ready: {ids:?}"
+        );
+    }
+
+    /// Once the cross-brain blocker is done, the dependent task becomes ready.
+    #[test]
+    fn test_cross_brain_dep_resolves_on_done() {
+        let conn = setup();
+        create_task_in_brain(&conn, "b-blocker", "Blocker in B", 2, "brain-b");
+        create_task_in_brain(&conn, "a-dependent", "Dependent in A", 1, "brain-a");
+        add_dep(&conn, "a-dependent", "b-blocker");
+
+        set_status(&conn, "b-blocker", "done");
+
+        let ready = list_ready(&conn, None).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            ids.contains(&"a-dependent"),
+            "a-dependent should be ready after cross-brain blocker done: {ids:?}"
+        );
+    }
+
+    /// Same resolution path via cancelled.
+    #[test]
+    fn test_cross_brain_dep_resolves_on_cancelled() {
+        let conn = setup();
+        create_task_in_brain(&conn, "b-blocker", "Blocker in B", 2, "brain-b");
+        create_task_in_brain(&conn, "a-dependent", "Dependent in A", 1, "brain-a");
+        add_dep(&conn, "a-dependent", "b-blocker");
+
+        set_status(&conn, "b-blocker", "cancelled");
+
+        let ready = list_ready(&conn, None).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            ids.contains(&"a-dependent"),
+            "a-dependent should be ready after cross-brain blocker cancelled: {ids:?}"
+        );
+    }
+
+    /// An orphaned dep (depends_on references a nonexistent task) keeps the
+    /// depending task out of the ready list and in the blocked list.
+    #[test]
+    fn test_orphan_dep_stays_blocked() {
+        let conn = setup();
+        create_task(&conn, "dependent", "Has orphan dep", 1);
+
+        // Insert a dep on a nonexistent task — bypasses FK check.
+        insert_orphan_dep(&conn, "dependent", "ghost-task");
+
+        // dependent must NOT appear in ready.
+        let ready = list_ready(&conn, None).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            !ids.contains(&"dependent"),
+            "task with orphan dep should NOT be ready: {ids:?}"
+        );
+
+        // dependent MUST appear in blocked.
+        let blocked = list_blocked(&conn, None).unwrap();
+        let blocked_ids: Vec<&str> = blocked.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            blocked_ids.contains(&"dependent"),
+            "task with orphan dep should appear in blocked list: {blocked_ids:?}"
+        );
+    }
+
+    /// get_dependency_summary counts orphan deps in total_deps and blocking_task_ids.
+    #[test]
+    fn test_orphan_dep_counted_in_dependency_summary() {
+        let conn = setup();
+        create_task(&conn, "dependent", "Has orphan dep", 1);
+        insert_orphan_dep(&conn, "dependent", "ghost-task");
+
+        let summary = get_dependency_summary(&conn, "dependent").unwrap();
+        assert_eq!(summary.total_deps, 1, "orphan dep counts toward total_deps");
+        assert_eq!(summary.done_deps, 0, "orphan dep is not done");
+        assert!(
+            summary
+                .blocking_task_ids
+                .contains(&"ghost-task".to_string()),
+            "orphan dep ID appears in blocking_task_ids: {:?}",
+            summary.blocking_task_ids
+        );
+    }
+
+    /// list_ready_actionable also excludes tasks with orphan deps.
+    #[test]
+    fn test_orphan_dep_excluded_from_actionable() {
+        let conn = setup();
+        create_task(&conn, "dependent", "Has orphan dep", 1);
+        insert_orphan_dep(&conn, "dependent", "ghost-task");
+
+        let actionable = list_ready_actionable(&conn, None).unwrap();
+        let ids: Vec<&str> = actionable.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            !ids.contains(&"dependent"),
+            "task with orphan dep should NOT appear in list_ready_actionable: {ids:?}"
+        );
+    }
+
+    /// Exercises the ANCESTOR_BLOCKED_CTE's own `LEFT JOIN tasks dep ... AND
+    /// (dep.task_id IS NULL OR ...)` clause. Without the NULL-check inside
+    /// the CTE, a child of a parent whose only blocker is an orphan dep
+    /// would slip into the ready list (the outer WHERE catches the parent
+    /// itself, but only the CTE catches descendants). A mutation that
+    /// removed the NULL-check from the CTE alone (not from the outer
+    /// listing queries) would not be caught by `test_orphan_dep_stays_blocked`.
+    #[test]
+    fn test_child_of_task_with_orphan_dep_not_ready() {
+        let conn = setup();
+        create_epic(&conn, "parent", "Parent epic", 1);
+        insert_orphan_dep(&conn, "parent", "ghost-blocker");
+        create_child_task(
+            &conn,
+            "child",
+            "parent",
+            "Child of orphan-blocked parent",
+            2,
+        );
+
+        let ready = list_ready(&conn, None).unwrap();
+        assert!(
+            !ready.iter().any(|t| t.task_id == "child"),
+            "child of a parent blocked by an orphan dep must not be ready"
+        );
+
+        let blocked = list_blocked(&conn, None).unwrap();
+        assert!(
+            blocked.iter().any(|t| t.task_id == "child"),
+            "child of a parent blocked by an orphan dep must appear in blocked list"
+        );
+    }
+
+    // -- External-blocker tests (brn-3a93) --
+    //
+    // External blockers are rows in `task_external_ids` with `blocking = 1`.
+    // An unresolved blocker (`resolved_at IS NULL`) keeps the task out of
+    // ready/actionable lists and pulls it into the blocked list. Resolving
+    // the blocker (stamping `resolved_at`) moves it back to ready (if no
+    // other blockers remain).
+
+    /// Helper: insert a `task_external_ids` row with FK off so we don't have
+    /// to register a brain. Used by tests that don't care about brain scoping.
+    fn insert_external_id(
+        conn: &Connection,
+        task_id: &str,
+        source: &str,
+        external_id: &str,
+        blocking: bool,
+        resolved_at: Option<i64>,
+    ) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT INTO task_external_ids
+                 (task_id, source, external_id, imported_at, blocking, resolved_at)
+             VALUES (?1, ?2, ?3, 1000, ?4, ?5)
+             ON CONFLICT(task_id, source, external_id) DO UPDATE SET
+                 blocking = excluded.blocking,
+                 resolved_at = excluded.resolved_at",
+            rusqlite::params![
+                task_id,
+                source,
+                external_id,
+                if blocking { 1 } else { 0 },
+                resolved_at,
+            ],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+    }
+
+    /// A task with an unresolved blocking external_id is NOT ready / NOT actionable.
+    #[test]
+    fn test_unresolved_external_blocker_excludes_from_ready() {
+        let conn = setup();
+        create_task(&conn, "t1", "Has external blocker", 1);
+        insert_external_id(&conn, "t1", "github", "GH-99", true, None);
+
+        let ready = list_ready(&conn, None).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            !ids.contains(&"t1"),
+            "task with unresolved external blocker must NOT be ready: {ids:?}"
+        );
+
+        let actionable = list_ready_actionable(&conn, None).unwrap();
+        let act_ids: Vec<&str> = actionable.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            !act_ids.contains(&"t1"),
+            "task with unresolved external blocker must NOT be actionable: {act_ids:?}"
+        );
+
+        let blocked = list_blocked(&conn, None).unwrap();
+        let blocked_ids: Vec<&str> = blocked.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            blocked_ids.contains(&"t1"),
+            "task with unresolved external blocker must be in blocked: {blocked_ids:?}"
+        );
+    }
+
+    /// After stamping resolved_at, the task becomes ready.
+    #[test]
+    fn test_resolved_external_blocker_unblocks_task() {
+        let conn = setup();
+        create_task(&conn, "t1", "Has external blocker", 1);
+        insert_external_id(&conn, "t1", "github", "GH-99", true, None);
+
+        // Initially blocked.
+        let ready = list_ready(&conn, None).unwrap();
+        assert!(!ready.iter().any(|t| t.task_id == "t1"));
+
+        // Resolve it.
+        insert_external_id(&conn, "t1", "github", "GH-99", true, Some(2000));
+
+        let ready = list_ready(&conn, None).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            ids.contains(&"t1"),
+            "task should be ready after external blocker resolved: {ids:?}"
+        );
+    }
+
+    /// Non-blocking external_id rows (the legacy / metadata-only shape) do
+    /// NOT gate readiness. This ensures the migration's default of
+    /// `blocking = 0` preserves the historical behavior.
+    #[test]
+    fn test_non_blocking_external_id_does_not_gate_ready() {
+        let conn = setup();
+        create_task(&conn, "t1", "Has metadata external_id", 1);
+        insert_external_id(&conn, "t1", "github", "GH-1", false, None);
+
+        let ready = list_ready(&conn, None).unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            ids.contains(&"t1"),
+            "non-blocking external_id must NOT gate readiness: {ids:?}"
+        );
+    }
+
+    /// Dependency summary keeps the two domains disjoint: `total_deps` /
+    /// `done_deps` / `blocking_task_ids` are about `task_deps` only;
+    /// external blockers are surfaced solely via
+    /// `external_blocker_unresolved_count`. Resolved blockers and metadata
+    /// rows are not counted here at all.
+    #[test]
+    fn test_external_blocker_in_dependency_summary() {
+        let conn = setup();
+        create_task(&conn, "t1", "Has blockers", 1);
+        insert_external_id(&conn, "t1", "github", "GH-A", true, None); // unresolved
+        insert_external_id(&conn, "t1", "github", "GH-B", true, Some(2000)); // resolved
+        insert_external_id(&conn, "t1", "jira", "PROJ-1", false, None); // metadata only
+
+        let summary = get_dependency_summary(&conn, "t1").unwrap();
+        assert_eq!(
+            summary.total_deps, 0,
+            "total_deps must NOT include external_ids — task_deps only: {summary:?}"
+        );
+        assert_eq!(
+            summary.done_deps, 0,
+            "done_deps must NOT include resolved external blockers: {summary:?}"
+        );
+        assert!(
+            summary.blocking_task_ids.is_empty(),
+            "external blocker IDs are NOT pushed to blocking_task_ids: {:?}",
+            summary.blocking_task_ids
+        );
+        assert_eq!(
+            summary.external_blocker_unresolved_count, 1,
+            "only the unresolved blocking external_id should count: {summary:?}"
+        );
+    }
+
+    /// `count_ready_blocked` must agree with `list_ready` / `list_blocked`
+    /// under external blockers.
+    #[test]
+    fn test_count_ready_blocked_with_external_blockers() {
+        let conn = setup();
+        create_task(&conn, "t1", "Ready", 2);
+        create_task(&conn, "t2", "Has external blocker", 1);
+        insert_external_id(&conn, "t2", "github", "GH-99", true, None);
+
+        let (ready, blocked) = count_ready_blocked(&conn, None).unwrap();
+        assert_eq!(ready, 1, "only t1 ready");
+        assert_eq!(blocked, 1, "t2 blocked by external");
+    }
+
+    /// `list_newly_unblocked` must NOT report a task whose only remaining
+    /// blocker is an unresolved external blocker, even if an internal dep
+    /// was just completed.
+    #[test]
+    fn test_newly_unblocked_excluded_when_external_blocker_remains() {
+        let conn = setup();
+        create_task(&conn, "blocker", "Internal blocker", 2);
+        create_task(&conn, "dependent", "Has both blockers", 1);
+        add_dep(&conn, "dependent", "blocker");
+        insert_external_id(&conn, "dependent", "github", "GH-X", true, None);
+
+        // Complete the internal dep.
+        set_status(&conn, "blocker", "done");
+
+        let unblocked = list_newly_unblocked(&conn, "blocker").unwrap();
+        assert!(
+            !unblocked.contains(&"dependent".to_string()),
+            "dependent should NOT be newly unblocked while external blocker is unresolved: {unblocked:?}"
+        );
+    }
+
+    /// `get_external_blockers` returns the blocking subset including history.
+    #[test]
+    fn test_get_external_blockers_includes_resolved_history() {
+        let conn = setup();
+        create_task(&conn, "t1", "Has blockers", 1);
+        insert_external_id(&conn, "t1", "github", "GH-A", true, None);
+        insert_external_id(&conn, "t1", "github", "GH-B", true, Some(5000));
+        insert_external_id(&conn, "t1", "jira", "PROJ-1", false, None); // not a blocker
+
+        let blockers = get_external_blockers(&conn, "t1").unwrap();
+        assert_eq!(
+            blockers.len(),
+            2,
+            "should return only blocking=1 rows: {blockers:?}"
+        );
+        assert!(blockers.iter().all(|b| b.blocking));
+        // Unresolved should sort first (resolved_at IS NOT NULL ASC -> false (0) before true (1)).
+        assert_eq!(blockers[0].external_id, "GH-A");
+        assert!(blockers[0].resolved_at.is_none());
+        assert_eq!(blockers[1].external_id, "GH-B");
+        assert_eq!(blockers[1].resolved_at, Some(5000));
+    }
+
+    /// Regression: an internal dep alone still works when no external blockers exist.
+    /// (Sanity check that the new clause doesn't break the dep-only path.)
+    #[test]
+    fn test_external_blocker_clause_does_not_break_dep_only_blocking() {
+        let conn = setup();
+        create_task(&conn, "blocker", "Blocker", 2);
+        create_task(&conn, "dep_only", "Dep-only", 1);
+        add_dep(&conn, "dep_only", "blocker");
+
+        let ready = list_ready(&conn, None).unwrap();
+        assert!(!ready.iter().any(|t| t.task_id == "dep_only"));
+
+        set_status(&conn, "blocker", "done");
+        let unblocked = list_newly_unblocked(&conn, "blocker").unwrap();
+        assert_eq!(unblocked, vec!["dep_only"]);
+    }
+
+    /// count_ready_blocked is consistent with list_ready/list_blocked under orphan deps.
+    #[test]
+    fn test_orphan_dep_count_ready_blocked_consistent() {
+        let conn = setup();
+        create_task(&conn, "t1", "Normal ready", 2);
+        create_task(&conn, "t2", "Orphan dep", 1);
+        insert_orphan_dep(&conn, "t2", "ghost-task");
+
+        let (ready, blocked) = count_ready_blocked(&conn, None).unwrap();
+        assert_eq!(ready, 1, "only t1 should be ready");
+        assert_eq!(blocked, 1, "t2 with orphan dep should be blocked");
     }
 }

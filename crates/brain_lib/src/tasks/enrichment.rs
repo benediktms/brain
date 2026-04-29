@@ -107,15 +107,20 @@ pub fn note_links_to_json(links: &[TaskNoteLink]) -> Vec<Value> {
         .collect()
 }
 
-/// Convert a dependency summary to JSON (total_deps + done_deps only).
+/// Convert a dependency summary to JSON (counts only — no blocking IDs).
+/// Resolved external blockers count toward `done_deps`; unresolved are surfaced
+/// separately so callers can render "X external blockers pending".
 pub fn dep_summary_to_json(summary: &DependencySummary) -> Value {
     json!({
         "total_deps": summary.total_deps,
         "done_deps": summary.done_deps,
+        "external_blocker_unresolved_count": summary.external_blocker_unresolved_count,
     })
 }
 
-/// Convert a dependency summary to JSON including the blocking_task_ids list.
+/// Convert a dependency summary to JSON including the `blocking_task_ids`
+/// list (internal-deps only). External blockers carry a different shape and
+/// are surfaced via the dedicated `external_blockers` array on `tasks.get`.
 pub fn dep_summary_to_json_with_blocking(store: &TaskStore, summary: &DependencySummary) -> Value {
     let compact_blocking: Vec<String> = summary
         .blocking_task_ids
@@ -126,6 +131,7 @@ pub fn dep_summary_to_json_with_blocking(store: &TaskStore, summary: &Dependency
         "total_deps": summary.total_deps,
         "done_deps": summary.done_deps,
         "blocking_task_ids": compact_blocking,
+        "external_blocker_unresolved_count": summary.external_blocker_unresolved_count,
     })
 }
 
@@ -176,11 +182,7 @@ pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
                 task.task_id,
                 err
             );
-            DependencySummary {
-                total_deps: 0,
-                done_deps: 0,
-                blocking_task_ids: vec![],
-            }
+            DependencySummary::default()
         }
     };
     let note_links = match store.get_task_note_links(&task.task_id) {
@@ -257,11 +259,7 @@ pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value>
                         task.task_id,
                         err
                     );
-                    DependencySummary {
-                        total_deps: 0,
-                        done_deps: 0,
-                        blocking_task_ids: vec![],
-                    }
+                    DependencySummary::default()
                 }
             };
             let note_links = match store.get_task_note_links(&task.task_id) {
@@ -310,6 +308,7 @@ mod tests {
             total_deps: total,
             done_deps: done,
             blocking_task_ids: blocking,
+            external_blocker_unresolved_count: 0,
         }
     }
 

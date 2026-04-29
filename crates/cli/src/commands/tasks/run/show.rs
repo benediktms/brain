@@ -23,6 +23,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
     let note_links = ctx.store.get_task_note_links(&id)?;
     let children = ctx.store.get_children(&id)?;
     let external_ids = ctx.store.get_external_ids(&id)?;
+    let external_blockers = ctx.store.get_external_blockers(&id)?;
 
     if ctx.json {
         let comments_json = comments_to_json(&comments);
@@ -36,6 +37,19 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
                     "source": e.source,
                     "external_id": e.external_id,
                     "external_url": e.external_url,
+                    "blocking": e.blocking,
+                    "resolved_at": e.resolved_at,
+                })
+            })
+            .collect();
+        let ext_blockers_json: Vec<serde_json::Value> = external_blockers
+            .iter()
+            .map(|e| {
+                json!({
+                    "source": e.source,
+                    "external_id": e.external_id,
+                    "external_url": e.external_url,
+                    "resolved_at": e.resolved_at,
                 })
             })
             .collect();
@@ -47,6 +61,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
             "comments": comments_json,
             "children": children_json,
             "external_ids": ext_ids_json,
+            "external_blockers": ext_blockers_json,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
@@ -132,10 +147,35 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
             println!("\nExternal References:");
             for e in &external_ids {
                 let url = e.external_url.as_deref().unwrap_or("");
-                if url.is_empty() {
-                    println!("  [{}] {}", e.source, e.external_id);
+                let marker = if e.blocking {
+                    if e.resolved_at.is_some() {
+                        " [blocker:resolved]"
+                    } else {
+                        " [blocker:unresolved]"
+                    }
                 } else {
-                    println!("  [{}] {} ({})", e.source, e.external_id, url);
+                    ""
+                };
+                if url.is_empty() {
+                    println!("  [{}] {}{}", e.source, e.external_id, marker);
+                } else {
+                    println!("  [{}] {} ({}){}", e.source, e.external_id, url, marker);
+                }
+            }
+        }
+
+        if !external_blockers.is_empty() {
+            println!("\nExternal Blockers:");
+            for e in &external_blockers {
+                let url = e.external_url.as_deref().unwrap_or("");
+                let state = match e.resolved_at {
+                    Some(ts) => format!("resolved {}", format_ts(ts)),
+                    None => "unresolved".to_string(),
+                };
+                if url.is_empty() {
+                    println!("  [{}] {} — {}", e.source, e.external_id, state);
+                } else {
+                    println!("  [{}] {} ({}) — {}", e.source, e.external_id, url, state);
                 }
             }
         }

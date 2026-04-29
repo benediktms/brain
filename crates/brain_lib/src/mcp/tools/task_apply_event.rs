@@ -50,7 +50,8 @@ fn parse_and_validate_event(params: &Params) -> Result<ValidatedEvent, String> {
             "Invalid event_type: '{}'. Must be one of: task_created, \
              task_updated, status_changed, dependency_added, dependency_removed, \
              note_linked, note_unlinked, label_added, label_removed, comment_added, \
-             parent_set, external_id_added, external_id_removed",
+             parent_set, external_id_added, external_id_removed, \
+             external_blocker_added, external_blocker_resolved",
             params.event_type
         )
     })?;
@@ -67,9 +68,12 @@ fn parse_and_validate_event(params: &Params) -> Result<ValidatedEvent, String> {
         return Err("actor exceeds maximum length of 256 characters".into());
     }
 
-    // Normalize timestamp fields from ISO 8601 strings to i64 Unix seconds
+    // Normalize timestamp fields from ISO 8601 strings to i64 Unix seconds.
+    // `resolved_at` is normalized too — it appears in
+    // `external_blocker_resolved` payloads and accepts the same ISO/integer
+    // dual format as the other timestamp fields.
     let mut payload = Value::Object(params.payload.clone());
-    for field in &["defer_until", "due_ts"] {
+    for field in &["defer_until", "due_ts", "resolved_at"] {
         if let Some(val) = payload.get(*field).filter(|v| v.is_string()) {
             match parse_timestamp(val) {
                 Some(ts) => payload[*field] = json!(ts),
@@ -120,6 +124,8 @@ fn apply_event_schema() -> Value {
         "parent_set",
         "external_id_added",
         "external_id_removed",
+        "external_blocker_added",
+        "external_blocker_resolved",
     ];
 
     json!({
@@ -151,7 +157,9 @@ fn apply_event_schema() -> Value {
                 - label_added/label_removed: {label (required)}\n\
                 - comment_added: {body (required)}\n\
                 - parent_set: {parent_task_id (string or null to clear)}\n\
-                - external_id_added/external_id_removed: {source (required), external_id (required), external_url}"
+                - external_id_added/external_id_removed: {source (required), external_id (required), external_url}\n\
+                - external_blocker_added: {source (required), external_id (required), external_url, blocking (default true)}\n\
+                - external_blocker_resolved: {source (required), external_id (required), resolved_at (ISO 8601 string or unix-seconds; default: now)}"
             }
         },
         "required": ["event_type", "payload"]

@@ -5,20 +5,38 @@ use crate::error::Result;
 
 use super::ANCESTOR_BLOCKED_CTE;
 
-/// Summary of a task's dependency state.
+/// Summary of a task's dependency state. The two domains are kept disjoint
+/// so each field has one source of truth:
+/// - `total_deps` / `done_deps` / `blocking_task_ids` cover `task_deps` rows.
+/// - `external_blocker_unresolved_count` covers `task_external_ids` rows
+///   with `blocking = 1 AND resolved_at IS NULL`.
+///
+/// Callers that want a unified "X of Y blocking" string compute
+/// `(total_deps - done_deps) + external_blocker_unresolved_count`.
 #[derive(Debug, Clone, Default)]
 pub struct DependencySummary {
     pub total_deps: usize,
     pub done_deps: usize,
     pub blocking_task_ids: Vec<String>,
+    pub external_blocker_unresolved_count: usize,
 }
 
 /// Get the dependency summary for a task.
+///
+/// `total_deps` / `done_deps` / `blocking_task_ids` count `task_deps` rows
+/// only. The LEFT JOIN keeps orphaned references (target task absent from
+/// the DB — e.g. cross-brain task in an unregistered brain, or a deleted
+/// dep target) blocking rather than silently dropping them.
+///
+/// External blockers (`task_external_ids` rows with `blocking = 1`) are
+/// counted separately in `external_blocker_unresolved_count`. Resolved
+/// blockers don't appear here at all — fetch `get_external_blockers` for
+/// the resolved-history view.
 pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<DependencySummary> {
     let mut stmt = conn.prepare(
         "SELECT d.depends_on, t.status
          FROM task_deps d
-         JOIN tasks t ON t.task_id = d.depends_on
+         LEFT JOIN tasks t ON t.task_id = d.depends_on
          WHERE d.task_id = ?1",
     )?;
 
@@ -27,23 +45,35 @@ pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<Depend
     let mut blocking_task_ids = Vec::new();
 
     let rows = stmt.query_map([task_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
     })?;
 
     for row in rows {
-        let (dep_id, status) = row?;
+        let (dep_id, status_opt) = row?;
         total_deps += 1;
-        if status == TaskStatus::Done.as_ref() || status == TaskStatus::Cancelled.as_ref() {
-            done_deps += 1;
-        } else {
-            blocking_task_ids.push(dep_id);
+        match status_opt.as_deref() {
+            Some(s) if s == TaskStatus::Done.as_ref() || s == TaskStatus::Cancelled.as_ref() => {
+                done_deps += 1;
+            }
+            _ => {
+                // None means orphaned dep (target not in DB) — counts as blocking.
+                blocking_task_ids.push(dep_id);
+            }
         }
     }
+
+    let ext_unresolved: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM task_external_ids
+         WHERE task_id = ?1 AND blocking = 1 AND resolved_at IS NULL",
+        [task_id],
+        |row| row.get(0),
+    )?;
 
     Ok(DependencySummary {
         total_deps,
         done_deps,
         blocking_task_ids,
+        external_blocker_unresolved_count: ext_unresolved as usize,
     })
 }
 
@@ -114,6 +144,11 @@ pub fn count_by_status(conn: &Connection) -> Result<StatusCounts> {
 }
 
 /// Count of ready and blocked tasks (for response metadata).
+///
+/// Mirrors the LEFT JOIN semantics from `list_ready` / `list_blocked`: orphaned
+/// dep entries (depends_on references a missing task) count as blocking. The
+/// external-blocker NOT EXISTS clause matches the listing queries so the
+/// counts agree with `list_ready` / `list_blocked` row counts.
 pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<(usize, usize)> {
     let (brain_clause, brain_params) = super::listing::brain_id_filter(brain_id);
     let ready_sql = format!(
@@ -124,9 +159,15 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
                SELECT 1 FROM task_deps d
-               JOIN tasks dep ON dep.task_id = d.depends_on
+               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
                WHERE d.task_id = t.task_id
-                 AND dep.status NOT IN ('done', 'cancelled')
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM task_external_ids x
+               WHERE x.task_id = t.task_id
+                 AND x.blocking = 1
+                 AND x.resolved_at IS NULL
            )
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
            {brain_clause}"
@@ -147,9 +188,15 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
                OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
                OR EXISTS (
                    SELECT 1 FROM task_deps d
-                   JOIN tasks dep ON dep.task_id = d.depends_on
+                   LEFT JOIN tasks dep ON dep.task_id = d.depends_on
                    WHERE d.task_id = t.task_id
-                     AND dep.status NOT IN ('done', 'cancelled')
+                     AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+               )
+               OR EXISTS (
+                   SELECT 1 FROM task_external_ids x
+                   WHERE x.task_id = t.task_id
+                     AND x.blocking = 1
+                     AND x.resolved_at IS NULL
                )
                OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
            )
@@ -165,6 +212,10 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
 }
 
 /// An external ID reference for a task.
+///
+/// `blocking = true` rows act as first-class blockers; `false` rows are pure
+/// metadata (the historical pre-v45 behavior). `resolved_at` is `Some(ts)`
+/// once the external system reports completion; `None` means still active.
 #[derive(Debug, Clone)]
 pub struct ExternalIdRow {
     pub task_id: String,
@@ -172,12 +223,17 @@ pub struct ExternalIdRow {
     pub external_id: String,
     pub external_url: Option<String>,
     pub imported_at: i64,
+    pub blocking: bool,
+    pub resolved_at: Option<i64>,
 }
 
 /// Get external ID references for a task.
+///
+/// Returns ALL `task_external_ids` rows (both metadata-only and blocking).
+/// Callers wanting only the blocker subset should use `get_external_blockers`.
 pub fn get_external_ids(conn: &Connection, task_id: &str) -> Result<Vec<ExternalIdRow>> {
     let mut stmt = conn.prepare(
-        "SELECT task_id, source, external_id, external_url, imported_at
+        "SELECT task_id, source, external_id, external_url, imported_at, blocking, resolved_at
          FROM task_external_ids WHERE task_id = ?1 ORDER BY source, external_id",
     )?;
     let rows = stmt.query_map([task_id], |row| {
@@ -187,6 +243,35 @@ pub fn get_external_ids(conn: &Connection, task_id: &str) -> Result<Vec<External
             external_id: row.get(2)?,
             external_url: row.get(3)?,
             imported_at: row.get(4)?,
+            blocking: row.get::<_, i64>(5)? != 0,
+            resolved_at: row.get(6)?,
+        })
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+/// Get external blocker rows for a task (`blocking = 1` only).
+///
+/// Returns both unresolved (`resolved_at IS NULL`) and resolved (timestamp)
+/// blockers so callers can render history. The `tasks.get` MCP response
+/// surfaces this list as `external_blockers`, distinct from `external_ids`
+/// which still includes pure-metadata rows.
+pub fn get_external_blockers(conn: &Connection, task_id: &str) -> Result<Vec<ExternalIdRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id, source, external_id, external_url, imported_at, blocking, resolved_at
+         FROM task_external_ids
+         WHERE task_id = ?1 AND blocking = 1
+         ORDER BY resolved_at IS NOT NULL ASC, source, external_id",
+    )?;
+    let rows = stmt.query_map([task_id], |row| {
+        Ok(ExternalIdRow {
+            task_id: row.get(0)?,
+            source: row.get(1)?,
+            external_id: row.get(2)?,
+            external_url: row.get(3)?,
+            imported_at: row.get(4)?,
+            blocking: row.get::<_, i64>(5)? != 0,
+            resolved_at: row.get(6)?,
         })
     })?;
     crate::db::collect_rows(rows)

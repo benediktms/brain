@@ -851,3 +851,163 @@ fn snapshot_prefix_uses_brain_db() {
         "Snapshot ID should use prefix 'SNP', got: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Orphan-dep readiness (brn-6f4)
+// ---------------------------------------------------------------------------
+//
+// A task whose only dep references a nonexistent task_id (orphaned dep) must:
+//   - NOT appear in `brain tasks ready`
+//   - NOT appear in `brain tasks next`
+//
+// We inject the orphan dep directly via rusqlite after creating the task via
+// the CLI, because the event layer correctly rejects deps on missing tasks.
+
+#[test]
+fn tasks_orphan_dep_not_in_ready_list() {
+    let (project, home) = setup_brain();
+    let _ = project;
+    let db = sqlite_db_path(home.path());
+
+    // Create a task via CLI.
+    let create_out = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "create", "--title", "Orphan dep task"])
+        .output()
+        .unwrap();
+    assert!(create_out.status.success(), "task create should succeed");
+    let create_stdout = String::from_utf8(create_out.stdout).unwrap();
+
+    // Extract the task_id from the create output (format: "Created task <id>").
+    let task_id = create_stdout
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            if line.starts_with("Created") || line.contains("Created task") {
+                line.split_whitespace().last().map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            // Fallback: query the DB directly for the task_id.
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.query_row(
+                "SELECT task_id FROM tasks WHERE title = 'Orphan dep task' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+        });
+
+    // Inject an orphan dep directly into the DB (FK checks off during insert).
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, 'ghost-nonexistent-task')",
+            rusqlite::params![task_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+    }
+
+    // `brain tasks ready` must NOT show "Orphan dep task".
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "ready"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Orphan dep task").not());
+
+    // `brain tasks next` must NOT show "Orphan dep task".
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "next"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Orphan dep task").not());
+}
+
+// Verifies the brn-3a93 contract end-to-end through the CLI binary:
+// a task with an unresolved external blocker (`task_external_ids` row with
+// `blocking=1, resolved_at IS NULL`) must be excluded from `brain tasks ready`
+// and surfaced in `brain tasks show`. There is no CLI subcommand for the
+// external_blocker_added event yet (tracked separately), so we inject the row
+// directly via rusqlite — same pattern as the orphan-dep test above.
+
+#[test]
+fn tasks_external_blocker_excluded_from_ready_and_shown_on_get() {
+    let (project, home) = setup_brain();
+    let _ = project;
+    let db = sqlite_db_path(home.path());
+
+    let create_out = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "create", "--title", "Awaits external sign-off"])
+        .output()
+        .unwrap();
+    assert!(create_out.status.success(), "task create should succeed");
+    let create_stdout = String::from_utf8(create_out.stdout).unwrap();
+
+    let task_id = create_stdout
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            if line.starts_with("Created") || line.contains("Created task") {
+                line.split_whitespace().last().map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.query_row(
+                "SELECT task_id FROM tasks WHERE title = 'Awaits external sign-off' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+        });
+
+    // Inject an unresolved external blocker directly.
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO task_external_ids
+                (task_id, source, external_id, external_url, blocking, resolved_at, imported_at)
+             VALUES (?1, 'jira', 'PLAT-42', 'https://example/PLAT-42', 1, NULL, strftime('%s','now'))",
+            rusqlite::params![task_id],
+        )
+        .unwrap();
+    }
+
+    // `brain tasks ready` must exclude the task.
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "ready"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Awaits external sign-off").not());
+
+    // `brain tasks show <id>` must surface the blocker (source + external_id).
+    brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .arg("--sqlite-db")
+        .arg(&db)
+        .args(["tasks", "show", &task_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PLAT-42"))
+        .stdout(predicate::str::contains("jira"));
+}

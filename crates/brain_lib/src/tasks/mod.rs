@@ -262,9 +262,22 @@ impl TaskStore {
     }
 
     /// Get external ID references for a task.
+    ///
+    /// Returns ALL `task_external_ids` rows (both metadata-only and blocking).
+    /// Callers wanting only the blocker subset should use `get_external_blockers`.
     pub fn get_external_ids(&self, task_id: &str) -> Result<Vec<queries::ExternalIdRow>> {
         self.db
             .with_read_conn(|conn| queries::get_external_ids(conn, task_id))
+    }
+
+    /// Get external blocker rows for a task (`blocking = 1` only).
+    ///
+    /// Returns both unresolved (`resolved_at IS NULL`) and resolved blockers
+    /// so callers can render history. Distinct from `get_external_ids` which
+    /// also includes pure-metadata rows.
+    pub fn get_external_blockers(&self, task_id: &str) -> Result<Vec<queries::ExternalIdRow>> {
+        self.db
+            .with_read_conn(|conn| queries::get_external_blockers(conn, task_id))
     }
 
     /// Resolve an external ID to a brain task_id.

@@ -223,7 +223,7 @@ mod tests {
         // Write a valid key with bad permissions
         let mut key = [0u8; KEY_LEN];
         OsRng.fill_bytes(&mut key);
-        fs::write(&key_path, &key).unwrap();
+        fs::write(&key_path, key).unwrap();
         fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644)).unwrap();
 
         let result = load_or_create_master_key(dir.path());
