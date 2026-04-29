@@ -1206,9 +1206,11 @@ mod tests {
         );
     }
 
-    /// Dependency summary counts blocking external_ids in total_deps; resolved
-    /// counts as done. The IDs are NOT pushed to `blocking_task_ids` — that
-    /// list stays internal-deps-only.
+    /// Dependency summary keeps the two domains disjoint: `total_deps` /
+    /// `done_deps` / `blocking_task_ids` are about `task_deps` only;
+    /// external blockers are surfaced solely via
+    /// `external_blocker_unresolved_count`. Resolved blockers and metadata
+    /// rows are not counted here at all.
     #[test]
     fn test_external_blocker_in_dependency_summary() {
         let conn = setup();
@@ -1219,19 +1221,22 @@ mod tests {
 
         let summary = get_dependency_summary(&conn, "t1").unwrap();
         assert_eq!(
-            summary.total_deps, 2,
-            "total_deps should include blocking external_ids only (not metadata): {summary:?}"
+            summary.total_deps, 0,
+            "total_deps must NOT include external_ids — task_deps only: {summary:?}"
         );
         assert_eq!(
-            summary.done_deps, 1,
-            "resolved external blocker counts as done: {summary:?}"
+            summary.done_deps, 0,
+            "done_deps must NOT include resolved external blockers: {summary:?}"
         );
         assert!(
             summary.blocking_task_ids.is_empty(),
             "external blocker IDs are NOT pushed to blocking_task_ids: {:?}",
             summary.blocking_task_ids
         );
-        assert_eq!(summary.external_blocker_unresolved_count, 1);
+        assert_eq!(
+            summary.external_blocker_unresolved_count, 1,
+            "only the unresolved blocking external_id should count: {summary:?}"
+        );
     }
 
     /// `count_ready_blocked` must agree with `list_ready` / `list_blocked`

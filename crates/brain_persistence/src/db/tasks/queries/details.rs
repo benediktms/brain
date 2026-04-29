@@ -5,36 +5,33 @@ use crate::error::Result;
 
 use super::ANCESTOR_BLOCKED_CTE;
 
-/// Summary of a task's dependency state. `total_deps` / `done_deps` count
-/// `task_deps` rows plus blocking `task_external_ids` rows so callers can
-/// render "X of Y blocking" directly. `blocking_task_ids` holds internal-dep
-/// task IDs only; external blockers carry a different shape and are surfaced
-/// via `external_blocker_unresolved_count` plus the dedicated
-/// `tasks.get` `external_blockers` array.
+/// Summary of a task's dependency state. The two domains are kept disjoint
+/// so each field has one source of truth:
+/// - `total_deps` / `done_deps` / `blocking_task_ids` cover `task_deps` rows.
+/// - `external_blocker_unresolved_count` covers `task_external_ids` rows
+///   with `blocking = 1 AND resolved_at IS NULL`.
+///
+/// Callers that want a unified "X of Y blocking" string compute
+/// `(total_deps - done_deps) + external_blocker_unresolved_count`.
 #[derive(Debug, Clone, Default)]
 pub struct DependencySummary {
     pub total_deps: usize,
     pub done_deps: usize,
     pub blocking_task_ids: Vec<String>,
-    /// `task_external_ids` rows for this task with `blocking = 1` and
-    /// `resolved_at IS NULL`. Subset of `total_deps - done_deps`.
     pub external_blocker_unresolved_count: usize,
 }
 
 /// Get the dependency summary for a task.
 ///
-/// Uses LEFT JOIN so that orphaned `depends_on` references (target task absent
-/// from the DB — e.g. unregistered cross-brain task) still count toward
-/// `total_deps` and appear in `blocking_task_ids`. Callers see a non-zero
-/// blocking count rather than a misleadingly empty summary.
+/// `total_deps` / `done_deps` / `blocking_task_ids` count `task_deps` rows
+/// only. The LEFT JOIN keeps orphaned references (target task absent from
+/// the DB — e.g. cross-brain task in an unregistered brain, or a deleted
+/// dep target) blocking rather than silently dropping them.
 ///
-/// External blockers (`task_external_ids` rows with `blocking = 1`) are folded
-/// into `total_deps` and `done_deps` (a row with `resolved_at IS NOT NULL`
-/// counts as done). They do NOT appear in `blocking_task_ids` because that
-/// list holds task IDs only — external blockers have a different shape and
-/// are surfaced separately as `external_blocker_count` /
-/// `external_blocker_unresolved_count` and via the dedicated
-/// `tasks.get` `external_blockers` field.
+/// External blockers (`task_external_ids` rows with `blocking = 1`) are
+/// counted separately in `external_blocker_unresolved_count`. Resolved
+/// blockers don't appear here at all — fetch `get_external_blockers` for
+/// the resolved-history view.
 pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<DependencySummary> {
     let mut stmt = conn.prepare(
         "SELECT d.depends_on, t.status
@@ -65,33 +62,18 @@ pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<Depend
         }
     }
 
-    // External blockers: count rows with blocking = 1; resolved (resolved_at
-    // IS NOT NULL) counts as a "done" dep. The IDs are NOT pushed to
-    // `blocking_task_ids` because external blocker rows are not task IDs —
-    // they have their own shape exposed via `get_external_blockers`.
-    let (ext_total, ext_unresolved): (i64, i64) = conn.query_row(
-        "SELECT COUNT(*),
-                SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END)
-         FROM task_external_ids
-         WHERE task_id = ?1 AND blocking = 1",
+    let ext_unresolved: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM task_external_ids
+         WHERE task_id = ?1 AND blocking = 1 AND resolved_at IS NULL",
         [task_id],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Option<i64>>(1)?.unwrap_or(0),
-            ))
-        },
+        |row| row.get(0),
     )?;
-    let ext_total = ext_total as usize;
-    let ext_unresolved = ext_unresolved as usize;
-    total_deps += ext_total;
-    done_deps += ext_total.saturating_sub(ext_unresolved);
 
     Ok(DependencySummary {
         total_deps,
         done_deps,
         blocking_task_ids,
-        external_blocker_unresolved_count: ext_unresolved,
+        external_blocker_unresolved_count: ext_unresolved as usize,
     })
 }
 
