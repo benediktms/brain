@@ -44,7 +44,7 @@ const MAX_NOTES_BYTES: usize = 4096;
 /// Field semantics mirror the v43 schema (`tag_cluster_runs` row + the diff
 /// against `tag_aliases`) so callers can render or persist the report
 /// without re-querying the database.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ReclusterReport {
     /// ULID of the `tag_cluster_runs` row written for this invocation.
     pub run_id: String,

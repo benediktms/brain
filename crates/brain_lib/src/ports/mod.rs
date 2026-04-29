@@ -2203,6 +2203,32 @@ pub trait TagAliasReader: Send + Sync {
     /// are lowercased — see `brain_persistence::db::tag_aliases::alias_lookup_for_brain`.
     /// Returns an empty map for brains that have never been reclustered.
     fn alias_lookup_for_brain(&self, brain_id: &str) -> Result<HashMap<String, String>>;
+
+    /// List `tag_aliases` rows for a brain with optional filtering and
+    /// pagination. Used by the `tags.aliases_list` MCP tool and CLI.
+    fn list_aliases_for_brain(
+        &self,
+        brain_id: &str,
+        canonical: Option<&str>,
+        cluster_id: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<brain_persistence::db::tag_aliases::AliasRow>>;
+
+    /// Aggregate counts over `tag_aliases` for a brain (raw / distinct
+    /// canonicals / distinct clusters). Used by the `tags.aliases_status`
+    /// MCP tool and CLI.
+    fn count_aliases_for_brain(
+        &self,
+        brain_id: &str,
+    ) -> Result<brain_persistence::db::tag_aliases::AliasCounts>;
+
+    /// Most recent `tag_cluster_runs` row for a brain. Returns `None` for
+    /// brains that have never been reclustered.
+    fn latest_run_for_brain(
+        &self,
+        brain_id: &str,
+    ) -> Result<Option<brain_persistence::db::tag_aliases::TagClusterRunRow>>;
 }
 
 // -- TagAliasReader for Db -------------------------------------------------
@@ -2233,6 +2259,49 @@ impl TagAliasReader for Db {
         let brain_id = brain_id.to_string();
         self.with_read_conn(move |conn| {
             brain_persistence::db::tag_aliases::alias_lookup_for_brain(conn, &brain_id)
+        })
+    }
+
+    fn list_aliases_for_brain(
+        &self,
+        brain_id: &str,
+        canonical: Option<&str>,
+        cluster_id: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<brain_persistence::db::tag_aliases::AliasRow>> {
+        let brain_id = brain_id.to_string();
+        let canonical = canonical.map(|s| s.to_string());
+        let cluster_id = cluster_id.map(|s| s.to_string());
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::tag_aliases::list_aliases_for_brain(
+                conn,
+                &brain_id,
+                canonical.as_deref(),
+                cluster_id.as_deref(),
+                limit,
+                offset,
+            )
+        })
+    }
+
+    fn count_aliases_for_brain(
+        &self,
+        brain_id: &str,
+    ) -> Result<brain_persistence::db::tag_aliases::AliasCounts> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::tag_aliases::count_aliases_for_brain(conn, &brain_id)
+        })
+    }
+
+    fn latest_run_for_brain(
+        &self,
+        brain_id: &str,
+    ) -> Result<Option<brain_persistence::db::tag_aliases::TagClusterRunRow>> {
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            brain_persistence::db::tag_aliases::latest_run_for_brain(conn, &brain_id)
         })
     }
 }

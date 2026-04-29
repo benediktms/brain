@@ -320,13 +320,13 @@ pub(crate) fn decode_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
 }
 
 // ---------------------------------------------------------------------------
-// Test/integration helpers (gated behind `test-utils` for brain_lib tests)
+// Inspection helpers (consumed by both tests and the production MCP/CLI
+// surface — see `brn-83a.7.2.5`).
 // ---------------------------------------------------------------------------
 
 /// Inspect a single `tag_cluster_runs` row by `run_id`. Returns `None` if
 /// the run is absent (e.g. Tx-1 never committed).
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TagClusterRunRow {
     pub run_id: String,
     pub started_at: String,
@@ -339,7 +339,6 @@ pub struct TagClusterRunRow {
     pub notes: Option<String>,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 pub fn get_run(conn: &Connection, run_id: &str) -> Result<Option<TagClusterRunRow>> {
     let mut stmt = conn.prepare(
         "SELECT run_id, started_at, finished_at, source_count, cluster_count,
@@ -363,6 +362,143 @@ pub fn get_run(conn: &Connection, run_id: &str) -> Result<Option<TagClusterRunRo
         Ok(None)
     }
 }
+
+/// Most recent `tag_cluster_runs` row for a brain, ordered by `started_at`
+/// DESC. Returns `None` for brains that have never been reclustered.
+pub fn latest_run_for_brain(conn: &Connection, brain_id: &str) -> Result<Option<TagClusterRunRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT run_id, started_at, finished_at, source_count, cluster_count,
+                embedder_version, threshold, triggered_by, notes
+         FROM tag_cluster_runs
+         WHERE brain_id = ?1
+         ORDER BY started_at DESC
+         LIMIT 1",
+    )?;
+    let mut rows = stmt.query(params![brain_id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(TagClusterRunRow {
+            run_id: row.get(0)?,
+            started_at: row.get(1)?,
+            finished_at: row.get(2)?,
+            source_count: row.get(3)?,
+            cluster_count: row.get(4)?,
+            embedder_version: row.get(5)?,
+            threshold: row.get(6)?,
+            triggered_by: row.get(7)?,
+            notes: row.get(8)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// One `tag_aliases` row for inspection (no embedding BLOB). Used by the
+/// `tags.aliases_list` MCP tool and `brain tags aliases list` CLI.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AliasRow {
+    pub raw_tag: String,
+    pub canonical_tag: String,
+    pub cluster_id: String,
+    pub last_run_id: String,
+    pub embedder_version: Option<String>,
+    pub updated_at: String,
+}
+
+/// List `tag_aliases` rows for a brain with optional `canonical_tag` and
+/// `cluster_id` filters, ordered by `(canonical_tag, raw_tag)` for stable
+/// pagination. Returns at most `limit` rows starting at `offset`.
+pub fn list_aliases_for_brain(
+    conn: &Connection,
+    brain_id: &str,
+    canonical: Option<&str>,
+    cluster_id: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AliasRow>> {
+    let mut sql = String::from(
+        "SELECT raw_tag, canonical_tag, cluster_id, last_run_id,
+                embedder_version, updated_at
+         FROM tag_aliases
+         WHERE brain_id = ?1",
+    );
+    if canonical.is_some() {
+        sql.push_str(" AND canonical_tag = ?2");
+    }
+    if cluster_id.is_some() {
+        // Bind index depends on whether `canonical` is present. Compute below.
+        if canonical.is_some() {
+            sql.push_str(" AND cluster_id = ?3");
+        } else {
+            sql.push_str(" AND cluster_id = ?2");
+        }
+    }
+    sql.push_str(" ORDER BY canonical_tag, raw_tag LIMIT ? OFFSET ?");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut binds: Vec<&dyn rusqlite::ToSql> = vec![&brain_id];
+    if let Some(c) = canonical.as_ref() {
+        binds.push(c);
+    }
+    if let Some(cl) = cluster_id.as_ref() {
+        binds.push(cl);
+    }
+    binds.push(&limit);
+    binds.push(&offset);
+
+    let mut rows = stmt.query(binds.as_slice())?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(AliasRow {
+            raw_tag: row.get(0)?,
+            canonical_tag: row.get(1)?,
+            cluster_id: row.get(2)?,
+            last_run_id: row.get(3)?,
+            embedder_version: row.get(4)?,
+            updated_at: row.get(5)?,
+        });
+    }
+    Ok(out)
+}
+
+/// Per-brain count summary used by `tags.aliases_status`.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct AliasCounts {
+    /// Total `tag_aliases` rows for the brain (one per raw tag).
+    pub raw_count: i64,
+    /// Distinct `canonical_tag` values across the brain's aliases.
+    pub canonical_count: i64,
+    /// Distinct `cluster_id` values across the brain's aliases.
+    pub cluster_count: i64,
+}
+
+/// Aggregate counts over `tag_aliases` for a brain. Returns zeros for
+/// brains that have never been reclustered.
+pub fn count_aliases_for_brain(conn: &Connection, brain_id: &str) -> Result<AliasCounts> {
+    let raw_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tag_aliases WHERE brain_id = ?1",
+        params![brain_id],
+        |row| row.get(0),
+    )?;
+    let canonical_count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT canonical_tag) FROM tag_aliases WHERE brain_id = ?1",
+        params![brain_id],
+        |row| row.get(0),
+    )?;
+    let cluster_count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT cluster_id) FROM tag_aliases WHERE brain_id = ?1",
+        params![brain_id],
+        |row| row.get(0),
+    )?;
+    Ok(AliasCounts {
+        raw_count,
+        canonical_count,
+        cluster_count,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test/integration helpers (gated behind `test-utils` for brain_lib tests)
+// ---------------------------------------------------------------------------
 
 /// List every `tag_cluster_runs` row, newest first by `started_at`. Used
 /// by tests that want to inspect run state without knowing the run_id

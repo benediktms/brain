@@ -23,6 +23,9 @@ mod record_search;
 mod record_tag;
 mod scope;
 mod status;
+mod tags_aliases_list;
+mod tags_aliases_status;
+mod tags_recluster;
 mod task_apply_event;
 mod task_close;
 mod task_create;
@@ -124,6 +127,9 @@ impl ToolRegistry {
                 Box::new(record_link::RecordLinkRemove),
                 Box::new(brains_list::BrainsList),
                 Box::new(jobs_status::JobsStatus),
+                Box::new(tags_recluster::TagsRecluster),
+                Box::new(tags_aliases_list::TagsAliasesList),
+                Box::new(tags_aliases_status::TagsAliasesStatus),
             ],
         }
     }
@@ -155,7 +161,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 33);
+        assert_eq!(defs.len(), 36);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.search_minimal"));
@@ -170,6 +176,9 @@ pub(crate) mod tests {
         assert!(names.contains(&"records.create_document"));
         assert!(names.contains(&"records.create_analysis"));
         assert!(names.contains(&"records.create_plan"));
+        assert!(names.contains(&"tags.recluster"));
+        assert!(names.contains(&"tags.aliases_list"));
+        assert!(names.contains(&"tags.aliases_status"));
         assert!(!names.contains(&"records.create_artifact"));
         assert!(!names.contains(&"tasks.create_remote"));
 

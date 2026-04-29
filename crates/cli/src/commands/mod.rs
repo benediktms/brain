@@ -30,6 +30,7 @@ pub mod registry;
 pub mod reindex;
 pub mod snapshots;
 pub mod status;
+pub mod tags;
 pub mod tasks;
 pub mod vacuum;
 pub mod watch;

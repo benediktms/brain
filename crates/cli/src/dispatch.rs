@@ -718,6 +718,36 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Tags { json, action } => {
+            use commands::tags::run::{AliasesListParams, TagsCtx};
+            let ctx = TagsCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+            match action {
+                TagsAction::Recluster { threshold } => {
+                    commands::tags::run::recluster(&ctx, &cli.model_dir, threshold).await?;
+                }
+                TagsAction::Aliases { action } => match action {
+                    AliasesAction::List {
+                        canonical,
+                        cluster_id,
+                        limit,
+                        offset,
+                    } => {
+                        commands::tags::run::aliases_list(
+                            &ctx,
+                            AliasesListParams {
+                                canonical,
+                                cluster_id,
+                                limit,
+                                offset,
+                            },
+                        )?;
+                    }
+                },
+                TagsAction::Status => {
+                    commands::tags::run::status(&ctx, Some(&cli.model_dir))?;
+                }
+            }
+        }
         Command::Migrate {
             yes,
             cleanup,

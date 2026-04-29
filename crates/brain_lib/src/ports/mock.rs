@@ -1409,6 +1409,31 @@ impl TagAliasReader for MockTagAliasReader {
             })
             .unwrap_or_default())
     }
+
+    fn list_aliases_for_brain(
+        &self,
+        _brain_id: &str,
+        _canonical: Option<&str>,
+        _cluster_id: Option<&str>,
+        _limit: i64,
+        _offset: i64,
+    ) -> Result<Vec<brain_persistence::db::tag_aliases::AliasRow>> {
+        unimplemented!("MockTagAliasReader::list_aliases_for_brain not used by current tests")
+    }
+
+    fn count_aliases_for_brain(
+        &self,
+        _brain_id: &str,
+    ) -> Result<brain_persistence::db::tag_aliases::AliasCounts> {
+        unimplemented!("MockTagAliasReader::count_aliases_for_brain not used by current tests")
+    }
+
+    fn latest_run_for_brain(
+        &self,
+        _brain_id: &str,
+    ) -> Result<Option<brain_persistence::db::tag_aliases::TagClusterRunRow>> {
+        unimplemented!("MockTagAliasReader::latest_run_for_brain not used by current tests")
+    }
 }
 
 #[cfg(test)]

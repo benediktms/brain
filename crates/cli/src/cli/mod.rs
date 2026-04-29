@@ -7,6 +7,7 @@ mod plans;
 mod record_common;
 mod records;
 mod snapshots;
+mod tags;
 mod tasks;
 
 use std::path::PathBuf;
@@ -22,6 +23,7 @@ pub(crate) use plans::*;
 pub(crate) use record_common::*;
 pub(crate) use records::*;
 pub(crate) use snapshots::*;
+pub(crate) use tags::*;
 pub(crate) use tasks::*;
 
 // ── value-enum helpers ──────────────────────────────────────
@@ -446,6 +448,21 @@ pub(crate) enum Command {
 
         #[command(subcommand)]
         action: PlansAction,
+    },
+
+    /// Manage synonym clustering for tags (recluster, inspect aliases, status)
+    #[command(long_about = "Manage synonym clustering for tags.\n\n\
+            Subcommands:\n\
+            - recluster        Run synonym clustering over the current brain's raw tags\n\
+            - aliases list     List tag_aliases rows with optional filtering\n\
+            - status           Show health summary for the clustering subsystem")]
+    Tags {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: TagsAction,
     },
 
     /// Manage records storage (verify, gc, evict, pin)
