@@ -382,7 +382,7 @@ fn test_hybrid_ranking_signal_combination() {
 // ─── 5. Token budgeting ─────────────────────────────────────────
 
 #[test]
-fn test_search_minimal_budget_compliance() {
+fn test_budget_packing_compliance() {
     let ranked: Vec<RankedResult> = (0..20)
         .map(|i| {
             let content = format!("This is chunk number {i} with some content to fill tokens.");

@@ -502,7 +502,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 
 ### Phase 3 — Retrieval Explainability / Observability
 
-#### Issue 3.1: Explain mode for `search_minimal`
+#### Issue 3.1: Explain mode for `memory.retrieve`
 
 **Problem:** When retrieval quality is poor, there's no way to understand why. The hybrid scoring formula is opaque.
 
@@ -528,7 +528,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 - Preserve existing response format when `explain=false`
 
 **Files:**
-- `crates/brain_lib/src/mcp/tools/mem_search_minimal.rs` — parameter + response
+- `crates/brain_lib/src/mcp/tools/mem_retrieve.rs` — parameter + response
 - `crates/brain_lib/src/query_pipeline.rs` — carry scores through pipeline
 - `crates/brain_lib/src/ranking.rs` — expose individual signal values
 - `crates/brain_lib/src/retrieval.rs` — include in stubs

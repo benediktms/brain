@@ -1,8 +1,8 @@
-/// Token-budgeted minimal-first retrieval.
+/// Shared retrieval types used by `memory.retrieve`.
 ///
-/// Provides a two-tier API:
-/// - `search_minimal`: returns compact stubs within a token budget
-/// - `expand`: returns full content for selected memory IDs
+/// This module defines the result shapes (`SearchResult`, `MemoryStub`),
+/// `MemoryKind` enum, and helpers like `pack_results_within_budget` consumed
+/// by the unified retrieval tool.
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};

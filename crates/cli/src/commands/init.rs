@@ -527,7 +527,7 @@ brain tasks stats              # Project statistics
 brain memory retrieve "query"                # Search notes/tasks at requested LOD
 brain memory retrieve -i lookup "exact term" # Keyword-heavy search
 brain memory retrieve --brain all "patterns" # Search all registered brains
-brain memory retrieve --uri synapse://b/memory/chunk-id  # Direct access by URI
+brain memory retrieve --uri synapse://my-brain/memory/<chunk-id>  # Direct access by URI
 brain memory retrieve "query" --lod L1       # Retrieve with LLM summaries
 brain memory write-episode --goal "..." --actions "..." --outcome "..."
 brain memory reflect --topic "architecture"  # Prepare: get source material

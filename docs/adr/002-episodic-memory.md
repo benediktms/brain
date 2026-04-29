@@ -8,7 +8,7 @@
 
 ## Context
 
-The episodic memory system was partially implemented. Episodes could be written via `memory.write_episode` but never surfaced through the main retrieval path (`memory.search_minimal`). Reflections were unreachable from MCP entirely — `store_reflection()` existed in `db/summaries.rs` but had no callable tool path.
+The episodic memory system was partially implemented. Episodes could be written via `memory.write_episode` but never surfaced through the main retrieval path (`memory.search_minimal`, now `memory.retrieve`). Reflections were unreachable from MCP entirely — `store_reflection()` existed in `db/summaries.rs` but had no callable tool path.
 
 Several structural gaps blocked the write-retrieve-reflect-retrieve loop:
 
