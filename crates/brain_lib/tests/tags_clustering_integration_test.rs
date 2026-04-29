@@ -55,6 +55,10 @@ impl Embed for ControlledEmbedder {
     fn hidden_size(&self) -> usize {
         384
     }
+
+    fn version(&self) -> &str {
+        "controlled-v0"
+    }
 }
 
 #[tokio::test]

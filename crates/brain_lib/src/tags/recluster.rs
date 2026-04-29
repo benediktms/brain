@@ -35,16 +35,6 @@ use crate::ports::{TagAliasReader, TagAliasWriter};
 use crate::stores::BrainStores;
 use crate::tags::clustering::{ClusterParams, TagCandidate, cluster_tags};
 
-/// Embedder identity stamped onto every cached embedding row in
-/// `tag_aliases` and onto every `tag_cluster_runs` audit row.
-///
-/// **Known shortcut.** The [`Embed`] trait does not expose a version method,
-/// so we hardcode the BGE-small-en-v1.5 identifier here. Bumping this
-/// constant invalidates every cached embedding on the next [`run_recluster`]
-/// call. Tracked for removal as `brn-83a.7.2.8` (add `fn version(&self) ->
-/// &str` to the `Embed` trait).
-const EMBEDDER_VERSION: &str = "bge-small-en-v1.5";
-
 /// Hard cap on the size of `tag_cluster_runs.notes` the failure path
 /// writes. Keeps a runaway error-message size from blowing up an audit row.
 const MAX_NOTES_BYTES: usize = 4096;
@@ -73,7 +63,8 @@ pub struct ReclusterReport {
     pub stale_aliases: usize,
     /// Wall-clock duration of the run, milliseconds.
     pub duration_ms: u64,
-    /// Embedder identity used for this run. Currently always [`EMBEDDER_VERSION`].
+    /// Embedder identity used for this run, sourced from
+    /// [`Embed::version`].
     pub embedder_version: String,
 }
 
@@ -107,18 +98,20 @@ pub async fn run_recluster(
     let run_id = ulid::Ulid::new().to_string();
     tracing::Span::current().record("run_id", run_id.as_str());
     let started_at_iso = chrono::Utc::now().to_rfc3339();
+    let embedder_version = embedder.version().to_string();
 
     info!(
         brain_id = %stores.brain_id,
         run_id = %run_id,
         threshold = params.cosine_threshold,
-        embedder_version = EMBEDDER_VERSION,
+        embedder_version = %embedder_version,
         "recluster run starting",
     );
 
     let outcome = run_inner(
         stores,
         embedder,
+        &embedder_version,
         params,
         run_id.clone(),
         started_at_iso,
@@ -157,6 +150,7 @@ pub async fn run_recluster(
 async fn run_inner(
     stores: &BrainStores,
     embedder: &Arc<dyn Embed>,
+    embedder_version: &str,
     params: ClusterParams,
     run_id: String,
     started_at_iso: String,
@@ -169,7 +163,7 @@ async fn run_inner(
         run_id: run_id.clone(),
         brain_id: stores.brain_id.clone(),
         started_at_iso,
-        embedder_version: EMBEDDER_VERSION.to_string(),
+        embedder_version: embedder_version.to_string(),
         threshold: params.cosine_threshold,
         triggered_by: "manual".to_string(),
     })?;
@@ -178,7 +172,7 @@ async fn run_inner(
     let raw_tags: Vec<DedupedRawTag> = db.collect_raw_tags(&stores.brain_id)?;
     let snapshot: HashMap<String, ExistingAlias> = db.read_alias_snapshot(&stores.brain_id)?;
 
-    let candidates = build_candidates(&raw_tags, &snapshot, embedder).await?;
+    let candidates = build_candidates(&raw_tags, &snapshot, embedder, embedder_version).await?;
 
     debug!(
         brain_id = %stores.brain_id,
@@ -197,8 +191,13 @@ async fn run_inner(
 
     let clusters = cluster_tags(candidates, params);
 
-    let (upserts, new_aliases, updated_aliases) =
-        diff_clusters_against_snapshot(&clusters, &candidates_by_tag, &snapshot, &stores.brain_id);
+    let (upserts, new_aliases, updated_aliases) = diff_clusters_against_snapshot(
+        &clusters,
+        &candidates_by_tag,
+        &snapshot,
+        &stores.brain_id,
+        embedder_version,
+    );
 
     // Stale rows: in this brain's snapshot but absent from the freshly
     // collected raw-tag set. Pruned inside Tx-2 (see `apply_alias_upserts`).
@@ -233,7 +232,7 @@ async fn run_inner(
         updated_aliases,
         stale_aliases,
         duration_ms: started_at.elapsed().as_millis() as u64,
-        embedder_version: EMBEDDER_VERSION.to_string(),
+        embedder_version: embedder_version.to_string(),
     };
 
     if report.stale_aliases > 0 {
@@ -261,11 +260,13 @@ async fn run_inner(
 
 /// Build the `Vec<TagCandidate>` for [`cluster_tags`] from the raw-tag set,
 /// reusing cached embeddings on `tag_aliases` rows whose `embedder_version`
-/// matches [`EMBEDDER_VERSION`] and embedding the rest in one batched call.
+/// matches the supplied `embedder_version` and embedding the rest in one
+/// batched call.
 async fn build_candidates(
     raw_tags: &[DedupedRawTag],
     snapshot: &HashMap<String, ExistingAlias>,
     embedder: &Arc<dyn Embed>,
+    embedder_version: &str,
 ) -> Result<Vec<TagCandidate>> {
     let mut candidates: Vec<TagCandidate> = Vec::with_capacity(raw_tags.len());
     let mut to_embed_tags: Vec<String> = Vec::new();
@@ -273,7 +274,7 @@ async fn build_candidates(
 
     for raw in raw_tags {
         let cache_hit = snapshot.get(&raw.tag).and_then(|prev| {
-            if prev.embedder_version.as_deref() == Some(EMBEDDER_VERSION) {
+            if prev.embedder_version.as_deref() == Some(embedder_version) {
                 prev.embedding.clone()
             } else {
                 None
@@ -325,6 +326,7 @@ fn diff_clusters_against_snapshot(
     candidates_by_tag: &HashMap<String, Vec<f32>>,
     snapshot: &HashMap<String, ExistingAlias>,
     brain_id: &str,
+    embedder_version: &str,
 ) -> (Vec<AliasUpsert>, usize, usize) {
     let mut new_aliases = 0usize;
     let mut updated_aliases = 0usize;
@@ -350,7 +352,7 @@ fn diff_clusters_against_snapshot(
                 canonical_tag: cluster.canonical.clone(),
                 cluster_id: cluster.cluster_id.clone(),
                 embedding,
-                embedder_version: EMBEDDER_VERSION.to_string(),
+                embedder_version: embedder_version.to_string(),
             };
             match snapshot.get(member) {
                 None => {
@@ -360,7 +362,7 @@ fn diff_clusters_against_snapshot(
                 Some(prev)
                     if prev.canonical_tag != row.canonical_tag
                         || prev.cluster_id != row.cluster_id
-                        || prev.embedder_version.as_deref() != Some(EMBEDDER_VERSION) =>
+                        || prev.embedder_version.as_deref() != Some(embedder_version) =>
                 {
                     updated_aliases += 1;
                     upserts.push(row);
@@ -423,7 +425,7 @@ mod tests {
         assert_eq!(report.new_aliases, 3);
         assert_eq!(report.updated_aliases, 0);
         assert_eq!(report.stale_aliases, 0);
-        assert_eq!(report.embedder_version, EMBEDDER_VERSION);
+        assert_eq!(report.embedder_version, MockEmbedder.version());
 
         let snapshot = stores
             .inner_db()
@@ -432,7 +434,10 @@ mod tests {
         assert_eq!(snapshot.len(), 3, "expected 3 alias rows, got {snapshot:?}");
         for tag in ["bug", "perf", "performance"] {
             let row = snapshot.get(tag).unwrap_or_else(|| panic!("missing {tag}"));
-            assert_eq!(row.embedder_version.as_deref(), Some(EMBEDDER_VERSION));
+            assert_eq!(
+                row.embedder_version.as_deref(),
+                Some(MockEmbedder.version()),
+            );
             assert!(
                 row.embedding.as_ref().is_some_and(|v| v.len() == 384),
                 "expected 384-dim cached embedding for {tag}",
@@ -447,7 +452,7 @@ mod tests {
         assert!(run.finished_at.is_some());
         assert!(run.notes.is_none());
         assert_eq!(run.source_count, Some(3));
-        assert_eq!(run.embedder_version, EMBEDDER_VERSION);
+        assert_eq!(run.embedder_version, MockEmbedder.version());
         assert_eq!(run.triggered_by, "manual");
     }
 
@@ -488,26 +493,43 @@ mod tests {
         }
     }
 
+    /// `MockEmbedder` clone that reports a caller-supplied [`Embed::version`]
+    /// string. Used by the version-change test to swap embedders between two
+    /// `run_recluster` calls and assert that cached rows are invalidated
+    /// when the embedder identity changes.
+    struct VersionedMockEmbedder(&'static str);
+
+    impl Embed for VersionedMockEmbedder {
+        fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+            MockEmbedder.embed_batch(texts)
+        }
+
+        fn hidden_size(&self) -> usize {
+            384
+        }
+
+        fn version(&self) -> &str {
+            self.0
+        }
+    }
+
     #[tokio::test]
     async fn recluster_invalidates_cache_on_version_change() {
         let (_tmp, stores) = BrainStores::in_memory_with_brain_id("ver-brain").unwrap();
         seed_demo_brain(&stores);
 
-        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
-
-        let r1 = run_recluster(&stores, &embedder, ClusterParams::default())
+        // First run uses embedder version "v1": writes fresh alias rows.
+        let v1: Arc<dyn Embed> = Arc::new(VersionedMockEmbedder("v1"));
+        let r1 = run_recluster(&stores, &v1, ClusterParams::default())
             .await
             .unwrap();
         assert!(r1.new_aliases > 0);
+        assert_eq!(r1.embedder_version, "v1");
 
-        // Stamp every tag_aliases row with a stale embedder_version.
-        let updated = stores
-            .db_for_tests()
-            .with_write_conn(|conn| ta::override_alias_embedder_version(conn, "outdated-v0"))
-            .unwrap();
-        assert_eq!(updated, r1.new_aliases);
-
-        let r2 = run_recluster(&stores, &embedder, ClusterParams::default())
+        // Second run swaps to "v2": every cached row's embedder_version
+        // mismatches, so all should be marked updated and re-stamped.
+        let v2: Arc<dyn Embed> = Arc::new(VersionedMockEmbedder("v2"));
+        let r2 = run_recluster(&stores, &v2, ClusterParams::default())
             .await
             .unwrap();
         assert_eq!(r2.new_aliases, 0, "rows already exist");
@@ -515,6 +537,7 @@ mod tests {
             r2.updated_aliases, r1.source_count,
             "version mismatch should mark every row as updated",
         );
+        assert_eq!(r2.embedder_version, "v2");
 
         let snapshot = stores
             .inner_db()
@@ -523,7 +546,7 @@ mod tests {
         for alias in snapshot.values() {
             assert_eq!(
                 alias.embedder_version.as_deref(),
-                Some(EMBEDDER_VERSION),
+                Some("v2"),
                 "expected re-stamped version on every row",
             );
         }
@@ -542,6 +565,10 @@ mod tests {
 
         fn hidden_size(&self) -> usize {
             384
+        }
+
+        fn version(&self) -> &str {
+            "failing-v0"
         }
     }
 

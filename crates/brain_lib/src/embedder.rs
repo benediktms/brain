@@ -77,6 +77,12 @@ fn verify_checksums(model_dir: &Path, expected: &[(&str, &str)]) -> crate::error
 pub trait Embed: Send + Sync {
     fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>>;
     fn hidden_size(&self) -> usize;
+    /// Identifier of the embedder model + revision in use.
+    ///
+    /// Stamped onto cached embeddings (`tag_aliases.embedder_version`) and
+    /// audit rows (`tag_cluster_runs.embedder_version`) so consumers can
+    /// invalidate cached vectors when the underlying model changes.
+    fn version(&self) -> &str;
 }
 
 pub struct Embedder {
@@ -296,6 +302,10 @@ impl Embed for Embedder {
     fn hidden_size(&self) -> usize {
         self.hidden_size
     }
+
+    fn version(&self) -> &str {
+        "bge-small-en-v1.5"
+    }
 }
 
 /// A mock embedder that produces deterministic hash-based 384-dim vectors.
@@ -309,6 +319,10 @@ impl Embed for MockEmbedder {
 
     fn hidden_size(&self) -> usize {
         384
+    }
+
+    fn version(&self) -> &str {
+        "mock-v1"
     }
 }
 

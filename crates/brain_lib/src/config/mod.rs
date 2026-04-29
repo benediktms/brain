@@ -1311,6 +1311,10 @@ roots = ["/some/path"]
         fn hidden_size(&self) -> usize {
             384
         }
+
+        fn version(&self) -> &str {
+            "dummy-v0"
+        }
     }
 
     // -----------------------------------------------------------------------
