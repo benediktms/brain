@@ -2,19 +2,86 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.6] - 2026-04-29
 
-### Added
-- `records.create_document`, `records.create_analysis`, `records.create_plan` MCP tools (per-kind embedding/summarization policy: document/analysis/plan/summary are embedded into LanceDB and included in scope summaries).
-- `brain documents create`, `brain analyses create`, `brain plans create` CLI subcommands.
-- SQLite migration v41→v42 normalizing legacy `dispatch-brief`→`document`, `conversation`→`snapshot`, `report`→`document` and re-deriving `records.searchable`.
-- SQLite migration v42→v43 adding `tag_aliases` and `tag_cluster_runs` tables (foundation for synonym clustering, parent task `brn-83a.7.2`); read-only `db::tags::collect_raw_tags()` helper enumerating raw tag strings with reference counts.
-- `RecordKind` enum with `KindPolicy` (embed/summarize/searchable) on every variant.
-- Operator note: pulling this change requires reinstalling the daemon binary because the database moves to schema v43 (the prior binary refuses to open a newer DB).
+### Bug Fixes
 
-### Removed (BREAKING)
-- `records.create_artifact` MCP tool — replaced by the three typed creation tools above.
-- `brain artifacts create` CLI subcommand — replaced by the three typed CLI commands above.
+- Hardening from review of brn-83a.7.2.5/.8
+- Brain-scoping helpers + federated reads (brn-a3e) (#93)
+- Address code review — :0 suffix, dedup helpers, pub(crate) visibility
+- Address code review findings for federated LOD (brn-83a.5.4)
+- Address code review findings for explainability and frontmatter
+- Address code review findings for frontmatter signals
+- Wire search layer into daemon McpContext for IPC dispatch (brn-3d9)
+- Harden test_auto_index_on_optimize for CI
+- Harden flaky perf tests for CI reliability
+- Prevent dotfile directory names from becoming brain names
+- Resolve clippy warnings and doctest failure on master
+
+### Documentation
+
+- Clarify ordering invariant test bound (brn-83a.7.2.4.4)
+- Update AGENTS.md and init.rs MCP docs
+- Update README and RECORDS.md for typed taxonomy
+- Update SKILL.md templates for typed tools
+
+### Features
+
+- MCP + CLI surface for manual recluster and alias inspection (brn-83a.7.2.5)
+- Observability instrumentation + end-to-end integration test (brn-83a.7.2.6)
+- Case-insensitive tag_match_score (brn-83a.7.2.4.6)
+- Alias-aware tag_match_score + alias_discount (brn-83a.7.2.4.4)
+- Expand_tags_via_aliases + filter rewiring (brn-83a.7.2.4.3)
+- FederatedPipeline brain_id plumbing (brn-83a.7.2.4.2)
+- A
+- TagAliasReader::alias_lookup_for_brain + MockTagAliasReader (brn-83a.7.2.4.1)
+- Alias_lookup_for_brain reader + seed_tag_aliases fixture (brn-83a.7.2.4.1)
+- Include summarizable records in tag-scope summaries
+- Per-kind embedding policy in create tools
+- [**breaking**] Replace 'artifacts create' with typed CLI subcommands
+- [**breaking**] Remove records.create_artifact tool
+- Scaffold documents/analyses/plans subcommands
+- Add records.create_plan tool
+- Add records.create_analysis tool
+- Add records.create_document tool
+- Migration v41->v42 normalize free-form kinds
+- Add LinkWriter, EmbeddingOps, BrainManager port traits
+- Use content-aware L0 abstract for immediate record creation path
+- Unify record L0 generation for immediate and poll paths
+- L0 generation and lod_chunks for reflections
+- L0 generation + lod_chunks for episodes
+- Wire record capsules into lod_chunks as L0 entries (brn-83a.5.5.2)
+- Wire task capsules into lod_chunks as L0 entries (brn-83a.5.5.1)
+- Cross-brain LOD resolution in federated retrieve (brn-83a.5.4)
+- Frontmatter signals & retrieve explainability (brn-83a.6.3)
+- Wire explain through federated search and expose fusion_confidence (brn-83a.6.3.2)
+- Extract YAML frontmatter tags/importance for independent ranking signals (brn-83a.6.3.1)
+- Implement Retrieve+ LOD storage and unified retrieve tool (#92)
+
+### Refactoring
+
+- Lift EMBEDDER_VERSION onto Embed trait (brn-83a.7.2.8)
+- Derive searchable flag from KindPolicy in projections
+- Redesign RecordKind enum with KindPolicy
+- Address branch review feedback
+- Remove public db() from RecordStore and TaskStore
+- Remove public db() accessor from IndexPipeline
+- Remove public db() accessor from BrainStores
+- Parameterize upsert_domain_lod_l0 over LodChunkStore
+- Pass &ctx.stores to enqueue_cluster_summarization
+- Impl JobQueue and DerivedSummaryStore for BrainStores
+- Add query_pipeline helper to BrainStores
+- Add resolve_brain delegation and BrainRegistry impl
+- Parameterize IndexPipeline over port traits
+- Fix boundary violations — use BrainStores delegation
+
+### Testing
+
+- Pin federated exclude isolation + empty brain_id (brn-83a.7.2.4.7)
+- Strengthen audit invariant from count to content (brn-83a.7.2.4.5)
+- Regression suite — audit invariant + federated isolation (brn-83a.7.2.4.5)
+- Migration v41->v42 fixture DB tests
+- Integration tests for typed creation + policy
 
 ## [0.3.5] - 2026-03-31
 
@@ -423,3 +490,4 @@ All notable changes to this project will be documented in this file.
 - Perf and concurrency test (#17)
 - Add smoke tests for current chunk, embed and hash-gate pipeline
 - Add-testing-fixtures
+
