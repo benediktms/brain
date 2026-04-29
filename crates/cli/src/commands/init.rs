@@ -439,6 +439,8 @@ const BRAIN_SECTION_BODY: &str = r#"{build_section}## Task Management
 
 This project uses `brain` for task tracking. **Always use MCP tools for task operations** — they provide structured responses and are the canonical interface for AI agents. CLI commands exist for human terminal use only.
 
+> **Brain task IDs are local-only.** Task IDs like `brn-6f4`, `BRN-01JPH...`, or `BRX-01K...` live in the local brain DB and have no meaning outside this machine. Never include them in artifacts visible to others — pull request descriptions, commit subjects intended for code review, public docs, GitHub issues/comments, Slack messages, or anything that crosses the workstation boundary. They are fine inside commit body text purely as an internal cross-reference, but they are NOT a substitute for a real change description: write the PR/commit so a reader who has never seen the brain DB still understands the change. If a follow-up needs to be tracked publicly, file a GitHub issue and reference that instead.
+
 ### MCP Tools (preferred for AI agents)
 
 When running as an MCP server (`brain mcp`), these tools are available:
