@@ -82,6 +82,12 @@ pub struct SearchParams<'a> {
     /// Optional brain_id filter for FTS queries. `None` = workspace-global,
     /// `Some(&[id])` = scope to specific brain(s).
     pub brain_ids: Option<&'a [String]>,
+    /// Owning brain for read-time projections that are brain-scoped (e.g. the
+    /// `tag_aliases` lookup consumed in milestone 3 of `brn-83a.7.2.4`).
+    /// `None` = no brain context (rare workspace-wide introspection paths).
+    /// Consumers MUST treat `Some("")` as `None` — the empty string is
+    /// reserved for "caller could not resolve a brain", not "all brains".
+    pub brain_id: Option<&'a str>,
     /// Filter by result kind. Empty = no filter (all kinds).
     pub kinds: &'a [MemoryKind],
     /// Only include results with effective timestamp >= this (Unix seconds).
@@ -112,6 +118,7 @@ impl<'a> SearchParams<'a> {
             mode: VectorSearchMode::default(),
             graph_expand: false,
             brain_ids: None,
+            brain_id: None,
             kinds: &[],
             time_after: None,
             time_before: None,
@@ -129,6 +136,13 @@ impl<'a> SearchParams<'a> {
     /// Scope FTS queries to specific brain(s).
     pub fn with_brain_ids(mut self, brain_ids: Option<&'a [String]>) -> Self {
         self.brain_ids = brain_ids;
+        self
+    }
+
+    /// Set the owning brain for read-time, brain-scoped projections (alias
+    /// lookup, etc.). `Some("")` MUST be treated by consumers as `None`.
+    pub fn with_brain_id(mut self, brain_id: Option<&'a str>) -> Self {
+        self.brain_id = brain_id;
         self
     }
 
@@ -787,8 +801,8 @@ where
 /// let pipeline = FederatedPipeline {
 ///     db: &ctx.db,
 ///     brains: vec![
-///         ("local".into(), Some(local_store)),
-///         ("remote".into(), remote_ctx.store),
+///         ("local".into(), local_id, Some(local_store)),
+///         ("remote".into(), remote_ctx.brain_id, remote_ctx.store),
 ///     ],
 ///     embedder: &embedder,
 ///     metrics: &metrics,
@@ -801,11 +815,13 @@ where
 {
     /// Shared unified SQLite database — abstracted via port traits.
     pub db: &'a D,
-    /// Per-brain entries: `(brain_name, store)`.
+    /// Per-brain entries: `(brain_name, brain_id, store)`.
     ///
+    /// `brain_id` is the brain's UUID — used by per-brain SearchParams so
+    /// downstream projections (alias lookup, etc.) can scope correctly.
     /// `store` is `None` when the brain's LanceDB has not yet been
     /// initialised — that brain is skipped for vector search with a warning.
-    pub brains: Vec<(String, Option<S>)>,
+    pub brains: Vec<(String, String, Option<S>)>,
     /// Shared embedder — query is embedded once, used across all brains.
     pub embedder: &'a Arc<dyn crate::embedder::Embed>,
     /// Shared metrics handle.
@@ -839,7 +855,7 @@ where
             std::pin::Pin<Box<dyn std::future::Future<Output = BrainResult> + Send + '_>>,
         > = Vec::new();
 
-        for (brain_name, store_opt) in &self.brains {
+        for (brain_name, brain_id, store_opt) in &self.brains {
             let store = match store_opt {
                 Some(s) => s,
                 None => {
@@ -855,6 +871,7 @@ where
             // FTS and chunk-enrichment queries run against the unified SQLite.
             let pipeline = QueryPipeline::new(self.db, store, self.embedder, self.metrics);
             let brain_name = brain_name.clone();
+            let brain_id = brain_id.clone();
             let query = params.query.to_string();
             let intent = params.intent.to_string();
             let query_tags = params.query_tags.to_vec();
@@ -875,6 +892,7 @@ where
                     mode,
                     graph_expand: false,
                     brain_ids: None,
+                    brain_id: Some(brain_id.as_str()),
                     kinds: &kinds,
                     time_after,
                     time_before,

@@ -79,8 +79,16 @@ async fn test_federated_search_merges_results_from_multiple_brains() {
     let pipeline = FederatedPipeline {
         db: &brain_a.db,
         brains: vec![
-            ("brain-a".to_string(), Some(brain_a.store_reader)),
-            ("brain-b".to_string(), Some(brain_b.store_reader)),
+            (
+                "brain-a".to_string(),
+                "brain-a-id".to_string(),
+                Some(brain_a.store_reader),
+            ),
+            (
+                "brain-b".to_string(),
+                "brain-b-id".to_string(),
+                Some(brain_b.store_reader),
+            ),
         ],
         embedder: &embedder,
         metrics: &metrics,
@@ -153,8 +161,16 @@ async fn test_federated_search_brain_attribution() {
     let pipeline = FederatedPipeline {
         db: &brain_a.db,
         brains: vec![
-            ("systems-brain".to_string(), Some(brain_a.store_reader)),
-            ("web-brain".to_string(), Some(brain_b.store_reader)),
+            (
+                "systems-brain".to_string(),
+                "systems-brain-id".to_string(),
+                Some(brain_a.store_reader),
+            ),
+            (
+                "web-brain".to_string(),
+                "web-brain-id".to_string(),
+                Some(brain_b.store_reader),
+            ),
         ],
         embedder: &embedder,
         metrics: &metrics,
@@ -212,7 +228,11 @@ async fn test_federated_search_single_brain_fallback() {
     // Only the local brain — no remotes
     let pipeline = FederatedPipeline {
         db: &brain.db,
-        brains: vec![("solo-brain".to_string(), Some(brain.store_reader))],
+        brains: vec![(
+            "solo-brain".to_string(),
+            "solo-brain-id".to_string(),
+            Some(brain.store_reader),
+        )],
         embedder: &embedder,
         metrics: &metrics,
     };
@@ -301,8 +321,16 @@ async fn test_federated_search_respects_budget() {
     let pipeline = FederatedPipeline {
         db: &brain_a.db,
         brains: vec![
-            ("brain-a".to_string(), Some(brain_a.store_reader)),
-            ("brain-b".to_string(), Some(brain_b.store_reader)),
+            (
+                "brain-a".to_string(),
+                "brain-a-id".to_string(),
+                Some(brain_a.store_reader),
+            ),
+            (
+                "brain-b".to_string(),
+                "brain-b-id".to_string(),
+                Some(brain_b.store_reader),
+            ),
         ],
         embedder: &embedder,
         metrics: &metrics,
@@ -340,8 +368,16 @@ async fn test_federated_search_skips_brain_without_lancedb() {
     let pipeline = FederatedPipeline {
         db: &brain_a.db,
         brains: vec![
-            ("valid-brain".to_string(), Some(brain_a.store_reader)),
-            ("no-store-brain".to_string(), None), // LanceDB not initialised
+            (
+                "valid-brain".to_string(),
+                "valid-brain-id".to_string(),
+                Some(brain_a.store_reader),
+            ),
+            (
+                "no-store-brain".to_string(),
+                "no-store-brain-id".to_string(),
+                None,
+            ), // LanceDB not initialised
         ],
         embedder: &embedder,
         metrics: &metrics,
@@ -409,8 +445,16 @@ async fn test_federated_search_ranks_by_hybrid_score() {
     let pipeline = FederatedPipeline {
         db: &brain_a.db,
         brains: vec![
-            ("brain-a".to_string(), Some(brain_a.store_reader)),
-            ("brain-b".to_string(), Some(brain_b.store_reader)),
+            (
+                "brain-a".to_string(),
+                "brain-a-id".to_string(),
+                Some(brain_a.store_reader),
+            ),
+            (
+                "brain-b".to_string(),
+                "brain-b-id".to_string(),
+                Some(brain_b.store_reader),
+            ),
         ],
         embedder: &embedder,
         metrics: &metrics,

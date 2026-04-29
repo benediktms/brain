@@ -154,8 +154,12 @@ pub async fn run(params: QueryParams) -> Result<()> {
 
     // Build brain list: local first, then each remote.
     // All share the same unified DB held by `stores`.
-    let mut brains: Vec<(String, Option<StoreReader>)> = Vec::new();
-    brains.push((stores.brain_name.clone(), Some(local_store_reader)));
+    let mut brains: Vec<(String, String, Option<StoreReader>)> = Vec::new();
+    brains.push((
+        stores.brain_name.clone(),
+        stores.brain_id.clone(),
+        Some(local_store_reader),
+    ));
 
     for key in &brain_keys {
         if key == &stores.brain_name {
@@ -166,7 +170,7 @@ pub async fn run(params: QueryParams) -> Result<()> {
             .await?
         {
             Some(ctx) => {
-                brains.push((ctx.brain_name, ctx.store));
+                brains.push((ctx.brain_name, ctx.brain_id, ctx.store));
             }
             None => {
                 eprintln!("warning: brain '{key}' not found in registry, skipping");

@@ -189,6 +189,7 @@ impl McpTool for MemSearchMinimal {
             )
             .with_mode(mode)
             .with_brain_ids(fts_brain_ids)
+            .with_brain_id(Some(ctx.brain_id()))
             .with_kinds(&params.kinds)
             .with_time_after(params.time_after)
             .with_time_before(params.time_before)

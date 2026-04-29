@@ -290,10 +290,13 @@ impl BrainStores {
     }
 
     /// Construct a `FederatedPipeline` over the unified DB borrowed from this
-    /// store. Per-brain entries are `(brain_name, optional store)`.
+    /// store. Per-brain entries are `(brain_name, brain_id, optional store)`.
+    /// The `brain_id` is propagated into each per-brain `SearchParams` so
+    /// downstream brain-scoped projections (e.g. alias lookup) resolve
+    /// correctly per the federated tuple-shape contract.
     pub fn federated_pipeline<'a, S>(
         &'a self,
-        brains: Vec<(String, Option<S>)>,
+        brains: Vec<(String, String, Option<S>)>,
         embedder: &'a std::sync::Arc<dyn crate::embedder::Embed>,
         metrics: &'a std::sync::Arc<crate::metrics::Metrics>,
     ) -> crate::query_pipeline::FederatedPipeline<'a, S, Db>
