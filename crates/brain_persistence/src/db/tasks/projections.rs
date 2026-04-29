@@ -317,7 +317,8 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
             let n = conn.execute(
                 "UPDATE task_external_ids
                  SET resolved_at = ?1
-                 WHERE task_id = ?2 AND source = ?3 AND external_id = ?4",
+                 WHERE task_id = ?2 AND source = ?3 AND external_id = ?4
+                   AND blocking = 1",
                 rusqlite::params![resolved_at, event.task_id, p.source, p.external_id],
             )?;
             if n == 0 {
@@ -325,7 +326,7 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                     task_id = %event.task_id,
                     source = %p.source,
                     external_id = %p.external_id,
-                    "external_blocker_resolved had no matching row — no-op"
+                    "external_blocker_resolved had no matching blocker — no-op (row absent or blocking=0)"
                 );
             }
         }

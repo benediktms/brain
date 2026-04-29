@@ -1067,6 +1067,39 @@ mod tests {
         );
     }
 
+    /// Exercises the ANCESTOR_BLOCKED_CTE's own `LEFT JOIN tasks dep ... AND
+    /// (dep.task_id IS NULL OR ...)` clause. Without the NULL-check inside
+    /// the CTE, a child of a parent whose only blocker is an orphan dep
+    /// would slip into the ready list (the outer WHERE catches the parent
+    /// itself, but only the CTE catches descendants). A mutation that
+    /// removed the NULL-check from the CTE alone (not from the outer
+    /// listing queries) would not be caught by `test_orphan_dep_stays_blocked`.
+    #[test]
+    fn test_child_of_task_with_orphan_dep_not_ready() {
+        let conn = setup();
+        create_epic(&conn, "parent", "Parent epic", 1);
+        insert_orphan_dep(&conn, "parent", "ghost-blocker");
+        create_child_task(
+            &conn,
+            "child",
+            "parent",
+            "Child of orphan-blocked parent",
+            2,
+        );
+
+        let ready = list_ready(&conn, None).unwrap();
+        assert!(
+            !ready.iter().any(|t| t.task_id == "child"),
+            "child of a parent blocked by an orphan dep must not be ready"
+        );
+
+        let blocked = list_blocked(&conn, None).unwrap();
+        assert!(
+            blocked.iter().any(|t| t.task_id == "child"),
+            "child of a parent blocked by an orphan dep must appear in blocked list"
+        );
+    }
+
     // -- External-blocker tests (brn-3a93) --
     //
     // External blockers are rows in `task_external_ids` with `blocking = 1`.

@@ -61,6 +61,16 @@ pub fn migrate_v44_to_v45(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Partial index supporting the readiness `NOT EXISTS` subquery and its
+    // recursive use inside `ANCESTOR_BLOCKED_CTE`. Without this, every
+    // readiness query scans `task_external_ids` rows per candidate task and
+    // the cost multiplies with ancestor-chain depth.
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_task_external_ids_blockers
+         ON task_external_ids (task_id)
+         WHERE blocking = 1 AND resolved_at IS NULL;",
+    )?;
+
     tx.execute_batch("PRAGMA user_version = 45;")?;
     tx.commit()?;
     Ok(())
