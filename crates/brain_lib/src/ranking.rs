@@ -19,6 +19,9 @@ pub enum WeightProfile {
 }
 
 /// The six signal weights. Must sum to 1.0.
+///
+/// `alias_discount` is a separate tunable that does NOT participate in the
+/// 6-signal sum constraint — see `validate`.
 #[derive(Debug, Clone, Copy)]
 pub struct Weights {
     /// Vector similarity weight.
@@ -33,6 +36,13 @@ pub struct Weights {
     pub tag_match: f64,
     /// Importance weight.
     pub importance: f64,
+    /// Discount applied to the tag-match jaccard contribution from
+    /// same-cluster (alias-only) matches. Literal matches contribute their
+    /// full jaccard slot. `0.7` default; `1.0` disables the discount;
+    /// `0.0` disables alias matching at the rank stage entirely (filter-side
+    /// expansion in `query_pipeline` still applies). Not part of
+    /// `validate`'s 6-signal sum constraint.
+    pub alias_discount: f64,
 }
 
 impl Weights {
@@ -46,6 +56,7 @@ impl Weights {
                 links: 0.15,
                 tag_match: 0.10,
                 importance: 0.10,
+                alias_discount: 0.7,
             },
             WeightProfile::Planning => Self {
                 vector: 0.15,
@@ -54,6 +65,7 @@ impl Weights {
                 links: 0.25,
                 tag_match: 0.10,
                 importance: 0.10,
+                alias_discount: 0.7,
             },
             WeightProfile::Reflection => Self {
                 vector: 0.15,
@@ -62,6 +74,7 @@ impl Weights {
                 links: 0.10,
                 tag_match: 0.10,
                 importance: 0.15,
+                alias_discount: 0.7,
             },
             WeightProfile::Synthesis => Self {
                 vector: 0.40,
@@ -70,6 +83,7 @@ impl Weights {
                 links: 0.15,
                 tag_match: 0.10,
                 importance: 0.10,
+                alias_discount: 0.7,
             },
         };
         debug_assert!(
@@ -90,6 +104,7 @@ impl Weights {
             links: w,
             tag_match: w,
             importance: w,
+            alias_discount: 0.7,
         }
     }
 
@@ -197,9 +212,21 @@ fn recency_score(age_seconds: f64) -> f64 {
     (-age_seconds / RECENCY_TAU).exp()
 }
 
-/// Compute Jaccard similarity between two tag sets.
-/// Returns 0.0 if both sets are empty.
-fn tag_match_score(query_tags: &[String], chunk_tags: &[String]) -> f64 {
+/// Compute the alias-aware tag-match score.
+///
+/// Blends literal Jaccard overlap (full slot) with same-cluster-only overlap
+/// (`alias_discount` slot, default 0.7). When `alias_lookup` is empty every
+/// tag is its own canonical class and the formula collapses to today's
+/// case-sensitive literal Jaccard — pinned by
+/// `tag_match_literal_only_with_empty_alias_map`.
+///
+/// score = (literal_overlap + alias_discount × same_cluster_only) / union_classes
+fn tag_match_score(
+    query_tags: &[String],
+    chunk_tags: &[String],
+    alias_lookup: &std::collections::HashMap<String, String>,
+    alias_discount: f64,
+) -> f64 {
     if query_tags.is_empty() && chunk_tags.is_empty() {
         return 0.0;
     }
@@ -207,28 +234,57 @@ fn tag_match_score(query_tags: &[String], chunk_tags: &[String]) -> f64 {
         return 0.0;
     }
 
-    let query_set: std::collections::HashSet<&str> =
-        query_tags.iter().map(|s| s.as_str()).collect();
-    let chunk_set: std::collections::HashSet<&str> =
-        chunk_tags.iter().map(|s| s.as_str()).collect();
+    let canonical_of = |t: &str| -> String {
+        alias_lookup
+            .get(t)
+            .cloned()
+            .unwrap_or_else(|| t.to_string())
+    };
 
-    let intersection = query_set.intersection(&chunk_set).count();
-    let union = query_set.union(&chunk_set).count();
+    let q_lit: std::collections::HashSet<&str> = query_tags.iter().map(|s| s.as_str()).collect();
+    let c_lit: std::collections::HashSet<&str> = chunk_tags.iter().map(|s| s.as_str()).collect();
+    let q_canon: std::collections::HashSet<String> =
+        query_tags.iter().map(|t| canonical_of(t)).collect();
+    let c_canon: std::collections::HashSet<String> =
+        chunk_tags.iter().map(|t| canonical_of(t)).collect();
 
-    if union == 0 {
-        0.0
-    } else {
-        intersection as f64 / union as f64
+    let literal_overlap = q_lit.intersection(&c_lit).count();
+    let canon_overlap = q_canon.intersection(&c_canon).count();
+    let same_cluster_only = canon_overlap.saturating_sub(literal_overlap);
+    let union_classes = q_canon.union(&c_canon).count();
+
+    if union_classes == 0 {
+        return 0.0;
     }
+
+    let score =
+        (literal_overlap as f64 + alias_discount * same_cluster_only as f64) / union_classes as f64;
+
+    tracing::debug!(
+        literal_overlap,
+        same_cluster_only,
+        union_classes,
+        alias_discount,
+        score,
+        "tag_match_score components"
+    );
+
+    score
 }
 
 /// Rank candidates using the hybrid scoring formula.
+///
+/// `alias_lookup` is the per-brain `(raw_tag → canonical_tag)` projection
+/// used by the alias-aware `tag_match_score`. Pass `&HashMap::new()` when
+/// alias-awareness is not needed (e.g. unit tests, or callers without a
+/// resolved brain context) — the score then collapses to literal Jaccard.
 ///
 /// Returns results sorted by descending hybrid score.
 pub fn rank_candidates(
     candidates: &[CandidateSignals],
     weights: &Weights,
     query_tags: &[String],
+    alias_lookup: &std::collections::HashMap<String, String>,
 ) -> Vec<RankedResult> {
     let mut results: Vec<RankedResult> = candidates
         .iter()
@@ -238,7 +294,12 @@ pub fn rank_candidates(
                 keyword: c.bm25,
                 recency: recency_score(c.age_seconds),
                 links: c.pagerank_score,
-                tag_match: tag_match_score(query_tags, &c.tags),
+                tag_match: tag_match_score(
+                    query_tags,
+                    &c.tags,
+                    alias_lookup,
+                    weights.alias_discount,
+                ),
                 importance: c.importance,
             };
 
@@ -480,6 +541,7 @@ mod tests {
             links: 0.0,
             tag_match: 0.0,
             importance: 0.0,
+            alias_discount: 0.7,
         };
         assert!(w.validate().is_err());
     }
@@ -504,14 +566,16 @@ mod tests {
 
     #[test]
     fn test_tag_match_empty() {
-        assert_eq!(tag_match_score(&[], &[]), 0.0);
-        assert_eq!(tag_match_score(&["a".into()], &[]), 0.0);
+        let lookup = std::collections::HashMap::new();
+        assert_eq!(tag_match_score(&[], &[], &lookup, 0.7), 0.0);
+        assert_eq!(tag_match_score(&["a".into()], &[], &lookup, 0.7), 0.0);
     }
 
     #[test]
     fn test_tag_match_perfect() {
         let tags = vec!["rust".to_string(), "memory".to_string()];
-        let score = tag_match_score(&tags, &tags);
+        let lookup = std::collections::HashMap::new();
+        let score = tag_match_score(&tags, &tags, &lookup, 0.7);
         assert!(
             (score - 1.0).abs() < f64::EPSILON,
             "identical tags should score 1.0"
@@ -522,9 +586,153 @@ mod tests {
     fn test_tag_match_partial() {
         let query = vec!["rust".to_string(), "memory".to_string()];
         let chunk = vec!["rust".to_string(), "safety".to_string()];
-        let score = tag_match_score(&query, &chunk);
+        let lookup = std::collections::HashMap::new();
+        let score = tag_match_score(&query, &chunk, &lookup, 0.7);
         // intersection=1 (rust), union=3 (rust, memory, safety) -> 1/3
         assert!((score - 1.0 / 3.0).abs() < 0.01);
+    }
+
+    // ─── Alias-aware tag_match_score tests (`brn-83a.7.2.4.4`) ───
+
+    fn alias_map(rows: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        rows.iter()
+            .map(|(raw, canonical)| (raw.to_string(), canonical.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn tag_match_literal_only_with_empty_alias_map() {
+        // Regression pin: with an empty alias_lookup, scoring is bit-for-bit
+        // the existing literal Jaccard. Mirrors `test_tag_match_partial`.
+        let query = vec!["rust".to_string(), "memory".to_string()];
+        let chunk = vec!["rust".to_string(), "safety".to_string()];
+        let score = tag_match_score(&query, &chunk, &std::collections::HashMap::new(), 0.7);
+        assert!((score - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tag_match_same_cluster_discounted() {
+        // query=["bug"], chunk=["bugs"], lookup clusters both → "bug".
+        // canonical_class(Q) = {bug}, canonical_class(C) = {bug}.
+        // literal_overlap=0, same_cluster_only=1, union_classes=1
+        // ⇒ score = (0 + 0.7*1) / 1 = 0.7
+        let query = vec!["bug".to_string()];
+        let chunk = vec!["bugs".to_string()];
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let score = tag_match_score(&query, &chunk, &lookup, 0.7);
+        assert!((score - 0.7).abs() < 1e-9, "got {score}");
+    }
+
+    #[test]
+    fn tag_match_mixed_literal_and_alias() {
+        // query=["bug","rust"], chunk=["bugs","rust"], lookup clusters bug↔bugs.
+        // canonical_class(Q) = {bug, rust}, canonical_class(C) = {bug, rust}.
+        // literal_overlap=1 (rust), same_cluster_only=2-1=1, union_classes=2
+        // ⇒ score = (1 + 0.7*1) / 2 = 0.85
+        let query = vec!["bug".to_string(), "rust".to_string()];
+        let chunk = vec!["bugs".to_string(), "rust".to_string()];
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let score = tag_match_score(&query, &chunk, &lookup, 0.7);
+        assert!((score - 0.85).abs() < 1e-9, "got {score}");
+    }
+
+    #[test]
+    fn tag_match_no_alias_no_overlap() {
+        let query = vec!["bug".to_string()];
+        let chunk = vec!["unrelated".to_string()];
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let score = tag_match_score(&query, &chunk, &lookup, 0.7);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn tag_match_singleton_cluster_behaves_like_literal() {
+        // A singleton cluster (raw_tag → itself) means no aliases share its
+        // canonical. literal match contributes its full slot; no same-cluster
+        // bonus is possible. Score is identical to the empty-lookup case.
+        let query = vec!["rust".to_string()];
+        let chunk = vec!["rust".to_string()];
+        let with_singleton = alias_map(&[("rust", "rust")]);
+        let with_empty = std::collections::HashMap::new();
+        let s1 = tag_match_score(&query, &chunk, &with_singleton, 0.7);
+        let s2 = tag_match_score(&query, &chunk, &with_empty, 0.7);
+        assert!((s1 - 1.0).abs() < 1e-9);
+        assert!((s1 - s2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tag_match_alias_discount_zero_disables_alias_contribution() {
+        // alias_discount=0.0 ⇒ same-cluster matches contribute 0; the score
+        // collapses to literal_overlap / union_classes.
+        let query = vec!["bug".to_string()];
+        let chunk = vec!["bugs".to_string()];
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let score = tag_match_score(&query, &chunk, &lookup, 0.0);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn rank_candidates_orders_literal_above_alias_above_none() {
+        // Three otherwise-identical candidates differing only in tags:
+        //   literal-match `["bug"]`   → tag_match=1.0
+        //   alias-match   `["bugs"]`  → tag_match=0.7
+        //   no-match      `["unrel"]` → tag_match=0.0
+        // All non-tag signals are zeroed below so the only contribution to
+        // hybrid_score is `tag_match × tag_match_weight`. Under
+        // `WeightProfile::Default` (1/6 each) the separation between literal
+        // and alias is `(1.0 − alias_discount) × tag_match_weight = 0.05`
+        // and between alias and none is `alias_discount × tag_match_weight
+        // ≈ 0.117`. The bound `(1 − alias_discount) × tag_match_weight > 0`
+        // is what guarantees the ordering — when other signals carry weight
+        // (e.g. a real query mixing vector / bm25), the invariant only holds
+        // for chunks that are otherwise tied. Pinning the zeroed-signals
+        // baseline here is enough to catch regressions in the discount math.
+        let make = |id: &str, tag: &str| CandidateSignals {
+            chunk_id: id.into(),
+            sim_vector: 0.0,
+            bm25: 0.0,
+            age_seconds: 0.0,
+            pagerank_score: 0.0,
+            tags: vec![tag.into()],
+            importance: 0.0,
+            file_path: format!("/{id}.md"),
+            heading_path: String::new(),
+            content: id.into(),
+            token_estimate: 1,
+            byte_start: 0,
+            byte_end: 0,
+            summary_kind: None,
+        };
+        let candidates = vec![
+            make("alias", "bugs"),
+            make("none", "unrelated"),
+            make("literal", "bug"),
+        ];
+        let weights = Weights::from_profile(WeightProfile::Default);
+        let lookup = alias_map(&[("bug", "bug"), ("bugs", "bug")]);
+        let query_tags = vec!["bug".to_string()];
+        let results = rank_candidates(&candidates, &weights, &query_tags, &lookup);
+        let order: Vec<&str> = results.iter().map(|r| r.chunk_id.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["literal", "alias", "none"],
+            "ordering invariant: literal > alias > none must hold"
+        );
+        // And the alias chunk must out-rank the no-match chunk strictly.
+        let alias_score = results
+            .iter()
+            .find(|r| r.chunk_id == "alias")
+            .unwrap()
+            .hybrid_score;
+        let none_score = results
+            .iter()
+            .find(|r| r.chunk_id == "none")
+            .unwrap()
+            .hybrid_score;
+        assert!(
+            alias_score > none_score,
+            "alias-match must strictly out-rank no-match"
+        );
     }
 
     #[test]
@@ -536,7 +744,8 @@ mod tests {
         ];
 
         let weights = Weights::from_profile(WeightProfile::Default);
-        let results = rank_candidates(&candidates, &weights, &[]);
+        let lookup = std::collections::HashMap::new();
+        let results = rank_candidates(&candidates, &weights, &[], &lookup);
 
         assert_eq!(results[0].chunk_id, "high");
         assert_eq!(results[2].chunk_id, "low");
@@ -583,15 +792,18 @@ mod tests {
             },
         ];
 
+        let alias_lookup = std::collections::HashMap::new();
         let lookup_results = rank_candidates(
             &candidates,
             &Weights::from_profile(WeightProfile::Lookup),
             &[],
+            &alias_lookup,
         );
         let reflection_results = rank_candidates(
             &candidates,
             &Weights::from_profile(WeightProfile::Reflection),
             &[],
+            &alias_lookup,
         );
 
         // Lookup should prefer the keyword hit
@@ -602,7 +814,13 @@ mod tests {
 
     #[test]
     fn test_rank_empty_candidates() {
-        let results = rank_candidates(&[], &Weights::from_profile(WeightProfile::Default), &[]);
+        let lookup = std::collections::HashMap::new();
+        let results = rank_candidates(
+            &[],
+            &Weights::from_profile(WeightProfile::Default),
+            &[],
+            &lookup,
+        );
         assert!(results.is_empty());
     }
 

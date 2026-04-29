@@ -619,8 +619,10 @@ where
             self.expand_graph_links(&mut candidate_vec, 10, 20);
         }
 
-        // 6. Rank
-        let mut ranked = rank_candidates(&candidate_vec, &weights, query_tags);
+        // 6. Rank — pass through the per-brain alias_lookup built in step 0
+        //    so `tag_match_score` can reward same-cluster matches at the
+        //    `Weights::alias_discount` rate (0.7× by default).
+        let mut ranked = rank_candidates(&candidate_vec, &weights, query_tags, &alias_lookup);
 
         // 7. Adaptive reranking: if confidence is low and a reranker is attached,
         //    rerank the top-N fused candidates using the cross-encoder.
