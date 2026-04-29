@@ -220,6 +220,90 @@ pub(crate) enum MemoryAction {
         async_llm: bool,
     },
 
+    /// Retrieve memory chunks at a requested level of detail (LOD)
+    #[command(
+        visible_alias = "r",
+        long_about = "Retrieve memory chunks at a requested level of detail (LOD).\n\n\
+            Supports two modes:\n  \
+            - Query mode (default): semantic search ranked by relevance.\n  \
+            - URI mode: direct access by synapse:// address.\n\n\
+            LOD levels:\n  \
+            - L0   Extractive abstract (~100 tokens each, default)\n  \
+            - L1   LLM-summarized content (~2000 tokens each)\n  \
+            - L2   Full source passthrough\n\n\
+            Strategy (ranking weight profile):\n  \
+            - auto       Equal weights across all signals (default)\n  \
+            - lookup     Keyword-heavy (40% BM25) for exact matches\n  \
+            - planning   Recency + links for project planning queries\n  \
+            - reflection Recency-heavy for journal/reflection queries\n  \
+            - synthesis  Vector-heavy (40%) for semantic similarity\n\n\
+            Exactly one of QUERY or --uri must be provided.",
+        after_help = "EXAMPLES:\n  \
+            brain memory retrieve \"how does authentication work\"\n  \
+            brain memory retrieve \"async error handling\" -k 5 --lod L1\n  \
+            brain memory r \"rust ownership\" --strategy lookup\n  \
+            brain memory retrieve --uri synapse://brain/memory/chunk-abc123\n  \
+            brain memory retrieve \"design patterns\" --brain work --brain personal\n  \
+            brain memory retrieve \"recent changes\" --time-scope 7d\n  \
+            brain memory retrieve \"auth\" --kinds note,episode --explain"
+    )]
+    Retrieve {
+        /// Natural-language search query (provide this or --uri, not both)
+        query: Option<String>,
+
+        /// Direct access by synapse:// URI (provide this or QUERY, not both)
+        #[arg(long)]
+        uri: Option<String>,
+
+        /// Level of detail: L0 (extractive abstract), L1 (LLM summary), L2 (full source)
+        #[arg(long, default_value = "L0")]
+        lod: String,
+
+        /// Maximum number of results to return
+        #[arg(short = 'k', long = "count", default_value = "10")]
+        count: u64,
+
+        /// Ranking strategy (auto, lookup, planning, reflection, synthesis)
+        #[arg(short = 's', long, default_value = "auto")]
+        strategy: String,
+
+        /// Search across specific brains (repeatable). Use 'all' for all registered brains.
+        #[arg(long = "brain", value_name = "NAME_OR_ID", num_args = 1)]
+        brains: Vec<String>,
+
+        /// Relative time window, e.g. "7d", "30d", "24h"
+        #[arg(long)]
+        time_scope: Option<String>,
+
+        /// Only results created/modified after this Unix timestamp
+        #[arg(long)]
+        time_after: Option<i64>,
+
+        /// Only results created/modified before this Unix timestamp
+        #[arg(long)]
+        time_before: Option<i64>,
+
+        /// Tags to boost via Jaccard similarity (comma-delimited)
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+
+        /// Tags that all must match (AND filter, comma-delimited)
+        #[arg(long = "tags-require", value_delimiter = ',')]
+        tags_require: Vec<String>,
+
+        /// Tags whose presence excludes a result (NOR filter, comma-delimited)
+        #[arg(long = "tags-exclude", value_delimiter = ',')]
+        tags_exclude: Vec<String>,
+
+        /// Filter by kind (comma-delimited: note,episode,reflection,procedure,task,task-outcome,record)
+        #[arg(long, value_delimiter = ',')]
+        kinds: Vec<String>,
+
+        /// Include per-result signal score breakdowns
+        #[arg(long)]
+        explain: bool,
+    },
+
     /// Retrieve source material for reflection (prepare) or store a reflection (commit)
     #[command(
         long_about = "Two-phase episodic reflection.\n\n\
