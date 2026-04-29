@@ -245,8 +245,7 @@ pub(crate) enum Command {
         long_about = "Start the MCP server (stdin/stdout JSON-RPC for agent integration).\n\n\
         Exposes brain's capabilities as MCP tools over stdin/stdout for use by \
         AI coding agents. Available tools:\n  \
-        - memory_search_minimal  Search notes and return compact stubs\n  \
-        - memory_expand          Expand memory stubs to full content\n  \
+        - memory.retrieve        Retrieve memory chunks at a requested LOD (L0/L1/L2)\n  \
         - memory_write_episode   Record a goal/actions/outcome episode\n  \
         - memory_reflect         Retrieve source material for reflection\n  \
         - tasks_apply_event      Create or update tasks via event sourcing\n  \

@@ -2,6 +2,10 @@
 //!
 //! Uses MockEmbedder (deterministic hash-based vectors) and in-memory/tempdir
 //! databases. Tests validate the full pipeline from indexing through retrieval.
+//!
+//! MCP tool dispatch uses `memory.retrieve` (the unified retrieval tool introduced
+//! in brn-83a.8). Tests that previously exercised `memory.search_minimal` or
+//! `memory.expand` have been migrated to the new tool surface.
 
 use std::sync::Arc;
 
@@ -547,7 +551,7 @@ async fn test_mcp_write_episode_and_retrieve() {
 }
 
 #[tokio::test]
-async fn test_mcp_search_minimal_returns_results() {
+async fn test_mcp_retrieve_returns_results() {
     let tmp = TempDir::new().unwrap();
     let sqlite_path = tmp.path().join("brain.db");
     let lance_path = tmp.path().join("brain_lancedb");
@@ -592,24 +596,23 @@ async fn test_mcp_search_minimal_returns_results() {
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
     };
 
-    // Search — MockEmbedder won't give semantic results, but pipeline should not error.
-    // Use exact chunk text for identity matching with MockEmbedder.
+    // memory.retrieve replaces memory.search_minimal — use exact chunk text so
+    // MockEmbedder's hash-based embedding yields a near-perfect vector match.
     let params = json!({
         "query": "Rust is a systems programming language.",
-        "intent": "lookup",
-        "budget_tokens": 500,
-        "k": 5
+        "strategy": "lookup",
+        "lod": "L0",
+        "count": 5
     });
 
     let registry = ToolRegistry::new();
     let result = registry
-        .dispatch("memory.search_minimal", params.clone(), &ctx)
+        .dispatch("memory.retrieve", params.clone(), &ctx)
         .await;
-    assert!(result.is_error.is_none(), "search should not error");
+    assert!(result.is_error.is_none(), "retrieve should not error");
 
     let text = &result.content[0].text;
     let parsed: Value = serde_json::from_str(text).unwrap();
-    assert_eq!(parsed["intent_resolved"], "Lookup");
 
     // Should have results from both vector and FTS
     let count = parsed["result_count"].as_u64().unwrap_or(0);
@@ -617,10 +620,19 @@ async fn test_mcp_search_minimal_returns_results() {
         count > 0,
         "should find at least one result, got response: {text}"
     );
+
+    // Each result must carry the required fields from memory.retrieve
+    let results = parsed["results"].as_array().expect("results is an array");
+    for r in results {
+        assert!(r["uri"].is_string(), "result missing uri: {r}");
+        assert!(r["kind"].is_string(), "result missing kind: {r}");
+        assert!(r["content"].is_string(), "result missing content: {r}");
+        assert!(r["lod"].is_string(), "result missing lod: {r}");
+    }
 }
 
 #[tokio::test]
-async fn test_mcp_expand_returns_full_content() {
+async fn test_mcp_retrieve_uri_mode_returns_full_content() {
     let tmp = TempDir::new().unwrap();
     let sqlite_path = tmp.path().join("brain.db");
     let lance_path = tmp.path().join("brain_lancedb");
@@ -629,76 +641,98 @@ async fn test_mcp_expand_returns_full_content() {
 
     // Index via pipeline first
     let db = Db::open(&sqlite_path).unwrap();
+
+    // Register a brain so synapse:// URI resolution works
+    db.upsert_brain(&brain_persistence::db::schema::BrainUpsert {
+        brain_id: "expand-brain-id",
+        name: "expand-brain",
+        prefix: "EXP",
+        roots_json: "[]",
+        notes_json: "[]",
+        aliases_json: "[]",
+        archived: false,
+    })
+    .unwrap();
+
     let store = Store::open_or_create(&lance_path).await.unwrap();
     let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
-    let pipeline = IndexPipeline::with_embedder(db, store, embedder)
+    let mut pipeline = IndexPipeline::with_embedder(db.clone(), store, embedder)
         .await
         .unwrap();
+    pipeline.set_brain_id("expand-brain-id".to_string());
 
     write_md(
         &notes_dir,
         "expand.md",
-        "## Expandable\n\nThis is content that will be expanded via the MCP tool.",
+        "## Expandable\n\nThis is content that will be retrieved via the MCP tool.",
     );
     pipeline.full_scan(&[notes_dir]).await.unwrap();
     drop(pipeline);
 
     // Create fresh McpContext that sees the indexed data
-    let store3 = Store::open_or_create(&lance_path).await.unwrap();
-    let store3_reader = brain_persistence::store::StoreReader::from_store(&store3);
-    let ctx_db3 = Db::open(&sqlite_path).unwrap();
-    let stores3 =
-        brain_lib::stores::BrainStores::from_dbs(ctx_db3, "", tmp.path(), tmp.path()).unwrap();
+    let store2 = Store::open_or_create(&lance_path).await.unwrap();
+    let store2_reader = brain_persistence::store::StoreReader::from_store(&store2);
+    let brain_data_dir = tmp.path().join("brains").join("expand-brain");
+    std::fs::create_dir_all(&brain_data_dir).unwrap();
+    let stores2 = brain_lib::stores::BrainStores::from_dbs(
+        db,
+        "expand-brain-id",
+        &brain_data_dir,
+        tmp.path(),
+    )
+    .unwrap();
     let ctx = McpContext {
-        stores: stores3,
+        stores: stores2,
         search: Some(brain_lib::search_service::SearchService {
-            store: store3_reader,
+            store: store2_reader,
             embedder: Arc::new(MockEmbedder),
         }),
-        writable_store: Some(store3),
+        writable_store: Some(store2),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
     };
 
-    // Get the chunk_id
-    let chunk_ids: Vec<String> = ctx
+    // Get the chunk_id from the DB
+    let chunk_id: String = ctx
         .stores
         .db_for_tests()
         .with_read_conn(|conn: &rusqlite::Connection| {
-            let mut stmt = conn.prepare("SELECT chunk_id FROM chunks")?;
-            let rows = stmt.query_map([], |row| row.get(0))?;
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
-            }
-            Ok(ids)
+            conn.query_row("SELECT chunk_id FROM chunks LIMIT 1", [], |row| row.get(0))
+                .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
         .unwrap();
 
-    assert!(!chunk_ids.is_empty());
-
-    // Expand via MCP
+    // Retrieve full content via URI mode (replaces memory.expand)
+    let uri = format!("synapse://expand-brain/memory/{chunk_id}");
     let params = json!({
-        "memory_ids": chunk_ids,
-        "budget_tokens": 2000
+        "uri": uri,
+        "lod": "L2"
     });
 
     let registry = ToolRegistry::new();
     let result = registry
-        .dispatch("memory.expand", params.clone(), &ctx)
+        .dispatch("memory.retrieve", params.clone(), &ctx)
         .await;
-    assert!(result.is_error.is_none(), "expand should not error");
+    assert!(
+        result.is_error.is_none(),
+        "retrieve URI mode should not error"
+    );
 
     let text = &result.content[0].text;
     let parsed: Value = serde_json::from_str(text).unwrap();
 
-    let memories = parsed["memories"].as_array().unwrap();
-    assert_eq!(memories.len(), 1);
+    let results = parsed["results"].as_array().expect("results is an array");
+    assert_eq!(results.len(), 1, "URI mode must return exactly one result");
     assert!(
-        memories[0]["content"]
+        results[0]["content"]
             .as_str()
             .unwrap()
-            .contains("expanded via the MCP tool"),
-        "expanded content should contain the original text"
+            .contains("retrieved via the MCP tool"),
+        "retrieved content should contain the original text"
+    );
+    assert_eq!(
+        results[0]["expansion_reason"].as_str().unwrap_or(""),
+        "uri_direct",
+        "URI mode expansion_reason must be uri_direct"
     );
 }
 
@@ -791,12 +825,12 @@ fn test_episode_store_and_list() {
     assert_eq!(ep.tags, vec!["indexing"]);
 }
 
-// ─── 10. Procedure kind surfaces in search_minimal ──────────────
+// ─── 10. Procedure kind surfaces in memory.retrieve ─────────────
 
 /// Verify that a procedure stored in summaries (kind='procedure') is
-/// returned with kind="procedure" by memory.search_minimal.
+/// returned with kind="procedure" by memory.retrieve.
 #[tokio::test]
-async fn test_procedure_surfaces_in_search_minimal_with_kind_procedure() {
+async fn test_procedure_surfaces_in_retrieve_with_kind_procedure() {
     use brain_lib::embedder::embed_batch_async;
 
     let tmp = TempDir::new().unwrap();
@@ -852,22 +886,20 @@ async fn test_procedure_surfaces_in_search_minimal_with_kind_procedure() {
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
     };
 
-    // 5. Search — use the procedure's exact content so MockEmbedder yields a
+    // 5. Retrieve — use the procedure's exact content so MockEmbedder yields a
     //    near-perfect vector match (same hash-based embedding).
     let params = serde_json::json!({
         "query": procedure_content,
-        "intent": "lookup",
-        "budget_tokens": 500,
-        "k": 5
+        "strategy": "lookup",
+        "lod": "L0",
+        "count": 5
     });
 
     let registry = brain_lib::mcp::tools::ToolRegistry::new();
-    let result = registry
-        .dispatch("memory.search_minimal", params, &ctx)
-        .await;
+    let result = registry.dispatch("memory.retrieve", params, &ctx).await;
     assert!(
         result.is_error.is_none(),
-        "search should not error: {:?}",
+        "retrieve should not error: {:?}",
         result.content
     );
 

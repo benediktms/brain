@@ -147,6 +147,13 @@ The following items from this ADR were not implemented in Phase 3:
 
 ---
 
+## Superseded Patterns
+
+**Original two-phase retrieval** (`memory.search_minimal` + `memory.expand`):
+The episodic memory system originally relied on a two-phase retrieval pattern: search for stubs, then expand selected ones. This pattern has been superseded by `memory.retrieve`, which unifies search and expansion into a single call with built-in level-of-detail (L0/L1/L2) support. Episodes and reflections are now returned with LOD-adjusted content in one call, eliminating the round-trip overhead while preserving all filtering, ranking, and cross-brain capabilities.
+
+---
+
 ## References
 
 - CLS theory: McClelland, McNaughton, O'Reilly (1995) — *Why there are complementary learning systems in the hippocampus and neocortex*

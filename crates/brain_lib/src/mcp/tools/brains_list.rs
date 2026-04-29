@@ -37,7 +37,7 @@ impl McpTool for BrainsList {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "List all registered brain projects from the global registry. Returns name, ID, root path, aliases, extra_roots, task prefix, and archived status for each brain. By default, archived brains are excluded. Pass include_archived: true to include them. Use this to discover available brains before cross-brain operations (federated search via memory.search_minimal with brains parameter, or cross-brain task creation).".into(),
+            description: "List all registered brain projects from the global registry. Returns name, ID, root path, aliases, extra_roots, task prefix, and archived status for each brain. By default, archived brains are excluded. Pass include_archived: true to include them. Use this to discover available brains before cross-brain operations (federated search via memory.retrieve with brains parameter, or cross-brain task creation).".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

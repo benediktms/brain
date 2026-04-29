@@ -255,20 +255,18 @@ xychart-beta
 
 ```mermaid
 flowchart TB
-  LLM[Orchestrator LLM] -->|MCP tool call| M[memory.search_minimal]
-  M --> R1[Hybrid retrieval: SQLite filters + LanceDB vector]
-  R1 --> C1[Local intent classifier / router]
-  C1 -->|needs more| E[memory.expand]
-  E --> R2[Local rerank + token packer]
-  R2 --> LLM
+  LLM[Orchestrator LLM] -->|MCP tool call| M[memory.retrieve]
+  M --> R1[Hybrid retrieval: SQLite filters + LanceDB vector<br/>LOD resolution on selected rank]
+  R1 --> C1[Intent routing + Strategy selection]
+  R1 --> LLM
   LLM -->|after outcome| W[memory.write_episode]
   W -->|periodic| F[memory.reflect]
 ```
 
 Local specialists:
 - **Embedder**: Candle BERT (BGE) model kept hot in RAM; batch requests
-- **Intent classifier**: small linear head on embeddings or compact ONNX classifier
-- **Reranker**: dot-sim re-scoring or lightweight ONNX ranker (optional)
+- **Intent classifier**: Strategy selector for ranking (lookup, planning, reflection, synthesis, auto)
+- **LOD resolver**: Generates L0, L1, L2 content on-demand with fallback chain (L0→L1→L2)
 - **Consolidator**: generates summaries/reflections; outputs stored as memory tiers
 
 ---
@@ -277,9 +275,20 @@ Local specialists:
 
 MCP specifies JSON-RPC messaging (UTF-8) over stdio transport. The tool surface uses progressive disclosure.
 
-### `memory.search_minimal`
+> **Note**: The original design used a two-phase search/expand pattern (`memory.search_minimal` + `memory.expand`). This has been superseded by `memory.retrieve`, which unifies search and expansion into a single call with LOD support (L0/L1/L2). The sections below document the original design for historical reference.
 
-Return compact stubs; never return full chunk text by default. Results include note chunks, tasks, and episodic memory objects (`episode` and `reflection` kinds) merged from the hybrid pipeline.
+### `memory.retrieve` (Current Implementation)
+
+Unifies search and expansion in a single LOD-aware call. Returns content at the requested level of detail:
+- **L0**: Extractive abstract (~100 tokens)
+- **L1**: LLM-summarized content (~2000 tokens)
+- **L2**: Full source passthrough (complete content)
+
+Supports all filtering, ranking, and cross-brain capabilities of the original two-phase design in a single efficient call.
+
+### `memory.search_minimal` (Historical — See `memory.retrieve`)
+
+Originally returned compact stubs; never returned full chunk text by default. Results included note chunks, tasks, and episodic memory objects (`episode` and `reflection` kinds) merged from the hybrid pipeline.
 
 **Request:**
 ```json
@@ -323,9 +332,9 @@ Return compact stubs; never return full chunk text by default. Results include n
 }
 ```
 
-### `memory.expand`
+### `memory.expand` (Historical — See `memory.retrieve`)
 
-Expand selected stubs into raw chunks with strict budgets and "quotable spans" with byte offsets for Markdown provenance.
+Originally expanded selected stubs into raw chunks with strict budgets and "quotable spans" with byte offsets for Markdown provenance. This functionality is now integrated into `memory.retrieve` via the LOD parameter.
 
 ### `memory.reflect`
 

@@ -13,7 +13,7 @@ Brain manages three primary domains with decoupled lifecycles:
 | Domain | Source of Truth | Derived State | Purpose |
 |--------|---|---|---|
 | **Notes** | Markdown files in repo | SQLite metadata + LanceDB embeddings | Semantic search, indexing |
-| **Tasks** | SQLite (`brain.db`) | LanceDB capsules (searchable via `memory_search_minimal`) | Intent, execution state, dependencies |
+| **Tasks** | SQLite (`brain.db`) | LanceDB capsules (searchable via `memory.retrieve`) | Intent, execution state, dependencies |
 | **Records** | SQLite (`brain.db`) + object store (`~/.brain/objects/`) | — | Work products, artifacts, snapshots |
 
 **Core invariant**: Each domain has exactly one source of truth, and sync is always unidirectional.
@@ -92,8 +92,7 @@ graph TB
         end
 
         subgraph Server["MCP Server (stdio JSON-RPC)"]
-            SM["memory.search_minimal"]
-            EX["memory.expand"]
+            MR["memory.retrieve"]
             WE["memory.write_episode"]
             RF["memory.reflect"]
             TA["tasks.*"]
@@ -214,8 +213,8 @@ sequenceDiagram
     participant DB as SQLite
     participant Vec as LanceDB
 
-    Agent->>MCP: memory.search_minimal(query, intent)
-    MCP->>HR: search_minimal(query, intent, brain_id)
+    Agent->>MCP: memory.retrieve(query, lod, strategy)
+    MCP->>HR: retrieve(query, lod, strategy, brain_id)
     
     par Vector Search
         HR->>Vec: vector_search(embed(query))

@@ -1,21 +1,31 @@
 ---
-description: Semantic search across notes and tasks
+description: Retrieve semantic memory at requested detail level
 allowed-tools: "mcp__brain__*"
 ---
 
-Search brain's semantic memory.
+Retrieve memory chunks via semantic search at a requested level of detail (LOD).
 
-Use the `memory_search_minimal` tool. Parameters:
-- `query` (required): Search query text
-- `intent`: Ranking profile -- `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy)
-- `tags`: Array of tags to boost matching results
-- `brains`: Array of brain names to search across (use `["all"]` for all brains)
+Use the `memory_retrieve` tool. Key parameters:
+- `query` (required): Natural language search query
+- `lod`: Level of detail for returned content
+  - `L0`: Extractive abstract (~100 tokens) — fastest, suitable for scanning
+  - `L1`: LLM-summarized content (~2000 tokens) — balanced
+  - `L2`: Full source passthrough — complete content
+- `count`: Maximum number of results (default: 10)
+- `strategy`: Retrieval strategy controlling ranking
+  - `lookup`: Keyword-heavy, for exact terms and names
+  - `planning`: Recency + links, for "what's related to X?"
+  - `reflection`: Recency-heavy, for recent learnings
+  - `synthesis`: Vector-heavy, for semantic similarity
+  - `auto`: Equal weights (default)
+- `brains`: Array of brain names to search (use `["all"]` for all registered brains)
 - `kinds`: Filter by result kind -- `["note", "episode", "reflection", "procedure", "task", "task-outcome", "record"]`
-- `time_after`: Only results modified/created after this Unix timestamp
-- `time_before`: Only results modified/created before this Unix timestamp
-- `tags_require`: Require ALL of these tags (AND logic, case-insensitive)
-- `tags_exclude`: Exclude results matching ANY of these tags (NOR logic, case-insensitive)
+- `time_after` / `time_before`: Unix timestamps for time-scoped results
+- `tags`: Tags to boost via Jaccard similarity
+- `tags_require`: Require ALL tags (AND logic)
+- `tags_exclude`: Exclude results matching ANY tags (NOR logic)
+- `explain`: When true, include per-signal score breakdowns
 
-Results include stubs with title, summary, score, and kind.
+Results include URI, kind, LOD-adjusted content, and hybrid search score.
 
-To see full content, use `/mem:expand` with the returned memory IDs.
+**One-shot retrieval**: `memory_retrieve` returns LOD-adjusted content in a single call.
