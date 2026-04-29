@@ -17,7 +17,7 @@ just check        # cargo check
 just install      # Build release binary and symlink to ~/bin/brain
 ```
 
-<!-- brain:start:e4bd3468 -->
+<!-- brain:start:a05bb0ee -->
 ## Build & Test
 
 ```bash
@@ -30,15 +30,17 @@ cargo clippy   # Lint
 
 This project uses `brain` for task tracking. **Always use MCP tools for task operations** — they provide structured responses and are the canonical interface for AI agents. CLI commands exist for human terminal use only.
 
+> **Brain task IDs are local-only.** Task IDs like `brn-6f4`, `BRN-01JPH...`, or `BRX-01K...` live in the local brain DB and have no meaning outside this machine. Never include them in artifacts visible to others — pull request descriptions, commit subjects intended for code review, public docs, GitHub issues/comments, Slack messages, or anything that crosses the workstation boundary. They are fine inside commit body text purely as an internal cross-reference, but they are NOT a substitute for a real change description: write the PR/commit so a reader who has never seen the brain DB still understands the change. If a follow-up needs to be tracked publicly, file a GitHub issue and reference that instead.
+
 ### MCP Tools (preferred for AI agents)
 
 When running as an MCP server (`brain mcp`), these tools are available:
 
 **Task tools:**
-- `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`, `external_id_added`, `external_id_removed`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
+- `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`, `external_id_added`, `external_id_removed`, `external_blocker_added`, `external_blocker_resolved`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`). External blockers (added via `external_blocker_added`) gate readiness until resolved.
 - `tasks_create` — Create a task with a flat schema (no event envelope). Required param: `title`. Optional: `description`, `priority` (0-4, default 4), `task_type` (task|bug|feature|epic|spike), `assignee`, `parent` (task ID prefix), `due_ts` (ISO 8601), `defer_until` (ISO 8601), `actor` (default: mcp). For remote creation: add `brain` (target brain name or ID from registry); optionally `link_from` (local task ID) and `link_type` (depends_on|blocks|related, default: related). Returns `{task_id, task, unblocked_task_ids}` for local creation, or `{remote_task_id, remote_brain_name, remote_brain_id, local_ref_created}` for remote creation.
 - `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`, `in_progress` (exact match), `cancelled` (exact match). Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description). Optional `brains` array to query across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` (or `["*"]`) to query every registered brain. Each task is tagged with its source `brain`; federated responses include a top-level `brains` array. Singular `brain` is accepted as a deprecated alias for `brains: [name]`.
-- `tasks_get` — Get full task details including relationships, comments, labels, linked notes, and external IDs (`external_ids`). Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
+- `tasks_get` — Get full task details including relationships, comments, labels, linked notes, external IDs (`external_ids`), and external blockers (`external_blockers` — the subset that gate readiness). Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
 - `tasks_next` — Get highest-priority ready tasks sorted by status (in-progress first), then priority, then due date. Use for "what should I work on?" queries. Optional `brains` array to query across multiple brains (e.g. `["work", "personal"]`); use `["all"]` to merge ready tasks from every registered brain and sort by priority globally. Each task is tagged with its source `brain`; federated responses include a top-level `brains` array.
 - `tasks_close` — Close one or more tasks by ID/prefix. Accepts a single string or array of task IDs. Returns closed tasks and newly unblocked task IDs.
 - `tasks_labels_summary` — Get all unique labels with counts and associated task IDs (short prefixes). No parameters. Use for label discovery and taxonomy overview.

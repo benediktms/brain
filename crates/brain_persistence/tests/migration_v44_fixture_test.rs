@@ -131,7 +131,14 @@ fn test_migration_v44_recreates_tables_and_indexes() {
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 44);
+    // init_schema runs all migrations forward; v44 is no longer the tip
+    // (v44→v45 added external-blocker columns). Assert ≥44 so this test
+    // continues to verify the v43→v44 recreate landed without coupling
+    // to whatever later migrations exist.
+    assert!(
+        version >= 44,
+        "init_schema should land at >= v44 (got {version})"
+    );
 
     assert!(table_exists(&conn, "tag_aliases"));
     assert!(table_exists(&conn, "tag_cluster_runs"));
