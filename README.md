@@ -22,9 +22,9 @@ brain takes a different position: run everything locally, combine all retrieval 
 
 brain is a Rust daemon that manages tasks, records, and Markdown notes. It incrementally indexes content into a dual-store system (SQLite for full-text search and metadata, LanceDB for 384-dim vector embeddings) and serves retrieval tools over MCP stdio JSON-RPC.
 
-**Token budgeting is a first-class constraint.** Instead of returning "top-k chunks" regardless of size, `memory.search_minimal` returns compact stubs within a declared token budget. The agent inspects the stubs, then calls `memory.expand` to fetch full content only for the chunks worth reading. This two-phase progressive retrieval lets agents spend context window space on reasoning rather than raw text.
+**Token budgeting is a first-class constraint.** `memory.retrieve` supports three levels of detail (L0 extractive abstracts ~100 tokens, L1 LLM summaries ~2000 tokens, L2 full source). Agents choose their budget upfront and get LOD-adjusted content in a single call, spending context window space efficiently.
 
-**Hybrid scoring combines six signals** — vector similarity, BM25 keyword ranking, recency decay, backlink count, tag match, and importance — into a single relevance score. An `intent` parameter shifts signal weights per query type: `lookup` upweights keyword precision; `planning` upweights recency and link structure; `synthesis` upweights semantic similarity.
+**Hybrid scoring combines six signals** — vector similarity, BM25 keyword ranking, recency decay, backlink count, tag match, and importance — into a single relevance score. A `strategy` parameter shifts signal weights per query type: `lookup` upweights keyword precision; `planning` upweights recency and link structure; `synthesis` upweights semantic similarity.
 
 **Everything runs on-device.** No network calls, no API keys, no ongoing cost after the initial ~130MB model download. The entire index can be rebuilt from the Markdown files at any time.
 
@@ -130,8 +130,7 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 
 | Tool                    | Description                                                                                   |
 | ----------------------- | --------------------------------------------------------------------------------------------- |
-| `memory.search_minimal` | Search notes and return lightweight stubs within a token budget. Use first to orient.         |
-| `memory.expand`         | Fetch full chunk content for specific IDs from `search_minimal`. Truncates at budget.         |
+| `memory.retrieve`       | Search notes and retrieve content at requested level of detail (L0/L1/L2). Unifies search and expansion in one call. Supports hybrid ranking, metadata filters, and cross-brain search. |
 | `memory.write_episode`  | Record an episodic memory (goal, actions, outcome) with tags and importance.                  |
 | `memory.reflect`        | Two-phase: returns source material for synthesis, then stores the agent-generated reflection. |
 | `tasks.apply_event`     | Apply a task event (create, update, status change, dependency, label, comment) via event sourcing. |
@@ -151,7 +150,7 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 | `records.tag_remove`    | Remove a tag from a record. Idempotent.                                                       |
 | `records.link_add`      | Link a record to a task or note chunk.                                                        |
 | `records.link_remove`   | Remove a link from a record to a task or note chunk.                                          |
-| `status`                | Get runtime health metrics: latency percentiles, token usage, queue depth, stuck files.       |
+| `status`                | Get runtime health metrics: latency percentiles, queue depth, stuck files.                    |
 
 ### Record Kinds and Policy
 
@@ -159,13 +158,14 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 - `records.save_snapshot` creates snapshot records for opaque state capture; snapshots are stored durably but are not embedded or summarized.
 - Other canonical kinds follow the same per-kind policy: `summary` is embedded + summarized + searchable, `implementation` and `review` are embedded + searchable only, and `custom` defaults to embedded + searchable.
 
-### Progressive Retrieval Pattern
+### Unified Retrieval Pattern
 
-1. `memory.search_minimal` with generous `k` and narrow budget (~600 tokens) — orient cheaply.
-2. `memory.expand` on the 2–4 most relevant stubs with a larger budget (~2000 tokens) — read in detail.
-3. Optionally expand more chunks from step 1 if context permits.
+Call `memory.retrieve` once with the LOD you need:
+- L0 (~100 tokens per result) for scanning many results, orienting cheaply
+- L1 (~2000 tokens per result) for balanced summary + detail, most common use
+- L2 (full content) when you need the complete source
 
-Cost: ~600–800 tokens for orientation + ~500–2000 per deep read, vs. 4,000–8,000 tokens for naive top-k.
+Total cost: 100–2000 tokens per result depending on LOD, vs. 4,000–8,000 tokens for naive top-k expansion.
 
 ---
 

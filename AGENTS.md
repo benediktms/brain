@@ -281,7 +281,7 @@ Three parallel domains with decoupled lifecycles:
 | Domain | Source of Truth | Derived State | Purpose |
 |--------|---|---|---|
 | Notes | Markdown files in repo | SQLite metadata + LanceDB embeddings | Semantic search, indexing |
-| Tasks | SQLite (`brain.db`) | LanceDB capsules (searchable via `memory_search_minimal`) | Intent, execution state, dependencies |
+| Tasks | SQLite (`brain.db`) | LanceDB capsules (searchable via `memory_retrieve`) | Intent, execution state, dependencies |
 | Records | SQLite (`brain.db`) + object store (`~/.brain/objects/`) | — | Work products, artifacts, snapshots |
 
 All three domains live in the unified SQLite instance, partitioned by `brain_id`. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) and [docs/RECORDS.md](./docs/RECORDS.md) for detailed design.

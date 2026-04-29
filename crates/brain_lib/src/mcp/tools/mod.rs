@@ -3,10 +3,8 @@ mod helpers;
 /// MCP tool definitions and handlers.
 mod jobs_status;
 mod mem_consolidate;
-mod mem_expand;
 mod mem_reflect;
 mod mem_retrieve;
-mod mem_search_minimal;
 mod mem_summarize_scope;
 mod mem_write_episode;
 mod mem_write_procedure;
@@ -94,9 +92,7 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: vec![
-                Box::new(mem_search_minimal::MemSearchMinimal),
                 Box::new(mem_retrieve::MemRetrieve),
-                Box::new(mem_expand::MemExpand),
                 Box::new(mem_write_episode::MemWriteEpisode),
                 Box::new(mem_write_procedure::MemWriteProcedure),
                 Box::new(mem_reflect::MemReflect),
@@ -161,11 +157,10 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 36);
+        assert_eq!(defs.len(), 34);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"memory.search_minimal"));
-        assert!(names.contains(&"memory.expand"));
+        assert!(names.contains(&"memory.retrieve"));
         assert!(names.contains(&"memory.write_episode"));
         assert!(names.contains(&"memory.reflect"));
         assert!(names.contains(&"tasks.apply_event"));
@@ -201,7 +196,7 @@ pub(crate) mod tests {
             .collect();
 
         assert!(aliases.iter().any(|a| a == "tasks_list"));
-        assert!(aliases.iter().any(|a| a == "memory_search_minimal"));
+        assert!(aliases.iter().any(|a| a == "memory_retrieve"));
         // Tools without a dot keep the same alias as their name.
         assert!(aliases.iter().any(|a| a == "status"));
         // Dot-notation names produce underscore aliases, not themselves.

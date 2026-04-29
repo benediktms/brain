@@ -17,7 +17,7 @@ impl McpTool for Status {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Get runtime health metrics: indexing/query latency (p50/p95), stale hash prevention count, token usage, queue depth, LanceDB unoptimized rows, stuck files, and uptime.".into(),
+            description: "Get runtime health metrics: indexing/query latency (p50/p95), stale hash prevention count, queue depth, LanceDB unoptimized rows, stuck files, and uptime.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {}
@@ -78,12 +78,11 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(text).expect("checked in test assertions");
 
-        // All 7 top-level metric fields present
+        // All top-level metric fields present
         assert!(parsed.get("uptime_seconds").is_some());
         assert!(parsed.get("indexing_latency").is_some());
         assert!(parsed.get("query_latency").is_some());
         assert!(parsed.get("stale_hashes_prevented").is_some());
-        assert!(parsed.get("tokens").is_some());
         assert!(parsed.get("queue_depth").is_some());
         assert!(parsed.get("lancedb_unoptimized_rows").is_some());
         assert!(parsed.get("dual_store_stuck_files").is_some());
@@ -98,9 +97,5 @@ mod tests {
         assert!(parsed.get("query_errors").is_some());
         assert!(parsed["indexing_errors"].is_u64());
         assert!(parsed["query_errors"].is_u64());
-
-        // Nested token fields
-        assert!(parsed["tokens"]["search_minimal_total"].is_u64());
-        assert!(parsed["tokens"]["expand_total"].is_u64());
     }
 }

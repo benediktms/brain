@@ -8,7 +8,7 @@
 
 ## Context
 
-The episodic memory system was partially implemented. Episodes could be written via `memory.write_episode` but never surfaced through the main retrieval path (`memory.search_minimal`). Reflections were unreachable from MCP entirely — `store_reflection()` existed in `db/summaries.rs` but had no callable tool path.
+The episodic memory system was partially implemented. Episodes could be written via `memory.write_episode` but never surfaced through the main retrieval path (`memory.search_minimal`, now `memory.retrieve`). Reflections were unreachable from MCP entirely — `store_reflection()` existed in `db/summaries.rs` but had no callable tool path.
 
 Several structural gaps blocked the write-retrieve-reflect-retrieve loop:
 
@@ -144,6 +144,13 @@ The following items from this ADR were not implemented in Phase 3:
 | Decision 7: `related_ids` on `write_episode` | Schema in place (`reflection_sources` table); MCP parameter and `store_episode()` signature extension deferred | Phase 4 |
 | PageRank extension to summaries | Reflections not yet included in PageRank graph; default to `pagerank_score = 0.0` | Phase 4 |
 | Port trait extraction for `EpisodeWriter` / `EpisodeReader` | Same rationale as `TaskPersistence` in ADR-001; deferred until the interface stabilizes | Phase 4+ |
+
+---
+
+## Superseded Patterns
+
+**Original two-phase retrieval** (`memory.search_minimal` + `memory.expand`):
+The episodic memory system originally relied on a two-phase retrieval pattern: search for stubs, then expand selected ones. This pattern has been superseded by `memory.retrieve`, which unifies search and expansion into a single call with built-in level-of-detail (L0/L1/L2) support. Episodes and reflections are now returned with LOD-adjusted content in one call, eliminating the round-trip overhead while preserving all filtering, ranking, and cross-brain capabilities.
 
 ---
 

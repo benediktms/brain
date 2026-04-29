@@ -9,7 +9,7 @@ Two evidence-backed conclusions shape the agentic memory layer:
 1. Long-running agent performance is dominated by **context window scarcity**, so memory systems must treat token budgeting as a first-class constraint rather than "retrieve top-k chunks". This is a central motivation in systems like **MemGPT** (virtual context management inspired by hierarchical memory tiers) and **Mem0** (explicit extraction/consolidation/retrieval to reduce token cost and latency).
 2. Retrieval quality and cost improve when you explicitly model **memory types and tiers**, and separate: (a) raw episodic traces, (b) structured metadata/links, and (c) multi-level summaries/reflections. This aligns with cognitive distinctions (episodic vs semantic) and with agent architectures such as **Generative Agents**, which combine recency, relevance, and importance and inject only top-ranked memories that fit the context window, plus periodic reflective synthesis.
 
-Implementation-wise, the recommended embedding baseline is **BAAI/bge-small-en-v1.5**, a BERT-family model with **384-dimensional** outputs and **512** max position embeddings. For pooling, BGE documentation demonstrates **CLS pooling (first token)** followed by **L2 normalisation**; this pairs naturally with LanceDB's recommendation to use **dot product** for normalised vectors for best performance. The report includes a concise Rust boilerplate for `File Watcher -> Candle embedder -> LanceDB merge_insert upsert`, and a token-optimised MCP tool surface (`memory.search_minimal / expand / reflect / write_episode`) designed to keep agent context tight and to progressively disclose more detail only when required.
+Implementation-wise, the recommended embedding baseline is **BAAI/bge-small-en-v1.5**, a BERT-family model with **384-dimensional** outputs and **512** max position embeddings. For pooling, BGE documentation demonstrates **CLS pooling (first token)** followed by **L2 normalisation**; this pairs naturally with LanceDB's recommendation to use **dot product** for normalised vectors for best performance. The report includes a concise Rust boilerplate for `File Watcher -> Candle embedder -> LanceDB merge_insert upsert`, and a token-optimised MCP tool surface (originally `memory.search_minimal / expand / reflect / write_episode`, now unified as `memory.retrieve / reflect / write_episode` — see Historical sections below) designed to keep agent context tight and to progressively disclose more detail only when required.
 
 ---
 
@@ -255,20 +255,18 @@ xychart-beta
 
 ```mermaid
 flowchart TB
-  LLM[Orchestrator LLM] -->|MCP tool call| M[memory.search_minimal]
-  M --> R1[Hybrid retrieval: SQLite filters + LanceDB vector]
-  R1 --> C1[Local intent classifier / router]
-  C1 -->|needs more| E[memory.expand]
-  E --> R2[Local rerank + token packer]
-  R2 --> LLM
+  LLM[Orchestrator LLM] -->|MCP tool call| M[memory.retrieve]
+  M --> R1[Hybrid retrieval: SQLite filters + LanceDB vector<br/>LOD resolution on selected rank]
+  R1 --> C1[Intent routing + Strategy selection]
+  R1 --> LLM
   LLM -->|after outcome| W[memory.write_episode]
   W -->|periodic| F[memory.reflect]
 ```
 
 Local specialists:
 - **Embedder**: Candle BERT (BGE) model kept hot in RAM; batch requests
-- **Intent classifier**: small linear head on embeddings or compact ONNX classifier
-- **Reranker**: dot-sim re-scoring or lightweight ONNX ranker (optional)
+- **Intent classifier**: Strategy selector for ranking (lookup, planning, reflection, synthesis, auto)
+- **LOD resolver**: Generates L0, L1, L2 content on-demand with fallback chain (L0→L1→L2)
 - **Consolidator**: generates summaries/reflections; outputs stored as memory tiers
 
 ---
@@ -277,9 +275,20 @@ Local specialists:
 
 MCP specifies JSON-RPC messaging (UTF-8) over stdio transport. The tool surface uses progressive disclosure.
 
-### `memory.search_minimal`
+> **Note**: The original design used a two-phase search/expand pattern (`memory.search_minimal` + `memory.expand`). This has been superseded by `memory.retrieve`, which unifies search and expansion into a single call with LOD support (L0/L1/L2). The sections below document the original design for historical reference.
 
-Return compact stubs; never return full chunk text by default. Results include note chunks, tasks, and episodic memory objects (`episode` and `reflection` kinds) merged from the hybrid pipeline.
+### `memory.retrieve` (Current Implementation)
+
+Unifies search and expansion in a single LOD-aware call. Returns content at the requested level of detail:
+- **L0**: Extractive abstract (~100 tokens)
+- **L1**: LLM-summarized content (~2000 tokens)
+- **L2**: Full source passthrough (complete content)
+
+Supports all filtering, ranking, and cross-brain capabilities of the original two-phase design in a single efficient call.
+
+### `memory.search_minimal` (Historical — See `memory.retrieve`)
+
+Originally returned compact stubs; never returned full chunk text by default. Results included note chunks, tasks, and episodic memory objects (`episode` and `reflection` kinds) merged from the hybrid pipeline.
 
 **Request:**
 ```json
@@ -323,9 +332,9 @@ Return compact stubs; never return full chunk text by default. Results include n
 }
 ```
 
-### `memory.expand`
+### `memory.expand` (Historical — See `memory.retrieve`)
 
-Expand selected stubs into raw chunks with strict budgets and "quotable spans" with byte offsets for Markdown provenance.
+Originally expanded selected stubs into raw chunks with strict budgets and "quotable spans" with byte offsets for Markdown provenance. This functionality is now integrated into `memory.retrieve` via the LOD parameter.
 
 ### `memory.reflect`
 

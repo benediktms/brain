@@ -2,7 +2,7 @@
 //!
 //! Pins the contract `[seed → recluster → search via canonical → get aliased
 //! hits, no row mutation]` across the real `BrainStores`, `IndexPipeline`,
-//! `run_recluster`, and the `memory.search_minimal` MCP handler. A sibling
+//! `run_recluster`, and the `memory.retrieve` MCP handler. A sibling
 //! task (`brn-83a.7.2.5`) will add MCP/CLI surface for `tags.recluster`; until
 //! then this test calls `run_recluster` directly.
 
@@ -159,14 +159,14 @@ async fn tag_clustering_end_to_end() {
     assert_eq!(stats.errors, 0, "no indexing errors");
     assert!(stats.indexed >= 3, "at least one chunk per note");
 
-    // 8. Run memory.search_minimal via the MCP harness with
+    // 8. Run memory.retrieve via the MCP harness with
     //    tags_require=["bug"]. The canonical→raw expansion (`brn-83a.7.2.4.3`)
     //    should widen the filter to {bug, bugs, defect}, surfacing all three
     //    notes.
     let result = registry
         .dispatch(
-            "memory.search_minimal",
-            json!({ "query": "fixture body", "tags_require": ["bug"], "budget_tokens": 4000, "k": 10 }),
+            "memory.retrieve",
+            json!({ "query": "fixture body", "tags_require": ["bug"], "lod": "L0", "count": 10 }),
             &ctx,
         )
         .await;

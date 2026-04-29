@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Removed
+
+- Removed legacy `memory.search_minimal` and `memory.expand` MCP tools. Use `memory.retrieve` instead.
+
 ## [0.3.7] - 2026-04-29
 
 ### Features

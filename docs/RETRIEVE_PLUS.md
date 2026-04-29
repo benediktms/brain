@@ -2,7 +2,7 @@
 layout: ADR
 number: 001
 title: Retrieve+ — Unified Memory Retrieval Surface
-status: proposed
+status: accepted-modified
 date: 2026-03-22
 authors: brain-collective
 deciders: []
@@ -14,6 +14,8 @@ challenged-date: 2026-06-22
 challenged-by: []
 tags: [area:memory, type:feature, phase:design]
 ---
+
+> **Update (post-implementation):** `memory.retrieve` shipped and the legacy `memory.search_minimal` and `memory.expand` tools were **removed**, not soft-deprecated. With a single local consumer (this machine), the migration window the original ADR called for was unnecessary — callers and docs were updated directly. The "soft deprecation" recommendations below (G9 in goals, the rejected-alternative discussion, and OQ-5) describe the original migration strategy and are preserved as historical record.
 
 ## Table of Contents
 

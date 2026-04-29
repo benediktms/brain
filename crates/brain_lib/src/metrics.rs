@@ -64,10 +64,6 @@ pub struct Metrics {
     pub indexing_latency: LatencyRing,
     pub query_latency: LatencyRing,
     pub stale_hashes_prevented: AtomicU64,
-    pub tokens_search_minimal: AtomicU64,
-    pub tokens_expand: AtomicU64,
-    pub calls_search_minimal: AtomicU64,
-    pub calls_expand: AtomicU64,
     pub indexing_errors: AtomicU64,
     pub query_errors: AtomicU64,
     pub queue_depth: AtomicU64,
@@ -81,10 +77,6 @@ impl Metrics {
             indexing_latency: LatencyRing::new(),
             query_latency: LatencyRing::new(),
             stale_hashes_prevented: AtomicU64::new(0),
-            tokens_search_minimal: AtomicU64::new(0),
-            tokens_expand: AtomicU64::new(0),
-            calls_search_minimal: AtomicU64::new(0),
-            calls_expand: AtomicU64::new(0),
             indexing_errors: AtomicU64::new(0),
             query_errors: AtomicU64::new(0),
             queue_depth: AtomicU64::new(0),
@@ -103,18 +95,6 @@ impl Metrics {
 
     pub fn record_stale_hash_prevented(&self) {
         self.stale_hashes_prevented.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_search_minimal_tokens(&self, tokens: usize) {
-        self.tokens_search_minimal
-            .fetch_add(tokens as u64, Ordering::Relaxed);
-        self.calls_search_minimal.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_expand_tokens(&self, tokens: usize) {
-        self.tokens_expand
-            .fetch_add(tokens as u64, Ordering::Relaxed);
-        self.calls_expand.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn set_queue_depth(&self, n: u64) {
@@ -143,12 +123,6 @@ impl Metrics {
                 total_samples: self.query_latency.count(),
             },
             stale_hashes_prevented: self.stale_hashes_prevented.load(Ordering::Relaxed),
-            tokens: TokenSnapshot {
-                search_minimal_total: self.tokens_search_minimal.load(Ordering::Relaxed),
-                expand_total: self.tokens_expand.load(Ordering::Relaxed),
-                calls_search_minimal: self.calls_search_minimal.load(Ordering::Relaxed),
-                calls_expand: self.calls_expand.load(Ordering::Relaxed),
-            },
             indexing_errors: self.indexing_errors.load(Ordering::Relaxed),
             query_errors: self.query_errors.load(Ordering::Relaxed),
             queue_depth: self.queue_depth.load(Ordering::Relaxed),
@@ -170,7 +144,6 @@ pub struct MetricsSnapshot {
     pub indexing_latency: LatencySnapshot,
     pub query_latency: LatencySnapshot,
     pub stale_hashes_prevented: u64,
-    pub tokens: TokenSnapshot,
     pub indexing_errors: u64,
     pub query_errors: u64,
     pub queue_depth: u64,
@@ -183,14 +156,6 @@ pub struct LatencySnapshot {
     pub p50_us: u64,
     pub p95_us: u64,
     pub total_samples: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TokenSnapshot {
-    pub search_minimal_total: u64,
-    pub expand_total: u64,
-    pub calls_search_minimal: u64,
-    pub calls_expand: u64,
 }
 
 #[cfg(test)]
@@ -252,8 +217,6 @@ mod tests {
         m.record_index_latency(Duration::from_micros(200));
         m.record_stale_hash_prevented();
         m.record_stale_hash_prevented();
-        m.record_search_minimal_tokens(50);
-        m.record_expand_tokens(30);
         m.set_queue_depth(5);
         m.set_lancedb_unoptimized_rows(42);
 
@@ -261,10 +224,6 @@ mod tests {
         assert!(snap.uptime_seconds < 5);
         assert_eq!(snap.indexing_latency.total_samples, 2);
         assert_eq!(snap.stale_hashes_prevented, 2);
-        assert_eq!(snap.tokens.search_minimal_total, 50);
-        assert_eq!(snap.tokens.expand_total, 30);
-        assert_eq!(snap.tokens.calls_search_minimal, 1);
-        assert_eq!(snap.tokens.calls_expand, 1);
         assert_eq!(snap.queue_depth, 5);
         assert_eq!(snap.lancedb_unoptimized_rows, 42);
         assert_eq!(snap.dual_store_stuck_files, 0);

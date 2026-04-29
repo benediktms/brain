@@ -456,14 +456,13 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Supports `brain` param for cross-brain label management. Returns succeeded/failed/summary.
 - `tasks_deps_batch` — Batch dependency operations. Actions: `add`/`remove` (pairs of task_id + depends_on_task_id), `chain` (ordered task_ids), `fan` (source_task_id + dependent_task_ids), `clear` (task_id). Returns succeeded/failed/summary.
 
-**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory_search_minimal` without any extra steps.
+**Note:** `tasks_apply_event` and `tasks_close` automatically generate and embed searchable capsules into LanceDB on every task create, update, or completion. Tasks become discoverable via `memory.retrieve` without any extra steps.
 
 **Brain tools:**
 - `brains.list` — List all brain projects registered in `~/.brain/state_projection.toml`. Returns `name`, `id`, `root` (filesystem path), and `prefix` (task ID prefix) for each brain. Also callable as `brains_list`.
 
 **Memory tools:**
-- `memory_search_minimal` — Semantic search across indexed notes and tasks. Returns compact stubs (title, summary, score, kind). The `kind` field is one of: `"note"`, `"episode"`, `"reflection"`, `"procedure"`, `"task"`, `"task-outcome"`, `"record"`. Use `intent` parameter to control ranking: `lookup` (keyword-heavy), `planning` (recency + links), `reflection` (recency-heavy), `synthesis` (vector-heavy). Optional `tags` array boosts results matching the given tags via Jaccard similarity (e.g. `["rust", "memory"]`). Optional `brains` array to search across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` to search all registered brains. Results include a `brain_name` field indicating the source brain. Supports metadata filters: `kinds` (array of kind strings to include), `time_after`/`time_before` (Unix timestamps), `tags_require` (AND — all must match), `tags_exclude` (NOR — any match excludes).
-- `memory_expand` — Expand stubs from `search_minimal` to full content by chunk ID. Use `budget` to control token limit. Returns `byte_start`/`byte_end` offsets within the source file for each chunk.
+- `memory.retrieve` — Retrieve memory chunks at a requested level of detail (LOD). Supports two modes: `query` (semantic search) and `uri` (direct access by `synapse://` address). LOD levels: `L0` extractive abstract (~100 tokens each), `L1` LLM-summarized (~2000 tokens each), `L2` full source passthrough. Falls back to the next available level when requested LOD is not yet generated. Parameters: `query` (natural-language search), `uri` (synapse:// URI for direct access), `lod` (L0/L1/L2, default L0), `count` (max results, default 10), `strategy` (lookup/planning/reflection/synthesis/auto, default auto), `brains` (array of brain names/IDs; use `["all"]` for all registered brains), `time_scope` (relative window e.g. `"7d"`, `"24h"`), `time_after`/`time_before` (Unix timestamps), `tags` (boost via Jaccard similarity), `tags_require` (AND filter), `tags_exclude` (NOR filter), `kinds` (filter by kind: note/episode/reflection/procedure/task/task-outcome/record), `explain` (include per-signal score breakdown).
 - `memory_write_episode` — Record structured episodes (goal, actions, outcome) with tags and importance score.
 - `memory_reflect` — Retrieve source material for a topic, suitable for reflection and synthesis.
 
@@ -525,10 +524,11 @@ brain tasks close <id1> <id2>  # Close one or more tasks
 brain tasks stats              # Project statistics
 
 # Memory (semantic search & episodes)
-brain memory search "query"                  # Search notes/tasks (compact stubs)
-brain memory search -i lookup "exact term"   # Keyword-heavy search
-brain memory search --brain all "patterns"   # Search all registered brains
-brain memory expand <id1> <id2>              # Expand stubs to full content
+brain memory retrieve "query"                # Search notes/tasks at requested LOD
+brain memory retrieve -i lookup "exact term" # Keyword-heavy search
+brain memory retrieve --brain all "patterns" # Search all registered brains
+brain memory retrieve --uri synapse://my-brain/memory/<chunk-id>  # Direct access by URI
+brain memory retrieve "query" --lod L1       # Retrieve with LLM summaries
 brain memory write-episode --goal "..." --actions "..." --outcome "..."
 brain memory reflect --topic "architecture"  # Prepare: get source material
 brain memory reflect --commit --title "..." --content "..." --source-ids ep1,ep2
@@ -622,7 +622,7 @@ When the user shares critical context that is not derivable from the current cod
 - `outcome`: How this knowledge should influence future work
 - `tags`: Relevant topic tags for later retrieval (e.g. `["external-api", "payments"]`)
 
-**Do not record:** Information already in the codebase, git history, or existing notes. Check `memory_search_minimal` first to avoid duplicates.
+**Do not record:** Information already in the codebase, git history, or existing notes. Check `memory.retrieve` first to avoid duplicates.
 
 ### Conventions
 

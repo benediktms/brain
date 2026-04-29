@@ -118,10 +118,6 @@ const PLUGINS: &[PluginSpec] = &[
                 output_path: "skills/search/SKILL.md",
             },
             TemplateFile {
-                content: include_str!("../templates/plugins/mem/skills/expand/SKILL.md"),
-                output_path: "skills/expand/SKILL.md",
-            },
-            TemplateFile {
                 content: include_str!("../templates/plugins/mem/skills/write/SKILL.md"),
                 output_path: "skills/write/SKILL.md",
             },

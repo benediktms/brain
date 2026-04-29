@@ -1,25 +1,46 @@
 # Memory Patterns
 
-## Search Intent Profiles
+## Canonical Retrieval Pattern
 
-Use the `intent` parameter on `memory_search_minimal` to control ranking:
+**One-shot retrieval**: Use `memory_retrieve` to search and expand in a single call.
 
-| Intent | Weighting | Best For |
-|--------|-----------|----------|
-| `auto` | Equal weights | General queries |
-| `lookup` | 40% BM25 (keyword) | Exact terms, names, IDs |
-| `planning` | Recency + links | Project planning, "what's related to X?" |
-| `reflection` | Recency-heavy | Journal entries, recent learnings |
-| `synthesis` | 40% vector | Semantic similarity, "things like X" |
+```
+Call memory_retrieve with:
+- query: Natural language search text
+- lod: Desired level of detail (L0, L1, or L2)
+- count: Number of results
+- [optional] strategy, kinds, time filters, tags, brains
+```
 
-## Search → Expand Workflow
+No follow-up expand call needed. Results include full LOD-adjusted content.
 
-1. `memory_search_minimal` returns compact stubs (title, summary, score, kind)
-2. Identify relevant results by score and kind
-3. `memory_expand` with selected memory IDs to get full content
-4. Use `budget` parameter to control token usage
+## Level of Detail (LOD)
+
+Choose based on your use case:
+
+| LOD | Size | Speed | Use For |
+|-----|------|-------|---------|
+| `L0` | ~100 tokens | Fast | Scanning/filtering (many results) |
+| `L1` | ~2000 tokens | Balanced | Most common — balanced summary + detail |
+| `L2` | Full source | Slow | Complete content, no truncation |
+
+LOD is "best-effort": if L1 is not yet generated, `memory_retrieve` falls back to L0 or L2 automatically.
+
+## Strategy Parameter
+
+Control ranking weight profile:
+
+| Strategy | Weighting | Best For |
+|----------|-----------|----------|
+| `auto` | Equal weights | General queries (default) |
+| `lookup` | Keyword-heavy | Exact terms, names, task IDs |
+| `planning` | Recency + links | "What's related to X?" — project-scoped questions |
+| `reflection` | Recency-heavy | Recent entries, journal-style queries |
+| `synthesis` | Vector-heavy | Semantic similarity, "things like X" |
 
 ## Result Kinds
+
+Results are classified by kind, filterable via `kinds` parameter:
 
 - **note**: Indexed markdown documents from the notes directory
 - **episode**: Recorded episodes (goal, actions, outcome)
@@ -29,25 +50,35 @@ Use the `intent` parameter on `memory_search_minimal` to control ranking:
 - **task-outcome**: Completed task outcomes
 - **record**: Artifacts, snapshots, and other stored records
 
-## Metadata Filters
+## Metadata Filtering
 
-Filter search results using metadata facets:
+Filter search results post-retrieval using:
 
-- `kinds`: Array of kind strings to include (e.g. `["episode", "reflection"]`). Empty = all kinds.
-- `time_after`: Unix timestamp — only results modified/created after this time
-- `time_before`: Unix timestamp — only results modified/created before this time
-- `tags_require`: Array of tags — ALL must be present (AND logic, case-insensitive)
+- `kinds`: Array of kind strings to include. Empty = all kinds.
+- `time_after`: Unix timestamp — only results created/modified after this time
+- `time_before`: Unix timestamp — only results created/modified before this time
+- `tags_require`: Array of tags — ALL must match (AND logic, case-insensitive)
 - `tags_exclude`: Array of tags — results matching ANY are excluded (NOR logic, case-insensitive)
 
-Filters are applied post-retrieval before ranking. Note: recency is based on actual file modification time on disk (not indexing time).
+Note: recency is based on file modification time on disk, not indexing time.
 
-## Cross-Brain Search
+## Cross-Brain Retrieval
 
-Pass `brains` parameter to search across multiple brain projects:
-- `["work", "personal"]` — specific brains
+Search across multiple brains by passing `brains` parameter:
+- `["work", "personal"]` — specific brain names/IDs
 - `["all"]` — all registered brains
 
-Results include `brain_name` field indicating the source.
+Results include `brain_name` field indicating the source brain.
+
+## Tag Boosting
+
+Pass `tags` array to boost results matching those tags via Jaccard similarity:
+
+```
+tags: ["rust", "memory"] — boosts results tagged with one or both terms
+```
+
+Useful for domain-scoped searches (e.g., "architecture" + `tags: ["database"]`).
 
 ## Episode Recording
 
@@ -62,8 +93,4 @@ Use `memory_write_episode` to capture knowledge that would be lost between conve
 
 Structure: `goal` (what prompted it), `actions` (key facts), `outcome` (how to use this knowledge).
 
-Always check `memory_search_minimal` first to avoid recording duplicates.
-
-## Tag Boosting
-
-Pass `tags` array to `memory_search_minimal` to boost results matching specific tags via Jaccard similarity. Example: `tags: ["rust", "memory"]` boosts results tagged with those terms.
+Always call `memory_retrieve` first to check for existing coverage and avoid duplicates.

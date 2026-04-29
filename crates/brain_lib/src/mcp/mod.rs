@@ -615,10 +615,7 @@ async fn handle_request(
                 }
             };
 
-            if matches!(
-                tool_name,
-                "memory.search_minimal" | "memory.expand" | "memory.reflect" | "memory.retrieve"
-            ) {
+            if matches!(tool_name, "memory.reflect" | "memory.retrieve") {
                 ctx.metrics.record_query_latency(call_start.elapsed());
             }
             match serde_json::to_value(result) {
@@ -692,14 +689,13 @@ mod tests {
         let tools = parsed["result"]["tools"]
             .as_array()
             .expect("checked in test assertions");
-        assert_eq!(tools.len(), 36);
+        assert_eq!(tools.len(), 34);
 
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["name"].as_str().expect("checked in test assertions"))
             .collect();
-        assert!(names.contains(&"memory.search_minimal"));
-        assert!(names.contains(&"memory.expand"));
+        assert!(names.contains(&"memory.retrieve"));
         assert!(names.contains(&"tasks.apply_event"));
         assert!(names.contains(&"tasks.create"));
         assert!(names.contains(&"tasks.labels_batch"));

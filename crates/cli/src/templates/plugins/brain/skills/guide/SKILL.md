@@ -46,7 +46,7 @@ Local-first knowledge base combining semantic search, task management, and recor
 | Domain | Key Tools | Use For |
 |--------|-----------|---------|
 | Tasks | `tasks_next`, `tasks_create`, `tasks_get`, `tasks_close` | Work tracking, dependencies, priorities |
-| Memory | `memory_search_minimal`, `memory_expand`, `memory_write_episode` | Semantic search, episode recording |
+| Memory | `memory_retrieve`, `memory_write_episode` | LOD-aware retrieval with search and expansion in one call, episode recording |
 | Records | `records_create_document`, `records_create_analysis`, `records_create_plan`, `records_save_snapshot`, `records_list` | Typed work products, snapshots, and per-kind retrieval policy |
 | Brain | `status`, `brains_list`, `jobs_status` | Health checks, brain registry, job queue |
 

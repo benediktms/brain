@@ -149,7 +149,7 @@ priority: high
   - Tag match: Jaccard on `tags`
   - Importance: stored value
 - Add `"episode"` and `"reflection"` as stub kinds in retrieval results
-- For `memory.expand`: if ID starts with `sum:`, fetch from `summaries` table
+- For `memory.retrieve`: if ID starts with `sum:`, fetch from `summaries` table (now unified into URI-based direct access)
 
 **Files:**
 - `crates/brain_lib/src/query_pipeline.rs` — candidate pool merging
@@ -206,7 +206,7 @@ Brain is a local-first Rust knowledge daemon exposing 25 MCP tools across four d
 - Episode and reflection stubs returned as first-class results alongside note chunks
 
 **Domains:**
-- **Notes/memory:** Markdown files → chunks → embeddings. Hybrid search via `memory.search_minimal`/`memory.expand`.
+- **Notes/memory:** Markdown files → chunks → embeddings. Hybrid search via `memory.retrieve` (unified search + LOD-aware expansion).
 - **Tasks:** CRUD + event sourcing, dependency graph, `tasks.next` prioritization.
 - **Records:** Content-addressed artifacts with metadata, tags, links. No semantic search (addressed by the sibling plan).
 - **Episodic memory:** Fully implemented (see [Episodic Memory Foundation](./episodic-memory.md)). Episodes and reflections are written, embedded, FTS-indexed, and retrievable via `search_minimal`. `memory.reflect` supports prepare and commit modes. Cross-brain episode gathering supported.
@@ -384,7 +384,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 
 #### Issue 1.3: Accept URIs in MCP tools as input identifiers
 
-**Problem:** Tools like `records.get`, `tasks.get`, `memory.expand` accept only domain-specific IDs.
+**Status: IMPLEMENTED.** Tools now accept `synapse://` URIs as first-class identifiers. `memory.retrieve` supports both query and URI modes for direct access.
 
 **Proposed change:**
 - Accept both raw IDs and `synapse://` URIs in ID parameters
@@ -396,7 +396,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 - `crates/brain_lib/src/uri.rs` — resolver
 
 **Dependencies:** Issue 1.1
-**Acceptance criteria:** `memory.expand(id="synapse://default/episode/01ABC")` works identically to `memory.expand(id="sum:01ABC")`
+**Acceptance criteria (DONE):** `memory.retrieve(uri="synapse://default/episode/01ABC")` works identically to `memory.retrieve(uri="sum:01ABC")`
 **Size:** M
 
 #### Issue 1.4: URI-based cross-domain linking
@@ -461,7 +461,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 - `crates/brain_lib/src/mcp/tools/mem_summarize_scope.rs` — **new**
 
 **Dependencies:** [Episodic Memory](./episodic-memory.md) (summary retrieval pattern), Phase 1 (URIs for child references)
-**Acceptance criteria:** `memory.search_minimal("architecture overview")` can return a directory summary for `docs/` alongside individual chunks
+**Acceptance criteria:** `memory.retrieve("architecture overview")` can return a directory summary for `docs/` alongside individual chunks
 **Size:** L
 
 #### Issue 2.2: Integrate derived summaries into retrieval
@@ -495,19 +495,19 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 
 **Files:** Same as 2.1 (extended, not new)
 **Dependencies:** Issue 2.1
-**Acceptance criteria:** `memory.search_minimal("performance work")` returns a tag summary for `#performance` if one exists
+**Acceptance criteria:** `memory.retrieve("performance work")` returns a tag summary for `#performance` if one exists
 **Size:** M
 
 ---
 
 ### Phase 3 — Retrieval Explainability / Observability
 
-#### Issue 3.1: Explain mode for `search_minimal`
+#### Issue 3.1: Explain mode for `memory.retrieve`
 
 **Problem:** When retrieval quality is poor, there's no way to understand why. The hybrid scoring formula is opaque.
 
 **Proposed change:**
-- Add `explain: bool` parameter to `memory.search_minimal` (default false)
+- Add `explain: bool` parameter to `memory.retrieve` (default false) — IMPLEMENTED
 - When true, include per-candidate score breakdown in response:
   ```json
   {
@@ -528,7 +528,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 - Preserve existing response format when `explain=false`
 
 **Files:**
-- `crates/brain_lib/src/mcp/tools/mem_search_minimal.rs` — parameter + response
+- `crates/brain_lib/src/mcp/tools/mem_retrieve.rs` — parameter + response
 - `crates/brain_lib/src/query_pipeline.rs` — carry scores through pipeline
 - `crates/brain_lib/src/ranking.rs` — expose individual signal values
 - `crates/brain_lib/src/retrieval.rs` — include in stubs
@@ -669,7 +669,7 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 **Proposed change:**
 - Add optional `parent_id` to `summaries` for version chains
 - `memory.update_playbook` creates a new version linked to the previous one
-- Latest version is returned by default; history accessible via `memory.expand` with `versions=true`
+- Latest version is returned by default; history accessible via `memory.retrieve` with `versions=true`
 
 **Files:**
 - `crates/brain_lib/src/db/summaries.rs` — add `parent_id` column
@@ -742,11 +742,11 @@ See [`episodic-memory.md`](./episodic-memory.md) for the full standalone plan (I
 
 ### Modified MCP tools
 
-| Tool | Change | Phase | Breaking? |
-|------|--------|-------|-----------|
-| `memory.search_minimal` | Returns episodes, reflections, derived summaries, playbooks as new stub kinds | 0, 2, 5 | No — additive kinds |
-| `memory.search_minimal` | `explain` parameter | 3 | No — optional param |
-| `memory.expand` | Handles `sum:` and `ds:` prefixed IDs | 0, 2 | No — additive |
+| Tool | Change | Phase | Breaking? | Status |
+|------|--------|-------|-----------|--------|
+| `memory.retrieve` | Returns episodes, reflections, derived summaries, playbooks as new stub kinds (unified from search_minimal + expand) | 0, 2, 5 | Yes — unified tool replaces two-phase | Implemented |
+| `memory.retrieve` | `explain` parameter for per-signal breakdown | 3 | No — optional param | Implemented |
+| `memory.retrieve` | Direct URI access mode alongside query mode | 0, 2 | No — additive | Implemented |
 | All tools returning IDs | Add `uri` field | 1 | No — additive field |
 | All tools accepting IDs | Accept `synapse://` URIs | 1 | No — additive input format |
 | `memory.reflect` | Add `mode` parameter (prepare/commit) | 0 | No — default is current behavior |

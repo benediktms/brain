@@ -206,36 +206,40 @@ async fn mcp_handler_task_list_filters_status_priority_label_search() {
 }
 
 #[tokio::test]
-async fn mcp_handler_mem_search_minimal_returns_stubs_within_budget() {
+async fn mcp_handler_mem_retrieve_returns_results() {
     let ctx = make_test_context().await;
     let indexed = seed_test_chunks(&ctx).await;
     assert!(indexed > 0, "seeding should index at least one chunk");
 
-    let budget = 80;
+    // memory.retrieve replaces memory.search_minimal; use count to limit results.
     let result = call_tool(
         &ctx,
-        "memory.search_minimal",
+        "memory.retrieve",
         json!({
             "query": "seeds chunks for MCP handler tests",
-            "budget_tokens": budget,
-            "k": 5
+            "lod": "L0",
+            "count": 5
         }),
     )
     .await;
 
     let parsed = success_json(&result);
-    assert_eq!(parsed["budget_tokens"], budget);
-    let used = parsed["used_tokens_est"]
-        .as_u64()
-        .expect("used_tokens_est u64");
-    assert!(used <= budget);
+    assert!(
+        parsed["result_count"].as_u64().unwrap_or(0) > 0,
+        "seeded note should be searchable: {parsed}"
+    );
 
     let results = parsed["results"].as_array().expect("results array");
-    assert!(!results.is_empty(), "seeded note should be searchable");
-    for stub in results {
-        assert!(stub["memory_id"].is_string());
-        assert!(stub["title"].is_string());
-        assert!(stub["summary"].is_string());
+    assert!(!results.is_empty(), "seeded note should produce results");
+    for item in results {
+        assert!(item["uri"].is_string(), "result missing uri: {item}");
+        assert!(item["title"].is_string(), "result missing title: {item}");
+        assert!(
+            item["content"].is_string(),
+            "result missing content: {item}"
+        );
+        assert!(item["kind"].is_string(), "result missing kind: {item}");
+        assert!(item["lod"].is_string(), "result missing lod: {item}");
     }
 }
 
@@ -391,10 +395,12 @@ async fn mcp_handler_status_returns_expected_json_fields() {
     assert!(parsed["query_latency"]["p50_us"].is_u64());
     assert!(parsed["query_latency"]["p95_us"].is_u64());
     assert!(parsed["stale_hashes_prevented"].is_u64());
-    assert!(parsed["tokens"].is_object());
     assert!(parsed["queue_depth"].is_u64());
     assert!(parsed["lancedb_unoptimized_rows"].is_u64());
     assert!(parsed["dual_store_stuck_files"].is_u64());
+    // indexing_errors and query_errors added in brn-83a.8 status refactor
+    assert!(parsed["indexing_errors"].is_u64());
+    assert!(parsed["query_errors"].is_u64());
 }
 
 // ---------------------------------------------------------------------------

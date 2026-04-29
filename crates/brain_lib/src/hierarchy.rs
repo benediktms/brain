@@ -199,7 +199,7 @@ pub fn mark_scope_stale(
 ///
 /// Returns matching summaries ordered by relevance.
 ///
-/// TODO: Integrate derived summaries into `memory.search_minimal` results.
+/// TODO: Integrate derived summaries into `memory.retrieve` results.
 /// Embedding-based search requires indexing summaries into LanceDB, which is
 /// deferred. Until then, use the `memory.summarize_scope` MCP tool for direct
 /// scope-based access to derived summaries.

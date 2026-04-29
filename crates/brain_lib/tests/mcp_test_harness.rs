@@ -1,3 +1,8 @@
+// Each Rust integration test under `tests/` compiles as its own crate, so
+// shared helpers here look "unused" to whichever binary doesn't reference them.
+// Suppress the false positive at the module level.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -152,6 +157,5 @@ async fn mcp_test_harness_status_smoke() {
     assert!(parsed["uptime_seconds"].is_u64());
     assert!(parsed["indexing_latency"]["p50_us"].is_u64());
     assert!(parsed["query_latency"]["p95_us"].is_u64());
-    assert!(parsed["tokens"].is_object());
     assert!(parsed["queue_depth"].is_u64());
 }
