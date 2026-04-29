@@ -412,12 +412,16 @@ async fn mcp_handler_status_returns_expected_json_fields() {
 /// task_exists). FK checks are disabled for the insert.
 fn inject_orphan_dep(db: &brain_persistence::db::Db, task_id: &str, depends_on: &str) {
     db.with_write_conn(|conn| {
+        // Restore FK enforcement unconditionally — `?` on the INSERT would
+        // otherwise return the pooled connection with FK disabled, polluting
+        // every subsequent caller of the pool.
         conn.execute_batch("PRAGMA foreign_keys = OFF")?;
-        conn.execute(
+        let insert_result = conn.execute(
             "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, ?2)",
             rusqlite::params![task_id, depends_on],
-        )?;
+        );
         conn.execute_batch("PRAGMA foreign_keys = ON")?;
+        insert_result?;
         Ok(())
     })
     .unwrap();

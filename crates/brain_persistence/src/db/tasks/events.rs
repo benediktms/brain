@@ -233,23 +233,15 @@ pub struct ExternalIdPayload {
     pub external_url: Option<String>,
 }
 
-/// Payload for `external_blocker_added`.
-///
-/// `blocking` defaults to `true` because the event name itself signals intent;
-/// callers can override (e.g. recording a known non-blocking external ID
-/// promoted later) but the typical case is "this is a real blocker".
+/// Payload for `external_blocker_added`. The event name itself signals intent —
+/// applying this event always sets `blocking = 1`. Use `external_id_added` for
+/// metadata-only external IDs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalBlockerAddedPayload {
     pub source: String,
     pub external_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_url: Option<String>,
-    #[serde(default = "default_blocking")]
-    pub blocking: bool,
-}
-
-fn default_blocking() -> bool {
-    true
 }
 
 /// Payload for `external_blocker_resolved`.

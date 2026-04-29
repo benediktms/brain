@@ -1231,7 +1231,6 @@ mod tests {
             "external blocker IDs are NOT pushed to blocking_task_ids: {:?}",
             summary.blocking_task_ids
         );
-        assert_eq!(summary.external_blocker_count, 2);
         assert_eq!(summary.external_blocker_unresolved_count, 1);
     }
 

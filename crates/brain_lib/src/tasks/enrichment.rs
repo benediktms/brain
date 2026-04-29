@@ -107,29 +107,20 @@ pub fn note_links_to_json(links: &[TaskNoteLink]) -> Vec<Value> {
         .collect()
 }
 
-/// Convert a dependency summary to JSON (total_deps + done_deps only).
-///
-/// External blocker counts are folded into `total_deps` / `done_deps` (a
-/// resolved external blocker counts as a "done" dep). The dedicated
-/// `external_blocker_count` and `external_blocker_unresolved_count` fields
-/// are surfaced too so callers can break out the external portion without
-/// double-counting.
+/// Convert a dependency summary to JSON (counts only — no blocking IDs).
+/// Resolved external blockers count toward `done_deps`; unresolved are surfaced
+/// separately so callers can render "X external blockers pending".
 pub fn dep_summary_to_json(summary: &DependencySummary) -> Value {
     json!({
         "total_deps": summary.total_deps,
         "done_deps": summary.done_deps,
-        "external_blocker_count": summary.external_blocker_count,
         "external_blocker_unresolved_count": summary.external_blocker_unresolved_count,
     })
 }
 
 /// Convert a dependency summary to JSON including the `blocking_task_ids`
-/// list (internal-deps only).
-///
-/// External blockers do NOT appear in `blocking_task_ids` — they have a
-/// different shape (source + external_id) and are surfaced via the dedicated
-/// `external_blocker_count` / `external_blocker_unresolved_count` counters
-/// here, plus the `external_blockers` array on the `tasks.get` response.
+/// list (internal-deps only). External blockers carry a different shape and
+/// are surfaced via the dedicated `external_blockers` array on `tasks.get`.
 pub fn dep_summary_to_json_with_blocking(store: &TaskStore, summary: &DependencySummary) -> Value {
     let compact_blocking: Vec<String> = summary
         .blocking_task_ids
@@ -140,7 +131,6 @@ pub fn dep_summary_to_json_with_blocking(store: &TaskStore, summary: &Dependency
         "total_deps": summary.total_deps,
         "done_deps": summary.done_deps,
         "blocking_task_ids": compact_blocking,
-        "external_blocker_count": summary.external_blocker_count,
         "external_blocker_unresolved_count": summary.external_blocker_unresolved_count,
     })
 }
@@ -318,7 +308,6 @@ mod tests {
             total_deps: total,
             done_deps: done,
             blocking_task_ids: blocking,
-            external_blocker_count: 0,
             external_blocker_unresolved_count: 0,
         }
     }

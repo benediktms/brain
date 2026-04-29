@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::{BrainCoreError, Result};
 
@@ -273,25 +273,22 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
         }
 
         EventType::ExternalBlockerAdded => {
-            // Promote (or insert) a row in `task_external_ids` to act as a real
-            // blocker. Idempotent: re-applying the event for a row that
-            // already exists clears any prior `resolved_at` and re-stamps
-            // `blocking` from the payload (typically `true`). Callers can pass
-            // `blocking: false` to register a non-blocking metadata row via
-            // this event path (rare but supported for symmetry).
+            // Insert or promote a row in `task_external_ids` to act as a real
+            // blocker (always `blocking = 1`). Idempotent: re-applying the
+            // event for an existing row clears any prior `resolved_at` so
+            // event-log replay reaches the right state.
             let p: ExternalBlockerAddedPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| {
                     BrainCoreError::TaskEvent(format!("bad ExternalBlockerAdded payload: {e}"))
                 })?;
-            let blocking_val = if p.blocking { 1_i64 } else { 0_i64 };
 
             conn.execute(
                 "INSERT INTO task_external_ids
                      (task_id, source, external_id, external_url, imported_at, blocking, resolved_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, NULL)
                  ON CONFLICT(task_id, source, external_id) DO UPDATE SET
                      external_url = COALESCE(excluded.external_url, task_external_ids.external_url),
-                     blocking     = excluded.blocking,
+                     blocking     = 1,
                      resolved_at  = NULL",
                 rusqlite::params![
                     event.task_id,
@@ -299,35 +296,74 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                     p.external_id,
                     p.external_url,
                     event.timestamp,
-                    blocking_val,
                 ],
             )?;
         }
 
         EventType::ExternalBlockerResolved => {
-            // Stamp `resolved_at` on the matching row. If no row matches
-            // (caller resolved a blocker that was never recorded), log a
-            // warning and no-op — the event log still records the attempt.
+            // Stamp `resolved_at` on the matching blocker row. Read the row
+            // state first so we can differentiate the four outcomes for an
+            // operator: row absent (likely caller bug), row is metadata-only
+            // (caller used the wrong event), already resolved (idempotent
+            // replay), or fresh resolution (the happy path).
             let p: ExternalBlockerResolvedPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| {
                 BrainCoreError::TaskEvent(format!("bad ExternalBlockerResolved payload: {e}"))
             })?;
             let resolved_at = p.resolved_at.unwrap_or(event.timestamp);
 
-            let n = conn.execute(
-                "UPDATE task_external_ids
-                 SET resolved_at = ?1
-                 WHERE task_id = ?2 AND source = ?3 AND external_id = ?4
-                   AND blocking = 1",
-                rusqlite::params![resolved_at, event.task_id, p.source, p.external_id],
-            )?;
-            if n == 0 {
-                tracing::warn!(
-                    task_id = %event.task_id,
-                    source = %p.source,
-                    external_id = %p.external_id,
-                    "external_blocker_resolved had no matching blocker — no-op (row absent or blocking=0)"
-                );
+            let existing: Option<(i64, Option<i64>)> = conn
+                .query_row(
+                    "SELECT blocking, resolved_at FROM task_external_ids
+                     WHERE task_id = ?1 AND source = ?2 AND external_id = ?3",
+                    rusqlite::params![event.task_id, p.source, p.external_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+
+            match existing {
+                None => {
+                    tracing::warn!(
+                        task_id = %event.task_id,
+                        source = %p.source,
+                        external_id = %p.external_id,
+                        "external_blocker_resolved: no matching row — caller likely resolved a blocker that was never recorded"
+                    );
+                }
+                Some((0, _)) => {
+                    tracing::warn!(
+                        task_id = %event.task_id,
+                        source = %p.source,
+                        external_id = %p.external_id,
+                        "external_blocker_resolved: row exists but blocking=0 (metadata only) — use external_blocker_added first to promote, or external_id_removed to retire"
+                    );
+                }
+                Some((_, Some(prior))) => {
+                    tracing::debug!(
+                        task_id = %event.task_id,
+                        source = %p.source,
+                        external_id = %p.external_id,
+                        prior_resolved_at = prior,
+                        new_resolved_at = resolved_at,
+                        "external_blocker_resolved: blocker already resolved — re-stamping (idempotent replay)"
+                    );
+                    conn.execute(
+                        "UPDATE task_external_ids
+                         SET resolved_at = ?1
+                         WHERE task_id = ?2 AND source = ?3 AND external_id = ?4
+                           AND blocking = 1",
+                        rusqlite::params![resolved_at, event.task_id, p.source, p.external_id],
+                    )?;
+                }
+                Some((_, None)) => {
+                    conn.execute(
+                        "UPDATE task_external_ids
+                         SET resolved_at = ?1
+                         WHERE task_id = ?2 AND source = ?3 AND external_id = ?4
+                           AND blocking = 1",
+                        rusqlite::params![resolved_at, event.task_id, p.source, p.external_id],
+                    )?;
+                }
             }
         }
     }

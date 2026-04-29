@@ -5,26 +5,19 @@ use crate::error::Result;
 
 use super::ANCESTOR_BLOCKED_CTE;
 
-/// Summary of a task's dependency state.
-///
-/// External blockers are folded into `total_deps` and `done_deps` so callers
-/// who render "X of Y blocking" see a single coherent count. The
-/// `blocking_task_ids` list intentionally remains internal-deps-only — it
-/// holds task IDs and external blockers have a different shape (source +
-/// external_id). Surface external blockers via `external_blocker_count` and
-/// `external_blocker_unresolved_count` (additive — does not double-count).
-/// Callers that need the external blocker rows themselves should fetch
-/// `get_external_blockers(task_id)` separately.
+/// Summary of a task's dependency state. `total_deps` / `done_deps` count
+/// `task_deps` rows plus blocking `task_external_ids` rows so callers can
+/// render "X of Y blocking" directly. `blocking_task_ids` holds internal-dep
+/// task IDs only; external blockers carry a different shape and are surfaced
+/// via `external_blocker_unresolved_count` plus the dedicated
+/// `tasks.get` `external_blockers` array.
 #[derive(Debug, Clone, Default)]
 pub struct DependencySummary {
     pub total_deps: usize,
     pub done_deps: usize,
     pub blocking_task_ids: Vec<String>,
-    /// Total number of `task_external_ids` rows for this task with `blocking = 1`
-    /// (resolved + unresolved). Already counted within `total_deps`.
-    pub external_blocker_count: usize,
-    /// Subset of `external_blocker_count` where `resolved_at IS NULL`.
-    /// Already counted within `total_deps - done_deps`.
+    /// `task_external_ids` rows for this task with `blocking = 1` and
+    /// `resolved_at IS NULL`. Subset of `total_deps - done_deps`.
     pub external_blocker_unresolved_count: usize,
 }
 
@@ -98,7 +91,6 @@ pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<Depend
         total_deps,
         done_deps,
         blocking_task_ids,
-        external_blocker_count: ext_total,
         external_blocker_unresolved_count: ext_unresolved,
     })
 }
