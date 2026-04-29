@@ -145,6 +145,11 @@ impl TaskGet {
             "get_external_ids",
             &mut warnings,
         );
+        let external_blockers = store_or_warn(
+            store.get_external_blockers(task_id),
+            "get_external_blockers",
+            &mut warnings,
+        );
 
         let comments = store_or_warn(
             store.get_task_comments(task_id),
@@ -160,11 +165,7 @@ impl TaskGet {
                     source: "get_dependency_summary".to_string(),
                     error: err.to_string(),
                 });
-                crate::tasks::queries::DependencySummary {
-                    total_deps: 0,
-                    done_deps: 0,
-                    blocking_task_ids: vec![],
-                }
+                crate::tasks::queries::DependencySummary::default()
             }
         };
 
@@ -309,6 +310,27 @@ impl TaskGet {
                             "external_id": e.external_id,
                             "external_url": e.external_url,
                             "imported_at": e.imported_at,
+                            "blocking": e.blocking,
+                            "resolved_at": e.resolved_at,
+                        }))
+                        .collect::<Vec<_>>()
+                ),
+            );
+            // `external_blockers` is the subset of `external_ids` with
+            // `blocking=true`. Resolved blockers are included (with
+            // `resolved_at` populated) so callers can render history.
+            // Distinct from `external_ids` (which also contains pure metadata)
+            // so consumers don't have to filter client-side.
+            obj.insert(
+                "external_blockers".into(),
+                json!(
+                    external_blockers
+                        .iter()
+                        .map(|e| json!({
+                            "source": e.source,
+                            "external_id": e.external_id,
+                            "external_url": e.external_url,
+                            "resolved_at": e.resolved_at,
                         }))
                         .collect::<Vec<_>>()
                 ),

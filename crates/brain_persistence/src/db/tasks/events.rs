@@ -40,6 +40,12 @@ pub enum EventType {
     ParentSet,
     ExternalIdAdded,
     ExternalIdRemoved,
+    /// Promote (or insert) a `task_external_ids` row to act as a real blocker.
+    /// Sets `blocking = 1` and clears any prior `resolved_at`.
+    ExternalBlockerAdded,
+    /// Mark a previously-added external blocker as resolved by stamping
+    /// `resolved_at`. The row is preserved so callers can render history.
+    ExternalBlockerResolved,
 }
 
 /// Valid task statuses.
@@ -225,6 +231,38 @@ pub struct ExternalIdPayload {
     pub external_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_url: Option<String>,
+}
+
+/// Payload for `external_blocker_added`.
+///
+/// `blocking` defaults to `true` because the event name itself signals intent;
+/// callers can override (e.g. recording a known non-blocking external ID
+/// promoted later) but the typical case is "this is a real blocker".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalBlockerAddedPayload {
+    pub source: String,
+    pub external_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_url: Option<String>,
+    #[serde(default = "default_blocking")]
+    pub blocking: bool,
+}
+
+fn default_blocking() -> bool {
+    true
+}
+
+/// Payload for `external_blocker_resolved`.
+///
+/// `resolved_at` is `None` to default to the event timestamp at apply time.
+/// Callers can pin a specific Unix-seconds timestamp (e.g. the moment the
+/// upstream system reported completion).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalBlockerResolvedPayload {
+    pub source: String,
+    pub external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at: Option<i64>,
 }
 
 // -- EventPayload trait --

@@ -3,7 +3,8 @@ use rusqlite::Connection;
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    CommentPayload, DependencyPayload, EventType, ExternalIdPayload, LabelPayload, NoteLinkPayload,
+    CommentPayload, DependencyPayload, EventType, ExternalBlockerAddedPayload,
+    ExternalBlockerResolvedPayload, ExternalIdPayload, LabelPayload, NoteLinkPayload,
     ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
 };
 use super::queries::next_child_seq;
@@ -270,6 +271,64 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                 rusqlite::params![event.task_id, p.source, p.external_id],
             )?;
         }
+
+        EventType::ExternalBlockerAdded => {
+            // Promote (or insert) a row in `task_external_ids` to act as a real
+            // blocker. Idempotent: re-applying the event for a row that
+            // already exists clears any prior `resolved_at` and re-stamps
+            // `blocking` from the payload (typically `true`). Callers can pass
+            // `blocking: false` to register a non-blocking metadata row via
+            // this event path (rare but supported for symmetry).
+            let p: ExternalBlockerAddedPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("bad ExternalBlockerAdded payload: {e}"))
+                })?;
+            let blocking_val = if p.blocking { 1_i64 } else { 0_i64 };
+
+            conn.execute(
+                "INSERT INTO task_external_ids
+                     (task_id, source, external_id, external_url, imported_at, blocking, resolved_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
+                 ON CONFLICT(task_id, source, external_id) DO UPDATE SET
+                     external_url = COALESCE(excluded.external_url, task_external_ids.external_url),
+                     blocking     = excluded.blocking,
+                     resolved_at  = NULL",
+                rusqlite::params![
+                    event.task_id,
+                    p.source,
+                    p.external_id,
+                    p.external_url,
+                    event.timestamp,
+                    blocking_val,
+                ],
+            )?;
+        }
+
+        EventType::ExternalBlockerResolved => {
+            // Stamp `resolved_at` on the matching row. If no row matches
+            // (caller resolved a blocker that was never recorded), log a
+            // warning and no-op — the event log still records the attempt.
+            let p: ExternalBlockerResolvedPayload = serde_json::from_value(event.payload.clone())
+                .map_err(|e| {
+                BrainCoreError::TaskEvent(format!("bad ExternalBlockerResolved payload: {e}"))
+            })?;
+            let resolved_at = p.resolved_at.unwrap_or(event.timestamp);
+
+            let n = conn.execute(
+                "UPDATE task_external_ids
+                 SET resolved_at = ?1
+                 WHERE task_id = ?2 AND source = ?3 AND external_id = ?4",
+                rusqlite::params![resolved_at, event.task_id, p.source, p.external_id],
+            )?;
+            if n == 0 {
+                tracing::warn!(
+                    task_id = %event.task_id,
+                    source = %p.source,
+                    external_id = %p.external_id,
+                    "external_blocker_resolved had no matching row — no-op"
+                );
+            }
+        }
     }
 
     // Record the event itself
@@ -403,7 +462,9 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
         | EventType::LabelRemoved
         | EventType::CommentAdded
         | EventType::ExternalIdAdded
-        | EventType::ExternalIdRemoved => {
+        | EventType::ExternalIdRemoved
+        | EventType::ExternalBlockerAdded
+        | EventType::ExternalBlockerResolved => {
             if !task_exists(&tx, &event.task_id)? {
                 return Err(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",

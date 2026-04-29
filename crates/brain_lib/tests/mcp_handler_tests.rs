@@ -588,3 +588,108 @@ async fn mcp_tasks_get_orphan_dep_in_dependency_summary() {
         "blocking_task_ids contains orphan dep ID: {blocking_id}"
     );
 }
+
+/// `tasks.apply_event` accepts `external_blocker_added`; the task is then
+/// excluded from `tasks.list({status: "ready"})` and `tasks.get` returns the
+/// blocker in its `external_blockers` field. After `external_blocker_resolved`
+/// the task is ready again.
+#[tokio::test]
+async fn mcp_external_blocker_gates_readiness() {
+    let ctx = make_test_context().await;
+
+    call_tool(
+        &ctx,
+        "tasks.apply_event",
+        json!({
+            "event_type": "task_created",
+            "task_id": "blk-t1",
+            "payload": { "title": "Awaits external sign-off", "priority": 1 }
+        }),
+    )
+    .await;
+
+    // Add an unresolved external blocker.
+    call_tool(
+        &ctx,
+        "tasks.apply_event",
+        json!({
+            "event_type": "external_blocker_added",
+            "task_id": "blk-t1",
+            "payload": {
+                "source": "jira",
+                "external_id": "PLAT-42",
+                "external_url": "https://example.atlassian.net/browse/PLAT-42"
+            }
+        }),
+    )
+    .await;
+
+    // Task must not be in ready list.
+    let ready_result = call_tool(
+        &ctx,
+        "tasks.list",
+        json!({ "status": "ready", "limit": 100 }),
+    )
+    .await;
+    let parsed_ready = success_json(&ready_result);
+    let ready_titles: Vec<&str> = parsed_ready["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["title"].as_str())
+        .collect();
+    assert!(
+        !ready_titles.contains(&"Awaits external sign-off"),
+        "task with unresolved external blocker must not be ready: {ready_titles:?}"
+    );
+
+    // tasks.get exposes the external blocker.
+    let get_result = call_tool(&ctx, "tasks.get", json!({ "task_id": "blk-t1" })).await;
+    let parsed_get = success_json(&get_result);
+    let blockers = parsed_get["external_blockers"]
+        .as_array()
+        .expect("external_blockers is array");
+    assert_eq!(
+        blockers.len(),
+        1,
+        "external_blockers should have one entry: {parsed_get}"
+    );
+    assert_eq!(blockers[0]["source"], "jira");
+    assert_eq!(blockers[0]["external_id"], "PLAT-42");
+    assert!(
+        blockers[0]["resolved_at"].is_null(),
+        "unresolved blocker has null resolved_at: {}",
+        blockers[0]
+    );
+
+    // Resolve the blocker.
+    call_tool(
+        &ctx,
+        "tasks.apply_event",
+        json!({
+            "event_type": "external_blocker_resolved",
+            "task_id": "blk-t1",
+            "payload": { "source": "jira", "external_id": "PLAT-42" }
+        }),
+    )
+    .await;
+
+    // Task is now ready.
+    let ready_after = call_tool(
+        &ctx,
+        "tasks.list",
+        json!({ "status": "ready", "limit": 100 }),
+    )
+    .await;
+    let parsed_after = success_json(&ready_after);
+    let after_titles: Vec<&str> = parsed_after["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["title"].as_str())
+        .collect();
+    assert!(
+        after_titles.contains(&"Awaits external sign-off"),
+        "task should be ready after blocker resolved: {after_titles:?}"
+    );
+}
