@@ -213,6 +213,8 @@ async fn handle_uri_mode(
         "generated_at": resolution.generated_at,
         "source_uri": uri_str,
         "explain": null,
+        "expansion_reason": crate::ranking::ExpansionReason::UriDirect.as_str(),
+        "lod_plan_slot": 0,
     });
 
     if explain {
@@ -482,7 +484,8 @@ impl McpTool for MemRetrieve {
                 let results_json: Vec<Value> = ranked
                     .iter()
                     .zip(resolutions.iter())
-                    .map(|(r, resolution)| {
+                    .enumerate()
+                    .map(|(slot, (r, resolution))| {
                         let brain_name = fed_result
                             .chunk_brain
                             .get(&r.chunk_id)
@@ -526,6 +529,8 @@ impl McpTool for MemRetrieve {
                             "generated_at": resolution.generated_at,
                             "source_uri": uri_str,
                             "brain": brain_name,
+                            "expansion_reason": r.expansion_reason.as_str(),
+                            "lod_plan_slot": slot,
                         });
 
                         if params.explain {
@@ -587,7 +592,8 @@ impl McpTool for MemRetrieve {
             let results_json: Vec<Value> = ranked
                 .iter()
                 .zip(resolutions.iter())
-                .map(|(r, resolution)| {
+                .enumerate()
+                .map(|(slot, (r, resolution))| {
                     let kind = derive_kind(&r.chunk_id, r.summary_kind.as_deref());
                     let uri = match kind.as_str() {
                         "episode" => SynapseUri::for_episode(ctx.brain_name(), &r.chunk_id),
@@ -626,6 +632,8 @@ impl McpTool for MemRetrieve {
                         "strategy_used": format!("{:?}", resolve_intent(&params.strategy)),
                         "generated_at": resolution.generated_at,
                         "source_uri": uri_str,
+                        "expansion_reason": r.expansion_reason.as_str(),
+                        "lod_plan_slot": slot,
                     });
 
                     if params.explain {

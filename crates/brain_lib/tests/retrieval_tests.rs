@@ -401,6 +401,7 @@ fn test_search_minimal_budget_compliance() {
                 byte_start: 0,
                 byte_end: 0,
                 summary_kind: None,
+                expansion_reason: brain_lib::ranking::ExpansionReason::Hybrid,
             }
         })
         .collect();
@@ -444,6 +445,7 @@ fn test_expand_truncates_correctly() {
         byte_start: 0,
         byte_end: 0,
         summary_kind: None,
+        expansion_reason: brain_lib::ranking::ExpansionReason::Hybrid,
     }];
 
     // Budget smaller than the content

@@ -615,14 +615,28 @@ where
 
         // 5d. 1-hop graph expansion: follow outgoing links from top-K candidates
         //     and inject (or boost) linked chunks in the candidate pool before ranking.
-        if graph_expand && !candidate_vec.is_empty() {
-            self.expand_graph_links(&mut candidate_vec, 10, 20);
-        }
+        let graph_only_chunk_ids: std::collections::HashSet<String> =
+            if graph_expand && !candidate_vec.is_empty() {
+                self.expand_graph_links(&mut candidate_vec, 10, 20)
+            } else {
+                std::collections::HashSet::new()
+            };
 
         // 6. Rank — pass through the per-brain alias_lookup built in step 0
         //    so `tag_match_score` can reward same-cluster matches at the
         //    `Weights::alias_discount` rate (0.7× by default).
         let mut ranked = rank_candidates(&candidate_vec, &weights, query_tags, &alias_lookup);
+
+        // Override the discovery reason for chunks that only entered the
+        // candidate pool through graph expansion. Boost-only updates leave
+        // the original vector/keyword classification intact.
+        if !graph_only_chunk_ids.is_empty() {
+            for r in ranked.iter_mut() {
+                if graph_only_chunk_ids.contains(&r.chunk_id) {
+                    r.expansion_reason = crate::ranking::ExpansionReason::GraphLink;
+                }
+            }
+        }
 
         // 7. Adaptive reranking: if confidence is low and a reranker is attached,
         //    rerank the top-N fused candidates using the cross-encoder.
@@ -658,6 +672,7 @@ where
                         b.hybrid_score
                             .partial_cmp(&a.hybrid_score)
                             .unwrap_or(std::cmp::Ordering::Equal)
+                            .then_with(|| a.chunk_id.cmp(&b.chunk_id))
                     });
                 }
                 Err(e) => {
@@ -695,12 +710,18 @@ where
     ///
     /// Expansion candidates receive `sim_vector = parent_score * 0.5` (graph penalty).
     /// At most `max_expansion` file IDs are fetched.
+    ///
+    /// Returns the set of chunk IDs that were *newly introduced* by graph
+    /// expansion (i.e. not already in `candidate_vec` from vector/FTS).
+    /// Boost-only updates to existing candidates are not included; their
+    /// discovery reason stays whatever vector/FTS classification produced.
     fn expand_graph_links(
         &self,
         candidate_vec: &mut Vec<CandidateSignals>,
         seed_count: usize,
         max_expansion: usize,
-    ) {
+    ) -> std::collections::HashSet<String> {
+        let mut graph_only: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Sort by composite signal to pick top seed candidates.
         let mut seeds = candidate_vec.clone();
         seeds.sort_by(|a, b| {
@@ -744,7 +765,7 @@ where
         expansion_entries.truncate(max_expansion);
 
         if expansion_entries.is_empty() {
-            return;
+            return graph_only;
         }
 
         let expansion_file_ids: Vec<String> = expansion_entries
@@ -777,6 +798,7 @@ where
                     } else {
                         0.0
                     };
+                    let chunk_id = chunk.chunk_id.clone();
                     candidate_vec.push(CandidateSignals {
                         chunk_id: chunk.chunk_id,
                         sim_vector: graph_sim,
@@ -793,12 +815,14 @@ where
                         byte_end: chunk.byte_end,
                         summary_kind: None,
                     });
+                    graph_only.insert(chunk_id);
                 }
             }
             Err(e) => {
                 warn!(error = %e, "graph expansion: get_chunks_by_file_ids failed");
             }
         }
+        graph_only
     }
 
     /// Expand: look up chunks by IDs, preserve order, return full content within budget.
@@ -1038,10 +1062,29 @@ where
                 first_confidence = confidence;
             }
             for result in ranked {
-                let dominated = best_by_chunk
-                    .get(&result.chunk_id)
-                    .is_some_and(|existing| existing.hybrid_score >= result.hybrid_score);
-                if !dominated {
+                // Determinism: when two brains report the same chunk with
+                // identical scores, pick the lexicographically-smaller brain
+                // name as the canonical attribution. Strict `>` lets ties
+                // fall through to the explicit tiebreak below.
+                let replace = match best_by_chunk.get(&result.chunk_id) {
+                    None => true,
+                    Some(existing) => {
+                        if result.hybrid_score > existing.hybrid_score {
+                            true
+                        } else if result.hybrid_score < existing.hybrid_score {
+                            false
+                        } else {
+                            // Tied scores: keep whichever brain name sorts
+                            // lexicographically smaller.
+                            let current_brain = chunk_brain
+                                .get(&result.chunk_id)
+                                .map(String::as_str)
+                                .unwrap_or("");
+                            brain_name.as_str() < current_brain
+                        }
+                    }
+                };
+                if replace {
                     chunk_brain.insert(result.chunk_id.clone(), brain_name.clone());
                     best_by_chunk.insert(result.chunk_id.clone(), result);
                 }
@@ -1050,11 +1093,12 @@ where
 
         let mut merged: Vec<crate::ranking::RankedResult> = best_by_chunk.into_values().collect();
 
-        // ── 4. Sort by hybrid_score descending ────────────────────────────────
+        // ── 4. Sort by hybrid_score descending, lex chunk_id as tiebreak ──────
         merged.sort_by(|a, b| {
             b.hybrid_score
                 .partial_cmp(&a.hybrid_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.chunk_id.cmp(&b.chunk_id))
         });
 
         Ok(FederatedRankedResult {

@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use brain_lib::embedder::MockEmbedder;
+use brain_lib::embedder::{Embed, MockEmbedder};
+use brain_lib::error::Result as BrainResult;
 use brain_lib::mcp::McpContext;
 use brain_lib::mcp::protocol::ToolCallResult;
 use brain_lib::mcp::tools::ToolRegistry;
@@ -98,6 +99,45 @@ pub async fn seed_test_chunks(ctx: &TestHarnessContext) -> usize {
         .expect("index seed note");
     assert_eq!(stats.errors, 0, "seed indexing should have no errors");
     stats.indexed
+}
+
+/// Embedder that maps each known tag string to one of four near-orthogonal
+/// 384-dim one-hot vectors so the clustering algorithm produces exactly four
+/// connected components (`bug/bugs/defect`, `performance/perf`,
+/// `docs/documentation`, `chore`) regardless of cosine threshold within
+/// (0, 1).
+pub struct ControlledEmbedder;
+
+impl ControlledEmbedder {
+    fn cluster_index(text: &str) -> usize {
+        match text {
+            "bug" | "bugs" | "defect" => 0,
+            "performance" | "perf" => 1,
+            "docs" | "documentation" => 2,
+            "chore" => 3,
+            other => panic!("ControlledEmbedder: unexpected tag {other:?}"),
+        }
+    }
+
+    fn vector_for(text: &str) -> Vec<f32> {
+        let mut v = vec![0f32; 384];
+        v[Self::cluster_index(text)] = 1.0;
+        v
+    }
+}
+
+impl Embed for ControlledEmbedder {
+    fn embed_batch(&self, texts: &[&str]) -> BrainResult<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|t| Self::vector_for(t)).collect())
+    }
+
+    fn hidden_size(&self) -> usize {
+        384
+    }
+
+    fn version(&self) -> &str {
+        "controlled-v0"
+    }
 }
 
 #[tokio::test]

@@ -1,0 +1,56 @@
+{
+  "description": "Golden fixture for memory.retrieve query mode. Volatile fields stripped before saving: query_time_ms (top-level), generated_at (per-result).",
+  "query": "semantic memory retrieval",
+  "response": {
+    "fusion_confidence": {
+      "confidence": 0.0,
+      "k": 1,
+      "overlap": 0
+    },
+    "lod_diagnostics": {
+      "lod_generation_enqueued": 0,
+      "lod_hits": 0,
+      "lod_misses": 3
+    },
+    "lod_requested": "L0",
+    "pipeline_diagnostics": {
+      "fts_candidates": 1,
+      "reranked": false,
+      "union_size": 3,
+      "vector_candidates": 3
+    },
+    "result_count": 3,
+    "results": [
+      {
+        "content": "Semantic memory retrieval uses vector embeddings.",
+        "expansion_reason": "keyword_only",
+        "kind": "note",
+        "lod": "L2",
+        "lod_fresh": true,
+        "lod_plan_slot": 0,
+        "strategy_used": "Default",
+        "title": "# Memory Retrieval"
+      },
+      {
+        "content": "Level-of-detail resolution produces extractive summaries.",
+        "expansion_reason": "vector_only",
+        "kind": "note",
+        "lod": "L2",
+        "lod_fresh": true,
+        "lod_plan_slot": 1,
+        "strategy_used": "Default",
+        "title": "# LOD Resolution"
+      },
+      {
+        "content": "The search pipeline combines BM25 and cosine similarity.",
+        "expansion_reason": "vector_only",
+        "kind": "note",
+        "lod": "L2",
+        "lod_fresh": true,
+        "lod_plan_slot": 2,
+        "strategy_used": "Default",
+        "title": "# Search Pipeline"
+      }
+    ]
+  }
+}

@@ -2,7 +2,59 @@
 ///
 /// Combines vector similarity, BM25 keyword scores, recency, backlink graph,
 /// tag overlap, and importance into a single weighted score.
+use serde::Serialize;
+
+/// Why this candidate was surfaced. Discovery channel only — not a measure
+/// of relevance. Used by callers to reason about retrieval coverage and by
+/// the benchmark suite to slice quality metrics.
 ///
+/// Tag-alias expansion is intentionally not represented here: it filters
+/// eligibility, not discovery, and its contribution is visible via
+/// `SignalScores::tag_match`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpansionReason {
+    /// Vector similarity hit only (no FTS match).
+    VectorOnly,
+    /// BM25/FTS hit only (no vector similarity).
+    KeywordOnly,
+    /// Both vector and keyword paths matched.
+    Hybrid,
+    /// Pulled in by 1-hop outlink expansion from a top seed.
+    GraphLink,
+    /// Direct URI fetch — no ranking involved.
+    UriDirect,
+}
+
+impl ExpansionReason {
+    /// Classify a candidate from its raw signal scores. Graph-link candidates
+    /// must be tagged separately by the caller — this function only sees
+    /// vector and keyword signals.
+    pub fn from_signals(sim_vector: f64, bm25: f64) -> Self {
+        let has_vector = sim_vector > 0.0;
+        let has_keyword = bm25 > 0.0;
+        match (has_vector, has_keyword) {
+            (true, true) => Self::Hybrid,
+            (true, false) => Self::VectorOnly,
+            (false, true) => Self::KeywordOnly,
+            // No signal — default to Hybrid; this branch is unreachable for
+            // legitimately-ranked candidates.
+            (false, false) => Self::Hybrid,
+        }
+    }
+
+    /// String form used in the MCP JSON surface.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::VectorOnly => "vector_only",
+            Self::KeywordOnly => "keyword_only",
+            Self::Hybrid => "hybrid",
+            Self::GraphLink => "graph_link",
+            Self::UriDirect => "uri_direct",
+        }
+    }
+}
+
 /// Weight profile names for different retrieval intents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WeightProfile {
@@ -167,6 +219,10 @@ pub struct RankedResult {
     /// For `sum:` candidates: the kind field from the summaries table ("episode" or "reflection").
     /// `None` for regular chunk candidates.
     pub summary_kind: Option<String>,
+    /// Discovery channel for this candidate. Initially set from signal
+    /// classification in `rank_candidates`; the caller (query pipeline)
+    /// overrides to `GraphLink` for chunks introduced by graph expansion.
+    pub expansion_reason: ExpansionReason,
 }
 
 /// Individual signal scores for debugging/introspection.
@@ -331,14 +387,19 @@ pub fn rank_candidates(
                 byte_start: c.byte_start,
                 byte_end: c.byte_end,
                 summary_kind: c.summary_kind.clone(),
+                expansion_reason: ExpansionReason::from_signals(c.sim_vector, c.bm25),
             }
         })
         .collect();
 
+    // Sort by hybrid score descending, with lexicographic chunk_id as a
+    // stable tiebreaker so identical queries against identical state produce
+    // byte-identical orderings (precondition for the benchmark suite).
     results.sort_by(|a, b| {
         b.hybrid_score
             .partial_cmp(&a.hybrid_score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.chunk_id.cmp(&b.chunk_id))
     });
     results
 }
