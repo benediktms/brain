@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.7] - 2026-04-29
+
+### Features
+
+- Cross-brain deps + first-class external blockers gate readiness (#96)
+- CLI plumbing for memory.retrieve (brn-83a.6.4) (#95)
+- Explainability fields + deterministic packing (brn-83a.6.3) (#94)
+
 ## [0.3.6] - 2026-04-29
 
 ### Bug Fixes
