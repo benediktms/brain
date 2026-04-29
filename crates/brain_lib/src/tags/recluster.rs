@@ -27,7 +27,7 @@ use std::sync::Arc;
 use brain_persistence::db::tag_aliases::{
     AliasUpsert, DedupedRawTag, ExistingAlias, FinalizeRun, InsertRun,
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::embedder::{Embed, embed_batch_async};
 use crate::error::Result;
@@ -94,6 +94,10 @@ pub struct ReclusterReport {
 /// (MCP/CLI surface) introduces a per-brain in-flight guard if needed;
 /// until then, callers must enforce the "one run at a time per brain"
 /// invariant themselves.
+#[tracing::instrument(
+    skip_all,
+    fields(run_id = tracing::field::Empty, threshold = params.cosine_threshold),
+)]
 pub async fn run_recluster(
     stores: &BrainStores,
     embedder: &Arc<dyn Embed>,
@@ -101,6 +105,7 @@ pub async fn run_recluster(
 ) -> Result<ReclusterReport> {
     let started_at = std::time::Instant::now();
     let run_id = ulid::Ulid::new().to_string();
+    tracing::Span::current().record("run_id", run_id.as_str());
     let started_at_iso = chrono::Utc::now().to_rfc3339();
 
     info!(
@@ -122,7 +127,7 @@ pub async fn run_recluster(
     .await;
 
     if let Err(ref e) = outcome {
-        warn!(
+        error!(
             brain_id = %stores.brain_id,
             run_id = %run_id,
             error = %e,
@@ -231,6 +236,15 @@ async fn run_inner(
         embedder_version: EMBEDDER_VERSION.to_string(),
     };
 
+    if report.stale_aliases > 0 {
+        warn!(
+            brain_id = %stores.brain_id,
+            run_id = %report.run_id,
+            stale = report.stale_aliases,
+            "recluster: pruned stale aliases",
+        );
+    }
+
     info!(
         brain_id = %stores.brain_id,
         run_id = %report.run_id,
@@ -317,6 +331,12 @@ fn diff_clusters_against_snapshot(
     let mut upserts: Vec<AliasUpsert> = Vec::new();
 
     for cluster in clusters {
+        debug!(
+            cluster_id = %cluster.cluster_id,
+            canonical = %cluster.canonical,
+            members = cluster.members.len(),
+            "recluster: cluster",
+        );
         for member in &cluster.members {
             let embedding = candidates_by_tag.get(member).cloned().unwrap_or_else(|| {
                 panic!(

@@ -41,9 +41,18 @@ pub(crate) enum MemoryAction {
         #[arg(short, long, default_value = "800")]
         budget: usize,
 
-        /// Tags to boost (comma-delimited, e.g. rust,memory)
+        /// Tags to boost (comma-delimited, e.g. rust,memory). This is a ranking signal,
+        /// not a filter — see --tags-require / --tags-exclude for AND/NOR filtering.
         #[arg(long, value_delimiter = ',')]
         tags: Vec<String>,
+
+        /// Tags that all must match (AND filter). Comma-delimited, alias-aware.
+        #[arg(long = "tags-require", value_delimiter = ',')]
+        tags_require: Vec<String>,
+
+        /// Tags whose presence excludes a result (NOR filter). Comma-delimited, alias-aware.
+        #[arg(long = "tags-exclude", value_delimiter = ',')]
+        tags_exclude: Vec<String>,
 
         /// Search across specific brains (repeatable). Use 'all' for all registered brains.
         #[arg(long = "brain", value_name = "NAME_OR_ID", num_args = 1)]

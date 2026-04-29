@@ -17,7 +17,7 @@ just check        # cargo check
 just install      # Build release binary and symlink to ~/bin/brain
 ```
 
-<!-- brain:start:e7e6bd8c -->
+<!-- brain:start:e4bd3468 -->
 ## Build & Test
 
 ```bash
@@ -37,9 +37,9 @@ When running as an MCP server (`brain mcp`), these tools are available:
 **Task tools:**
 - `tasks_apply_event` — Single tool for all task mutations. Event types: `task_created`, `task_updated`, `status_changed`, `dependency_added`, `dependency_removed`, `comment_added`, `label_added`, `label_removed`, `note_linked`, `note_unlinked`, `parent_set`, `external_id_added`, `external_id_removed`. Accepts task ID as full ID or unique prefix (e.g. `BRN-01JPH`).
 - `tasks_create` — Create a task with a flat schema (no event envelope). Required param: `title`. Optional: `description`, `priority` (0-4, default 4), `task_type` (task|bug|feature|epic|spike), `assignee`, `parent` (task ID prefix), `due_ts` (ISO 8601), `defer_until` (ISO 8601), `actor` (default: mcp). For remote creation: add `brain` (target brain name or ID from registry); optionally `link_from` (local task ID) and `link_type` (depends_on|blocks|related, default: related). Returns `{task_id, task, unblocked_task_ids}` for local creation, or `{remote_task_id, remote_brain_name, remote_brain_id, local_ref_created}` for remote creation.
-- `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`, `in_progress` (exact match), `cancelled` (exact match). Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description). Optional `brain` parameter for cross-brain queries.
+- `tasks_list` — List tasks filtered by status: `open` (default, excludes done), `ready` (no unresolved deps), `blocked` (has unresolved deps), `done`, `in_progress` (exact match), `cancelled` (exact match). Supports `task_ids` array for batch lookup, `limit` for pagination, `include_description` flag, and per-field filters: `priority` (0-4), `task_type`, `assignee`, `label`, `search` (FTS5 full-text search on title+description). Optional `brains` array to query across multiple brain projects (e.g. `["work", "personal"]`); use `["all"]` (or `["*"]`) to query every registered brain. Each task is tagged with its source `brain`; federated responses include a top-level `brains` array. Singular `brain` is accepted as a deprecated alias for `brains: [name]`.
 - `tasks_get` — Get full task details including relationships, comments, labels, linked notes, and external IDs (`external_ids`). Use `expand` parameter (`parent`, `children`, `blocked_by`, `blocks`) to inline related task objects.
-- `tasks_next` — Get highest-priority ready tasks sorted by status (in-progress first), then priority, then due date. Use for "what should I work on?" queries.
+- `tasks_next` — Get highest-priority ready tasks sorted by status (in-progress first), then priority, then due date. Use for "what should I work on?" queries. Optional `brains` array to query across multiple brains (e.g. `["work", "personal"]`); use `["all"]` to merge ready tasks from every registered brain and sort by priority globally. Each task is tagged with its source `brain`; federated responses include a top-level `brains` array.
 - `tasks_close` — Close one or more tasks by ID/prefix. Accepts a single string or array of task IDs. Returns closed tasks and newly unblocked task IDs.
 - `tasks_labels_summary` — Get all unique labels with counts and associated task IDs (short prefixes). No parameters. Use for label discovery and taxonomy overview.
 - `tasks_labels_batch` — Batch label operations. Actions: `add` (label + task_ids), `remove` (label + task_ids), `rename` (old_label + new_label), `purge` (label). Supports `brain` param for cross-brain label management. Returns succeeded/failed/summary.
@@ -63,7 +63,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `records.save_snapshot` — Save a snapshot record with `text` (plain) or `data` (base64) content. Supports `brain` param for cross-brain writes.
 - Per-kind policy: document/analysis/plan/summary are embedded and summarized; implementation/review/custom are embedded and searchable; snapshots are stored without embedding or summarization.
 - `records.get` — Get a record by ID with full metadata, tags, and links (supports prefix resolution). Supports `brain` param for cross-brain access.
-- `records.list` — List records with optional filters (kind, status, tag, task_id). Supports `brain` param for cross-brain access.
+- `records.list` — List records with optional filters (kind, status, tag, task_id). Optional `brains` array to query across multiple brains (e.g. `["work", "personal"]`); use `["all"]` to query every registered brain. Each record is tagged with its source `brain`; federated responses include a top-level `brains` array. Singular `brain` is accepted as a deprecated alias for `brains: [name]`.
 - `records.fetch_content` — Fetch raw content of a record. Text content (text/*, application/json, application/toml, application/yaml) is auto-decoded as UTF-8 and returned in a `text` field; binary content is returned as base64 in `data`. Response includes `encoding` ('utf-8' or 'base64'), `title`, and `kind` metadata. Supports `brain` param for cross-brain access.
 - `records.archive` — Archive a record (metadata-only, payload preserved).
 - `records.tag_add` — Add a tag to a record (idempotent).

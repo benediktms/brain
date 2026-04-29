@@ -62,6 +62,8 @@ pub struct SearchParams2 {
     pub intent: String,
     pub budget: usize,
     pub tags: Vec<String>,
+    pub tags_require: Vec<String>,
+    pub tags_exclude: Vec<String>,
     pub brains: Vec<String>,
     pub explain: bool,
 }
@@ -73,7 +75,9 @@ pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
         params.budget,
         params.k,
         &params.tags,
-    );
+    )
+    .with_tags_require(&params.tags_require)
+    .with_tags_exclude(&params.tags_exclude);
 
     let result = if params.brains.is_empty() {
         let pipeline =

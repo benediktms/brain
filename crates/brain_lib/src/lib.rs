@@ -31,6 +31,11 @@ pub mod search_service;
 pub mod stores;
 pub mod summarizer;
 pub(crate) mod tags;
+// Targeted public re-exports from `tags` so integration tests and `.7.2.5`'s
+// future MCP/CLI surface can reach the recluster job without exposing the
+// module namespace itself (preserves a deliberate review gate on what becomes
+// public API).
+pub use crate::tags::{ClusterParams, ReclusterReport, run_recluster};
 pub mod tasks;
 pub mod tokens;
 pub mod uri;

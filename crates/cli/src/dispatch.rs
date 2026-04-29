@@ -801,6 +801,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     intent,
                     budget,
                     tags,
+                    tags_require,
+                    tags_exclude,
                     brains,
                     explain,
                 } => {
@@ -812,6 +814,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             intent: intent.as_str().to_string(),
                             budget,
                             tags,
+                            tags_require,
+                            tags_exclude,
                             brains,
                             explain,
                         },
