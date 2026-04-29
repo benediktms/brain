@@ -24,7 +24,6 @@ pub mod migrate;
 pub mod plans;
 pub mod plugin;
 pub mod provider;
-pub mod query;
 pub mod records;
 pub mod registry;
 pub mod reindex;

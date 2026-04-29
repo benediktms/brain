@@ -21,10 +21,7 @@ use crate::ranking::{
     CandidateSignals, FusionConfidence, RerankCandidate, Reranker, RerankerPolicy, Weights,
     compute_fusion_confidence, rank_candidates, resolve_intent,
 };
-use crate::retrieval::{
-    ExpandResult, ExpandableChunk, MemoryKind, SearchResult, derive_kind, expand_results,
-    pack_minimal,
-};
+use crate::retrieval::{MemoryKind, SearchResult, derive_kind, pack_minimal};
 use crate::tokens::estimate_tokens;
 use brain_persistence::db::Db;
 use brain_persistence::db::summaries::SummaryRow;
@@ -823,34 +820,6 @@ where
             }
         }
         graph_only
-    }
-
-    /// Expand: look up chunks by IDs, preserve order, return full content within budget.
-    #[instrument(skip_all)]
-    pub async fn expand(
-        &self,
-        memory_ids: &[String],
-        budget_tokens: usize,
-    ) -> Result<ExpandResult> {
-        let rows = self.db.get_chunks_by_ids(memory_ids)?;
-
-        // Preserve the requested order
-        let row_map: HashMap<&str, _> = rows.iter().map(|r| (r.chunk_id.as_str(), r)).collect();
-        let chunks: Vec<ExpandableChunk> = memory_ids
-            .iter()
-            .filter_map(|id| row_map.get(id.as_str()).copied())
-            .map(|row| ExpandableChunk {
-                chunk_id: row.chunk_id.clone(),
-                content: row.content.clone(),
-                file_path: row.file_path.clone(),
-                heading_path: row.heading_path.clone(),
-                token_estimate: row.token_estimate,
-                byte_start: row.byte_start,
-                byte_end: row.byte_end,
-            })
-            .collect();
-
-        Ok(expand_results(&chunks, budget_tokens))
     }
 
     /// Reflect: fetch recent episodes + search for related chunks, return combined result.

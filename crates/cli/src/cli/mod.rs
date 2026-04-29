@@ -50,33 +50,6 @@ impl From<TaskTypeArg> for brain_lib::tasks::events::TaskType {
     }
 }
 
-/// Ranking intent profiles for hybrid search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum Intent {
-    /// Equal weights across all signals
-    Auto,
-    /// Keyword-heavy (40% BM25) for exact matches
-    Lookup,
-    /// Recency + links for project planning queries
-    Planning,
-    /// Recency-heavy for journal/reflection queries
-    Reflection,
-    /// Vector-heavy (40%) for semantic similarity
-    Synthesis,
-}
-
-impl Intent {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Lookup => "lookup",
-            Self::Planning => "planning",
-            Self::Reflection => "reflection",
-            Self::Synthesis => "synthesis",
-        }
-    }
-}
-
 // ── top-level CLI struct ────────────────────────────────────
 
 #[derive(Parser)]
@@ -95,12 +68,12 @@ impl Intent {
         - .brain/brain.db        SQLite control-plane & task store\n  \
         - .brain/models/         Embedding model weights",
     after_help = "EXAMPLES:\n  \
-        brain index ./notes          Index a notes directory\n  \
-        brain query \"async patterns\" Search for notes about async patterns\n  \
-        brain watch ./notes          Watch and re-index on changes\n  \
-        brain daemon start           Start background watcher\n  \
-        brain daemon install         Install as login service (launchd/systemd)\n  \
-        brain mcp                    Start MCP server for agent integration\n\n\
+        brain index ./notes                  Index a notes directory\n  \
+        brain memory retrieve \"async patterns\"  Search for notes about async patterns\n  \
+        brain watch ./notes                  Watch and re-index on changes\n  \
+        brain daemon start                   Start background watcher\n  \
+        brain daemon install                 Install as login service (launchd/systemd)\n  \
+        brain mcp                            Start MCP server for agent integration\n\n\
         Use `brain <command> --help` for more details on each command."
 )]
 pub(crate) struct Cli {
@@ -159,50 +132,6 @@ pub(crate) enum Command {
         /// Path to the notes directory
         #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
         notes_path: PathBuf,
-    },
-
-    /// Query indexed notes using hybrid search (vector + keyword + ranking)
-    #[command(
-        visible_alias = "q",
-        long_about = "Query indexed notes using hybrid search.\n\n\
-            Combines vector similarity (BGE embeddings) with BM25 keyword matching \
-            and a 6-signal ranking engine (vector, keyword, recency, backlinks, \
-            tags, importance). Use --intent to tune ranking for your retrieval goal.\n\n\
-            Weight profiles:\n  \
-            - auto      Equal weights across all signals (default)\n  \
-            - lookup    Keyword-heavy (40% BM25) for exact matches\n  \
-            - planning  Recency + links for project planning queries\n  \
-            - reflection Recency-heavy for journal/reflection queries\n  \
-            - synthesis  Vector-heavy (40%) for semantic similarity",
-        after_help = "EXAMPLES:\n  \
-            brain query \"how does authentication work\"\n  \
-            brain query \"async error handling\" -k 10\n  \
-            brain query -i lookup \"database migration steps\"\n  \
-            brain query -i synthesis \"ownership and borrowing\" --verbose"
-    )]
-    Query {
-        /// Natural-language search query
-        query: String,
-
-        /// Maximum number of results to return
-        #[arg(short, long, default_value = "5")]
-        k: usize,
-
-        /// Ranking intent profile
-        #[arg(short, long, default_value = "auto")]
-        intent: Intent,
-
-        /// Token budget for result packing
-        #[arg(short, long, default_value = "800")]
-        budget: usize,
-
-        /// Show per-signal score breakdown for each result
-        #[arg(short = 'V', long)]
-        verbose: bool,
-
-        /// Search across specific brains (repeatable). Use 'all' for all registered brains.
-        #[arg(long = "brain", value_name = "NAME_OR_ID", num_args = 1)]
-        brains: Vec<String>,
     },
 
     /// Watch a directory for changes and re-index incrementally
@@ -474,17 +403,20 @@ pub(crate) enum Command {
         action: RecordsAction,
     },
 
-    /// Search and manage episodic memory (search, expand, write-episode, reflect)
+    /// Retrieve and manage episodic memory (retrieve, write-episode, reflect, ...)
     #[command(
         visible_alias = "mem",
-        long_about = "Search and manage episodic memory.\n\n\
-            Provides direct CLI access to the memory pipeline: hybrid search, \
-            content expansion, episode writing, and two-phase reflection.\n\n\
+        long_about = "Retrieve and manage episodic memory.\n\n\
+            Provides direct CLI access to the memory pipeline: unified retrieval \
+            at a requested level of detail (LOD), episode writing, two-phase reflection, \
+            consolidation, and scope summarisation.\n\n\
             Subcommands:\n  \
-            - search        Hybrid search returning compact memory stubs\n  \
-            - expand        Expand stubs to full content\n  \
-            - write-episode Record a goal/actions/outcome episode\n  \
-            - reflect       Retrieve source material or commit a reflection"
+            - retrieve        Retrieve memory chunks at a requested LOD (canonical search surface)\n  \
+            - write-episode   Record a goal/actions/outcome episode\n  \
+            - write-procedure Record a reusable procedure\n  \
+            - reflect         Retrieve source material or commit a reflection\n  \
+            - consolidate     Cluster recent episodes and summarise\n  \
+            - summarize-scope Generate extractive summaries scoped to a directory or tag"
     )]
     Memory {
         /// Output as JSON instead of human-readable text

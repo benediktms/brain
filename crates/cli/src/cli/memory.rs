@@ -1,88 +1,8 @@
 use clap::Subcommand;
 
-use super::Intent;
-
 /// Subcommands for `brain memory`.
 #[derive(Subcommand)]
 pub(crate) enum MemoryAction {
-    /// Search the knowledge base and return compact memory stubs
-    #[command(
-        visible_alias = "s",
-        long_about = "Search the knowledge base using hybrid retrieval (vector + BM25 + ranking).\n\n\
-            Returns compact memory stubs within a token budget. Results span note chunks, \
-            task capsules, episodes, and reflections. Use --intent to tune the ranking \
-            weight profile for your retrieval goal.\n\n\
-            Weight profiles:\n  \
-            - auto       Equal weights across all signals (default)\n  \
-            - lookup     Keyword-heavy (40% BM25) for exact matches\n  \
-            - planning   Recency + links for project planning queries\n  \
-            - reflection Recency-heavy for journal/reflection queries\n  \
-            - synthesis  Vector-heavy (40%) for semantic similarity",
-        after_help = "EXAMPLES:\n  \
-            brain memory search \"how does authentication work\"\n  \
-            brain memory search \"async error handling\" -k 10\n  \
-            brain memory s -i lookup \"database migration steps\"\n  \
-            brain memory search \"rust ownership\" --tags rust,memory\n  \
-            brain memory search \"design patterns\" --brain work --brain personal"
-    )]
-    Search {
-        /// Natural-language search query
-        query: String,
-
-        /// Maximum number of results to return
-        #[arg(short, long, default_value = "10")]
-        k: usize,
-
-        /// Ranking intent profile
-        #[arg(short, long, default_value = "auto")]
-        intent: Intent,
-
-        /// Token budget for result packing
-        #[arg(short, long, default_value = "800")]
-        budget: usize,
-
-        /// Tags to boost (comma-delimited, e.g. rust,memory). This is a ranking signal,
-        /// not a filter — see --tags-require / --tags-exclude for AND/NOR filtering.
-        #[arg(long, value_delimiter = ',')]
-        tags: Vec<String>,
-
-        /// Tags that all must match (AND filter). Comma-delimited, alias-aware.
-        #[arg(long = "tags-require", value_delimiter = ',')]
-        tags_require: Vec<String>,
-
-        /// Tags whose presence excludes a result (NOR filter). Comma-delimited, alias-aware.
-        #[arg(long = "tags-exclude", value_delimiter = ',')]
-        tags_exclude: Vec<String>,
-
-        /// Search across specific brains (repeatable). Use 'all' for all registered brains.
-        #[arg(long = "brain", value_name = "NAME_OR_ID", num_args = 1)]
-        brains: Vec<String>,
-
-        /// Show per-result signal score breakdowns
-        #[arg(long)]
-        explain: bool,
-    },
-
-    /// Expand memory stubs to full content
-    #[command(
-        visible_alias = "e",
-        long_about = "Expand memory stubs to full content.\n\n\
-            Pass memory_ids obtained from `brain memory search` results. Returns the \
-            full chunk content for each ID within the token budget.",
-        after_help = "EXAMPLES:\n  \
-            brain memory expand chunk-abc123 chunk-def456\n  \
-            brain memory e chunk-abc123 --budget 4000"
-    )]
-    Expand {
-        /// Memory IDs to expand (from search results)
-        #[arg(required = true)]
-        memory_ids: Vec<String>,
-
-        /// Token budget for expanded content
-        #[arg(short, long, default_value = "2000")]
-        budget: usize,
-    },
-
     /// Record a goal/actions/outcome episode to the knowledge base
     #[command(
         name = "write-episode",

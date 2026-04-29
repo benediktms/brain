@@ -43,27 +43,6 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Index { notes_path } => {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
-        Command::Query {
-            query,
-            k,
-            intent,
-            budget,
-            verbose,
-            brains,
-        } => {
-            commands::query::run(commands::query::QueryParams {
-                query,
-                top_k: k,
-                intent: intent.as_str().to_string(),
-                budget,
-                verbose,
-                model_dir: cli.model_dir,
-                db_path: cli.lance_db,
-                sqlite_path: cli.sqlite_db,
-                brains,
-            })
-            .await?
-        }
         Command::Watch { notes_path } => {
             let outcome =
                 commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
@@ -812,7 +791,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Memory { json, action } => {
             use commands::memory::run::{
                 MemoryCtx, ReflectCommitParams, ReflectPrepareParams, RetrieveParams,
-                SearchParams2, WriteEpisodeParams, WriteProcedureParams,
+                WriteEpisodeParams, WriteProcedureParams,
             };
             let ctx = MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
 
@@ -824,33 +803,6 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 } => {
                     commands::memory::run::consolidate(&ctx, limit, gap_seconds, auto_summarize)
                         .await?;
-                }
-                MemoryAction::Search {
-                    query,
-                    k,
-                    intent,
-                    budget,
-                    tags,
-                    tags_require,
-                    tags_exclude,
-                    brains,
-                    explain,
-                } => {
-                    commands::memory::run::search(
-                        &ctx,
-                        SearchParams2 {
-                            query,
-                            k,
-                            intent: intent.as_str().to_string(),
-                            budget,
-                            tags,
-                            tags_require,
-                            tags_exclude,
-                            brains,
-                            explain,
-                        },
-                    )
-                    .await?;
                 }
                 MemoryAction::Retrieve {
                     query,
@@ -888,9 +840,6 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         },
                     )
                     .await?;
-                }
-                MemoryAction::Expand { memory_ids, budget } => {
-                    commands::memory::run::expand(&ctx, &memory_ids, budget).await?;
                 }
                 MemoryAction::WriteEpisode {
                     goal,

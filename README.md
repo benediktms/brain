@@ -237,14 +237,14 @@ For full technical details — sequence diagrams, hybrid scoring formula, intent
 ## Usage
 
 ```sh
-brain index                              # One-shot index all notes
-brain watch                              # Watch and index incrementally
-brain query "weekly review template"     # Search from CLI
-brain query --intent planning "next steps"
-brain query --budget 800 "async patterns"
-brain daemon start                       # Start + register auto-start
-brain daemon stop                        # Stop + deregister
-brain daemon status                      # Check daemon state
+brain index                                           # One-shot index all notes
+brain watch                                           # Watch and index incrementally
+brain memory retrieve "weekly review template"        # Search from CLI
+brain memory retrieve --strategy planning "next steps"
+brain memory retrieve --count 10 "async patterns"
+brain daemon start                                    # Start + register auto-start
+brain daemon stop                                     # Stop + deregister
+brain daemon status                                   # Check daemon state
 ```
 
 ### Multiple Brains

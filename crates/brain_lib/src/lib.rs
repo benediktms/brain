@@ -60,7 +60,7 @@ pub mod prelude {
         FusionConfidence, RankedResult, RerankCandidate, RerankResult, Reranker, RerankerPolicy,
         WeightProfile,
     };
-    pub use crate::retrieval::{ExpandResult, ExpandedMemory, MemoryStub, SearchResult};
+    pub use crate::retrieval::{MemoryStub, SearchResult};
     pub use crate::scanner::{ScannedFile, scan_brain};
     pub use crate::tokens::estimate_tokens;
     pub use crate::utils::content_hash;

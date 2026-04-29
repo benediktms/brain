@@ -596,8 +596,8 @@ async fn test_mcp_retrieve_returns_results() {
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),
     };
 
-    // memory.retrieve replaces memory.search_minimal — use exact chunk text so
-    // MockEmbedder's hash-based embedding yields a near-perfect vector match.
+    // Use exact chunk text so MockEmbedder's hash-based embedding yields a
+    // near-perfect vector match.
     let params = json!({
         "query": "Rust is a systems programming language.",
         "strategy": "lookup",

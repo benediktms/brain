@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Removed
 
 - Removed legacy `memory.search_minimal` and `memory.expand` MCP tools. Use `memory.retrieve` instead.
+- Removed corresponding CLI surface: `brain query`, `brain memory search`, `brain memory expand`, and the `--intent` ranking-profile flag. Use `brain memory retrieve` (with `--strategy`/`-s`) instead.
 
 ## [0.3.7] - 2026-04-29
 
