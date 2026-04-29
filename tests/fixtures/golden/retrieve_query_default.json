@@ -28,7 +28,6 @@
         "lod": "L2",
         "lod_fresh": true,
         "lod_plan_slot": 0,
-        "score": 0.41666666666666663,
         "strategy_used": "Default",
         "title": "# Memory Retrieval"
       },
@@ -39,7 +38,6 @@
         "lod": "L2",
         "lod_fresh": true,
         "lod_plan_slot": 1,
-        "score": 0.2784886956214905,
         "strategy_used": "Default",
         "title": "# LOD Resolution"
       },
@@ -50,7 +48,6 @@
         "lod": "L2",
         "lod_fresh": true,
         "lod_plan_slot": 2,
-        "score": 0.25775502125422156,
         "strategy_used": "Default",
         "title": "# Search Pipeline"
       }

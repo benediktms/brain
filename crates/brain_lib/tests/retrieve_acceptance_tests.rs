@@ -170,7 +170,12 @@ fn save_golden<T: Serialize>(name: &str, value: &T) {
 /// Stripped top-level: `query_time_ms`.
 /// Stripped per-result: `generated_at`, `uri`, `source_uri` (contain ULID-based
 /// chunk_ids that differ across test runs because each run uses a fresh TempDir
-/// and fresh ULID generation).
+/// and fresh ULID generation), and `score` (f32 cosine-similarity reductions
+/// drift in the last 6–7 decimal places across separate process invocations
+/// even though they are deterministic *within* a single process — which is
+/// what tests 5 and 6 already pin. The structural assertions of this golden
+/// test — result count, ordering, `lod_plan_slot`, `expansion_reason`, `kind`
+/// — are byte-stable and remain in the comparison).
 fn strip_volatile_fields(mut v: Value) -> Value {
     if let Some(obj) = v.as_object_mut() {
         obj.remove("query_time_ms");
@@ -181,6 +186,7 @@ fn strip_volatile_fields(mut v: Value) -> Value {
                         o.remove("generated_at");
                         o.remove("uri");
                         o.remove("source_uri");
+                        o.remove("score");
                     }
                 }
             }
