@@ -563,6 +563,7 @@ mod tests {
             byte_start: 0,
             byte_end: content.len(),
             summary_kind: None,
+            expansion_reason: crate::ranking::ExpansionReason::Hybrid,
         }
     }
 

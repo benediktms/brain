@@ -54,6 +54,7 @@ fn make_ranked(id: &str, score: f64, content: &str) -> RankedResult {
         byte_start: 0,
         byte_end: 0,
         summary_kind: None,
+        expansion_reason: brain_lib::ranking::ExpansionReason::Hybrid,
     }
 }
 

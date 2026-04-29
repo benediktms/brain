@@ -214,6 +214,8 @@ mod tests {
             signal_scores: None,
             kind: "note".to_string(),
             brain_name: None,
+            expansion_reason: brain_lib::ranking::ExpansionReason::Hybrid,
+            lod_plan_slot: rank,
         }
     }
 

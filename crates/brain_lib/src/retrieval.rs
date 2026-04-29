@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::capsule::generate_stub_capsule;
-use crate::ranking::{FusionConfidence, RankedResult, SignalScores};
+use crate::ranking::{ExpansionReason, FusionConfidence, RankedResult, SignalScores};
 use crate::tokens::estimate_tokens;
 
 /// Canonical memory result kind.
@@ -57,6 +57,11 @@ pub struct MemoryStub {
     pub kind: String,
     /// Which brain this result came from. `None` for single-brain search.
     pub brain_name: Option<String>,
+    /// Discovery channel for this result.
+    pub expansion_reason: ExpansionReason,
+    /// Zero-indexed slot in the packed result list. Stable across identical
+    /// queries against identical state.
+    pub lod_plan_slot: usize,
 }
 
 /// Result of a search_minimal call.
@@ -165,6 +170,10 @@ pub fn pack_minimal(
         if include_scores {
             stub.signal_scores = Some(result.scores);
         }
+
+        // Slot index in the packed list. Stable across runs because `ranked`
+        // is sorted with a deterministic tiebreak in `rank_candidates`.
+        stub.lod_plan_slot = results.len();
 
         used_tokens += stub_tokens;
         results.push(stub);
@@ -280,6 +289,9 @@ fn make_stub(result: &RankedResult, ml_summary: Option<&str>) -> MemoryStub {
         signal_scores: None,
         kind,
         brain_name: None,
+        expansion_reason: result.expansion_reason,
+        // Set by pack_minimal at the moment of push. Sentinel value here.
+        lod_plan_slot: 0,
     }
 }
 
@@ -369,6 +381,7 @@ mod tests {
             byte_start: 0,
             byte_end: 0,
             summary_kind: None,
+            expansion_reason: crate::ranking::ExpansionReason::Hybrid,
         }
     }
 
