@@ -8,6 +8,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   commit-lint:
@@ -52,10 +57,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: mozilla-actions/sccache-action@v0.0.5
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: "true"
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: cargo check --workspace
-      - run: cargo check --workspace --tests
+      - run: cargo check --workspace --locked
+      - run: cargo check --workspace --tests --locked
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   fmt:
     name: Format
@@ -64,8 +77,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+          components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
@@ -75,10 +87,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy
+      - uses: mozilla-actions/sccache-action@v0.0.5
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: "true"
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --locked -- -D warnings
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   test:
     name: Test
@@ -86,11 +106,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - uses: mozilla-actions/sccache-action@v0.0.5
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: "true"
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: cargo test --workspace
+      - run: cargo test --workspace --locked
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   test-perf:
     name: Perf Tests
@@ -98,6 +124,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.5
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: "true"
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: ulimit -n 4096 && cargo test -p brain-lib --test perf_tests -- --ignored --test-threads=1
+      - run: ulimit -n 4096 && cargo test -p brain-lib --test perf_tests --locked -- --ignored --test-threads=1
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
