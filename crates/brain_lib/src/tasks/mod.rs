@@ -407,19 +407,60 @@ impl TaskStore {
     /// a `task_transferred` event row. CAS clause (`WHERE brain_id = current`)
     /// prevents concurrent double-transfer.
     ///
+    /// When `vector_store` is `Some`, the LanceDB vector rows for the task's
+    /// file IDs are re-stamped to `target_brain_id` **after** the SQLite
+    /// transaction commits (source of truth). LanceDB failure is non-fatal:
+    /// the SQLite transfer stands and `TaskTransferResult::lance_synced` is
+    /// set to `false` with a warning logged. Pass `None` in tests or callers
+    /// that do not have a LanceDB store.
+    ///
     /// Returns a no-op result if `target_brain_id` equals the current brain.
     /// Returns an error if the task does not exist, if CAS affected 0 rows
     /// (concurrent transfer), or if the target brain is not registered.
-    pub fn transfer_task(
+    pub async fn transfer_task(
         &self,
         task_id: &str,
         target_brain_id: &str,
+        vector_store: Option<&brain_persistence::store::Store>,
     ) -> Result<TaskTransferResult> {
         use brain_persistence::db::tasks::transfer::transfer_task_inner;
         let task_id = task_id.to_string();
         let target_brain_id = target_brain_id.to_string();
-        self.db
-            .with_write_conn(|conn| transfer_task_inner(conn, &task_id, &target_brain_id))
+
+        // Step 1: commit the SQLite transaction (source of truth).
+        let mut result = self
+            .db
+            .with_write_conn(|conn| transfer_task_inner(conn, &task_id, &target_brain_id))?;
+
+        // Step 2: re-stamp LanceDB vector rows (best-effort, non-fatal).
+        if !result.was_no_op {
+            if let Some(store) = vector_store {
+                let task_file_id = format!("task:{task_id}");
+                let outcome_file_id = format!("task-outcome:{task_id}");
+                let file_ids: &[&str] = &[task_file_id.as_str(), outcome_file_id.as_str()];
+                match store
+                    .update_brain_id_for_files(
+                        file_ids,
+                        &result.from_brain_id,
+                        &result.to_brain_id,
+                    )
+                    .await
+                {
+                    Ok(()) => result.lance_synced = true,
+                    Err(e) => {
+                        tracing::warn!(
+                            task_id = %task_id,
+                            error = %e,
+                            "LanceDB brain_id re-stamp failed after SQLite commit; \
+                             retrieval scoped to target brain may miss this task \
+                             until re-indexed"
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Import events from a JSONL file into the unified SQLite database.

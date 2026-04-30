@@ -49,8 +49,8 @@ fn make_task_in_store(store: &TaskStore, task_id: &str, title: &str) {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-#[test]
-fn transfer_happy_path_all_tables_updated() {
+#[tokio::test]
+async fn transfer_happy_path_all_tables_updated() {
     let (store, src_brain, dst_brain) = open_two_brain_store();
     make_task_in_store(&store, "task-hp-1", "Happy Path Task");
 
@@ -58,7 +58,10 @@ fn transfer_happy_path_all_tables_updated() {
     let row = store.get_task("task-hp-1").unwrap().unwrap();
     assert_eq!(row.task_id, "task-hp-1");
 
-    let result = store.transfer_task("task-hp-1", &dst_brain).unwrap();
+    let result = store
+        .transfer_task("task-hp-1", &dst_brain, None)
+        .await
+        .unwrap();
     assert!(!result.was_no_op);
     assert_eq!(result.from_brain_id, src_brain);
     assert_eq!(result.to_brain_id, dst_brain);
@@ -92,12 +95,15 @@ fn transfer_happy_path_all_tables_updated() {
     assert_eq!(event_count, 1, "task_transferred event must be recorded");
 }
 
-#[test]
-fn transfer_same_brain_is_no_op() {
+#[tokio::test]
+async fn transfer_same_brain_is_no_op() {
     let (store, src_brain, _dst) = open_two_brain_store();
     make_task_in_store(&store, "task-noop-1", "No-op Task");
 
-    let result = store.transfer_task("task-noop-1", &src_brain).unwrap();
+    let result = store
+        .transfer_task("task-noop-1", &src_brain, None)
+        .await
+        .unwrap();
     assert!(result.was_no_op, "transfer to same brain must be a no-op");
 
     // No task_transferred event should exist.
@@ -115,10 +121,12 @@ fn transfer_same_brain_is_no_op() {
     assert_eq!(event_count, 0);
 }
 
-#[test]
-fn transfer_nonexistent_task_returns_error() {
+#[tokio::test]
+async fn transfer_nonexistent_task_returns_error() {
     let (store, _src, dst_brain) = open_two_brain_store();
-    let result = store.transfer_task("task-does-not-exist", &dst_brain);
+    let result = store
+        .transfer_task("task-does-not-exist", &dst_brain, None)
+        .await;
     assert!(result.is_err(), "transfer of nonexistent task must fail");
     let err = result.unwrap_err().to_string();
     assert!(
@@ -127,8 +135,8 @@ fn transfer_nonexistent_task_returns_error() {
     );
 }
 
-#[test]
-fn transfer_display_id_collision_resolved() {
+#[tokio::test]
+async fn transfer_display_id_collision_resolved() {
     let (store, _src_brain, dst_brain) = open_two_brain_store();
 
     // Create two tasks whose blake3 hash collides at length 3 — very unlikely
@@ -155,7 +163,10 @@ fn transfer_display_id_collision_resolved() {
         })
         .unwrap();
 
-    let result = store.transfer_task("task-col-1", &dst_brain).unwrap();
+    let result = store
+        .transfer_task("task-col-1", &dst_brain, None)
+        .await
+        .unwrap();
 
     // The new display_id must differ from the colliding blocker.
     assert_ne!(
@@ -168,13 +179,20 @@ fn transfer_display_id_collision_resolved() {
     );
 }
 
-#[test]
-fn transfer_concurrent_cas_second_call_fails() {
+/// Renamed from `transfer_concurrent_cas_second_call_fails` — the original test
+/// verified idempotence (sequential second transfer picks up the new brain_id),
+/// not a true concurrent CAS race. The real race is covered by
+/// `transfer_concurrent_cas_truly_concurrent` below.
+#[tokio::test]
+async fn transfer_second_call_picks_up_new_brain_id() {
     let (store, _src_brain, dst_brain) = open_two_brain_store();
     make_task_in_store(&store, "task-cas-1", "CAS Task");
 
     // First transfer: succeeds.
-    let r1 = store.transfer_task("task-cas-1", &dst_brain).unwrap();
+    let r1 = store
+        .transfer_task("task-cas-1", &dst_brain, None)
+        .await
+        .unwrap();
     assert!(!r1.was_no_op);
 
     // Register a third brain for the second transfer attempt.
@@ -183,32 +201,90 @@ fn transfer_concurrent_cas_second_call_fails() {
         .ensure_brain_registered("brain-third", "third-brain")
         .unwrap();
 
-    // Second transfer from the original source brain — should fail because
-    // the task is now in dst_brain, not the original src_brain.
-    // The CAS WHERE brain_id=src_brain will match 0 rows.
-    let r2 = store.transfer_task("task-cas-1", "brain-third");
-    // The task exists in dst_brain now; a second transfer FROM the store's
-    // original brain_id will find no matching row and CAS will fail.
-    // (transfer_task reads current brain_id fresh, so this will actually
-    //  succeed if called from the same store context — meaning it moves from
-    //  dst to third. This is correct: the task is now in dst, and transfer
-    //  picks it up from there.)
-    //
-    // The true CAS race (both threads see same brain_id simultaneously)
-    // can't be simulated in a single-threaded test without raw SQL manipulation.
-    // We verify the CAS invariant by checking rows_affected == 1 property:
-    // if the task moved (r1 succeeded), the second call from the same
-    // TaskStore context sees dst_brain as current and proceeds normally.
-    assert!(
-        r2.is_ok(),
-        "second transfer from updated state should succeed"
+    // Second transfer from the original source brain — the task is now in
+    // dst_brain. transfer_task reads current brain_id fresh, so it picks up
+    // dst_brain as the current owner and proceeds to brain-third.
+    let r2 = store
+        .transfer_task("task-cas-1", "brain-third", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        r2.from_brain_id, dst_brain,
+        "second transfer must read updated brain_id from dst"
     );
-    let r2 = r2.unwrap();
-    assert_eq!(r2.from_brain_id, dst_brain);
 }
 
+/// Verifies the CAS clause rejects a concurrent double-transfer.
+///
+/// Two OS threads both attempt to transfer the same task. A `Barrier` aligns
+/// them so the `BEGIN IMMEDIATE` contend on the same write lock. The loser's
+/// CAS UPDATE sees 0 rows affected and returns `TaskTransferCasFailed`.
 #[test]
-fn transfer_records_brain_id_moves_with_task() {
+fn transfer_concurrent_cas_truly_concurrent() {
+    use std::sync::{Arc, Barrier};
+
+    let db = Db::open_in_memory().expect("open in-memory db");
+    db.ensure_brain_registered("brain-src", "source-brain")
+        .unwrap();
+    db.ensure_brain_registered("brain-dst-a", "dest-a")
+        .unwrap();
+    db.ensure_brain_registered("brain-dst-b", "dest-b")
+        .unwrap();
+
+    let store = Arc::new(TaskStore::with_brain_id(db, "brain-src", "source-brain").unwrap());
+
+    // Create the task once.
+    make_task_in_store(&store, "task-concurrent-1", "Concurrent CAS Task");
+
+    // Barrier ensures both threads reach transfer_task before either commits.
+    let barrier = Arc::new(Barrier::new(2));
+
+    let store_a = Arc::clone(&store);
+    let barrier_a = Arc::clone(&barrier);
+    let h_a = std::thread::spawn(move || {
+        barrier_a.wait();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(store_a.transfer_task("task-concurrent-1", "brain-dst-a", None))
+    });
+
+    let store_b = Arc::clone(&store);
+    let barrier_b = Arc::clone(&barrier);
+    let h_b = std::thread::spawn(move || {
+        barrier_b.wait();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(store_b.transfer_task("task-concurrent-1", "brain-dst-b", None))
+    });
+
+    let result_a = h_a.join().expect("thread A panicked");
+    let result_b = h_b.join().expect("thread B panicked");
+
+    // Exactly one must succeed; the other must get a CAS failure.
+    let successes = [result_a.is_ok(), result_b.is_ok()]
+        .iter()
+        .filter(|&&ok| ok)
+        .count();
+    let failures = [result_a.is_err(), result_b.is_err()]
+        .iter()
+        .filter(|&&err| err)
+        .count();
+
+    // The Db write mutex serialises the two BEGIN IMMEDIATE calls — so one
+    // acquires the lock first and commits, then the second reads the updated
+    // brain_id and its CAS WHERE clause matches 0 rows.
+    assert_eq!(successes, 1, "exactly one transfer must succeed");
+    assert_eq!(failures, 1, "exactly one transfer must fail with CAS error");
+
+    // Verify the failure is specifically a CAS failure.
+    let err_result = if result_a.is_err() { result_a } else { result_b };
+    let err = err_result.unwrap_err();
+    assert!(
+        matches!(err, brain_persistence::error::BrainCoreError::TaskTransferCasFailed(_)),
+        "loser must return TaskTransferCasFailed, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn transfer_records_brain_id_moves_with_task() {
     let (store, _src, dst_brain) = open_two_brain_store();
     make_task_in_store(&store, "task-rec-1", "Records Task");
 
@@ -225,7 +301,10 @@ fn transfer_records_brain_id_moves_with_task() {
         })
         .unwrap();
 
-    store.transfer_task("task-rec-1", &dst_brain).unwrap();
+    store
+        .transfer_task("task-rec-1", &dst_brain, None)
+        .await
+        .unwrap();
 
     let record_brain_id: String = store
         .db_for_tests()
@@ -244,12 +323,15 @@ fn transfer_records_brain_id_moves_with_task() {
     );
 }
 
-#[test]
-fn transfer_event_payload_self_contained_for_replay() {
+#[tokio::test]
+async fn transfer_event_payload_self_contained_for_replay() {
     let (store, src_brain, dst_brain) = open_two_brain_store();
     make_task_in_store(&store, "task-replay-1", "Replay Task");
 
-    let result = store.transfer_task("task-replay-1", &dst_brain).unwrap();
+    let result = store
+        .transfer_task("task-replay-1", &dst_brain, None)
+        .await
+        .unwrap();
 
     // Fetch the task_transferred event payload from the DB.
     let payload_json: String = store

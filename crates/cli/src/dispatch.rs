@@ -517,7 +517,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             to,
                             dry_run,
                         },
-                    )?;
+                    )
+                    .await?;
                 }
             }
         }

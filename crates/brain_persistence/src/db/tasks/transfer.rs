@@ -18,6 +18,9 @@ pub struct TaskTransferResult {
     pub to_display_id: String,
     /// `true` when source and target brain are the same — no writes occurred.
     pub was_no_op: bool,
+    /// `true` when the LanceDB vector rows were also re-stamped to `to_brain_id`.
+    /// `false` when no LanceDB store was provided or the update failed (non-fatal).
+    pub lance_synced: bool,
 }
 
 /// Execute the transfer inside a single `BEGIN IMMEDIATE` transaction.
@@ -49,7 +52,7 @@ pub fn transfer_task_inner(
         .optional()?;
 
     let (from_brain_id, from_display_id_opt) =
-        current.ok_or_else(|| BrainCoreError::TaskEvent(format!("task not found: {task_id}")))?;
+        current.ok_or_else(|| BrainCoreError::TaskNotFound(task_id.to_string()))?;
 
     let from_display_id = from_display_id_opt.unwrap_or_default();
 
@@ -62,7 +65,22 @@ pub fn transfer_task_inner(
             from_display_id: from_display_id.clone(),
             to_display_id: from_display_id,
             was_no_op: true,
+            lance_synced: false,
         });
+    }
+
+    // Pre-check: verify target brain exists before opening a write lock.
+    // This surfaces a clear BrainNotFound error instead of a generic FK violation.
+    let target_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM brains WHERE brain_id = ?1",
+            params![target_brain_id],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !target_exists {
+        return Err(BrainCoreError::BrainNotFound(target_brain_id.to_string()));
     }
 
     conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -79,9 +97,8 @@ pub fn transfer_task_inner(
             params![target_brain_id, to_display_id, task_id, from_brain_id],
         )?;
         if rows != 1 {
-            return Err(BrainCoreError::TaskEvent(format!(
-                "transfer CAS failed for task {task_id}: \
-                 concurrent modification or task moved"
+            return Err(BrainCoreError::TaskTransferCasFailed(format!(
+                "task {task_id}: concurrent transfer detected — retry"
             )));
         }
 
@@ -114,7 +131,11 @@ pub fn transfer_task_inner(
                 to_display_id: to_display_id.clone(),
             },
         );
-        let payload_json = serde_json::to_string(&ev.payload).unwrap_or_else(|_| "{}".into());
+        // ev.payload is already a serde_json::Value; serializing it to a JSON
+        // string is infallible in practice, but we propagate errors explicitly
+        // rather than silently corrupting the event row with "{}".
+        let payload_json = serde_json::to_string(&ev.payload)
+            .map_err(|e| BrainCoreError::TaskEvent(format!("payload serialize failed: {e}")))?;
         conn.execute(
             "INSERT INTO task_events \
              (event_id, task_id, event_type, timestamp, actor, payload) \
@@ -136,6 +157,7 @@ pub fn transfer_task_inner(
             from_display_id,
             to_display_id,
             was_no_op: false,
+            lance_synced: false, // Populated by the async caller after SQLite commits.
         })
     })();
 

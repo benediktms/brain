@@ -29,6 +29,15 @@ pub enum BrainCoreError {
     #[error("task event error: {0}")]
     TaskEvent(String),
 
+    #[error("task not found: {0}")]
+    TaskNotFound(String),
+
+    #[error("task transfer CAS failed — retry: {0}")]
+    TaskTransferCasFailed(String),
+
+    #[error("brain not found: {0}")]
+    BrainNotFound(String),
+
     #[error("task dependency cycle: {0}")]
     TaskCycle(String),
 
@@ -45,6 +54,12 @@ pub enum BrainCoreError {
 impl From<rusqlite::Error> for BrainCoreError {
     fn from(e: rusqlite::Error) -> Self {
         BrainCoreError::Database(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for BrainCoreError {
+    fn from(e: serde_json::Error) -> Self {
+        BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))
     }
 }
 

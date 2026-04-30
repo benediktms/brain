@@ -10,8 +10,9 @@ use super::queries::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 ///
 /// Starts at `MIN_SHORT_HASH_LEN` and extends until a free slot is found.
 /// If all positions are exhausted (extremely unlikely with 64 hex chars), the
-/// full hex string is returned as-is — the caller's UNIQUE constraint INSERT
-/// will surface any remaining collision.
+/// full hex string is returned as-is. The caller is responsible for enforcing
+/// the `(brain_id, display_id)` UNIQUE constraint — for transfer callers this
+/// occurs via a CAS UPDATE, not an INSERT.
 pub fn pick_unique_prefix(full_hex: &str, used: &HashSet<String>) -> String {
     for len in MIN_SHORT_HASH_LEN..=full_hex.len() {
         let candidate = &full_hex[..len];
