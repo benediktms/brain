@@ -4,6 +4,8 @@ use serde_json::json;
 use brain_lib::tasks::events::*;
 use brain_lib::utils::task_row_to_compact_json;
 
+use crate::hooks::{OutputFormat, build_hook_envelope};
+
 use super::{TaskCtx, UpdateParams, priority_label};
 
 // ── update ──────────────────────────────────────────────────
@@ -56,7 +58,7 @@ pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
         .get_task(&params.id)?
         .ok_or_else(|| anyhow::anyhow!("task not found after update: {}", params.id))?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let labels = ctx.store.get_task_labels(&params.id)?;
         let out = json!({ "task": task_row_to_compact_json(&ctx.store, &task, labels) });
         println!("{}", serde_json::to_string_pretty(&out)?);
@@ -101,7 +103,7 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
             .collect();
         all_unblocked.extend(display_unblocked.clone());
 
-        if ctx.json {
+        if ctx.output.is_json_mode() {
             let task = ctx
                 .store
                 .get_task(&id)?
@@ -119,7 +121,7 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
         }
     }
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "closed": closed,
             "total_closed": ids.len(),
@@ -137,7 +139,7 @@ pub fn stats(ctx: &TaskCtx) -> Result<()> {
     let counts = ctx.store.count_by_status()?;
     let (ready, blocked) = ctx.store.count_ready_blocked()?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "open": counts.open,
             "in_progress": counts.in_progress,
@@ -148,7 +150,12 @@ pub fn stats(ctx: &TaskCtx) -> Result<()> {
             "ready": ready,
             "blocked_by_deps": blocked,
         });
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        if ctx.output == OutputFormat::HookEnvelope {
+            let payload = serde_json::to_string_pretty(&out)?;
+            println!("{}", build_hook_envelope("SessionStart", &payload));
+        } else {
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
     } else {
         println!("Task Statistics");
         println!("{}", "\u{2500}".repeat(30));
@@ -184,7 +191,7 @@ pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "event_id": event.event_id,
             "task_id": display_id,
@@ -215,7 +222,7 @@ pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "event_id": event.event_id,
             "task_id": display_id,
@@ -256,7 +263,7 @@ pub fn ext_link_add(
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = serde_json::json!({
             "event_id": event.event_id,
             "task_id": display_id,
@@ -291,7 +298,7 @@ pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> 
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = serde_json::json!({
             "event_id": event.event_id,
             "task_id": display_id,
@@ -315,7 +322,7 @@ pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
         .unwrap_or_else(|_| task_id.to_string());
     let refs = ctx.store.get_external_ids(task_id)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out: Vec<serde_json::Value> = refs
             .iter()
             .map(|e| {
@@ -359,7 +366,7 @@ pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "event_id": event.event_id,
             "task_id": display_id,

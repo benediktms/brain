@@ -6,6 +6,7 @@ use brain_lib::tasks::enrichment::enrich_task_list;
 use brain_lib::tasks::queries::{TaskFilter, TaskRow, apply_filters};
 use brain_lib::utils::task_row_to_compact_json;
 
+use crate::hooks::{OutputFormat, build_hook_envelope};
 use crate::markdown_table::MarkdownTable;
 
 use super::{ListParams, TaskCtx, priority_label};
@@ -122,7 +123,7 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         let (_name, _id, tasks, _records, _objects) = brain_lib::config::open_brain_stores(brain)?;
         let remote_ctx = TaskCtx {
             store: tasks,
-            json: ctx.json,
+            output: ctx.output,
         };
         return list_inner(&remote_ctx, params);
     }
@@ -140,7 +141,7 @@ fn list_inner(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
     let FilteredTasks { tasks, .. } =
         fetch_filtered_tasks(ctx, params, LabelFetchMode::OnlyWhenFiltering)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
         let labels_map = match ctx.store.get_labels_for_tasks(&task_ids) {
             Ok(m) => m,
@@ -164,7 +165,12 @@ fn list_inner(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             "ready_count": ready_count,
             "blocked_count": blocked_count,
         });
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        if ctx.output == OutputFormat::HookEnvelope {
+            let payload = serde_json::to_string_pretty(&out)?;
+            println!("{}", build_hook_envelope("UserPromptSubmit", &payload));
+        } else {
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
     } else {
         if tasks.is_empty() {
             println!("No tasks found.");
@@ -217,7 +223,7 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         }
     }
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let short_ids = ctx.store.compact_ids()?;
         let mut group_list: Vec<serde_json::Value> = groups
             .iter()
@@ -261,7 +267,12 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         }
 
         let out = json!({ "groups": group_list, "count": tasks.len() });
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        if ctx.output == OutputFormat::HookEnvelope {
+            let payload = serde_json::to_string_pretty(&out)?;
+            println!("{}", build_hook_envelope("UserPromptSubmit", &payload));
+        } else {
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
     } else {
         if tasks.is_empty() {
             println!("No tasks found.");

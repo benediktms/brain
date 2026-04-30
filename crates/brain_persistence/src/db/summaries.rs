@@ -35,6 +35,9 @@ pub struct SummaryRow {
 
 /// Store an episode in the summaries table.
 /// Returns the summary_id.
+///
+/// Trust defaults to `untrusted` via the SQL column default. Use
+/// [`store_episode_with_trust`] when the caller must record a different band.
 pub fn store_episode(conn: &Connection, episode: &Episode) -> Result<String> {
     let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
@@ -55,6 +58,45 @@ pub fn store_episode(conn: &Connection, episode: &Episode) -> Result<String> {
             tags_json,
             episode.importance,
             episode.brain_id,
+            now,
+        ],
+    )?;
+
+    Ok(summary_id)
+}
+
+/// Store an episode with an explicit trust band.
+///
+/// Hook paths that derive content from the user's own session activity
+/// (e.g. PreCompact snapshots, Stop session-summary episodes) should pass
+/// `vetted` rather than letting the SQL default `untrusted` apply — those
+/// rows are tool-derived but algorithmically curated from a known-local
+/// origin, not external attacker-controlled content.
+pub fn store_episode_with_trust(
+    conn: &Connection,
+    episode: &Episode,
+    trust: &str,
+) -> Result<String> {
+    let summary_id = Ulid::new().to_string();
+    let now = crate::utils::now_ts();
+    let tags_json = serde_json::to_string(&episode.tags).unwrap_or_else(|_| "[]".into());
+
+    let content = format!(
+        "Goal: {}\nActions: {}\nOutcome: {}",
+        episode.goal, episode.actions, episode.outcome
+    );
+
+    conn.execute(
+        "INSERT INTO summaries (summary_id, kind, title, content, tags, importance, brain_id, trust, valid_from, created_at, updated_at)
+         VALUES (?1, 'episode', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8)",
+        rusqlite::params![
+            summary_id,
+            episode.goal,
+            content,
+            tags_json,
+            episode.importance,
+            episode.brain_id,
+            trust,
             now,
         ],
     )?;

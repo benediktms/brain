@@ -205,6 +205,19 @@ impl Db {
         self.with_write_conn(|conn| schema::delete_brain(conn, name))
     }
 
+    // ── Vetted episode write ────────────────────────────────────────────
+
+    /// Store an episode with `trust='vetted'`.
+    ///
+    /// Hook paths writing summaries derived from the user's own session
+    /// activity should call this rather than [`Self::store_episode_default`]
+    /// (which lets the SQL DEFAULT 'untrusted' apply). PreCompact snapshots
+    /// and Stop session-summary episodes both qualify: they are tool-derived
+    /// but algorithmically curated from a known-local origin.
+    pub fn store_vetted_episode(&self, episode: &summaries::Episode) -> Result<String> {
+        self.with_write_conn(|conn| summaries::store_episode_with_trust(conn, episode, "vetted"))
+    }
+
     // ── Injection audit ────────────────────────────────────────────────
 
     /// Append one row to the `injection_audit` table.
@@ -217,6 +230,140 @@ impl Db {
         entry: &injection_audit::InjectionAuditEntry<'_>,
     ) -> Result<()> {
         self.with_write_conn(|conn| injection_audit::insert(conn, entry))
+    }
+
+    // ── PreToolUse throttle ────────────────────────────────────────────
+
+    /// Check if `(session_id, file_path)` has already been seen by the
+    /// PreToolUse hook in this session.
+    ///
+    /// Returns `true` when the pair exists in `pre_tool_use_seen`.
+    pub fn is_pre_tool_use_seen(&self, session_id: &str, file_path: &str) -> Result<bool> {
+        let session_id = session_id.to_string();
+        let file_path = file_path.to_string();
+        self.with_read_conn(move |conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM pre_tool_use_seen \
+                 WHERE session_id = ?1 AND file_path = ?2",
+                rusqlite::params![session_id, file_path],
+                |row| row.get(0),
+            )?;
+            Ok(count > 0)
+        })
+    }
+
+    /// Record `(session_id, file_path)` as seen by the PreToolUse hook.
+    ///
+    /// Uses `INSERT OR IGNORE` so that concurrent calls are idempotent.
+    pub fn mark_pre_tool_use_seen(&self, session_id: &str, file_path: &str) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let session_id = session_id.to_string();
+        let file_path = file_path.to_string();
+        self.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO pre_tool_use_seen (session_id, file_path, ts) \
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![session_id, file_path, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    // ── File-scoped memory retrieval ────────────────────────────────────
+
+    /// Retrieve summaries within the trustworthy band (`trusted` or `vetted`)
+    /// whose JSON tag array contains `tag_value`, scoped to `brain_id`,
+    /// ordered by importance DESC.
+    ///
+    /// Trust filter: `trust IN ('trusted', 'vetted')`. The `vetted` band
+    /// exists for tool-derived but algorithmically curated content (e.g.
+    /// PreCompact snapshots of the user's own session activity); excluding
+    /// it would defeat the band's purpose. `untrusted` rows are always
+    /// excluded — they carry external attacker-controlled origin.
+    ///
+    /// Tags are matched via a `LIKE` pattern on the serialized JSON array
+    /// (e.g. `%"file:hooks.rs"%`). Returns up to `limit` `(summary_id, content)`
+    /// pairs.
+    pub fn retrieve_summaries_by_tag_trusted(
+        &self,
+        brain_id: &str,
+        tag_value: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let tag_pattern = format!("%\"{tag_value}\"%");
+        let brain_id = brain_id.to_string();
+        let limit_i = limit as i64;
+        self.with_read_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT summary_id, content FROM summaries \
+                 WHERE brain_id = ?1 AND trust IN ('trusted', 'vetted') \
+                   AND tags LIKE ?2 \
+                 ORDER BY importance DESC \
+                 LIMIT ?3",
+            )?;
+            let rows = stmt
+                .query_map(rusqlite::params![brain_id, tag_pattern, limit_i], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+            collect_rows(rows)
+        })
+    }
+
+    /// Full-text search summaries filtered to the trustworthy band
+    /// (`trusted` or `vetted`) for `brain_id`.
+    ///
+    /// Runs an FTS5 query for `query`, collects matching summary IDs, then
+    /// re-queries the `summaries` table with a trust filter applied in the same
+    /// connection. Returns up to `limit` `(summary_id, content)` pairs in FTS
+    /// relevance order. Trust filter rationale matches
+    /// [`Self::retrieve_summaries_by_tag_trusted`].
+    pub fn retrieve_summaries_by_fts_trusted(
+        &self,
+        query: &str,
+        brain_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let query = query.to_string();
+        let brain_id = brain_id.to_string();
+        self.with_read_conn(move |conn| {
+            // Phase 1: FTS5 hit list.
+            let fts_hits = fts::search_summaries_fts(
+                conn,
+                &query,
+                limit,
+                Some(std::slice::from_ref(&brain_id)),
+            )?;
+            if fts_hits.is_empty() {
+                return Ok(Vec::new());
+            }
+            let ids: Vec<String> = fts_hits.into_iter().map(|h| h.summary_id).collect();
+
+            // Phase 2: Re-query with trust filter.
+            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "SELECT summary_id, content FROM summaries \
+                 WHERE brain_id = ?{brain_slot} AND trust IN ('trusted', 'vetted') \
+                   AND summary_id IN ({list}) \
+                 ORDER BY importance DESC",
+                brain_slot = ids.len() + 1,
+                list = placeholders.join(", "),
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = ids
+                .iter()
+                .map(|id| -> Box<dyn rusqlite::ToSql> { Box::new(id.clone()) })
+                .collect();
+            param_values.push(Box::new(brain_id));
+            let params: Vec<&dyn rusqlite::ToSql> =
+                param_values.iter().map(|b| b.as_ref()).collect();
+            let rows = stmt.query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            collect_rows(rows)
+        })
     }
 
     // ── LOD Chunks ─────────────────────────────────────────────────────

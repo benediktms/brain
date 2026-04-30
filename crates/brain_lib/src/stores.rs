@@ -350,6 +350,16 @@ impl BrainStores {
         EpisodeWriter::store_episode(&self.db, episode)
     }
 
+    /// Store an episode with `trust='vetted'`. Used by hook paths that
+    /// produce algorithmically-curated summaries from the user's own session
+    /// activity (PreCompact snapshot, Stop session summary).
+    pub fn store_vetted_episode(
+        &self,
+        episode: &brain_persistence::db::summaries::Episode,
+    ) -> Result<String> {
+        Ok(self.db.store_vetted_episode(episode)?)
+    }
+
     /// List recent episodes, newest first.
     pub fn list_episodes(
         &self,
@@ -624,6 +634,68 @@ impl BrainStores {
     pub fn upsert_record_chunk(&self, record_file_id: &str, capsule_text: &str) -> Result<()> {
         use crate::ports::ChunkMetaWriter;
         ChunkMetaWriter::upsert_record_chunk(&self.db, record_file_id, capsule_text, &self.brain_id)
+    }
+
+    // -- PreToolUse hook helpers --
+
+    /// Check whether `(session_id, file_path)` has been seen by the PreToolUse
+    /// hook in this session.
+    ///
+    /// Used to enforce the per-file-per-session throttle: once a file has been
+    /// injected during a session, subsequent calls for the same file return
+    /// `true` and injection is skipped.
+    pub fn is_pre_tool_use_seen(&self, session_id: &str, file_path: &str) -> Result<bool> {
+        self.db.is_pre_tool_use_seen(session_id, file_path)
+    }
+
+    /// Record `(session_id, file_path)` as seen by the PreToolUse hook.
+    ///
+    /// Uses `INSERT OR IGNORE` under the hood so concurrent calls are
+    /// idempotent.
+    pub fn mark_pre_tool_use_seen(&self, session_id: &str, file_path: &str) -> Result<()> {
+        self.db.mark_pre_tool_use_seen(session_id, file_path)
+    }
+
+    /// Retrieve trusted summaries whose JSON tag array contains `tag_value`,
+    /// scoped to `brain_id`, ordered by importance DESC.
+    ///
+    /// Only rows with `trust = 'trusted'` are returned. Tags are matched via a
+    /// `LIKE` pattern on the serialized JSON array (e.g. `%"file:hooks.rs"%`).
+    /// Returns up to `limit` `(summary_id, content)` pairs.
+    pub fn retrieve_summaries_by_tag_trusted(
+        &self,
+        brain_id: &str,
+        tag_value: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        self.db
+            .retrieve_summaries_by_tag_trusted(brain_id, tag_value, limit)
+    }
+
+    /// Full-text search summaries filtered to `trust = 'trusted'` for `brain_id`.
+    ///
+    /// Runs an FTS5 query for `query`, collects matching summary IDs, then
+    /// re-queries the summaries table with a trust filter applied. Returns up
+    /// to `limit` `(summary_id, content)` pairs.
+    pub fn retrieve_summaries_by_fts_trusted(
+        &self,
+        query: &str,
+        brain_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        self.db
+            .retrieve_summaries_by_fts_trusted(query, brain_id, limit)
+    }
+
+    /// Write one row to the `injection_audit` table.
+    ///
+    /// Delegates to the underlying `Db` handle. Returns `Ok(())` on success;
+    /// callers treat audit failures as non-fatal.
+    pub fn log_injection_audit(
+        &self,
+        entry: &brain_persistence::db::InjectionAuditEntry,
+    ) -> crate::error::Result<()> {
+        self.db.log_injection_audit(entry)
     }
 
     /// Clone this store bundle with a different brain_id.

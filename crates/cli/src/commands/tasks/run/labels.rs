@@ -32,7 +32,7 @@ fn try_ipc_label_event(
         }),
     ) {
         Ok(value) => {
-            if ctx.json {
+            if ctx.output.is_json_mode() {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             } else {
                 println!("{action_name} label \"{label}\" on task {task_id} (via daemon)");
@@ -69,7 +69,7 @@ fn try_ipc_label_batch(
         }),
     ) {
         Ok(value) => {
-            if ctx.json {
+            if ctx.output.is_json_mode() {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             } else {
                 let succeeded = value
@@ -96,7 +96,7 @@ fn try_ipc_label_batch(
 pub fn labels(ctx: &TaskCtx) -> Result<()> {
     let summaries = ctx.store.label_summary()?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let labels_json: Vec<serde_json::Value> = summaries
             .iter()
             .map(|s| {
@@ -139,7 +139,7 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
             brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
             store: tasks,
-            json: ctx.json,
+            output: ctx.output,
         };
         return label_add(&remote_ctx, task_id, label, None);
     }
@@ -158,7 +158,7 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "event_id": event.event_id,
             "task_id": display_id,
@@ -189,7 +189,7 @@ pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&st
             brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
             store: tasks,
-            json: ctx.json,
+            output: ctx.output,
         };
         return label_remove(&remote_ctx, task_id, label, None);
     }
@@ -208,7 +208,7 @@ pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&st
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "event_id": event.event_id,
             "task_id": display_id,
@@ -258,7 +258,7 @@ fn batch_label_op(
         }
     }
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
             .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
@@ -307,7 +307,7 @@ pub fn label_batch_add(
             brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
             store: tasks,
-            json: ctx.json,
+            output: ctx.output,
         };
         return label_batch_add(&remote_ctx, task_ids, label, None);
     }
@@ -328,7 +328,7 @@ pub fn label_batch_remove(
             brain_lib::config::open_brain_stores(target_brain)?;
         let remote_ctx = TaskCtx {
             store: tasks,
-            json: ctx.json,
+            output: ctx.output,
         };
         return label_batch_remove(&remote_ctx, task_ids, label, None);
     }
@@ -339,7 +339,7 @@ pub fn label_rename(ctx: &TaskCtx, old_label: &str, new_label: &str) -> Result<(
     let task_ids = ctx.store.get_task_ids_with_label(old_label)?;
 
     if task_ids.is_empty() {
-        if ctx.json {
+        if ctx.output.is_json_mode() {
             let out = json!({
                 "succeeded": [],
                 "failed": [],
@@ -386,7 +386,7 @@ pub fn label_rename(ctx: &TaskCtx, old_label: &str, new_label: &str) -> Result<(
         }
     }
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
             .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
@@ -416,7 +416,7 @@ pub fn label_purge(ctx: &TaskCtx, label: &str) -> Result<()> {
     let task_ids = ctx.store.get_task_ids_with_label(label)?;
 
     if task_ids.is_empty() {
-        if ctx.json {
+        if ctx.output.is_json_mode() {
             let out = json!({
                 "succeeded": [],
                 "failed": [],
@@ -454,7 +454,7 @@ pub fn label_purge(ctx: &TaskCtx, label: &str) -> Result<()> {
         }
     }
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
             .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
