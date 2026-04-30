@@ -120,6 +120,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
                 notes: vec![],
                 id: Some(brain_id.clone()),
                 prefix: None,
+                auto_inject: Default::default(),
             };
             save_brain_toml(&brain_dir, &brain_toml)?;
             // cwd is already in roots — nothing to add, just report.
@@ -160,6 +161,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         notes: note_dirs.clone(),
         id: Some(brain_id.clone()),
         prefix: None,
+        auto_inject: Default::default(),
     };
     save_brain_toml(&brain_dir, &brain_toml)?;
 

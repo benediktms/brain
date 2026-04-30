@@ -2,6 +2,7 @@ pub mod chunks;
 pub mod crypto;
 pub mod files;
 pub mod fts;
+pub mod injection_audit;
 pub mod job;
 pub mod jobs;
 pub mod links;
@@ -23,6 +24,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub use injection_audit::InjectionAuditEntry;
 pub use rusqlite::Connection;
 use rusqlite::OpenFlags;
 
@@ -201,6 +203,20 @@ impl Db {
     /// Delete a brain by name.
     pub fn delete_brain(&self, name: &str) -> Result<bool> {
         self.with_write_conn(|conn| schema::delete_brain(conn, name))
+    }
+
+    // ── Injection audit ────────────────────────────────────────────────
+
+    /// Append one row to the `injection_audit` table.
+    ///
+    /// Called by the CLI injection sanitizer after each `sanitize_hook_input`
+    /// call. Errors are non-fatal at the call site — a failed audit write MUST
+    /// NOT prevent the injection from proceeding.
+    pub fn log_injection_audit(
+        &self,
+        entry: &injection_audit::InjectionAuditEntry<'_>,
+    ) -> Result<()> {
+        self.with_write_conn(|conn| injection_audit::insert(conn, entry))
     }
 
     // ── LOD Chunks ─────────────────────────────────────────────────────
