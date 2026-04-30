@@ -7,14 +7,37 @@
   "hooks": {
     "SessionStart": [
       {
+        "_brain_managed": true,
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "brain tasks stats --json 2>/dev/null" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain tasks stats --json 2>/dev/null"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "_brain_managed": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain tasks list --ready --json 2>/dev/null | head -c 2000"
+          }
+        ]
       }
     ],
     "PreCompact": [
       {
+        "_brain_managed": true,
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "brain tasks stats --json 2>/dev/null" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain hooks pre-compact 2>/dev/null"
+          }
+        ]
       }
     ]
   }

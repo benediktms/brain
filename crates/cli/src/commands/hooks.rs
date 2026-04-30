@@ -5,10 +5,19 @@ use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
 
 /// The hook entries brain installs into `.claude/settings.json`.
+///
+/// LEGACY: prefer `brain plugin install` (canonical plugin surface).
+/// This path mutates the project's `.claude/settings.json` directly and is
+/// retained for advanced / manual use only. New hooks ship via the canonical
+/// brain plugin manifest.
+///
+/// Each entry carries `"_brain_managed": true` so `is_brain_hook` can detect
+/// and upgrade entries without command-prefix matching.
 fn brain_hooks() -> Value {
     json!({
         "UserPromptSubmit": [
             {
+                "_brain_managed": true,
                 "hooks": [
                     {
                         "type": "command",
@@ -19,6 +28,7 @@ fn brain_hooks() -> Value {
         ],
         "SessionStart": [
             {
+                "_brain_managed": true,
                 "hooks": [
                     {
                         "type": "command",
@@ -30,23 +40,22 @@ fn brain_hooks() -> Value {
     })
 }
 
-/// Marker we use to detect brain-managed hook entries.
-const BRAIN_COMMAND_PREFIX: &str = "brain tasks";
+/// Sentinel field injected into every brain-managed hook entry.
+///
+/// Canonical detection uses this field rather than command-prefix matching so
+/// new hook subcommands (`brain hooks pre-compact`, `brain hooks stop`, etc.)
+/// are recognised automatically without updating a prefix allowlist.
+///
+/// LEGACY: command-prefix detection via `BRAIN_COMMAND_PREFIX` is retired.
+/// The `_brain_managed` marker is spoof-resistant for the use cases brain
+/// controls (plugin-installed hooks) — a foreign hook must opt in explicitly.
+const BRAIN_MANAGED_MARKER: &str = "_brain_managed";
 
 fn is_brain_hook(entry: &Value) -> bool {
-    // New format: { "matcher": {}, "hooks": [{ "command": "brain tasks ..." }] }
-    if let Some(hooks_arr) = entry.get("hooks").and_then(|h| h.as_array()) {
-        return hooks_arr.iter().any(|hook| {
-            hook.get("command")
-                .and_then(|c| c.as_str())
-                .is_some_and(|cmd| cmd.starts_with(BRAIN_COMMAND_PREFIX))
-        });
-    }
-    // Legacy format: { "command": "brain tasks ..." }
     entry
-        .get("command")
-        .and_then(|c| c.as_str())
-        .is_some_and(|cmd| cmd.starts_with(BRAIN_COMMAND_PREFIX))
+        .get(BRAIN_MANAGED_MARKER)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// Merge brain hooks into an existing hooks object, preserving non-brain hooks.
@@ -78,6 +87,11 @@ fn merge_hooks(existing: &Value) -> Value {
     Value::Object(merged)
 }
 
+/// Install brain hooks directly into `.claude/settings.json`.
+///
+/// LEGACY: use `brain plugin install` for the canonical plugin surface.
+/// This command is retained for advanced / manual environments where the
+/// Claude Code plugin marketplace is unavailable.
 pub fn install(dry_run: bool) -> Result<()> {
     let hooks = brain_hooks();
 
