@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::db::tasks::queries::{MIN_SHORT_HASH_LEN, blake3_short_hex};
+use crate::db::tasks::display_id::pick_unique_prefix;
+use crate::db::tasks::queries::blake3_short_hex;
 use crate::error::Result;
 
 /// v30 → v31: Add `id` column to tasks for stable, hash-based display IDs.
@@ -60,16 +61,6 @@ pub fn migrate_v30_to_v31(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Pick the shortest unique prefix of `full_hex` that doesn't collide with `used`.
-fn pick_unique_prefix(full_hex: &str, used: &HashSet<String>) -> String {
-    for len in MIN_SHORT_HASH_LEN..=full_hex.len() {
-        let candidate = &full_hex[..len];
-        if !used.contains(candidate) {
-            return candidate.to_string();
-        }
-    }
-    full_hex.to_string()
-}
 
 #[cfg(test)]
 mod tests {
