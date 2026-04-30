@@ -11,13 +11,13 @@ use super::migrations::{
     migrate_v30_to_v31, migrate_v31_to_v32, migrate_v32_to_v33, migrate_v33_to_v34,
     migrate_v34_to_v35, migrate_v35_to_v36, migrate_v36_to_v37, migrate_v37_to_v38,
     migrate_v38_to_v39, migrate_v39_to_v40, migrate_v40_to_v41, migrate_v41_to_v42,
-    migrate_v42_to_v43, migrate_v43_to_v44, migrate_v44_to_v45,
+    migrate_v42_to_v43, migrate_v43_to_v44, migrate_v44_to_v45, migrate_v45_to_v46,
 };
 use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-pub const SCHEMA_VERSION: i32 = 45;
+pub const SCHEMA_VERSION: i32 = 46;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -98,6 +98,7 @@ fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
             42 => migrate_v42_to_v43(conn)?,
             43 => migrate_v43_to_v44(conn)?,
             44 => migrate_v44_to_v45(conn)?,
+            45 => migrate_v45_to_v46(conn)?,
             other => {
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",
@@ -685,6 +686,40 @@ mod tests {
                 "missing table: {expected}"
             );
         }
+
+        // v46: records has trust + source_tool columns
+        let rec_cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('records')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            rec_cols.contains(&"trust".to_string()),
+            "records missing column: trust"
+        );
+        assert!(
+            rec_cols.contains(&"source_tool".to_string()),
+            "records missing column: source_tool"
+        );
+
+        // v46: summaries has trust + source_tool columns
+        let sum2_cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('summaries')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            sum2_cols.contains(&"trust".to_string()),
+            "summaries missing column: trust"
+        );
+        assert!(
+            sum2_cols.contains(&"source_tool".to_string()),
+            "summaries missing column: source_tool"
+        );
 
         // v35: summary_sources has expected columns
         let ss_cols: Vec<String> = conn

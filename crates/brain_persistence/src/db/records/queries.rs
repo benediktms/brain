@@ -32,6 +32,10 @@ pub struct RecordRow {
     pub payload_available: bool,
     pub content_encoding: String,
     pub original_size: Option<i64>,
+    /// Provenance trust level (schema v46+). `trusted` for legacy rows.
+    pub trust: String,
+    /// Originating tool (schema v46+). NULL for system-internal rows.
+    pub source_tool: Option<String>,
 }
 
 /// A row from the record_links projection table.
@@ -59,7 +63,8 @@ pub struct RecordFilter {
 
 const RECORD_COLUMNS: &str = "record_id, title, kind, status, description, content_hash, content_size, \
      media_type, task_id, actor, created_at, updated_at, \
-     retention_class, pinned, payload_available, content_encoding, original_size";
+     retention_class, pinned, payload_available, content_encoding, original_size, \
+     trust, source_tool";
 
 fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<RecordRow> {
     Ok(RecordRow {
@@ -80,6 +85,10 @@ fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<RecordRow> {
         payload_available: row.get::<_, i32>(14)? != 0,
         content_encoding: row.get(15)?,
         original_size: row.get(16)?,
+        trust: row
+            .get::<_, Option<String>>(17)?
+            .unwrap_or_else(|| "untrusted".to_string()),
+        source_tool: row.get(18)?,
     })
 }
 
@@ -147,7 +156,8 @@ pub fn list_records(conn: &Connection, filter: &RecordFilter) -> Result<Vec<Reco
         RECORD_COLUMNS_PREFIXED = "record_id, r.title, r.kind, r.status, r.description, \
              r.content_hash, r.content_size, r.media_type, r.task_id, \
              r.actor, r.created_at, r.updated_at, \
-             r.retention_class, r.pinned, r.payload_available, r.content_encoding, r.original_size",
+             r.retention_class, r.pinned, r.payload_available, r.content_encoding, r.original_size, \
+             r.trust, r.source_tool",
     );
 
     let mut stmt = conn.prepare(&sql)?;
