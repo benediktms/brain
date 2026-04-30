@@ -305,8 +305,8 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
             // Replay path: apply the brain_id and display_id from the payload to the
             // tasks row. The transfer transaction applies this directly; the projection
             // here is for event-log replay consistency.
-            let p: TaskTransferredPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| {
+            let p: TaskTransferredPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
                     BrainCoreError::TaskEvent(format!("bad TaskTransferred payload: {e}"))
                 })?;
             conn.execute(

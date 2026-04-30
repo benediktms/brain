@@ -61,10 +61,10 @@ pub fn migrate_v30_to_v31(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::tasks::queries::MIN_SHORT_HASH_LEN;
     use rusqlite::OptionalExtension;
 
     fn setup_v30(conn: &Connection) {

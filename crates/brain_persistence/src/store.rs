@@ -594,8 +594,12 @@ impl Store {
                 })?;
         }
         if !file_ids.is_empty() {
-            self.optimize_scheduler.record_mutation(file_ids.len() as u64);
-            info!(count = file_ids.len(), new_brain_id, "brain_id updated in LanceDB for file_ids");
+            self.optimize_scheduler
+                .record_mutation(file_ids.len() as u64);
+            info!(
+                count = file_ids.len(),
+                new_brain_id, "brain_id updated in LanceDB for file_ids"
+            );
         }
         Ok(())
     }

@@ -16,8 +16,10 @@ use serde_json::json;
 fn open_two_brain_store() -> (TaskStore, String, String) {
     let db = Db::open_in_memory().expect("open in-memory db");
     // Register two brains.
-    db.ensure_brain_registered("brain-src", "source-brain").unwrap();
-    db.ensure_brain_registered("brain-dst", "dest-brain").unwrap();
+    db.ensure_brain_registered("brain-src", "source-brain")
+        .unwrap();
+    db.ensure_brain_registered("brain-dst", "dest-brain")
+        .unwrap();
 
     let store = TaskStore::with_brain_id(db, "brain-src", "source-brain").unwrap();
     (store, "brain-src".to_string(), "brain-dst".to_string())
@@ -117,7 +119,10 @@ fn transfer_nonexistent_task_returns_error() {
     let result = store.transfer_task("task-does-not-exist", &dst_brain);
     assert!(result.is_err(), "transfer of nonexistent task must fail");
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("task not found") || err.contains("not found"), "error message: {err}");
+    assert!(
+        err.contains("task not found") || err.contains("not found"),
+        "error message: {err}"
+    );
 }
 
 #[test]
@@ -192,7 +197,10 @@ fn transfer_concurrent_cas_second_call_fails() {
     // We verify the CAS invariant by checking rows_affected == 1 property:
     // if the task moved (r1 succeeded), the second call from the same
     // TaskStore context sees dst_brain as current and proceeds normally.
-    assert!(r2.is_ok(), "second transfer from updated state should succeed");
+    assert!(
+        r2.is_ok(),
+        "second transfer from updated state should succeed"
+    );
     let r2 = r2.unwrap();
     assert_eq!(r2.from_brain_id, dst_brain);
 }
@@ -228,7 +236,10 @@ fn transfer_records_brain_id_moves_with_task() {
             .map_err(Into::into)
         })
         .unwrap();
-    assert_eq!(record_brain_id, dst_brain, "record.brain_id must follow the task");
+    assert_eq!(
+        record_brain_id, dst_brain,
+        "record.brain_id must follow the task"
+    );
 }
 
 #[test]
@@ -261,8 +272,12 @@ fn transfer_event_payload_self_contained_for_replay() {
 
     // Verify replay: construct a TaskEvent from the payload and apply it to a fresh DB.
     let fresh_db = Db::open_in_memory().expect("open fresh in-memory db");
-    fresh_db.ensure_brain_registered(&src_brain, "source-brain").unwrap();
-    fresh_db.ensure_brain_registered(&dst_brain, "dest-brain").unwrap();
+    fresh_db
+        .ensure_brain_registered(&src_brain, "source-brain")
+        .unwrap();
+    fresh_db
+        .ensure_brain_registered(&dst_brain, "dest-brain")
+        .unwrap();
 
     // First create the task in src brain.
     let create_ev = TaskEvent::from_payload(
@@ -311,7 +326,10 @@ fn transfer_event_payload_self_contained_for_replay() {
             .map_err(Into::into)
         })
         .unwrap();
-    assert_eq!(replayed_brain_id, dst_brain, "replay must move task to dst brain");
+    assert_eq!(
+        replayed_brain_id, dst_brain,
+        "replay must move task to dst brain"
+    );
 
     let replayed_display_id: String = fresh_db
         .with_read_conn(|conn| {
@@ -365,10 +383,15 @@ async fn mcp_tasks_transfer_happy_path() {
         }),
     )
     .await;
-    assert_ne!(transferred.is_error, Some(true), "transfer failed: {:?}", transferred);
+    assert_ne!(
+        transferred.is_error,
+        Some(true),
+        "transfer failed: {:?}",
+        transferred
+    );
 
-    let resp: serde_json::Value = serde_json::from_str(&transferred.content[0].text)
-        .expect("response must be JSON");
+    let resp: serde_json::Value =
+        serde_json::from_str(&transferred.content[0].text).expect("response must be JSON");
     assert_eq!(resp["task_id"], "mcp-transfer-t1");
     assert_eq!(resp["to_brain_id"], "brain-target");
     assert_eq!(resp["was_no_op"], false);
@@ -395,5 +418,9 @@ async fn mcp_tasks_transfer_unknown_task_returns_error() {
         }),
     )
     .await;
-    assert_eq!(result.is_error, Some(true), "expected error for unknown task");
+    assert_eq!(
+        result.is_error,
+        Some(true),
+        "expected error for unknown task"
+    );
 }

@@ -8,24 +8,12 @@ pub mod queries;
 
 use std::collections::HashMap;
 
-use crate::error::{BrainCoreError, Result};
+use crate::error::Result;
 use brain_persistence::db::Db;
-use brain_persistence::db::tasks::display_id::compute_display_id_for_target;
-use rusqlite::OptionalExtension;
 
 use events::TaskEvent;
 
-/// Result of a successful task transfer.
-#[derive(Debug, Clone)]
-pub struct TaskTransferResult {
-    pub task_id: String,
-    pub from_brain_id: String,
-    pub to_brain_id: String,
-    pub from_display_id: String,
-    pub to_display_id: String,
-    /// `true` when source and target brain are the same — no writes occurred.
-    pub was_no_op: bool,
-}
+pub use brain_persistence::db::tasks::transfer::TaskTransferResult;
 
 /// The task store: SQLite is the sole source of truth.
 pub struct TaskStore {
@@ -419,134 +407,19 @@ impl TaskStore {
     /// a `task_transferred` event row. CAS clause (`WHERE brain_id = current`)
     /// prevents concurrent double-transfer.
     ///
-    /// Returns `None` if `target_brain_id` is the same as the current brain
-    /// (no-op). Returns an error if the task does not exist, if the CAS update
-    /// affected 0 rows (concurrent transfer), or if the target brain is not
-    /// registered.
+    /// Returns a no-op result if `target_brain_id` equals the current brain.
+    /// Returns an error if the task does not exist, if CAS affected 0 rows
+    /// (concurrent transfer), or if the target brain is not registered.
     pub fn transfer_task(
         &self,
         task_id: &str,
         target_brain_id: &str,
     ) -> Result<TaskTransferResult> {
+        use brain_persistence::db::tasks::transfer::transfer_task_inner;
         let task_id = task_id.to_string();
         let target_brain_id = target_brain_id.to_string();
-
-        self.db.with_write_conn(|conn| {
-            // 1. Read current state.
-            let current: Option<(String, Option<String>)> = conn
-                .query_row(
-                    "SELECT brain_id, display_id FROM tasks WHERE task_id = ?1",
-                    rusqlite::params![task_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(BrainCoreError::from)?;
-
-            let (from_brain_id, from_display_id_opt) = current.ok_or_else(|| {
-                BrainCoreError::TaskEvent(format!("task not found: {task_id}"))
-            })?;
-
-            let from_display_id = from_display_id_opt.unwrap_or_default();
-
-            // 2. Same-brain no-op.
-            if from_brain_id == target_brain_id {
-                return Ok(TaskTransferResult {
-                    task_id: task_id.clone(),
-                    from_brain_id: from_brain_id.clone(),
-                    to_brain_id: from_brain_id,
-                    from_display_id: from_display_id.clone(),
-                    to_display_id: from_display_id,
-                    was_no_op: true,
-                });
-            }
-
-            // Wrap the remaining mutations in a single BEGIN IMMEDIATE transaction.
-            conn.execute_batch("BEGIN IMMEDIATE")?;
-
-            let result = (|| -> Result<TaskTransferResult> {
-                // 3. Compute collision-safe display_id for target brain.
-                let to_display_id =
-                    compute_display_id_for_target(conn, &task_id, &target_brain_id)?;
-
-                // 4. CAS UPDATE on tasks.
-                let rows = conn.execute(
-                    "UPDATE tasks SET brain_id = ?1, display_id = ?2, updated_at = strftime('%s','now') \
-                     WHERE task_id = ?3 AND brain_id = ?4",
-                    rusqlite::params![target_brain_id, to_display_id, task_id, from_brain_id],
-                )?;
-                if rows != 1 {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "transfer CAS failed for task {task_id}: concurrent modification or task moved"
-                    )));
-                }
-
-                // 5. Update SQLite chunks.
-                let task_file_id = format!("task:{task_id}");
-                let outcome_file_id = format!("task-outcome:{task_id}");
-                conn.execute(
-                    "UPDATE chunks SET brain_id = ?1 WHERE file_id IN (?2, ?3)",
-                    rusqlite::params![target_brain_id, task_file_id, outcome_file_id],
-                )?;
-
-                // 6. Update SQLite files.
-                conn.execute(
-                    "UPDATE files SET brain_id = ?1 WHERE path IN (?2, ?3)",
-                    rusqlite::params![target_brain_id, task_file_id, outcome_file_id],
-                )?;
-
-                // 7. Update records (FK-less but brain_id must move with task).
-                conn.execute(
-                    "UPDATE records SET brain_id = ?1 WHERE task_id = ?2",
-                    rusqlite::params![target_brain_id, task_id],
-                )?;
-
-                // 8. Insert task_transferred event.
-                use brain_persistence::db::tasks::events::{TaskEvent, TaskTransferredPayload};
-                let ev = TaskEvent::from_payload(
-                    &task_id,
-                    "system",
-                    TaskTransferredPayload {
-                        from_brain_id: from_brain_id.clone(),
-                        to_brain_id: target_brain_id.clone(),
-                        from_display_id: from_display_id.clone(),
-                        to_display_id: to_display_id.clone(),
-                    },
-                );
-                let payload_json = serde_json::to_string(&ev.payload).unwrap_or_else(|_| "{}".into());
-                conn.execute(
-                    "INSERT INTO task_events (event_id, task_id, event_type, timestamp, actor, payload) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    rusqlite::params![
-                        ev.event_id,
-                        ev.task_id,
-                        format!("{:?}", ev.event_type),
-                        ev.timestamp,
-                        ev.actor,
-                        payload_json,
-                    ],
-                )?;
-
-                Ok(TaskTransferResult {
-                    task_id: task_id.clone(),
-                    from_brain_id,
-                    to_brain_id: target_brain_id.clone(),
-                    from_display_id,
-                    to_display_id,
-                    was_no_op: false,
-                })
-            })();
-
-            match result {
-                Ok(r) => {
-                    conn.execute_batch("COMMIT")?;
-                    Ok(r)
-                }
-                Err(e) => {
-                    let _ = conn.execute_batch("ROLLBACK");
-                    Err(e)
-                }
-            }
-        })
+        self.db
+            .with_write_conn(|conn| transfer_task_inner(conn, &task_id, &target_brain_id))
     }
 
     /// Import events from a JSONL file into the unified SQLite database.

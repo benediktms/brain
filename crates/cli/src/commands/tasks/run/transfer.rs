@@ -26,7 +26,10 @@ pub fn transfer(ctx: &TaskCtx, params: TransferParams) -> Result<()> {
     let result = ctx.store.transfer_task(&task_id, &target_brain_id)?;
 
     if result.was_no_op {
-        println!("no-op: task {} is already in brain '{}'", task_id, target_brain_name);
+        println!(
+            "no-op: task {} is already in brain '{}'",
+            task_id, target_brain_name
+        );
         return Ok(());
     }
 
@@ -41,10 +44,7 @@ pub fn transfer(ctx: &TaskCtx, params: TransferParams) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         // Human-readable: "<old_display> → <new_display>"
-        println!(
-            "{} → {}",
-            result.from_display_id, result.to_display_id
-        );
+        println!("{} → {}", result.from_display_id, result.to_display_id);
     }
 
     Ok(())

@@ -504,9 +504,20 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 TasksAction::Next { k } => {
                     commands::tasks::run::next(&ctx, k)?;
                 }
-                TasksAction::Transfer { task_id, to, dry_run } => {
+                TasksAction::Transfer {
+                    task_id,
+                    to,
+                    dry_run,
+                } => {
                     use commands::tasks::run::TransferParams;
-                    commands::tasks::run::transfer(&ctx, TransferParams { task_id, to, dry_run })?;
+                    commands::tasks::run::transfer(
+                        &ctx,
+                        TransferParams {
+                            task_id,
+                            to,
+                            dry_run,
+                        },
+                    )?;
                 }
             }
         }
