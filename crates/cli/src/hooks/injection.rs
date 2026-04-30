@@ -631,7 +631,7 @@ mod tests {
         // A 3-byte UTF-8 sequence — truncating at a non-boundary would produce
         // invalid UTF-8. We verify the result is valid UTF-8.
         let ch = '\u{4E2D}'; // CJK character, 3 bytes in UTF-8
-        let text: String = std::iter::repeat(ch).take(200).collect();
+        let text: String = std::iter::repeat_n(ch, 200).collect();
         let opts = SanitizeOpts {
             max_bytes: 100,
             ..default_opts()

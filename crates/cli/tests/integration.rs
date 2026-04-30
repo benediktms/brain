@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 /// CLI integration tests.
 ///
 /// These tests exercise the compiled `brain` binary through `assert_cmd`.

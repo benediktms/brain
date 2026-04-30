@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 /// brn-3d7.6 — Task transfer integration tests.
 ///
 /// Covers: happy path, display_id collision, same-brain no-op, concurrent

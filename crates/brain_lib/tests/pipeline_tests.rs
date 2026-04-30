@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 //! Integration tests for `IndexPipeline` public API.
 //!
 //! Covers `index_file`, `full_scan`, `vacuum`, and `doctor` using `MockEmbedder`

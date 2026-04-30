@@ -1,3 +1,7 @@
+// Pre-existing technical debt: raw rusqlite usage inside test modules below.
+// Architectural cleanup tracked separately; this allow keeps the workspace lint clean.
+#![allow(clippy::disallowed_macros)]
+
 /// Read-path orchestration pipeline.
 ///
 /// Centralises hybrid search, expand, and reflect logic so that MCP handlers

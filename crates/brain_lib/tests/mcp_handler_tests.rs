@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 mod mcp_test_harness;
 
 use crate::mcp_test_harness::*;

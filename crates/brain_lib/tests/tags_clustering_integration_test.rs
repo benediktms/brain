@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 //! End-to-end correctness gate for the synonym-clustering pipeline (`brn-83a.7.2.6`).
 //!
 //! Pins the contract `[seed → recluster → search via canonical → get aliased

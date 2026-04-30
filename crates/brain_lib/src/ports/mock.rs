@@ -1262,7 +1262,7 @@ impl JobQueue for MockJobQueue {
     fn update_job_status(&self, job_id: &str, status: &JobStatus) -> Result<bool> {
         let mut jobs = self.jobs.lock().unwrap();
         if let Some(job) = jobs.get_mut(job_id) {
-            job.status = status.clone();
+            job.status = *status;
             Ok(true)
         } else {
             Ok(false)

@@ -457,8 +457,7 @@ mod tests {
     fn test_extractive_l1_output_size() {
         // Generate content well over the budget.
         let big_para = "Word ".repeat(500);
-        let content = std::iter::repeat(big_para.as_str())
-            .take(10)
+        let content = std::iter::repeat_n(big_para.as_str(), 10)
             .collect::<Vec<_>>()
             .join("\n\n");
         let result = generate_extractive_l1(&content);

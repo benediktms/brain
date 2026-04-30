@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 //! TDD integration tests for `store_procedure`.
 //!
 //! These tests use a self-contained in-memory SQLite schema that already
