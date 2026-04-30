@@ -75,6 +75,7 @@ pub fn run(name: &str) -> Result<()> {
             Some(brain_id.clone())
         },
         prefix: brain_row.prefix.clone(),
+        auto_inject: Default::default(),
     };
     save_brain_toml(&brain_dir, &brain_toml)?;
 

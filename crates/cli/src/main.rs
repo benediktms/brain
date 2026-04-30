@@ -9,6 +9,7 @@ use crate::commands::daemon::Daemon;
 mod cli;
 mod commands;
 mod dispatch;
+pub mod hooks;
 pub mod markdown_table;
 
 // Generated at build time by build.rs — contains git SHA when

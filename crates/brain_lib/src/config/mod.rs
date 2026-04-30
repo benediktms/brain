@@ -135,6 +135,40 @@ impl<'de> Deserialize<'de> for BrainEntry {
 // Per-project config (.brain/brain.toml)
 // ---------------------------------------------------------------------------
 
+/// Controls whether automatic memory injection into hook envelopes is active.
+///
+/// Injection is disabled by default (`enabled = false`). Users who understand
+/// the security implications may opt in by setting `enabled = true` in their
+/// `brain.toml`. Individual hook events are further gated by sub-flags.
+///
+/// Example `brain.toml` section:
+/// ```toml
+/// [auto_inject]
+/// enabled = true
+/// pre_edit_recall = true
+/// max_bytes = 4096
+/// ```
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct AutoInjectConfig {
+    /// Master switch: whether auto-injection is active at all. Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Whether the PreToolUse:Edit recall path is active. Requires
+    /// `enabled = true` as a prerequisite. Default: false.
+    #[serde(default)]
+    pub pre_edit_recall: bool,
+
+    /// Maximum byte length of sanitized injected content per event.
+    /// Maps to `SanitizeOpts::max_bytes`. Default: 4096 (~4 KiB).
+    #[serde(default = "default_max_bytes")]
+    pub max_bytes: usize,
+}
+
+fn default_max_bytes() -> usize {
+    4096
+}
+
 /// Project-local configuration stored at `<project>/.brain/brain.toml`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BrainToml {
@@ -149,6 +183,9 @@ pub struct BrainToml {
     /// 3-letter task ID prefix (read-only projection from DB).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
+    /// Automatic memory injection settings. Omitted from TOML when defaults.
+    #[serde(default)]
+    pub auto_inject: AutoInjectConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -870,6 +907,7 @@ mod tests {
             notes: vec![],
             id: Some("abcd1234".to_string()),
             prefix: None,
+            auto_inject: Default::default(),
         };
         save_brain_toml(&brain_dir, &toml_cfg).expect("unwrap should not fail");
         let loaded = load_brain_toml(&brain_dir).expect("unwrap should not fail");
@@ -887,6 +925,7 @@ mod tests {
             notes: vec![],
             id: None,
             prefix: None,
+            auto_inject: Default::default(),
         };
         save_brain_toml(&brain_dir, &toml_cfg).expect("unwrap should not fail");
         let loaded = load_brain_toml(&brain_dir).expect("unwrap should not fail");
