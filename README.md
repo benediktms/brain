@@ -126,6 +126,29 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 
 ---
 
+## Claude Code Integration
+
+brain distributes as a set of Claude Code plugins. The plugin surface is canonical — install via the plugin marketplace or the CLI:
+
+```sh
+brain plugin install
+```
+
+This mounts the plugin manifests from `~/.brain/plugins/{brain,tasks,records,mem}/plugin.json` and registers the hooks (`SessionStart`, `UserPromptSubmit`, `PreCompact`) without mutating your project's `.claude/settings.json`.
+
+### Advanced / manual setup
+
+`brain hooks install` directly injects hook entries into `.claude/settings.json`. This path is retained for environments where the Claude Code plugin marketplace is unavailable (CI runners, air-gapped machines):
+
+```sh
+brain hooks install            # mutates .claude/settings.json
+brain hooks install --dry-run  # preview changes without applying
+```
+
+Prefer `brain plugin install` for all standard setups.
+
+---
+
 ## MCP Tools
 
 | Tool                    | Description                                                                                   |
