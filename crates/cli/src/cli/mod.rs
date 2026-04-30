@@ -28,6 +28,20 @@ pub(crate) use tasks::*;
 
 // ── value-enum helpers ──────────────────────────────────────
 
+/// Output format for hook-emitting commands.
+///
+/// Mirrors the transport enum used internally. Accepted on `--output`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OutputFormatArg {
+    /// Human-readable text (default).
+    Human,
+    /// Plain JSON (no envelope wrapper).
+    Json,
+    /// Claude Code hook envelope.
+    #[value(name = "hook-envelope")]
+    HookEnvelope,
+}
+
 /// Valid task types for CLI arguments.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum TaskTypeArg {
@@ -314,7 +328,12 @@ pub(crate) enum Command {
     /// Manage brain tasks
     #[command(visible_alias = "task")]
     Tasks {
-        /// Output as JSON instead of human-readable text
+        /// Output transport format: human (default), json, or hook-envelope.
+        /// Replaces --json; --json is retained for backward compatibility.
+        #[arg(long, global = true, value_name = "FORMAT")]
+        output: Option<OutputFormatArg>,
+
+        /// Output as JSON instead of human-readable text (deprecated; use --output=json)
         #[arg(long, global = true)]
         json: bool,
 

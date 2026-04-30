@@ -23,19 +23,25 @@ use brain_lib::tasks::TaskStore;
 use brain_lib::tasks::events::{self, *};
 use brain_lib::utils::task_row_to_compact_json;
 
+use crate::hooks::OutputFormat;
+
 // ── shared context ─────────────────────────────────────────
 
 pub struct TaskCtx {
     pub(crate) store: TaskStore,
-    pub(crate) json: bool,
+    /// Output transport format.
+    ///
+    /// `Human` → human-readable text, `Json` → plain JSON,
+    /// `HookEnvelope` → Claude Code hook envelope.
+    pub(crate) output: OutputFormat,
 }
 
 impl TaskCtx {
-    pub fn new(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Result<Self> {
+    pub fn new(sqlite_db: &Path, lance_db: Option<&Path>, output: OutputFormat) -> Result<Self> {
         let stores = BrainStores::from_path(sqlite_db, lance_db)?;
         Ok(Self {
             store: stores.tasks,
-            json,
+            output,
         })
     }
 }
@@ -141,7 +147,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
 
         remote_store.append(&event)?;
 
-        if ctx.json {
+        if ctx.output.is_json_mode() {
             let task = remote_store
                 .get_task(&task_id)?
                 .ok_or_else(|| anyhow::anyhow!("Task not found after creation: {task_id}"))?;
@@ -197,7 +203,7 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
 
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let task = ctx
             .store
             .get_task(&task_id)?

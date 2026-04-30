@@ -5,6 +5,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::cli::*;
 use crate::commands;
+use crate::hooks::OutputFormat;
 
 // ── helpers ─────────────────────────────────────────────────
 
@@ -229,12 +230,20 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             }
         }
         Command::Tasks {
+            output: output_arg,
             json,
             markdown: _,
             action,
         } => {
             use commands::tasks::run::{CreateParams, ListParams, TaskCtx, UpdateParams};
-            let ctx = TaskCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+            let output = match output_arg {
+                Some(OutputFormatArg::HookEnvelope) => OutputFormat::HookEnvelope,
+                Some(OutputFormatArg::Json) => OutputFormat::Json,
+                Some(OutputFormatArg::Human) => OutputFormat::Human,
+                None if json => OutputFormat::Json,
+                None => OutputFormat::Human,
+            };
+            let ctx = TaskCtx::new(&cli.sqlite_db, Some(&cli.lance_db), output)?;
 
             match action {
                 TasksAction::Create {

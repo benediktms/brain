@@ -28,7 +28,7 @@ pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "event_id": event.event_id,
             "task_id": display_task_id,
@@ -64,7 +64,7 @@ pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> 
     );
     ctx.store.append(&event)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let out = json!({
             "event_id": event.event_id,
             "task_id": display_task_id,
@@ -111,7 +111,7 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
         match ctx.store.append(&event) {
             Ok(()) => {
                 succeeded.push((task_id.clone(), depends_on.clone()));
-                if !ctx.json {
+                if !ctx.output.is_json_mode() {
                     let display_task_id = ctx
                         .store
                         .compact_id(task_id)
@@ -125,7 +125,7 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
             }
             Err(e) => {
                 failed.push((task_id.clone(), depends_on.clone(), format!("{e}")));
-                if !ctx.json {
+                if !ctx.output.is_json_mode() {
                     let display_task_id = ctx
                         .store
                         .compact_id(task_id)
@@ -140,7 +140,7 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
         }
     }
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
             .map(|(t, d)| {
@@ -192,7 +192,7 @@ pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result
             Ok(id) => id,
             Err(e) => {
                 failed.push((raw_id.clone(), format!("{e}"), false));
-                if !ctx.json {
+                if !ctx.output.is_json_mode() {
                     println!("Failed to resolve {raw_id}: {e}");
                 }
                 continue;
@@ -211,7 +211,7 @@ pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result
         match ctx.store.append(&event) {
             Ok(()) => {
                 succeeded.push(dep_id.clone());
-                if !ctx.json {
+                if !ctx.output.is_json_mode() {
                     let display_dep_id = ctx
                         .store
                         .compact_id(&dep_id)
@@ -221,14 +221,14 @@ pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result
             }
             Err(e) => {
                 failed.push((dep_id, format!("{e}"), true));
-                if !ctx.json {
+                if !ctx.output.is_json_mode() {
                     println!("Failed: {raw_id} -> {source_display}: {e}");
                 }
             }
         }
     }
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
             .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| id.clone()))
@@ -267,7 +267,7 @@ pub fn dep_clear(ctx: &TaskCtx, task_id: &str) -> Result<()> {
     let deps = ctx.store.get_deps_for_task(&resolved)?;
 
     if deps.is_empty() {
-        if ctx.json {
+        if ctx.output.is_json_mode() {
             let out = json!({
                 "task_id": display_resolved,
                 "succeeded": [],
@@ -306,7 +306,7 @@ pub fn dep_clear(ctx: &TaskCtx, task_id: &str) -> Result<()> {
         }
     }
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
             .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))

@@ -677,6 +677,7 @@ dependencies = [
  "notify-debouncer-full",
  "predicates",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

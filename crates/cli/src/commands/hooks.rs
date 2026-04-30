@@ -21,7 +21,7 @@ fn brain_hooks() -> Value {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "brain tasks list --ready --json 2>/dev/null | head -c 2000"
+                        "command": "brain tasks list --ready --output=hook-envelope 2>/dev/null"
                     }
                 ]
             }
@@ -32,7 +32,7 @@ fn brain_hooks() -> Value {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "brain tasks stats --json 2>/dev/null"
+                        "command": "brain tasks stats --output=hook-envelope 2>/dev/null"
                     }
                 ]
             }
@@ -135,8 +135,8 @@ pub fn install(dry_run: bool) -> Result<()> {
     println!("Installed brain hooks into .claude/settings.json");
     println!();
     println!("Hooks added:");
-    println!("  SessionStart  -> brain tasks stats --json");
-    println!("  UserPromptSubmit -> brain tasks list --ready --json");
+    println!("  SessionStart     -> brain tasks stats --output=hook-envelope");
+    println!("  UserPromptSubmit -> brain tasks list --ready --output=hook-envelope");
 
     Ok(())
 }

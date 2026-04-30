@@ -25,7 +25,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
     let external_ids = ctx.store.get_external_ids(&id)?;
     let external_blockers = ctx.store.get_external_blockers(&id)?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         let comments_json = comments_to_json(&comments);
         let note_links_json = note_links_to_json(&note_links);
         let children_json = children_stubs_to_json(&ctx.store, &children);

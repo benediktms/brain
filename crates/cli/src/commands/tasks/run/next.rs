@@ -37,7 +37,7 @@ pub fn next(ctx: &TaskCtx, k: usize) -> Result<()> {
     // Aggregate counts
     let (ready_count, blocked_count) = ctx.store.count_ready_blocked()?;
 
-    if ctx.json {
+    if ctx.output.is_json_mode() {
         // Enrich with labels and dependency summaries
         let mut results_json = enrich_task_summaries(&ctx.store, &selected);
 
