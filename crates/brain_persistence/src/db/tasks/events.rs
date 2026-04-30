@@ -46,6 +46,12 @@ pub enum EventType {
     /// Mark a previously-added external blocker as resolved by stamping
     /// `resolved_at`. The row is preserved so callers can render history.
     ExternalBlockerResolved,
+    /// A task was moved from one brain to another (preserve-ID transfer).
+    ///
+    /// The `task_id` is stable; only `brain_id` and `display_id` change.
+    /// The payload is self-contained so replay reconstructs state without
+    /// any external lookup.
+    TaskTransferred,
 }
 
 /// Valid task statuses.
@@ -257,6 +263,22 @@ pub struct ExternalBlockerResolvedPayload {
     pub resolved_at: Option<i64>,
 }
 
+/// Payload for `task_transferred`.
+///
+/// Self-contained: includes both source and target brain_id and display_id so
+/// event-log replay reconstructs the final task state without external lookup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskTransferredPayload {
+    /// Brain the task moved from.
+    pub from_brain_id: String,
+    /// Brain the task moved to.
+    pub to_brain_id: String,
+    /// Display ID in the source brain (e.g. `"a3f"`).
+    pub from_display_id: String,
+    /// Display ID in the target brain (may differ if collision was resolved).
+    pub to_display_id: String,
+}
+
 // -- EventPayload trait --
 
 /// Maps a typed payload to its unambiguous `EventType`.
@@ -295,6 +317,12 @@ impl EventPayload for CommentPayload {
 impl EventPayload for ParentSetPayload {
     fn event_type() -> EventType {
         EventType::ParentSet
+    }
+}
+
+impl EventPayload for TaskTransferredPayload {
+    fn event_type() -> EventType {
+        EventType::TaskTransferred
     }
 }
 
@@ -492,5 +520,30 @@ mod tests {
         assert_eq!(ev.payload, payload);
         assert_eq!(ev.event_type, EventType::StatusChanged);
         assert_eq!(ev.event_version, CURRENT_EVENT_VERSION);
+    }
+
+    #[test]
+    fn test_task_transferred_payload_round_trip() {
+        use super::TaskTransferredPayload;
+
+        let p = TaskTransferredPayload {
+            from_brain_id: "brain-a".to_string(),
+            to_brain_id: "brain-b".to_string(),
+            from_display_id: "a3f".to_string(),
+            to_display_id: "b7e".to_string(),
+        };
+
+        let ev = TaskEvent::from_payload("t1", "cli", p);
+        assert_eq!(ev.event_type, EventType::TaskTransferred);
+        assert_eq!(ev.task_id, "t1");
+        assert_eq!(ev.actor, "cli");
+
+        // Deserialize back — payload fields must survive round-trip.
+        let recovered: TaskTransferredPayload =
+            serde_json::from_value(ev.payload).expect("deserialization must succeed");
+        assert_eq!(recovered.from_brain_id, "brain-a");
+        assert_eq!(recovered.to_brain_id, "brain-b");
+        assert_eq!(recovered.from_display_id, "a3f");
+        assert_eq!(recovered.to_display_id, "b7e");
     }
 }

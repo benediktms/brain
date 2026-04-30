@@ -568,6 +568,38 @@ impl Store {
         Ok(())
     }
 
+    /// Update the brain_id column for all chunks belonging to the given file_ids.
+    ///
+    /// Used by the task-transfer transaction to re-attribute vector rows to the
+    /// target brain after the SQLite `brain_id` has been updated. Only the
+    /// LanceDB filter metadata changes — vector content is untouched.
+    pub async fn update_brain_id_for_files(
+        &self,
+        file_ids: &[&str],
+        old_brain_id: &str,
+        new_brain_id: &str,
+    ) -> crate::error::Result<()> {
+        let bid_old = validate_filter_value(old_brain_id)?;
+        let bid_new = validate_filter_value(new_brain_id)?;
+        for file_id in file_ids {
+            let fid = validate_filter_value(file_id)?;
+            self.table
+                .update()
+                .only_if(format!("file_id = '{fid}' AND brain_id = '{bid_old}'"))
+                .column("brain_id", format!("'{bid_new}'"))
+                .execute()
+                .await
+                .map_err(|e| {
+                    BrainCoreError::VectorDb(format!("update brain_id failed for {file_id}: {e}"))
+                })?;
+        }
+        if !file_ids.is_empty() {
+            self.optimize_scheduler.record_mutation(file_ids.len() as u64);
+            info!(count = file_ids.len(), new_brain_id, "brain_id updated in LanceDB for file_ids");
+        }
+        Ok(())
+    }
+
     /// Delete all chunks for a given file_id within a brain.
     #[instrument(skip_all)]
     pub async fn delete_file_chunks(
