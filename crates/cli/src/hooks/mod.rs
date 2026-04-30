@@ -111,6 +111,27 @@ pub fn build_hook_envelope(hook_event: &str, context: &str) -> String {
     serde_json::to_string_pretty(&envelope).unwrap_or_default()
 }
 
+/// Build the minimal universal-fields-only acknowledgement.
+///
+/// Claude Code's runtime validator rejects `hookSpecificOutput` for events
+/// other than `PreToolUse`, `UserPromptSubmit`, `PostToolUse`, and
+/// `PostToolBatch`. Events outside that set (notably `Stop` and `PreCompact`)
+/// must emit only the universal envelope fields.
+///
+/// This helper produces:
+/// ```json
+/// { "suppressOutput": true }
+/// ```
+///
+/// Use it from hook commands whose work happens on the persistence side
+/// (writing episodes or snapshots to the brain DB) rather than via output
+/// injection. The DB write is the source of truth; the JSON output exists
+/// only to satisfy the schema validator.
+pub fn build_minimal_hook_ack() -> String {
+    let envelope = serde_json::json!({ "suppressOutput": true });
+    serde_json::to_string_pretty(&envelope).unwrap_or_default()
+}
+
 // ---------------------------------------------------------------------------
 // Safety framing
 // ---------------------------------------------------------------------------
@@ -199,6 +220,25 @@ mod tests {
         let json_str = build_hook_envelope("Stop", "");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["hookSpecificOutput"]["additionalContext"], "");
+    }
+
+    // ── Minimal hook ack (Stop / PreCompact shape) ────────────────────────
+
+    #[test]
+    fn minimal_ack_has_suppress_output_true() {
+        let json_str = build_minimal_hook_ack();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["suppressOutput"], true);
+    }
+
+    #[test]
+    fn minimal_ack_omits_hook_specific_output() {
+        // Claude Code's runtime validator rejects hookSpecificOutput for
+        // events outside the allow-list (Stop, PreCompact, etc.). The minimal
+        // ack must NOT include this field.
+        let json_str = build_minimal_hook_ack();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert!(parsed.get("hookSpecificOutput").is_none());
     }
 
     // ── Safety framing ─────────────────────────────────────────────────────

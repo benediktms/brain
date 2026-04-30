@@ -316,8 +316,11 @@ pub fn pre_compact() -> Result<()> {
         }
     );
 
-    let envelope = crate::hooks::build_hook_envelope("PreCompact", &context);
-    println!("{envelope}");
+    // PreCompact is not in Claude Code's hookSpecificOutput allow-list — emit
+    // the minimal universal-fields shape. The snapshot is persisted as an
+    // episode; retrieval surfaces it on subsequent compactions.
+    let _ = context;
+    println!("{}", crate::hooks::build_minimal_hook_ack());
 
     Ok(())
 }
@@ -374,7 +377,7 @@ pub fn stop() -> Result<()> {
 
     // Silently exit on user-initiated interrupts.
     if stop_reason == "user_interrupt" {
-        println!("{}", crate::hooks::build_hook_envelope("Stop", ""));
+        println!("{}", crate::hooks::build_minimal_hook_ack());
         return Ok(());
     }
 
@@ -397,7 +400,7 @@ pub fn stop() -> Result<()> {
 
     // Skip trivial sessions.
     if transcript.tool_call_count < STOP_MIN_TOOL_CALLS {
-        println!("{}", crate::hooks::build_hook_envelope("Stop", ""));
+        println!("{}", crate::hooks::build_minimal_hook_ack());
         return Ok(());
     }
 
@@ -470,16 +473,11 @@ pub fn stop() -> Result<()> {
         written_ids.push(id);
     }
 
-    let context = if written_ids.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "Session summary written: {} episode(s) recorded (session {session_id}).",
-            written_ids.len()
-        )
-    };
-
-    println!("{}", crate::hooks::build_hook_envelope("Stop", &context));
+    // Stop is not in Claude Code's hookSpecificOutput allow-list — emit the
+    // minimal universal-fields shape. Episodes are persisted; retrieval
+    // surfaces them on subsequent sessions.
+    let _ = (written_ids, session_id);
+    println!("{}", crate::hooks::build_minimal_hook_ack());
     Ok(())
 }
 
