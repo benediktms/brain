@@ -6,11 +6,11 @@
 //! and `summaries`. Three values are defined (see [`Trust`]):
 //!
 //! - `untrusted` — hook-injected, attacker-controlled, opaque provenance.
-//! - `vetted`    — intermediate band: tool-derived but reviewed/curated by a
-//!                 human-in-the-loop pass (e.g. explicit `brain memory write`
-//!                 invoked on hook output after review).
-//! - `trusted`   — user-authored or explicitly marked safe (e.g. the existing
-//!                 `brain memory write` CLI path used before hook integration).
+//! - `vetted` — intermediate band: tool-derived but reviewed/curated by a
+//!   human-in-the-loop pass (e.g. explicit `brain memory write` invoked on
+//!   hook output after review).
+//! - `trusted` — user-authored or explicitly marked safe (e.g. the existing
+//!   `brain memory write` CLI path used before hook integration).
 //!
 //! Choosing TEXT over INTEGER:
 //! - Readable in SQL queries and log output without a lookup table.
