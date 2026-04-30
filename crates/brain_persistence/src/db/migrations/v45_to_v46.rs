@@ -137,7 +137,6 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::init_schema;
 
     fn setup_v45() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

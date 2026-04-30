@@ -357,7 +357,7 @@ impl BrainStores {
         &self,
         episode: &brain_persistence::db::summaries::Episode,
     ) -> Result<String> {
-        Ok(self.db.store_vetted_episode(episode)?)
+        self.db.store_vetted_episode(episode)
     }
 
     /// List recent episodes, newest first.
