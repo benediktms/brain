@@ -33,42 +33,8 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
                 let home = brain_home()?;
                 let db_path = home.join("brain.db");
                 let db = brain_persistence::db::Db::open(&db_path)?;
-                if let Ok(Some(brain_row)) = db.get_brain(local_id) {
-                    let mut roots: Vec<std::path::PathBuf> = brain_row
-                        .roots_json
-                        .as_deref()
-                        .and_then(|j| serde_json::from_str(j).ok())
-                        .unwrap_or_default();
-                    if roots.contains(&cwd) {
-                        println!(
-                            "Path already registered in brain \"{}\" ({} roots)",
-                            brain_name,
-                            roots.len()
-                        );
-                    } else {
-                        roots.push(cwd.clone());
-                        let roots_json = serde_json::to_string(&roots)?;
-                        db.upsert_brain(&BrainUpsert {
-                            brain_id: local_id,
-                            name: &brain_name,
-                            prefix: brain_row.prefix.as_deref().unwrap_or("BRN"),
-                            roots_json: &roots_json,
-                            notes_json: brain_row.notes_json.as_deref().unwrap_or("[]"),
-                            aliases_json: brain_row.aliases_json.as_deref().unwrap_or("[]"),
-                            archived: brain_row.archived,
-                        })?;
-                        // Project to state_projection.toml.
-                        let entry = global.brains.get_mut(&brain_name).unwrap();
-                        if !entry.roots.contains(&cwd) {
-                            entry.roots.push(cwd.clone());
-                        }
-                        save_global_config(&global)?;
-                        println!(
-                            "Path added to existing brain \"{}\" (now has {} roots)",
-                            brain_name,
-                            roots.len()
-                        );
-                    }
+                if db.get_brain(local_id)?.is_some() {
+                    attach_cwd_to_existing_brain(&cwd, local_id, &brain_name, &db, &mut global)?;
                 } else {
                     // Brain in config but not in DB yet — fall through to re-register.
                     // (backward compat with old installs)
@@ -135,6 +101,47 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         None
     };
 
+    // Case C: cwd is a git working tree whose common-dir matches an existing
+    // brain's root common-dir. Catches worktrees where the marker file isn't
+    // checked out (e.g. project gitignores `.brain/`) and the path was never
+    // explicitly registered. Path-independent: the lookup is keyed on the
+    // shared `.git` directory, not on filesystem paths.
+    if let Some(wt_common) = brain_lib::git::common_dir_cached(&cwd)? {
+        let mut global = load_global_config()?;
+        let mut matched: Option<(String, String)> = None;
+        for (name, entry) in &global.brains {
+            if entry.archived {
+                continue;
+            }
+            for root in &entry.roots {
+                let Some(root_common) = brain_lib::git::common_dir_cached(root)? else {
+                    continue;
+                };
+                if root_common == wt_common {
+                    if let Some(id) = entry.id.clone() {
+                        matched = Some((name.clone(), id));
+                    } else {
+                        eprintln!(
+                            "Warning: brain \"{name}\" matches by git common-dir but has no id in projection — skipping. Run `brain init` in the original checkout to repair the entry."
+                        );
+                    }
+                    break;
+                }
+            }
+            if matched.is_some() {
+                break;
+            }
+        }
+
+        if let Some((brain_name, brain_id)) = matched {
+            let home = brain_home()?;
+            let db_path = home.join("brain.db");
+            let db = brain_persistence::db::Db::open(&db_path)?;
+            attach_cwd_to_existing_brain(&cwd, &brain_id, &brain_name, &db, &mut global)?;
+            return Ok(());
+        }
+    }
+
     // Derive brain name from explicit flag or directory name.
     let brain_name = name.unwrap_or_else(|| {
         cwd.file_name()
@@ -181,14 +188,43 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     let abs_notes = normalize_note_paths(&note_dirs, &cwd)?;
 
     // 4b. Register brain in DB (source of truth) with roots, notes, prefix.
+    //
+    // When a row already exists for this brain_id (e.g. projection has drifted
+    // from the DB), the upsert must be additive — append cwd to existing roots
+    // and preserve notes/aliases/archived. Otherwise a register-new fall-through
+    // would silently destroy the parent's registered roots.
     let db_path = home.join("brain.db");
     seed_project_prefix_if_missing(&db_path, &brain_name)?;
     {
         let db = brain_persistence::db::Db::open(&db_path)?;
         let prefix = brain_persistence::db::meta::generate_prefix(&brain_name);
-        let roots_json = serde_json::to_string(&vec![&cwd])?;
-        let notes_json = serde_json::to_string(&abs_notes)?;
-        let aliases_json = "[]".to_string();
+        let existing_row = db.get_brain(&brain_id)?;
+
+        let merged_roots: Vec<PathBuf> = match &existing_row {
+            Some(row) => {
+                let mut existing: Vec<PathBuf> = row
+                    .roots_json
+                    .as_deref()
+                    .and_then(|j| serde_json::from_str(j).ok())
+                    .unwrap_or_default();
+                if !existing.contains(&cwd) {
+                    existing.push(cwd.clone());
+                }
+                existing
+            }
+            None => vec![cwd.clone()],
+        };
+        let roots_json = serde_json::to_string(&merged_roots)?;
+
+        let (notes_json, aliases_json, archived) = match &existing_row {
+            Some(row) => (
+                row.notes_json.clone().unwrap_or_else(|| "[]".to_string()),
+                row.aliases_json.clone().unwrap_or_else(|| "[]".to_string()),
+                row.archived,
+            ),
+            None => (serde_json::to_string(&abs_notes)?, "[]".to_string(), false),
+        };
+
         db.upsert_brain(&BrainUpsert {
             brain_id: &brain_id,
             name: &brain_name,
@@ -196,24 +232,39 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
             roots_json: &roots_json,
             notes_json: &notes_json,
             aliases_json: &aliases_json,
-            archived: false,
+            archived,
         })?;
     }
 
     // 4c. Project to state_projection.toml (read-only projection for human readability).
+    //
+    // Match 4b's additive policy: if the projection already has an entry for this
+    // brain_name, merge cwd into its roots rather than replacing the whole entry.
     {
         let mut global = load_global_config()?;
-        global.brains.insert(
-            brain_name.clone(),
-            BrainEntry {
-                roots: vec![cwd.clone()],
-                notes: abs_notes,
-                id: Some(brain_id.clone()),
-                aliases: vec![],
-                prefix: None,
-                archived: false,
-            },
-        );
+        match global.brains.get_mut(&brain_name) {
+            Some(entry) => {
+                if !entry.roots.contains(&cwd) {
+                    entry.roots.push(cwd.clone());
+                }
+                if entry.id.is_none() {
+                    entry.id = Some(brain_id.clone());
+                }
+            }
+            None => {
+                global.brains.insert(
+                    brain_name.clone(),
+                    BrainEntry {
+                        roots: vec![cwd.clone()],
+                        notes: abs_notes,
+                        id: Some(brain_id.clone()),
+                        aliases: vec![],
+                        prefix: None,
+                        archived: false,
+                    },
+                );
+            }
+        }
         save_global_config(&global)?;
     }
 
@@ -247,6 +298,86 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         display_notes
     );
 
+    Ok(())
+}
+
+/// Attach `cwd` to an existing brain identified by `brain_id` / `brain_name`.
+///
+/// Reads the brain's existing DB row, appends `cwd` to `roots_json` if missing,
+/// upserts preserving prefix/notes/aliases/archived, mirrors the change in the
+/// projection, and writes a local `.brain/brain.toml` so subsequent inits
+/// fast-path through the marker-file detection.
+///
+/// Shared by Case A (marker-file match) and Case C (git-common-dir match) so
+/// both paths produce identical state.
+fn attach_cwd_to_existing_brain(
+    cwd: &Path,
+    brain_id: &str,
+    brain_name: &str,
+    db: &brain_persistence::db::Db,
+    global: &mut brain_lib::config::GlobalConfig,
+) -> Result<()> {
+    let brain_row = db
+        .get_brain(brain_id)?
+        .ok_or_else(|| anyhow::anyhow!("brain row missing for id {brain_id}"))?;
+
+    let mut roots: Vec<PathBuf> = brain_row
+        .roots_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+
+    if roots.iter().any(|r| r == cwd) {
+        println!(
+            "Path already registered in brain \"{}\" ({} roots)",
+            brain_name,
+            roots.len()
+        );
+        return Ok(());
+    }
+
+    roots.push(cwd.to_path_buf());
+    let roots_json = serde_json::to_string(&roots)?;
+    db.upsert_brain(&BrainUpsert {
+        brain_id,
+        name: brain_name,
+        prefix: brain_row.prefix.as_deref().unwrap_or("BRN"),
+        roots_json: &roots_json,
+        notes_json: brain_row.notes_json.as_deref().unwrap_or("[]"),
+        aliases_json: brain_row.aliases_json.as_deref().unwrap_or("[]"),
+        archived: brain_row.archived,
+    })?;
+
+    if let Some(entry) = global.brains.get_mut(brain_name)
+        && !entry.roots.iter().any(|r| r == cwd)
+    {
+        entry.roots.push(cwd.to_path_buf());
+    }
+    save_global_config(global)?;
+
+    // Drop a marker file so future `brain init` runs in this directory
+    // fast-path through Case A without re-running git discovery. Skip if the
+    // marker is already present — preserves the caller's existing notes/prefix
+    // (e.g. when called from Case A, where the marker is what got us here).
+    let brain_dir = cwd.join(".brain");
+    let marker_path = brain_dir.join("brain.toml");
+    if !marker_path.exists() {
+        fs::create_dir_all(&brain_dir)?;
+        let brain_toml = BrainToml {
+            name: brain_name.to_string(),
+            notes: vec![],
+            id: Some(brain_id.to_string()),
+            prefix: None,
+            auto_inject: Default::default(),
+        };
+        save_brain_toml(&brain_dir, &brain_toml)?;
+    }
+
+    println!(
+        "Path added to existing brain \"{}\" (now has {} roots)",
+        brain_name,
+        roots.len()
+    );
     Ok(())
 }
 
