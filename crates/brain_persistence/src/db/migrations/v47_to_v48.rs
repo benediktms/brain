@@ -49,19 +49,7 @@ pub fn migrate_v47_to_v48(conn: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::v46_to_v47::migrate_v46_to_v47;
     use super::*;
-
-    fn setup_v47() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        super::super::migrate_v0_to_v1(&conn).unwrap();
-        // Apply migrations up to v47 using the migration harness approach.
-        // We call the full sequence via schema::run_migrations for convenience.
-        crate::db::schema::run_migrations(&conn, 0).unwrap();
-        conn
-    }
 
     #[test]
     fn table_created_after_migration() {

@@ -50,7 +50,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 }
 
 /// Run migrations sequentially from `from_version` up to `SCHEMA_VERSION`.
-fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
+pub(crate) fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
     let mut version = from_version;
     while version < SCHEMA_VERSION {
         match version {
