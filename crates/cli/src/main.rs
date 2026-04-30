@@ -19,11 +19,20 @@ include!(concat!(env!("OUT_DIR"), "/version.rs"));
 // ── config resolution ───────────────────────────────────────
 
 /// If the user didn't pass explicit `--model-dir` / `--lance-db` / `--sqlite-db`
-/// flags (i.e. all three are still at their clap defaults), try to discover
-/// a `.brain/brain.toml` marker by walking up from cwd and resolve paths from it.
+/// flags (i.e. all three are still at their clap defaults), resolve them from
+/// `BRAIN_HOME` (or `~/.brain`).
+///
+/// Per the unified-DB invariant (single shared SQLite at `BRAIN_HOME/brain.db`),
+/// the relative clap default `./.brain/...` is wrong for every command — it
+/// would silently materialize an empty project-local DB whenever the subprocess
+/// cwd lacked a `.brain/brain.toml` marker. The previous version gated this
+/// resolution on a marker discovered by walking up from cwd, which made
+/// registry commands (`list`, `alias`, `remove`) cwd-dependent: they hit the
+/// global registry only when invoked from inside a brain-managed tree.
+///
+/// Resolution is now unconditional: if the user did not pass explicit flags,
+/// the canonical home-relative paths are used.
 fn resolve_defaults(cli: &mut Cli) {
-    use brain_lib::config::resolve_brain_paths;
-
     let default_model = PathBuf::from("./.brain/models/bge-small-en-v1.5");
     let default_lance = PathBuf::from("./.brain/lancedb");
     let default_sqlite = PathBuf::from("./.brain/brain.db");
@@ -35,15 +44,10 @@ fn resolve_defaults(cli: &mut Cli) {
         return;
     }
 
-    let cwd = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(_) => return,
-    };
-
-    if let Ok(Some(resolved)) = resolve_brain_paths(&cwd) {
-        cli.model_dir = resolved.model_dir;
-        cli.lance_db = resolved.lance_db;
-        cli.sqlite_db = resolved.sqlite_db;
+    if let Ok(home) = brain_lib::config::brain_home() {
+        cli.model_dir = home.join("models").join("bge-small-en-v1.5");
+        cli.lance_db = home.join("lancedb");
+        cli.sqlite_db = home.join("brain.db");
     }
 }
 
