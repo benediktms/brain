@@ -6,4 +6,5 @@ pub mod links;
 pub mod pagerank;
 pub mod store;
 pub(crate) mod tokens;
+pub mod trust;
 pub(crate) mod utils;
