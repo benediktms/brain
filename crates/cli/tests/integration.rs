@@ -224,6 +224,299 @@ fn init_detects_existing_brain_and_adds_path() {
         );
 }
 
+/// Negative case: `brain init` in a non-git directory with no marker must
+/// register a fresh brain — Case C must short-circuit gracefully on
+/// `git rev-parse`-equivalent failure rather than panic or spuriously match.
+#[test]
+fn init_in_non_git_directory_creates_new_brain() {
+    let project_a = TempDir::new().unwrap();
+    let project_b = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    // Pre-register an unrelated brain so Case C has something to potentially
+    // match against. project_a is a plain tempdir (no git repo).
+    brain_cmd()
+        .current_dir(project_a.path())
+        .env("BRAIN_HOME", home.path())
+        .args(["init", "--name", "first-brain"])
+        .assert()
+        .success();
+
+    // project_b is also a plain tempdir, no git, no marker, never registered.
+    brain_cmd()
+        .current_dir(project_b.path())
+        .env("BRAIN_HOME", home.path())
+        .args(["init", "--name", "second-brain"])
+        .assert()
+        .success();
+
+    let list_output = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(list_output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&list_output.stdout).unwrap();
+    let brains = parsed["brains"].as_array().unwrap();
+    assert_eq!(
+        brains.len(),
+        2,
+        "non-git tempdir must register as a separate brain, not attach via Case C: {brains:?}"
+    );
+}
+
+/// Negative case: `brain init` in a worktree of repo X must NOT attach to a
+/// brain registered against an unrelated repo Y, even though Case C runs.
+#[test]
+fn init_does_not_attach_across_unrelated_repos() {
+    fn run_git(args: &[&str], cwd: &std::path::Path) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .status()
+            .expect("git not available on PATH");
+        assert!(status.success(), "git {args:?} failed in {}", cwd.display());
+    }
+    fn init_repo(path: &std::path::Path) {
+        run_git(&["init", "-q", "-b", "main"], path);
+        run_git(&["config", "user.email", "test@test"], path);
+        run_git(&["config", "user.name", "test"], path);
+        std::fs::write(path.join("readme"), "x").unwrap();
+        run_git(&["add", "."], path);
+        run_git(&["commit", "-q", "-m", "init"], path);
+    }
+
+    let repo_x = TempDir::new().unwrap();
+    let repo_y = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    // Two independent git repos.
+    init_repo(repo_x.path());
+    init_repo(repo_y.path());
+
+    // Register brain in repo X only.
+    brain_cmd()
+        .current_dir(repo_x.path())
+        .env("BRAIN_HOME", home.path())
+        .args(["init", "--name", "brain-x"])
+        .assert()
+        .success();
+
+    // brain init in repo Y must NOT attach to repo X's brain — different .git dirs.
+    brain_cmd()
+        .current_dir(repo_y.path())
+        .env("BRAIN_HOME", home.path())
+        .args(["init", "--name", "brain-y"])
+        .assert()
+        .success();
+
+    let list_output = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(list_output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&list_output.stdout).unwrap();
+    let brains = parsed["brains"].as_array().unwrap();
+    assert_eq!(
+        brains.len(),
+        2,
+        "Case C must not match across unrelated git repos: {brains:?}"
+    );
+}
+
+/// `brain init` in a fresh git worktree of an already-registered brain must
+/// auto-attach via the shared `.git` directory (common-dir lookup), even when
+/// no `.brain/brain.toml` marker is present in the worktree (e.g. project
+/// gitignores `.brain/`, or the marker was never committed).
+///
+/// This exercises Case C in `init.rs` — the path-independent fallback added in
+/// brn-4e9.1.
+#[test]
+fn init_attaches_via_git_common_dir_when_marker_missing() {
+    fn run_git(args: &[&str], cwd: &std::path::Path) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .status()
+            .expect("git not available on PATH");
+        assert!(status.success(), "git {args:?} failed in {}", cwd.display());
+    }
+
+    let main = TempDir::new().unwrap();
+    let wt_parent = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    // 1. Initialize a real git repo in `main` with one commit so worktrees can be added.
+    run_git(&["init", "-q", "-b", "main"], main.path());
+    run_git(&["config", "user.email", "test@test"], main.path());
+    run_git(&["config", "user.name", "test"], main.path());
+    std::fs::write(main.path().join("readme"), "x").unwrap();
+    run_git(&["add", "."], main.path());
+    run_git(&["commit", "-q", "-m", "init"], main.path());
+
+    // 2. brain init in `main`. The marker file is created but uncommitted.
+    init_cmd(main.path(), home.path()).assert().success();
+    assert!(main.path().join(".brain/brain.toml").exists());
+
+    // 3. Create a linked worktree. Uncommitted files (including .brain/brain.toml)
+    //    do NOT propagate to the new worktree, so Case A's marker-file detection
+    //    must miss.
+    let wt_path = wt_parent.path().join("linked");
+    run_git(
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            wt_path.to_str().unwrap(),
+            "HEAD",
+        ],
+        main.path(),
+    );
+    assert!(
+        !wt_path.join(".brain/brain.toml").exists(),
+        "worktree must not carry the uncommitted marker file"
+    );
+
+    // 4. Run brain init in the worktree. Case A misses (no marker), Case B misses
+    //    (path never registered), Case C must match via shared .git.
+    init_cmd(&wt_path, home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Path added to existing brain"));
+
+    // 5. Verify exactly one brain exists, with roots covering both main and worktree paths.
+    let list_output = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(list_output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&list_output.stdout).unwrap();
+    let brains = parsed["brains"].as_array().unwrap();
+    assert_eq!(
+        brains.len(),
+        1,
+        "Case C must attach to existing brain, not create a new one. Got: {brains:?}"
+    );
+
+    let entry = &brains[0];
+    let primary_root = entry["root"].as_str().unwrap_or("").to_string();
+    let extra_roots: Vec<String> = entry["extra_roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let all_roots: Vec<String> = std::iter::once(primary_root).chain(extra_roots).collect();
+
+    let main_str = main.path().to_string_lossy().to_string();
+    let wt_str = wt_path.to_string_lossy().to_string();
+    assert!(
+        all_roots.iter().any(|r| r.contains(&main_str)),
+        "main checkout must remain in roots: {all_roots:?}"
+    );
+    assert!(
+        all_roots.iter().any(|r| r.contains(&wt_str)),
+        "worktree path must be added to roots: {all_roots:?}"
+    );
+
+    // 6. Marker file should now exist in the worktree (helper drops it post-attach).
+    assert!(
+        wt_path.join(".brain/brain.toml").exists(),
+        "attach helper must write a marker file for fast-path on subsequent inits"
+    );
+}
+
+/// Regression: `brain init` must not destroy the parent's registered roots
+/// when `state_projection.toml` has drifted out of sync with the DB.
+///
+/// Conditions:
+/// 1. Brain X is registered: DB row has roots = [A], projection has the entry.
+/// 2. Projection is wiped (simulates drift — projection deleted, manually edited,
+///    or regenerated incompletely). DB row remains.
+/// 3. `brain init` runs in dir B with `.brain/brain.toml` carrying brain X's id.
+///
+/// Before fix (brn-4e9.2): the upsert at init.rs:184-201 would replace `roots_json`
+/// with `vec![B]`, silently losing A.
+/// After fix: roots become [A, B] (additive merge).
+#[test]
+fn init_preserves_existing_db_roots_when_projection_is_stale() {
+    let project_a = TempDir::new().unwrap();
+    let project_b = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    // Step 1: register brain in dir A. DB and projection both have it.
+    init_cmd(project_a.path(), home.path()).assert().success();
+
+    // Capture brain_id from list --json.
+    let list_output = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(list_output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&list_output.stdout).unwrap();
+    let brain_id = parsed["brains"][0]["id"].as_str().unwrap().to_string();
+    assert!(!brain_id.is_empty());
+
+    // Step 2: wipe state_projection.toml. DB row is untouched.
+    let projection_path = home.path().join("state_projection.toml");
+    assert!(projection_path.exists());
+    std::fs::write(&projection_path, "[brains]\n").unwrap();
+
+    // Step 3: create marker file in dir B referencing the same brain_id.
+    let brain_dir_b = project_b.path().join(".brain");
+    std::fs::create_dir_all(&brain_dir_b).unwrap();
+    std::fs::write(
+        brain_dir_b.join("brain.toml"),
+        format!("name = \"test-brain\"\nid = \"{brain_id}\"\nnotes = []\n"),
+    )
+    .unwrap();
+
+    // Step 4: run init in B. With the bug, this overwrites the DB's roots_json.
+    init_cmd(project_b.path(), home.path()).assert().success();
+
+    // Step 5: verify DB row's roots are additive (contain both A and B).
+    let list_output = brain_cmd()
+        .env("BRAIN_HOME", home.path())
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+    assert!(list_output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&list_output.stdout).unwrap();
+    let brains = parsed["brains"].as_array().unwrap();
+    assert_eq!(
+        brains.len(),
+        1,
+        "expected exactly one brain (additive merge under same id), got {brains:?}"
+    );
+    let entry = &brains[0];
+    assert_eq!(entry["id"].as_str().unwrap(), brain_id);
+
+    // Collect all roots: `root` plus `extra_roots`.
+    let primary_root = entry["root"].as_str().unwrap_or("").to_string();
+    let extra_roots: Vec<String> = entry["extra_roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let mut all_roots: Vec<String> = std::iter::once(primary_root).chain(extra_roots).collect();
+    all_roots.sort();
+
+    let path_a = project_a.path().to_string_lossy().to_string();
+    let path_b = project_b.path().to_string_lossy().to_string();
+    assert!(
+        all_roots.iter().any(|r| r.contains(&path_a)),
+        "DB roots must still contain dir A after init in B: {all_roots:?}"
+    );
+    assert!(
+        all_roots.iter().any(|r| r.contains(&path_b)),
+        "DB roots must contain dir B after init in B: {all_roots:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // brain list (after init)
 // ---------------------------------------------------------------------------

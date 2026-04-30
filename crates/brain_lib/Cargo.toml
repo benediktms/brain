@@ -47,6 +47,11 @@ tempfile = "3"
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 dashmap = "6"
+# Pure-Rust git repository discovery (used by `git::common_dir` to resolve the
+# shared `.git` directory across linked worktrees). gix-hash is a transitive
+# of gix-discover but requires an explicit hash-backend feature.
+gix-discover = "0.51"
+gix-hash = { version = "0.25", features = ["sha1"] }
 
 # Enable Accelerate (Apple BLAS) on macOS for ~2x faster embeddings.
 [target.'cfg(target_os = "macos")'.dependencies]
