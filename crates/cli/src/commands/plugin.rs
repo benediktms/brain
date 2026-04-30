@@ -35,6 +35,54 @@ fn marketplaces_dir() -> Result<std::path::PathBuf> {
     Ok(home.join(".claude").join("plugins").join("marketplaces"))
 }
 
+/// Parse a `plugin.json` string and return the hooks it declares.
+///
+/// Returns one `(event_name, command_summary)` pair per hook entry found under
+/// the top-level `"hooks"` object. Entries that carry only the `_brain_managed`
+/// sentinel (i.e. no nested `"hooks"` commands) are skipped. Event names are
+/// sorted alphabetically for deterministic output.
+///
+/// Returns an empty [`Vec`] when `"hooks"` is absent, empty, or the input is
+/// not valid JSON.
+fn summarize_hooks(json_str: &str) -> Vec<(String, String)> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        return vec![];
+    };
+    let Some(hooks_map) = value.get("hooks").and_then(|v| v.as_object()) else {
+        return vec![];
+    };
+
+    let mut pairs: Vec<(String, String)> = Vec::new();
+
+    let mut events: Vec<&String> = hooks_map.keys().collect();
+    events.sort();
+
+    for event in events {
+        let Some(entries) = hooks_map[event].as_array() else {
+            continue;
+        };
+        for entry in entries {
+            let Some(inner_hooks) = entry.get("hooks").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for hook in inner_hooks {
+                let command = hook
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<command>");
+                let summary = if command.len() > 80 {
+                    format!("{}…", &command[..80])
+                } else {
+                    command.to_owned()
+                };
+                pairs.push((event.clone(), summary));
+            }
+        }
+    }
+
+    pairs
+}
+
 /// (marketplace_dir_name, plugin_name, templates)
 struct PluginSpec {
     /// Directory name under ~/.claude/plugins/marketplaces/
@@ -241,7 +289,19 @@ pub fn install(dry_run: bool) -> Result<()> {
         for spec in PLUGINS {
             println!("  {}/", spec.marketplace);
             for t in spec.templates {
-                println!("    {}", t.output_path);
+                if t.output_path == ".claude-plugin/plugin.json" {
+                    let hooks = summarize_hooks(t.content);
+                    if hooks.is_empty() {
+                        println!("    {} (no hooks)", t.output_path);
+                    } else {
+                        println!("    {} ({} hooks)", t.output_path, hooks.len());
+                        for (event, cmd) in &hooks {
+                            println!("      {} → {}", event, cmd);
+                        }
+                    }
+                } else {
+                    println!("    {}", t.output_path);
+                }
             }
         }
         println!("\nWould register each marketplace and install each plugin via `claude` CLI.");
@@ -370,5 +430,46 @@ mod tests {
     #[test]
     fn install_dry_run_succeeds() {
         assert!(install(true).is_ok());
+    }
+
+    #[test]
+    fn summarize_hooks_multiple_events() {
+        let json = r#"{
+            "hooks": {
+                "UserPromptSubmit": [
+                    {"_brain_managed": true, "hooks": [{"type": "command", "command": "brain tasks list --json"}]}
+                ],
+                "SessionStart": [
+                    {"_brain_managed": true, "hooks": [{"type": "command", "command": "brain tasks stats --json"}]}
+                ]
+            }
+        }"#;
+        let pairs = summarize_hooks(json);
+        // Events sorted alphabetically: SessionStart before UserPromptSubmit
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].0, "SessionStart");
+        assert_eq!(pairs[0].1, "brain tasks stats --json");
+        assert_eq!(pairs[1].0, "UserPromptSubmit");
+        assert_eq!(pairs[1].1, "brain tasks list --json");
+    }
+
+    #[test]
+    fn summarize_hooks_empty_hooks_object() {
+        let json = r#"{"name": "tasks", "hooks": {}}"#;
+        let pairs = summarize_hooks(json);
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn summarize_hooks_missing_hooks_field() {
+        let json = r#"{"name": "records", "version": "1.0.0"}"#;
+        let pairs = summarize_hooks(json);
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn summarize_hooks_malformed_json_returns_empty() {
+        let pairs = summarize_hooks("this is not { valid json");
+        assert!(pairs.is_empty());
     }
 }
