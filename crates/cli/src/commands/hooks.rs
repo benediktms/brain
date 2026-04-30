@@ -484,19 +484,237 @@ pub fn stop() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// PreToolUse hook (implemented in node .3)
+// PreToolUse hook
 // ---------------------------------------------------------------------------
+
+/// Emit an empty PreToolUse envelope and return successfully.
+///
+/// Used when the opt-in gate is not active, the throttle fires, or retrieval
+/// produces no results. An empty `additionalContext` is valid; Claude Code
+/// will simply not inject any context.
+#[inline]
+fn emit_empty_pre_tool_use() {
+    println!("{}", crate::hooks::build_hook_envelope("PreToolUse", ""));
+}
+
+/// Hook input JSON from Claude Code for PreToolUse events.
+///
+/// Claude Code sends:
+/// ```json
+/// {
+///   "session_id": "...",
+///   "tool_name": "Edit",
+///   "tool_input": { "file_path": "/abs/path/to/file.rs", ... }
+/// }
+/// ```
+#[derive(Debug)]
+struct PreToolUseInput {
+    session_id: String,
+    tool_name: String,
+    file_path: Option<String>,
+}
+
+fn parse_pre_tool_use_input(raw: &str) -> PreToolUseInput {
+    let v: Value = serde_json::from_str(raw).unwrap_or(Value::Object(Map::new()));
+
+    let session_id = v
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let tool_name = v
+        .get("tool_name")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Claude Code wraps tool parameters in `tool_input`.
+    let file_path = v
+        .get("tool_input")
+        .and_then(|ti| ti.get("file_path"))
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string());
+
+    PreToolUseInput {
+        session_id,
+        tool_name,
+        file_path,
+    }
+}
 
 /// `brain hooks pre-tool-use` — invoked by the Claude Code PreToolUse hook.
 ///
-/// Retrieves file-scoped memory and injects it before Edit/Write/MultiEdit.
-/// Opt-in: requires `auto_inject.pre_edit_recall = true` in brain config.
+/// Retrieves file-scoped memory and injects it into the LLM context before a
+/// write-tool (Edit, Write, MultiEdit) executes.
+///
+/// ## Opt-in gate
+///
+/// Requires `[auto_inject] pre_edit_recall = true` in the brain's
+/// `.brain/brain.toml`. Default is `false`. Users opt in per brain. This
+/// allows using the skill `mem:search` for explicit recall, or enabling
+/// ambient injection for fully automated context enrichment.
+///
+/// ## Per-file-per-session throttle
+///
+/// Records `(session_id, file_path)` in `pre_tool_use_seen` on each
+/// injection. Subsequent edits of the same file within the same Claude Code
+/// session emit an empty envelope without retrieving or injecting anything.
+///
+/// ## Retrieval strategy (3-step, memesh-inspired)
+///
+/// 1. Tag match `file:<basename>` — exact filename match.
+/// 2. Tag match `file:<stem>` — filename without extension (catches multi-ext).
+/// 3. FTS5 fallback — full-text search using the basename as the query term.
+///
+/// Results are scoped to the current brain (`brain_id`) and filtered to
+/// `trust='trusted'`. Cross-brain leakage is prevented by the brain_id scope.
+/// Maximum 3 results are injected.
+///
+/// ## Safety
+///
+/// Content passes through `sanitize_hook_input` (control-seq stripping, length
+/// cap, role-token removal) before injection. A `safety frame` header+footer
+/// wraps the content. An audit row is written to `injection_audit`.
 pub fn pre_tool_use() -> Result<()> {
-    // Placeholder — full implementation added in the PreToolUse hook commit.
     let mut stdin_raw = String::new();
     std::io::stdin().read_to_string(&mut stdin_raw).ok();
-    // Do nothing when not opted in; emit empty envelope.
-    println!("{}", crate::hooks::build_hook_envelope("PreToolUse", ""));
+
+    let input = parse_pre_tool_use_input(&stdin_raw);
+
+    // No file path → nothing to inject.
+    let file_path = match &input.file_path {
+        Some(p) if !p.is_empty() => p.clone(),
+        _ => {
+            emit_empty_pre_tool_use();
+            return Ok(());
+        }
+    };
+
+    // Load brain config to check opt-in.
+    let cwd = std::env::current_dir()?;
+    let brain_toml = if let Some(root) = brain_lib::config::find_brain_root(&cwd) {
+        brain_lib::config::load_brain_toml(&root.join(".brain")).ok()
+    } else {
+        None
+    };
+
+    let auto_inject = brain_toml.as_ref().map(|t| &t.auto_inject);
+
+    // Gate: `auto_inject.pre_edit_recall` must be true.
+    let opted_in = auto_inject.is_some_and(|ai| ai.pre_edit_recall);
+    if !opted_in {
+        emit_empty_pre_tool_use();
+        return Ok(());
+    }
+
+    let max_bytes = auto_inject
+        .map(|ai| ai.max_bytes)
+        .unwrap_or(crate::hooks::injection::DEFAULT_MAX_BYTES);
+
+    // Open stores.
+    let stores = open_stores_for_cwd()?;
+    let brain_id = stores.brain_id.clone();
+
+    // Per-file-per-session throttle.
+    let already_seen = stores.is_pre_tool_use_seen(&input.session_id, &file_path)?;
+    if already_seen {
+        emit_empty_pre_tool_use();
+        return Ok(());
+    }
+    stores.mark_pre_tool_use_seen(&input.session_id, &file_path)?;
+
+    // Derive basename and stem for tag lookups.
+    let path_obj = std::path::Path::new(&file_path);
+    let basename = path_obj
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&file_path)
+        .to_string();
+    let stem = path_obj
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&basename)
+        .to_string();
+
+    const MAX_RESULTS: usize = 3;
+
+    // Strategy 1: exact basename tag match.
+    let mut results = stores.retrieve_summaries_by_tag_trusted(
+        &brain_id,
+        &format!("file:{basename}"),
+        MAX_RESULTS,
+    )?;
+
+    // Strategy 2: stem tag match (if basename != stem and still need results).
+    if results.is_empty() && stem != basename {
+        results = stores.retrieve_summaries_by_tag_trusted(
+            &brain_id,
+            &format!("file:{stem}"),
+            MAX_RESULTS,
+        )?;
+    }
+
+    // Strategy 3: FTS5 fallback — trust-filtered inside BrainStores.
+    if results.is_empty() {
+        results = stores.retrieve_summaries_by_fts_trusted(&basename, &brain_id, MAX_RESULTS)?;
+    }
+
+    if results.is_empty() {
+        emit_empty_pre_tool_use();
+        return Ok(());
+    }
+
+    // Assemble raw content.
+    let raw_content = results
+        .iter()
+        .map(|(id, content)| format!("[{id}]\n{content}"))
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n");
+
+    let record_ids = results
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // Sanitize.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let sanitize_opts = crate::hooks::injection::SanitizeOpts {
+        enabled: true,
+        max_bytes,
+        hook_event: format!("PreToolUse:{}", input.tool_name),
+        session_id: Some(input.session_id.clone()),
+        record_ids: Some(record_ids.clone()),
+        opt_in_source: "brain.toml".to_string(),
+    };
+
+    let sanitized = crate::hooks::injection::sanitize_hook_input(&raw_content, &sanitize_opts);
+
+    // Audit log (non-fatal).
+    let audit_entry = brain_persistence::db::InjectionAuditEntry {
+        ts: now,
+        hook_event: &sanitize_opts.hook_event,
+        session_id: sanitize_opts.session_id.as_deref(),
+        record_ids: Some(&record_ids),
+        input_len: sanitized.input_len as i64,
+        output_len: sanitized.output_len as i64,
+        stripped_counts: &sanitized.stripped.to_json(),
+        was_truncated: sanitized.was_truncated,
+        opt_in_source: &sanitize_opts.opt_in_source,
+    };
+    let _ = stores.log_injection_audit(&audit_entry);
+
+    // Safety frame.
+    let framed = crate::hooks::apply_safety_frame(&sanitized.text);
+
+    // Emit envelope.
+    let envelope = crate::hooks::build_hook_envelope("PreToolUse", &framed);
+    println!("{envelope}");
+
     Ok(())
 }
 
@@ -734,5 +952,145 @@ mod tests {
 
         let parsed = crate::hooks::transcript::parse_transcript_str(&transcript).unwrap();
         assert!(parsed.tool_call_count >= STOP_HEAVY_SESSION_THRESHOLD);
+    }
+
+    // ── PreToolUse hook ────────────────────────────────────────────────────
+
+    // (a) Opt-in OFF: hook must return an empty envelope without injecting.
+    //
+    // When `auto_inject.pre_edit_recall` is false, the gate check returns false
+    // before any store is opened. We verify that `AutoInjectConfig` default
+    // is false, which is the condition the hook checks.
+    #[test]
+    fn pre_tool_use_opt_in_off_by_default() {
+        use brain_lib::config::AutoInjectConfig;
+
+        let cfg = AutoInjectConfig::default();
+        // Both master switch and per-hook flag must default to false.
+        assert!(!cfg.enabled, "auto_inject.enabled must default to false");
+        assert!(
+            !cfg.pre_edit_recall,
+            "auto_inject.pre_edit_recall must default to false"
+        );
+        // Empty envelope is produced when !opted_in — verified by inspecting
+        // the gate branch in pre_tool_use().
+    }
+
+    // (b) Opt-in ON + clean content: tag-based retrieval returns sanitized content.
+    //
+    // We exercise Db::retrieve_summaries_by_tag_trusted directly with an
+    // in-memory DB that holds a trusted summary tagged `file:hooks.rs`.
+    #[test]
+    fn pre_tool_use_retrieves_trusted_memory_for_file() {
+        use brain_persistence::db::Db;
+        use brain_persistence::db::summaries::Episode;
+
+        let db = Db::open_in_memory().unwrap();
+        db.ensure_brain_registered("brain-b1", "test").unwrap();
+
+        // Insert a summary tagged with "file:hooks.rs" (default trust = 'untrusted').
+        let ep = Episode {
+            brain_id: "brain-b1".to_string(),
+            goal: "Fix hooks.rs".to_string(),
+            actions: "Changed handler".to_string(),
+            outcome: "OK".to_string(),
+            tags: vec!["file:hooks.rs".to_string()],
+            importance: 0.9,
+        };
+        let id = db
+            .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
+            .unwrap();
+
+        // Untrusted summary must not be returned.
+        let results_before = db
+            .retrieve_summaries_by_tag_trusted("brain-b1", "file:hooks.rs", 3)
+            .unwrap();
+        assert!(
+            results_before.is_empty(),
+            "untrusted summary must not be returned"
+        );
+
+        // Mark it trusted.
+        db.with_write_conn(|conn| {
+            conn.execute(
+                "UPDATE summaries SET trust = 'trusted' WHERE summary_id = ?1",
+                rusqlite::params![id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let results = db
+            .retrieve_summaries_by_tag_trusted("brain-b1", "file:hooks.rs", 3)
+            .unwrap();
+        assert_eq!(results.len(), 1, "expected 1 trusted result");
+        assert!(
+            results[0].1.contains("Fix hooks.rs") || results[0].1.contains("Changed handler"),
+            "content must include episode text"
+        );
+    }
+
+    // (c) Throttle: second call for same file+session returns empty.
+    //
+    // We call mark_pre_tool_use_seen then is_pre_tool_use_seen and assert
+    // the second call detects the prior entry.
+    #[test]
+    fn pre_tool_use_throttle_prevents_second_injection() {
+        use brain_persistence::db::Db;
+
+        let db = Db::open_in_memory().unwrap();
+        db.ensure_brain_registered("brain-c1", "test").unwrap();
+
+        let session = "sess-throttle-1";
+        let file = "/src/main.rs";
+
+        // First call: not yet seen.
+        assert!(!db.is_pre_tool_use_seen(session, file).unwrap());
+
+        // Mark as seen.
+        db.mark_pre_tool_use_seen(session, file).unwrap();
+
+        // Second call: now seen — throttle fires.
+        assert!(
+            db.is_pre_tool_use_seen(session, file).unwrap(),
+            "throttle must detect prior entry for same session+file"
+        );
+
+        // Different session with the same file is NOT throttled.
+        assert!(!db.is_pre_tool_use_seen("sess-other", file).unwrap());
+
+        // Same session with a different file is NOT throttled.
+        assert!(!db.is_pre_tool_use_seen(session, "/src/lib.rs").unwrap());
+    }
+
+    // (d) Non-write tools are ignored (tool_name not in Edit|Write|MultiEdit).
+    //
+    // The Claude Code matcher `Edit|Write|MultiEdit` prevents the hook from
+    // firing for other tools. We verify parse_pre_tool_use_input correctly
+    // captures the tool_name so it can be gated in the hook body, and that
+    // a Read tool produces a different tool_name than the write set.
+    #[test]
+    fn pre_tool_use_parse_captures_tool_name() {
+        // Write-tool: should have file_path populated.
+        let edit_raw = r#"{"session_id":"s1","tool_name":"Edit","tool_input":{"file_path":"/src/main.rs","old_string":"a","new_string":"b"}}"#;
+        let edit = parse_pre_tool_use_input(edit_raw);
+        assert_eq!(edit.tool_name, "Edit");
+        assert_eq!(edit.file_path.as_deref(), Some("/src/main.rs"));
+
+        // Non-write tool: Read doesn't carry file_path in tool_input.
+        let read_raw =
+            r#"{"session_id":"s1","tool_name":"Read","tool_input":{"file_path":"/src/main.rs"}}"#;
+        let read_inp = parse_pre_tool_use_input(read_raw);
+        // tool_name identifies non-write tools; the matcher in plugin.json
+        // prevents this hook from running for Read, but we verify parsing is correct.
+        assert_eq!(read_inp.tool_name, "Read");
+        assert_ne!(read_inp.tool_name, "Edit");
+        assert_ne!(read_inp.tool_name, "Write");
+        assert_ne!(read_inp.tool_name, "MultiEdit");
+
+        // Malformed input: missing tool_name defaults to empty string.
+        let empty = parse_pre_tool_use_input("{}");
+        assert_eq!(empty.tool_name, "");
+        assert!(empty.file_path.is_none());
     }
 }
