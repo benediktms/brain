@@ -8,8 +8,8 @@ use serde_json::{Map, Value, json};
 ///
 /// LEGACY: prefer `brain plugin install` (canonical plugin surface).
 /// This path mutates the project's `.claude/settings.json` directly and is
-/// retained for advanced / manual use only. New hooks ship via the plugin
-/// templates at `crates/cli/src/templates/plugins/brain/plugin.json`.
+/// retained for advanced / manual use only. New hooks ship via the canonical
+/// brain plugin manifest.
 ///
 /// Each entry carries `"_brain_managed": true` so `is_brain_hook` can detect
 /// and upgrade entries without command-prefix matching.
