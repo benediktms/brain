@@ -3,5 +3,6 @@
   "description": "Semantic memory — search, episodes, reflections, and procedures.",
   "version": "{{version}}",
   "author": { "name": "Benedikt Schnatterbeck" },
-  "license": "MIT"
+  "license": "MIT",
+  "hooks": {}
 }
