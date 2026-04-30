@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use brain_persistence::store::Store;
+
 use super::TaskCtx;
 
 pub struct TransferParams {
@@ -8,7 +10,11 @@ pub struct TransferParams {
     pub dry_run: bool,
 }
 
-pub async fn transfer(ctx: &TaskCtx, params: TransferParams) -> Result<()> {
+pub async fn transfer(
+    ctx: &TaskCtx,
+    params: TransferParams,
+    vector_store: Option<&Store>,
+) -> Result<()> {
     // Resolve the source task ID (may be a short prefix).
     let task_id = ctx.store.resolve_task_id(&params.task_id)?;
 
@@ -33,11 +39,9 @@ pub async fn transfer(ctx: &TaskCtx, params: TransferParams) -> Result<()> {
         return Ok(());
     }
 
-    // The CLI does not carry a LanceDB write handle — pass None.
-    // Vector re-stamping is handled by the MCP path (which has writable_store).
     let result = ctx
         .store
-        .transfer_task(&task_id, &target_brain_id, None)
+        .transfer_task(&task_id, &target_brain_id, vector_store)
         .await?;
 
     if result.was_no_op {
