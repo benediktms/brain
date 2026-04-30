@@ -300,7 +300,7 @@ pub fn pre_compact() -> Result<()> {
         importance: 0.8,
     };
 
-    let summary_id = stores.store_episode(&episode)?;
+    let summary_id = stores.store_vetted_episode(&episode)?;
 
     // Emit hook envelope.
     let context = format!(
@@ -423,7 +423,7 @@ pub fn stop() -> Result<()> {
             tags: vec![format!("session:{session_id}"), "session-files".to_string()],
             importance: 0.6,
         };
-        let id = stores.store_episode(&ep)?;
+        let id = stores.store_vetted_episode(&ep)?;
         written_ids.push(id);
     }
 
@@ -446,7 +446,7 @@ pub fn stop() -> Result<()> {
             tags: vec![format!("session:{session_id}"), "session-fixes".to_string()],
             importance: 0.7,
         };
-        let id = stores.store_episode(&ep)?;
+        let id = stores.store_vetted_episode(&ep)?;
         written_ids.push(id);
     }
 
@@ -469,7 +469,7 @@ pub fn stop() -> Result<()> {
             ],
             importance: 0.8,
         };
-        let id = stores.store_episode(&ep)?;
+        let id = stores.store_vetted_episode(&ep)?;
         written_ids.push(id);
     }
 

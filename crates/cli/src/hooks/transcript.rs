@@ -80,6 +80,13 @@ pub fn parse_transcript(path: &Path) -> Result<ParsedTranscript> {
 }
 
 /// Parse transcript JSONL from a string (used in tests).
+///
+/// Handles both transcript shapes seen in production:
+/// - **Flat:** top-level `{"type": "tool_use", ...}` or `{"type": "tool_result", ...}`.
+/// - **Nested (Claude Code v2.x):** `{"type": "assistant"|"user", "message": {"content": [...]}}`,
+///   where each content block carries its own `type` (`tool_use`, `tool_result`, etc.).
+///
+/// The recursive descent treats both shapes uniformly.
 pub fn parse_transcript_str(content: &str) -> Result<ParsedTranscript> {
     let mut result = ParsedTranscript::default();
 
@@ -88,11 +95,23 @@ pub fn parse_transcript_str(content: &str) -> Result<ParsedTranscript> {
         if line.is_empty() {
             continue;
         }
-        let Ok(entry) = serde_json::from_str::<TranscriptEntry>(line) else {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        match entry {
-            TranscriptEntry::ToolUse(tu) => {
+        process_value(&v, &mut result);
+    }
+
+    Ok(result)
+}
+
+/// Recursively process a JSON value: handle leaf `tool_use`/`tool_result`
+/// entries and descend into wrapper `assistant`/`user` entries that nest tool
+/// blocks under `message.content[]`.
+fn process_value(v: &serde_json::Value, result: &mut ParsedTranscript) {
+    let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    match kind {
+        "tool_use" => {
+            if let Ok(tu) = serde_json::from_value::<ToolUseEntry>(v.clone()) {
                 result.tool_call_count += 1;
                 if let Some(path) = extract_file_path(&tu)
                     && !result.edited_files.contains(&path)
@@ -100,18 +119,29 @@ pub fn parse_transcript_str(content: &str) -> Result<ParsedTranscript> {
                     result.edited_files.push(path);
                 }
             }
-            TranscriptEntry::ToolResult(tr) => {
-                if tr.is_error
-                    && let Some(msg) = extract_error_message(&tr)
-                {
-                    result.errors.push(msg);
+        }
+        "tool_result" => {
+            if let Ok(tr) = serde_json::from_value::<ToolResultEntry>(v.clone())
+                && tr.is_error
+                && let Some(msg) = extract_error_message(&tr)
+            {
+                result.errors.push(msg);
+            }
+        }
+        "assistant" | "user" => {
+            // Wrapper format: dig into message.content[].
+            if let Some(blocks) = v
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+            {
+                for block in blocks {
+                    process_value(block, result);
                 }
             }
-            TranscriptEntry::Other => {}
         }
+        _ => {}
     }
-
-    Ok(result)
 }
 
 // ---------------------------------------------------------------------------

@@ -350,6 +350,16 @@ impl BrainStores {
         EpisodeWriter::store_episode(&self.db, episode)
     }
 
+    /// Store an episode with `trust='vetted'`. Used by hook paths that
+    /// produce algorithmically-curated summaries from the user's own session
+    /// activity (PreCompact snapshot, Stop session summary).
+    pub fn store_vetted_episode(
+        &self,
+        episode: &brain_persistence::db::summaries::Episode,
+    ) -> Result<String> {
+        Ok(self.db.store_vetted_episode(episode)?)
+    }
+
     /// List recent episodes, newest first.
     pub fn list_episodes(
         &self,

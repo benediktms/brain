@@ -205,6 +205,19 @@ impl Db {
         self.with_write_conn(|conn| schema::delete_brain(conn, name))
     }
 
+    // ── Vetted episode write ────────────────────────────────────────────
+
+    /// Store an episode with `trust='vetted'`.
+    ///
+    /// Hook paths writing summaries derived from the user's own session
+    /// activity should call this rather than [`Self::store_episode_default`]
+    /// (which lets the SQL DEFAULT 'untrusted' apply). PreCompact snapshots
+    /// and Stop session-summary episodes both qualify: they are tool-derived
+    /// but algorithmically curated from a known-local origin.
+    pub fn store_vetted_episode(&self, episode: &summaries::Episode) -> Result<String> {
+        self.with_write_conn(|conn| summaries::store_episode_with_trust(conn, episode, "vetted"))
+    }
+
     // ── Injection audit ────────────────────────────────────────────────
 
     /// Append one row to the `injection_audit` table.
