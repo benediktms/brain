@@ -226,10 +226,8 @@ fn transfer_concurrent_cas_truly_concurrent() {
     let db = Db::open_in_memory().expect("open in-memory db");
     db.ensure_brain_registered("brain-src", "source-brain")
         .unwrap();
-    db.ensure_brain_registered("brain-dst-a", "dest-a")
-        .unwrap();
-    db.ensure_brain_registered("brain-dst-b", "dest-b")
-        .unwrap();
+    db.ensure_brain_registered("brain-dst-a", "dest-a").unwrap();
+    db.ensure_brain_registered("brain-dst-b", "dest-b").unwrap();
 
     let store = Arc::new(TaskStore::with_brain_id(db, "brain-src", "source-brain").unwrap());
 
@@ -275,10 +273,17 @@ fn transfer_concurrent_cas_truly_concurrent() {
     assert_eq!(failures, 1, "exactly one transfer must fail with CAS error");
 
     // Verify the failure is specifically a CAS failure.
-    let err_result = if result_a.is_err() { result_a } else { result_b };
+    let err_result = if result_a.is_err() {
+        result_a
+    } else {
+        result_b
+    };
     let err = err_result.unwrap_err();
     assert!(
-        matches!(err, brain_persistence::error::BrainCoreError::TaskTransferCasFailed(_)),
+        matches!(
+            err,
+            brain_persistence::error::BrainCoreError::TaskTransferCasFailed(_)
+        ),
         "loser must return TaskTransferCasFailed, got: {err}"
     );
 }

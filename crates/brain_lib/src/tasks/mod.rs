@@ -433,29 +433,25 @@ impl TaskStore {
             .with_write_conn(|conn| transfer_task_inner(conn, &task_id, &target_brain_id))?;
 
         // Step 2: re-stamp LanceDB vector rows (best-effort, non-fatal).
-        if !result.was_no_op {
-            if let Some(store) = vector_store {
-                let task_file_id = format!("task:{task_id}");
-                let outcome_file_id = format!("task-outcome:{task_id}");
-                let file_ids: &[&str] = &[task_file_id.as_str(), outcome_file_id.as_str()];
-                match store
-                    .update_brain_id_for_files(
-                        file_ids,
-                        &result.from_brain_id,
-                        &result.to_brain_id,
-                    )
-                    .await
-                {
-                    Ok(()) => result.lance_synced = true,
-                    Err(e) => {
-                        tracing::warn!(
-                            task_id = %task_id,
-                            error = %e,
-                            "LanceDB brain_id re-stamp failed after SQLite commit; \
-                             retrieval scoped to target brain may miss this task \
-                             until re-indexed"
-                        );
-                    }
+        if !result.was_no_op
+            && let Some(store) = vector_store
+        {
+            let task_file_id = format!("task:{task_id}");
+            let outcome_file_id = format!("task-outcome:{task_id}");
+            let file_ids: &[&str] = &[task_file_id.as_str(), outcome_file_id.as_str()];
+            match store
+                .update_brain_id_for_files(file_ids, &result.from_brain_id, &result.to_brain_id)
+                .await
+            {
+                Ok(()) => result.lance_synced = true,
+                Err(e) => {
+                    tracing::warn!(
+                        task_id = %task_id,
+                        error = %e,
+                        "LanceDB brain_id re-stamp failed after SQLite commit; \
+                         retrieval scoped to target brain may miss this task \
+                         until re-indexed"
+                    );
                 }
             }
         }
