@@ -274,12 +274,19 @@ impl Db {
 
     // ── File-scoped memory retrieval ────────────────────────────────────
 
-    /// Retrieve trusted summaries whose JSON tag array contains `tag_value`,
-    /// scoped to `brain_id`, ordered by importance DESC.
+    /// Retrieve summaries within the trustworthy band (`trusted` or `vetted`)
+    /// whose JSON tag array contains `tag_value`, scoped to `brain_id`,
+    /// ordered by importance DESC.
     ///
-    /// Only rows with `trust = 'trusted'` are returned. Tags are matched via a
-    /// `LIKE` pattern on the serialized JSON array (e.g. `%"file:hooks.rs"%`).
-    /// Returns up to `limit` `(summary_id, content)` pairs.
+    /// Trust filter: `trust IN ('trusted', 'vetted')`. The `vetted` band
+    /// exists for tool-derived but algorithmically curated content (e.g.
+    /// PreCompact snapshots of the user's own session activity); excluding
+    /// it would defeat the band's purpose. `untrusted` rows are always
+    /// excluded — they carry external attacker-controlled origin.
+    ///
+    /// Tags are matched via a `LIKE` pattern on the serialized JSON array
+    /// (e.g. `%"file:hooks.rs"%`). Returns up to `limit` `(summary_id, content)`
+    /// pairs.
     pub fn retrieve_summaries_by_tag_trusted(
         &self,
         brain_id: &str,
@@ -292,7 +299,7 @@ impl Db {
         self.with_read_conn(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT summary_id, content FROM summaries \
-                 WHERE brain_id = ?1 AND trust = 'trusted' \
+                 WHERE brain_id = ?1 AND trust IN ('trusted', 'vetted') \
                    AND tags LIKE ?2 \
                  ORDER BY importance DESC \
                  LIMIT ?3",
@@ -305,12 +312,14 @@ impl Db {
         })
     }
 
-    /// Full-text search summaries filtered to `trust = 'trusted'` for `brain_id`.
+    /// Full-text search summaries filtered to the trustworthy band
+    /// (`trusted` or `vetted`) for `brain_id`.
     ///
     /// Runs an FTS5 query for `query`, collects matching summary IDs, then
     /// re-queries the `summaries` table with a trust filter applied in the same
     /// connection. Returns up to `limit` `(summary_id, content)` pairs in FTS
-    /// relevance order.
+    /// relevance order. Trust filter rationale matches
+    /// [`Self::retrieve_summaries_by_tag_trusted`].
     pub fn retrieve_summaries_by_fts_trusted(
         &self,
         query: &str,
@@ -336,7 +345,7 @@ impl Db {
             let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
             let sql = format!(
                 "SELECT summary_id, content FROM summaries \
-                 WHERE brain_id = ?{brain_slot} AND trust = 'trusted' \
+                 WHERE brain_id = ?{brain_slot} AND trust IN ('trusted', 'vetted') \
                    AND summary_id IN ({list}) \
                  ORDER BY importance DESC",
                 brain_slot = ids.len() + 1,
