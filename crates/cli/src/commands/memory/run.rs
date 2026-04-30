@@ -27,6 +27,14 @@ pub struct MemoryCtx {
     pub(crate) json: bool,
 }
 
+fn resolve_stores_for_cwd() -> Result<BrainStores> {
+    let cwd = std::env::current_dir()?;
+    let root = brain_lib::config::find_brain_root(&cwd)
+        .ok_or_else(|| anyhow::anyhow!("no .brain marker found from cwd"))?;
+    let toml = brain_lib::config::load_brain_toml(&root.join(".brain"))?;
+    BrainStores::from_brain(&toml.name).map_err(anyhow::Error::from)
+}
+
 impl MemoryCtx {
     pub async fn new(
         sqlite_db: &Path,
@@ -34,7 +42,13 @@ impl MemoryCtx {
         model_dir: &Path,
         json: bool,
     ) -> Result<Self> {
-        let stores = BrainStores::from_path(sqlite_db, Some(lance_db))?;
+        // Prefer cwd-marker resolution so `brain_name` is the registered name
+        // (required by `retrieve` to reopen stores via `from_brain`). The
+        // path-based fallback works for everything except retrieve, but yields
+        // an empty `brain_name` under the unified `~/.brain/` layout.
+        let stores = resolve_stores_for_cwd().or_else(|_e| {
+            BrainStores::from_path(sqlite_db, Some(lance_db)).map_err(anyhow::Error::from)
+        })?;
         let embedder: Arc<dyn Embed> = Arc::new(Embedder::load(model_dir)?);
         let store = Store::open_or_create(lance_db).await?;
         let search = SearchService {
