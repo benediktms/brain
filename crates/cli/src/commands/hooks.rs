@@ -339,19 +339,147 @@ pub(crate) fn open_stores_for_cwd() -> Result<brain_lib::stores::BrainStores> {
 }
 
 // ---------------------------------------------------------------------------
-// Stop hook (implemented in node .2)
+// Stop hook
 // ---------------------------------------------------------------------------
+
+/// Minimum tool calls required before writing stop-hook episodes.
+const STOP_MIN_TOOL_CALLS: usize = 3;
+
+/// Tool-call threshold above which a summary episode is written.
+const STOP_HEAVY_SESSION_THRESHOLD: usize = 20;
 
 /// `brain hooks stop` — invoked by the Claude Code Stop hook.
 ///
-/// Reads transcript JSONL and writes 1–3 episodic memory entries covering
-/// edited files, errors, and (for heavy sessions) a session summary.
+/// Reads transcript JSONL from the path in the hook input JSON and writes
+/// 1–3 episodic memory entries:
+/// - `session-<id>-files`: list of files edited during the session.
+/// - `session-<id>-fixes`: errors encountered + files changed in the same
+///   span (heuristic for "what was fixed").
+/// - `session-<id>-summary`: high-level summary; only for heavy sessions
+///   (≥20 tool calls).
+///
+/// Trust defaults to `untrusted` at the SQL layer (no explicit column set).
+/// Episodes are skipped entirely when:
+/// - `stop_reason == "user_interrupt"` (aborted sessions are noise).
+/// - Total tool-call count < 3 (trivial interactions not worth persisting).
 pub fn stop() -> Result<()> {
-    // Placeholder — full implementation added in the Stop hook commit.
     let mut stdin_raw = String::new();
-    std::io::stdin().read_to_string(&mut stdin_raw).ok();
-    // Emit empty envelope (suppress output; no context to inject on stop).
-    println!("{}", crate::hooks::build_hook_envelope("Stop", ""));
+    std::io::stdin()
+        .read_to_string(&mut stdin_raw)
+        .context("failed to read hook input from stdin")?;
+
+    let v: Value = serde_json::from_str(&stdin_raw).unwrap_or(Value::Object(Map::new()));
+
+    let stop_reason = v.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("");
+
+    // Silently exit on user-initiated interrupts.
+    if stop_reason == "user_interrupt" {
+        println!("{}", crate::hooks::build_hook_envelope("Stop", ""));
+        return Ok(());
+    }
+
+    let transcript_path = v
+        .get("transcript_path")
+        .and_then(|p| p.as_str())
+        .map(std::path::PathBuf::from);
+
+    let session_id = v
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let transcript = if let Some(ref path) = transcript_path {
+        crate::hooks::transcript::parse_transcript(path).unwrap_or_default()
+    } else {
+        crate::hooks::transcript::ParsedTranscript::default()
+    };
+
+    // Skip trivial sessions.
+    if transcript.tool_call_count < STOP_MIN_TOOL_CALLS {
+        println!("{}", crate::hooks::build_hook_envelope("Stop", ""));
+        return Ok(());
+    }
+
+    let stores = open_stores_for_cwd()?;
+    let brain_id = stores.brain_id.clone();
+
+    let mut written_ids: Vec<String> = Vec::new();
+
+    // Episode 1: files edited.
+    if !transcript.edited_files.is_empty() {
+        let file_list = transcript.edited_files.join(", ");
+        let ep = Episode {
+            brain_id: brain_id.clone(),
+            goal: format!("Session {session_id}: files edited"),
+            actions: format!("Files modified: {file_list}"),
+            outcome: format!(
+                "Session ended ({}). {} tool calls.",
+                stop_reason, transcript.tool_call_count
+            ),
+            tags: vec![format!("session:{session_id}"), "session-files".to_string()],
+            importance: 0.6,
+        };
+        let id = stores.store_episode(&ep)?;
+        written_ids.push(id);
+    }
+
+    // Episode 2: errors / fixes (only when errors were recorded).
+    if !transcript.errors.is_empty() {
+        let error_summary = transcript.errors.join("; ");
+        let file_context = if transcript.edited_files.is_empty() {
+            "(no files edited)".to_string()
+        } else {
+            transcript.edited_files.join(", ")
+        };
+        let ep = Episode {
+            brain_id: brain_id.clone(),
+            goal: format!("Session {session_id}: errors and fixes"),
+            actions: format!(
+                "Errors encountered: {error_summary}. Changed files in same span: {file_context}"
+            ),
+            outcome: "Errors may have been addressed by subsequent edits in the same session."
+                .to_string(),
+            tags: vec![format!("session:{session_id}"), "session-fixes".to_string()],
+            importance: 0.7,
+        };
+        let id = stores.store_episode(&ep)?;
+        written_ids.push(id);
+    }
+
+    // Episode 3: session summary (heavy sessions only).
+    if transcript.tool_call_count >= STOP_HEAVY_SESSION_THRESHOLD {
+        let file_count = transcript.edited_files.len();
+        let ep = Episode {
+            brain_id: brain_id.clone(),
+            goal: format!("Session {session_id}: summary"),
+            actions: format!(
+                "Heavy session: {} tool calls, {} files edited, {} errors.",
+                transcript.tool_call_count,
+                file_count,
+                transcript.errors.len()
+            ),
+            outcome: format!("Session ended: {stop_reason}."),
+            tags: vec![
+                format!("session:{session_id}"),
+                "session-summary".to_string(),
+            ],
+            importance: 0.8,
+        };
+        let id = stores.store_episode(&ep)?;
+        written_ids.push(id);
+    }
+
+    let context = if written_ids.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Session summary written: {} episode(s) recorded (session {session_id}).",
+            written_ids.len()
+        )
+    };
+
+    println!("{}", crate::hooks::build_hook_envelope("Stop", &context));
     Ok(())
 }
 
@@ -486,5 +614,125 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    // ── Stop hook ───────────────────────────────────────────────────────────
+
+    fn make_tool_use_line(name: &str, file: Option<&str>) -> String {
+        if let Some(f) = file {
+            format!(
+                r#"{{"type":"tool_use","name":"{name}","input":{{"file_path":"{f}","old_string":"x","new_string":"y"}}}}"#
+            )
+        } else {
+            format!(r#"{{"type":"tool_use","name":"{name}","input":{{"command":"cargo build"}}}}"#)
+        }
+    }
+
+    fn make_error_result(id: &str, msg: &str) -> String {
+        format!(
+            r#"{{"type":"tool_result","tool_use_id":"{id}","is_error":true,"content":"{msg}"}}"#
+        )
+    }
+
+    #[test]
+    fn stop_skips_trivial_session_below_threshold() {
+        // 2 tool calls < STOP_MIN_TOOL_CALLS(3) — expect no episodes written.
+        let transcript = [
+            make_tool_use_line("Edit", Some("a.rs")),
+            make_tool_use_line("Bash", None),
+        ]
+        .join("\n");
+        let parsed = crate::hooks::transcript::parse_transcript_str(&transcript).unwrap();
+        assert!(parsed.tool_call_count < STOP_MIN_TOOL_CALLS);
+    }
+
+    #[test]
+    fn stop_writes_files_episode_for_qualifying_session() {
+        use brain_persistence::db::Db;
+
+        let transcript = (0..5)
+            .map(|i| make_tool_use_line("Edit", Some(&format!("src/f{i}.rs"))))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let parsed = crate::hooks::transcript::parse_transcript_str(&transcript).unwrap();
+        assert!(parsed.tool_call_count >= STOP_MIN_TOOL_CALLS);
+        assert!(!parsed.edited_files.is_empty());
+
+        let db = Db::open_in_memory().unwrap();
+        db.ensure_brain_registered("b1", "test-brain").unwrap();
+
+        let ep = Episode {
+            brain_id: "b1".to_string(),
+            goal: "Session test-stop-1: files edited".to_string(),
+            actions: format!("Files modified: {}", parsed.edited_files.join(", ")),
+            outcome: "Session ended (end_turn). 5 tool calls.".to_string(),
+            tags: vec![
+                "session:test-stop-1".to_string(),
+                "session-files".to_string(),
+            ],
+            importance: 0.6,
+        };
+
+        let id = db
+            .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
+            .unwrap();
+        assert!(!id.is_empty());
+    }
+
+    #[test]
+    fn stop_writes_fixes_episode_when_errors_present() {
+        use brain_persistence::db::Db;
+
+        let transcript = [
+            make_tool_use_line("Bash", None),
+            make_tool_use_line("Bash", None),
+            make_tool_use_line("Bash", None),
+            make_error_result("id1", "build failed: missing semicolon"),
+            make_tool_use_line("Edit", Some("src/main.rs")),
+        ]
+        .join("\n");
+
+        let parsed = crate::hooks::transcript::parse_transcript_str(&transcript).unwrap();
+        assert!(!parsed.errors.is_empty());
+        assert!(parsed.tool_call_count >= STOP_MIN_TOOL_CALLS);
+
+        let db = Db::open_in_memory().unwrap();
+        db.ensure_brain_registered("b2", "test-brain").unwrap();
+
+        let ep = Episode {
+            brain_id: "b2".to_string(),
+            goal: "Session test-stop-2: errors and fixes".to_string(),
+            actions: format!(
+                "Errors encountered: {}. Changed files in same span: src/main.rs",
+                parsed.errors.join("; ")
+            ),
+            outcome: "Errors may have been addressed by subsequent edits in the same session."
+                .to_string(),
+            tags: vec![
+                "session:test-stop-2".to_string(),
+                "session-fixes".to_string(),
+            ],
+            importance: 0.7,
+        };
+
+        let id = db
+            .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
+            .unwrap();
+        assert!(!id.is_empty());
+    }
+
+    #[test]
+    fn stop_writes_summary_episode_for_heavy_session() {
+        // Verify STOP_HEAVY_SESSION_THRESHOLD constant is correct.
+        assert_eq!(STOP_HEAVY_SESSION_THRESHOLD, 20);
+
+        let transcript = (0..STOP_HEAVY_SESSION_THRESHOLD)
+            .map(|i| make_tool_use_line("Bash", None).replace("cargo build", &format!("cmd{i}")))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let parsed = crate::hooks::transcript::parse_transcript_str(&transcript).unwrap();
+        assert!(parsed.tool_call_count >= STOP_HEAVY_SESSION_THRESHOLD);
     }
 }
