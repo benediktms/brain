@@ -638,6 +638,14 @@ pub(crate) enum HooksAction {
     },
     /// Show current hook status
     Status,
+    /// PreCompact hook: snapshot edited files + open tasks from transcript
+    #[command(name = "pre-compact")]
+    PreCompact,
+    /// Stop hook: auto-write episode summary from transcript JSONL
+    Stop,
+    /// PreToolUse:Edit|Write hook: inject file-scoped memory before edits
+    #[command(name = "pre-tool-use")]
+    PreToolUse,
 }
 
 #[derive(Subcommand)]

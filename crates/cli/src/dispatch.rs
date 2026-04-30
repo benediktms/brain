@@ -144,6 +144,15 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             HooksAction::Status => {
                 commands::hooks::status()?;
             }
+            HooksAction::PreCompact => {
+                commands::hooks::pre_compact()?;
+            }
+            HooksAction::Stop => {
+                commands::hooks::stop()?;
+            }
+            HooksAction::PreToolUse => {
+                commands::hooks::pre_tool_use()?;
+            }
         },
         Command::Docs => {
             commands::docs::run()?;

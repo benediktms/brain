@@ -39,6 +39,31 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "_brain_managed": true,
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain hooks stop 2>/dev/null"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "_brain_managed": true,
+        "matcher": "Edit|Write|MultiEdit",
+        "timeout": 5,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain hooks pre-tool-use 2>/dev/null"
+          }
+        ]
+      }
     ]
   }
 }
