@@ -226,14 +226,14 @@ async fn tag_clustering_end_to_end() {
     );
     assert_eq!(report2.cluster_count, 4, "rerun: same four clusters");
 
-    // CLI surface coverage note: the `brain memory search --tags-require` /
+    // CLI surface coverage note: the `brain memory retrieve --tags-require` /
     // `--tags-exclude` flags share the same `query_pipeline::search` code path
     // exercised above (the dispatcher feeds `tags_require`/`tags_exclude` into
     // the same `SearchParams` builder). A subprocess test from this crate
     // can't see the `brain` binary (different cargo package, no
     // `CARGO_BIN_EXE_brain`) — flag-wiring smoke belongs in
     // `crates/cli/tests/` if we add it, but the manual `cargo run -- memory
-    // search --help` smoke during implementation already validates the flags
+    // retrieve --help` smoke during implementation already validates the flags
     // are exposed and documented.
 }
 

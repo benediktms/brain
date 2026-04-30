@@ -335,7 +335,7 @@ Brain verifies model integrity at startup using built-in BLAKE3 hashing regardle
 Example — use a model from a custom location:
 
 ```sh
-BRAIN_MODEL_DIR=/opt/models/bge-small brain query "async patterns"
+BRAIN_MODEL_DIR=/opt/models/bge-small brain memory retrieve "async patterns"
 ```
 
 ### Integrity Verification

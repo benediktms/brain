@@ -8,7 +8,6 @@ use serde_json::json;
 use brain_lib::embedder::{Embed, Embedder, embed_batch_async};
 use brain_lib::metrics::Metrics;
 use brain_lib::prelude::*;
-use brain_lib::query_pipeline::SearchParams;
 use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_lib::uri::SynapseUri;
@@ -28,6 +27,14 @@ pub struct MemoryCtx {
     pub(crate) json: bool,
 }
 
+fn resolve_stores_for_cwd() -> Result<BrainStores> {
+    let cwd = std::env::current_dir()?;
+    let root = brain_lib::config::find_brain_root(&cwd)
+        .ok_or_else(|| anyhow::anyhow!("no .brain marker found from cwd"))?;
+    let toml = brain_lib::config::load_brain_toml(&root.join(".brain"))?;
+    BrainStores::from_brain(&toml.name).map_err(anyhow::Error::from)
+}
+
 impl MemoryCtx {
     pub async fn new(
         sqlite_db: &Path,
@@ -35,7 +42,13 @@ impl MemoryCtx {
         model_dir: &Path,
         json: bool,
     ) -> Result<Self> {
-        let stores = BrainStores::from_path(sqlite_db, Some(lance_db))?;
+        // Prefer cwd-marker resolution so `brain_name` is the registered name
+        // (required by `retrieve` to reopen stores via `from_brain`). The
+        // path-based fallback works for everything except retrieve, but yields
+        // an empty `brain_name` under the unified `~/.brain/` layout.
+        let stores = resolve_stores_for_cwd().or_else(|_e| {
+            BrainStores::from_path(sqlite_db, Some(lance_db)).map_err(anyhow::Error::from)
+        })?;
         let embedder: Arc<dyn Embed> = Arc::new(Embedder::load(model_dir)?);
         let store = Store::open_or_create(lance_db).await?;
         let search = SearchService {
@@ -50,251 +63,6 @@ impl MemoryCtx {
             json,
         })
     }
-}
-
-// ---------------------------------------------------------------------------
-// search
-// ---------------------------------------------------------------------------
-
-pub struct SearchParams2 {
-    pub query: String,
-    pub k: usize,
-    pub intent: String,
-    pub budget: usize,
-    pub tags: Vec<String>,
-    pub tags_require: Vec<String>,
-    pub tags_exclude: Vec<String>,
-    pub brains: Vec<String>,
-    pub explain: bool,
-}
-
-pub async fn search(ctx: &MemoryCtx, params: SearchParams2) -> Result<()> {
-    let search_params = SearchParams::new(
-        &params.query,
-        &params.intent,
-        params.budget,
-        params.k,
-        &params.tags,
-    )
-    .with_tags_require(&params.tags_require)
-    .with_tags_exclude(&params.tags_exclude);
-
-    let result = if params.brains.is_empty() {
-        let pipeline =
-            ctx.stores
-                .query_pipeline(&ctx.search.store, &ctx.search.embedder, &ctx.metrics);
-        if params.explain {
-            pipeline.search_with_scores(&search_params).await?
-        } else {
-            pipeline.search(&search_params).await?
-        }
-    } else {
-        use brain_lib::config::open_remote_search_context;
-
-        let brain_keys: Vec<String> = if params.brains.iter().any(|b| b == "all") {
-            ctx.stores
-                .list_brain_keys()?
-                .into_iter()
-                .map(|(name, _id)| name)
-                .collect()
-        } else {
-            params.brains.clone()
-        };
-
-        let mut brains: Vec<(String, String, Option<StoreReader>)> = Vec::new();
-        brains.push((
-            ctx.stores.brain_name.clone(),
-            ctx.stores.brain_id.clone(),
-            Some(ctx.search.store.clone()),
-        ));
-
-        for key in &brain_keys {
-            if key == &ctx.stores.brain_name {
-                continue;
-            }
-            match open_remote_search_context(
-                &ctx.stores.brain_home,
-                key,
-                Path::new(""),
-                &ctx.search.embedder,
-            )
-            .await?
-            {
-                Some(remote) => {
-                    brains.push((remote.brain_name, remote.brain_id, remote.store));
-                }
-                None => {
-                    eprintln!("warning: brain '{key}' not found in registry, skipping");
-                }
-            }
-        }
-
-        let federated = ctx
-            .stores
-            .federated_pipeline(brains, &ctx.search.embedder, &ctx.metrics);
-        federated.search(&search_params, false).await?
-    };
-
-    if ctx.json {
-        let results_json: Vec<serde_json::Value> = result
-            .results
-            .iter()
-            .map(|stub| {
-                let mut v = json!({
-                    "memory_id": stub.memory_id,
-                    "title": stub.title,
-                    "summary": stub.summary_2sent,
-                    "score": stub.hybrid_score,
-                    "file_path": stub.file_path,
-                    "heading_path": stub.heading_path,
-                    "kind": stub.kind,
-                });
-                let uri_brain = stub.brain_name.as_deref().unwrap_or(&ctx.stores.brain_name);
-                let uri = match stub.kind.as_str() {
-                    "episode" => SynapseUri::for_episode(uri_brain, &stub.memory_id),
-                    "reflection" => SynapseUri::for_reflection(uri_brain, &stub.memory_id),
-                    "procedure" => SynapseUri::for_procedure(uri_brain, &stub.memory_id),
-                    "record" => SynapseUri::for_record(uri_brain, &stub.memory_id),
-                    "task" | "task-outcome" => SynapseUri::for_task(uri_brain, &stub.memory_id),
-                    _ => SynapseUri::for_memory(uri_brain, &stub.memory_id),
-                };
-                v["uri"] = json!(uri.to_string());
-                if let Some(ref bn) = stub.brain_name {
-                    v["brain_name"] = json!(bn);
-                }
-                if let Some(ref ss) = stub.signal_scores {
-                    v["signals"] = json!({
-                        "sim_vector": ss.vector,
-                        "bm25": ss.keyword,
-                        "recency": ss.recency,
-                        "links": ss.links,
-                        "tag_match": ss.tag_match,
-                        "importance": ss.importance,
-                    });
-                }
-                v
-            })
-            .collect();
-        let out = json!({
-            "budget_tokens": result.budget_tokens,
-            "used_tokens_est": result.used_tokens_est,
-            "result_count": result.num_results,
-            "total_available": result.total_available,
-            "results": results_json,
-        });
-        println!("{}", serde_json::to_string_pretty(&out)?);
-    } else {
-        if result.results.is_empty() {
-            println!("No results found.");
-            return Ok(());
-        }
-        let headers = if params.explain {
-            vec!["ID", "TITLE", "KIND", "SCORE", "VECTOR", "BM25"]
-        } else {
-            vec!["ID", "TITLE", "KIND", "SCORE"]
-        };
-        let mut table = MarkdownTable::new(headers);
-        for stub in &result.results {
-            if params.explain {
-                let (vector, bm25) = stub
-                    .signal_scores
-                    .as_ref()
-                    .map(|ss| (format!("{:.4}", ss.vector), format!("{:.4}", ss.keyword)))
-                    .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
-                table.add_row(vec![
-                    stub.memory_id.clone(),
-                    stub.title.clone(),
-                    stub.kind.clone(),
-                    format!("{:.4}", stub.hybrid_score),
-                    vector,
-                    bm25,
-                ]);
-            } else {
-                table.add_row(vec![
-                    stub.memory_id.clone(),
-                    stub.title.clone(),
-                    stub.kind.clone(),
-                    format!("{:.4}", stub.hybrid_score),
-                ]);
-            }
-        }
-        print!("{table}");
-        println!();
-        println!(
-            "{}/{} results | intent: {} | {}-token budget",
-            result.num_results, result.total_available, params.intent, params.budget
-        );
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// expand
-// ---------------------------------------------------------------------------
-
-pub async fn expand(ctx: &MemoryCtx, memory_ids: &[String], budget: usize) -> Result<()> {
-    let pipeline = ctx
-        .stores
-        .query_pipeline(&ctx.search.store, &ctx.search.embedder, &ctx.metrics);
-    let result = pipeline.expand(memory_ids, budget).await?;
-
-    if ctx.json {
-        let memories_json: Vec<serde_json::Value> = result
-            .memories
-            .iter()
-            .map(|m| {
-                json!({
-                    "memory_id": m.memory_id,
-                    "content": m.content,
-                    "file_path": m.file_path,
-                    "heading_path": m.heading_path,
-                    "byte_start": m.byte_start,
-                    "byte_end": m.byte_end,
-                    "truncated": m.truncated,
-                })
-            })
-            .collect();
-        let out = json!({
-            "budget_tokens": result.budget_tokens,
-            "used_tokens_est": result.used_tokens_est,
-            "memories": memories_json,
-        });
-        println!("{}", serde_json::to_string_pretty(&out)?);
-    } else {
-        if result.memories.is_empty() {
-            println!("No memories found for the given IDs.");
-            return Ok(());
-        }
-        for m in &result.memories {
-            println!("=== {} ===", m.memory_id);
-            if !m.file_path.is_empty() {
-                println!("File: {}", m.file_path);
-            }
-            if !m.heading_path.is_empty() {
-                println!("Section: {}", m.heading_path);
-            }
-            println!();
-            println!("{}", m.content);
-            if m.truncated {
-                println!("[truncated]");
-            }
-            println!();
-        }
-        println!(
-            "{} memor{} expanded | {}/{} tokens used",
-            result.memories.len(),
-            if result.memories.len() == 1 {
-                "y"
-            } else {
-                "ies"
-            },
-            result.used_tokens_est,
-            result.budget_tokens,
-        );
-    }
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

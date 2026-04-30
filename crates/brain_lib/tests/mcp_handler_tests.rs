@@ -211,7 +211,6 @@ async fn mcp_handler_mem_retrieve_returns_results() {
     let indexed = seed_test_chunks(&ctx).await;
     assert!(indexed > 0, "seeding should index at least one chunk");
 
-    // memory.retrieve replaces memory.search_minimal; use count to limit results.
     let result = call_tool(
         &ctx,
         "memory.retrieve",

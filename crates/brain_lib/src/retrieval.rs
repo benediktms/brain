@@ -26,9 +26,7 @@ pub enum MemoryKind {
 
 /// Trait for types that can be expanded to full memory content.
 ///
-/// Implemented by `RankedResult` (for backward compatibility) and by
-/// `ExpandableChunk` (used by `QueryPipeline::expand` to avoid constructing
-/// dummy `RankedResult` objects with zero scores).
+/// Implemented by `RankedResult`.
 pub trait Expandable {
     fn chunk_id(&self) -> &str;
     fn content(&self) -> &str;
@@ -64,7 +62,7 @@ pub struct MemoryStub {
     pub lod_plan_slot: usize,
 }
 
-/// Result of a search_minimal call.
+/// Result of a `memory.retrieve` query-mode call.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub budget_tokens: usize,
@@ -95,45 +93,6 @@ pub struct ExpandResult {
     pub budget_tokens: usize,
     pub used_tokens_est: usize,
     pub memories: Vec<ExpandedMemory>,
-}
-
-/// A lightweight struct for expanding chunks without requiring a full `RankedResult`.
-///
-/// Used by `QueryPipeline::expand` to avoid constructing dummy `RankedResult`
-/// objects with zero scores just to call `expand_results`.
-#[derive(Debug, Clone)]
-pub struct ExpandableChunk {
-    pub chunk_id: String,
-    pub content: String,
-    pub file_path: String,
-    pub heading_path: String,
-    pub token_estimate: usize,
-    pub byte_start: usize,
-    pub byte_end: usize,
-}
-
-impl Expandable for ExpandableChunk {
-    fn chunk_id(&self) -> &str {
-        &self.chunk_id
-    }
-    fn content(&self) -> &str {
-        &self.content
-    }
-    fn file_path(&self) -> &str {
-        &self.file_path
-    }
-    fn heading_path(&self) -> &str {
-        &self.heading_path
-    }
-    fn token_estimate(&self) -> usize {
-        self.token_estimate
-    }
-    fn byte_start(&self) -> usize {
-        self.byte_start
-    }
-    fn byte_end(&self) -> usize {
-        self.byte_end
-    }
 }
 
 /// Pack ranked results into compact stubs within a token budget.
@@ -193,9 +152,6 @@ pub fn pack_minimal(
 ///
 /// Packs greedily in the given order. If the last entry exceeds the
 /// remaining budget, its content is truncated with a `[truncated]` marker.
-///
-/// Accepts any type implementing `Expandable`, including `RankedResult` and
-/// `ExpandableChunk`.
 pub fn expand_results<T: Expandable>(results: &[T], budget_tokens: usize) -> ExpandResult {
     let mut memories = Vec::new();
     let mut used_tokens = 0;

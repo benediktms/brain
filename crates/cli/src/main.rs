@@ -86,58 +86,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_query_default_k() {
-        let cli = Cli::try_parse_from(["brain", "query", "hello"]).unwrap();
-        match cli.command {
-            Command::Query {
-                query,
-                k,
-                intent,
-                budget,
-                verbose,
-                brains: _,
-            } => {
-                assert_eq!(query, "hello");
-                assert_eq!(k, 5);
-                assert_eq!(intent, Intent::Auto);
-                assert_eq!(budget, 800);
-                assert!(!verbose);
-            }
-            _ => panic!("expected Query"),
-        }
-    }
-
-    #[test]
-    fn parse_query_custom_k() {
-        let cli = Cli::try_parse_from(["brain", "query", "hello", "-k", "10"]).unwrap();
-        match cli.command {
-            Command::Query { query, k, .. } => {
-                assert_eq!(query, "hello");
-                assert_eq!(k, 10);
-            }
-            _ => panic!("expected Query"),
-        }
-    }
-
-    #[test]
-    fn parse_query_with_intent() {
-        let cli = Cli::try_parse_from(["brain", "query", "-i", "lookup", "hello"]).unwrap();
-        match cli.command {
-            Command::Query { query, intent, .. } => {
-                assert_eq!(query, "hello");
-                assert_eq!(intent, Intent::Lookup);
-            }
-            _ => panic!("expected Query"),
-        }
-    }
-
-    #[test]
-    fn parse_query_invalid_intent_rejected() {
-        let result = Cli::try_parse_from(["brain", "query", "-i", "bogus", "hello"]);
-        assert!(result.is_err(), "invalid intent should be rejected");
-    }
-
-    #[test]
     fn parse_watch() {
         let cli = Cli::try_parse_from(["brain", "watch", "./notes"]).unwrap();
         assert!(
@@ -332,12 +280,6 @@ mod tests {
     }
 
     #[test]
-    fn alias_q() {
-        let cli = Cli::try_parse_from(["brain", "q", "hello"]).unwrap();
-        assert!(matches!(cli.command, Command::Query { .. }));
-    }
-
-    #[test]
     fn alias_w() {
         let cli = Cli::try_parse_from(["brain", "w", "./notes"]).unwrap();
         assert!(matches!(cli.command, Command::Watch { .. }));
@@ -366,8 +308,7 @@ mod tests {
             "/l",
             "--sqlite-db",
             "/s",
-            "query",
-            "x",
+            "mcp",
         ])
         .unwrap();
         assert_eq!(cli.model_dir, PathBuf::from("/m"));
