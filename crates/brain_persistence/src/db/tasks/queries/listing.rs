@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::Result;
 
-use super::{ANCESTOR_BLOCKED_CTE, TASK_COLUMNS, TaskRow, row_to_task};
+use super::{ANCESTOR_BLOCKED_CTE, TASK_COLUMNS, TASK_COLUMNS_T, TaskRow, row_to_task};
 
 /// Build a brain_id filter clause and push the param value.
 ///
@@ -294,7 +294,7 @@ pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Resul
 /// Get child tasks of a parent.
 pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskRow>> {
     let sql = format!(
-        "SELECT t.{TASK_COLUMNS} FROM tasks t
+        "SELECT {TASK_COLUMNS_T} FROM tasks t
          JOIN entity_links el ON el.to_id = t.task_id
          WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='parent_of'
            AND el.from_id = ?1
@@ -308,7 +308,7 @@ pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskR
 /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
 pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<TaskRow>> {
     let sql = format!(
-        "SELECT t.{TASK_COLUMNS} FROM tasks t
+        "SELECT {TASK_COLUMNS_T} FROM tasks t
          JOIN entity_links el ON el.from_id = t.task_id
          WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='blocks'
            AND el.to_id = ?1

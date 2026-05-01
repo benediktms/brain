@@ -1157,6 +1157,10 @@ fn snapshot_prefix_uses_brain_db() {
 //
 // We inject the orphan dep directly via rusqlite after creating the task via
 // the CLI, because the event layer correctly rejects deps on missing tasks.
+// The polymorphic readers (Wave 5) query `entity_links`, so we must inject into
+// both `task_deps` (legacy) and `entity_links` (new source of truth) to mirror
+// what dual-write would normally produce. During the dual-write window both
+// tables must be consistent for hot-path readers to behave correctly.
 
 #[test]
 fn tasks_orphan_dep_not_in_ready_list() {
@@ -1198,11 +1202,23 @@ fn tasks_orphan_dep_not_in_ready_list() {
         });
 
     // Inject an orphan dep directly into the DB (FK checks off during insert).
+    // We mirror dual-write into both `task_deps` (legacy) and `entity_links`
+    // (Wave 5 reader source), since the dual-write projection isn't running
+    // here.
     {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
         conn.execute(
             "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, 'ghost-nonexistent-task')",
+            rusqlite::params![task_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO entity_links \
+                 (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope) \
+             VALUES \
+                 (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', 'ghost-nonexistent-task', 'blocks', \
+                  strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)",
             rusqlite::params![task_id],
         )
         .unwrap();

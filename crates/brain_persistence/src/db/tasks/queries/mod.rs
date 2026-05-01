@@ -36,6 +36,13 @@ pub struct TaskRow {
 pub(super) const TASK_COLUMNS: &str = "task_id, title, description, status, priority, blocked_reason, due_ts, \
      task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at, display_id";
 
+/// Same column list as [`TASK_COLUMNS`] but every column is qualified with the
+/// `t.` alias. Required for any SELECT that joins `entity_links`, since both
+/// tables expose `created_at` (and would clash on any future shared column).
+pub(super) const TASK_COLUMNS_T: &str = "t.task_id, t.title, t.description, t.status, t.priority, \
+     t.blocked_reason, t.due_ts, t.task_type, t.assignee, t.defer_until, t.parent_task_id, \
+     t.child_seq, t.created_at, t.updated_at, t.display_id";
+
 /// Reusable `WITH RECURSIVE` CTE that produces `has_blocked_ancestor(tid)` — the set
 /// of task IDs whose parent chain contains at least one blocked ancestor.
 /// An ancestor is blocking if it has unresolved deps, an unresolved external blocker,
