@@ -61,7 +61,8 @@ fn cache() -> &'static Mutex<LruCache<PathBuf, Option<PathBuf>>> {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(DEFAULT_GIT_CACHE_CAP);
-        let cap = NonZeroUsize::new(cap).unwrap_or(NonZeroUsize::new(DEFAULT_GIT_CACHE_CAP).unwrap());
+        let cap =
+            NonZeroUsize::new(cap).unwrap_or(NonZeroUsize::new(DEFAULT_GIT_CACHE_CAP).unwrap());
         Mutex::new(LruCache::new(cap))
     })
 }
