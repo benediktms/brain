@@ -1,5 +1,7 @@
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::db::links::projections::{LinkEvent, apply_link_event};
+use crate::db::links::{EdgeKind, EntityRef, LinkCreatedPayload, LinkRemovedPayload};
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
@@ -76,6 +78,25 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                     }
                     Err(e) => return Err(e.into()),
                 }
+            }
+
+            // Dual-write the parent edge into entity_links if the task was
+            // created with a parent already set (mirrors the ParentSet handler).
+            if let Some(parent_id) = p.parent_task_id.as_deref() {
+                apply_link_event(
+                    conn,
+                    &LinkEvent::Created(LinkCreatedPayload {
+                        from: EntityRef {
+                            kind: crate::db::links::EntityType::Task,
+                            id: parent_id.to_string(),
+                        },
+                        to: EntityRef {
+                            kind: crate::db::links::EntityType::Task,
+                            id: event.task_id.clone(),
+                        },
+                        edge_kind: EdgeKind::ParentOf,
+                    }),
+                )?;
             }
         }
 
@@ -161,6 +182,21 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                 "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, ?2)",
                 rusqlite::params![event.task_id, p.depends_on_task_id],
             )?;
+
+            apply_link_event(
+                conn,
+                &LinkEvent::Created(LinkCreatedPayload {
+                    from: EntityRef {
+                        kind: crate::db::links::EntityType::Task,
+                        id: event.task_id.clone(),
+                    },
+                    to: EntityRef {
+                        kind: crate::db::links::EntityType::Task,
+                        id: p.depends_on_task_id.clone(),
+                    },
+                    edge_kind: EdgeKind::Blocks,
+                }),
+            )?;
         }
 
         EventType::DependencyRemoved => {
@@ -172,6 +208,21 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
             conn.execute(
                 "DELETE FROM task_deps WHERE task_id = ?1 AND depends_on = ?2",
                 rusqlite::params![event.task_id, p.depends_on_task_id],
+            )?;
+
+            apply_link_event(
+                conn,
+                &LinkEvent::Removed(LinkRemovedPayload {
+                    from: EntityRef {
+                        kind: crate::db::links::EntityType::Task,
+                        id: event.task_id.clone(),
+                    },
+                    to: EntityRef {
+                        kind: crate::db::links::EntityType::Task,
+                        id: p.depends_on_task_id.clone(),
+                    },
+                    edge_kind: EdgeKind::Blocks,
+                }),
             )?;
         }
 
@@ -242,10 +293,60 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                 .map(|pid| next_child_seq(conn, pid))
                 .transpose()?;
 
+            // For the parent-clear case we need the previous parent id before nulling it.
+            let prev_parent: Option<String> = if p.parent_task_id.is_none() {
+                conn.query_row(
+                    "SELECT parent_task_id FROM tasks WHERE task_id = ?1",
+                    rusqlite::params![event.task_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten()
+            } else {
+                None
+            };
+
             conn.execute(
                 "UPDATE tasks SET parent_task_id = ?1, child_seq = ?2, updated_at = ?3 WHERE task_id = ?4",
                 rusqlite::params![p.parent_task_id, child_seq, event.timestamp, event.task_id],
             )?;
+
+            match &p.parent_task_id {
+                Some(parent_id) => {
+                    apply_link_event(
+                        conn,
+                        &LinkEvent::Created(LinkCreatedPayload {
+                            from: EntityRef {
+                                kind: crate::db::links::EntityType::Task,
+                                id: parent_id.clone(),
+                            },
+                            to: EntityRef {
+                                kind: crate::db::links::EntityType::Task,
+                                id: event.task_id.clone(),
+                            },
+                            edge_kind: EdgeKind::ParentOf,
+                        }),
+                    )?;
+                }
+                None => {
+                    if let Some(old_parent) = prev_parent {
+                        apply_link_event(
+                            conn,
+                            &LinkEvent::Removed(LinkRemovedPayload {
+                                from: EntityRef {
+                                    kind: crate::db::links::EntityType::Task,
+                                    id: old_parent,
+                                },
+                                to: EntityRef {
+                                    kind: crate::db::links::EntityType::Task,
+                                    id: event.task_id.clone(),
+                                },
+                                edge_kind: EdgeKind::ParentOf,
+                            }),
+                        )?;
+                    }
+                }
+            }
         }
 
         EventType::ExternalIdAdded => {
@@ -863,5 +964,237 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    // ── Dual-write: entity_links mirrors legacy task relationship events ───────
+
+    fn count_entity_links(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM entity_links", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn entity_link_exists(conn: &Connection, from: &str, to: &str, kind: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM entity_links
+             WHERE from_type = 'TASK' AND from_id = ?1
+               AND to_type   = 'TASK' AND to_id   = ?2
+               AND edge_kind = ?3",
+            rusqlite::params![from, to, kind],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+            > 0
+    }
+
+    #[test]
+    fn dual_write_dependency_added_creates_entity_link() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("t1", "Task 1", 2), "").unwrap();
+        apply_event(&conn, &make_created_event("t2", "Task 2", 2), "").unwrap();
+
+        let dep_add = TaskEvent::new(
+            "t1",
+            "user",
+            EventType::DependencyAdded,
+            &DependencyPayload {
+                depends_on_task_id: "t2".to_string(),
+            },
+        );
+        apply_event(&conn, &dep_add, "").unwrap();
+
+        assert!(
+            entity_link_exists(&conn, "t1", "t2", "blocks"),
+            "entity_links must contain blocks edge t1→t2"
+        );
+        assert_eq!(count_entity_links(&conn), 1);
+    }
+
+    #[test]
+    fn dual_write_dependency_removed_deletes_entity_link() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("t1", "Task 1", 2), "").unwrap();
+        apply_event(&conn, &make_created_event("t2", "Task 2", 2), "").unwrap();
+
+        apply_event(
+            &conn,
+            &TaskEvent::new(
+                "t1",
+                "user",
+                EventType::DependencyAdded,
+                &DependencyPayload {
+                    depends_on_task_id: "t2".to_string(),
+                },
+            ),
+            "",
+        )
+        .unwrap();
+        assert_eq!(count_entity_links(&conn), 1);
+
+        apply_event(
+            &conn,
+            &TaskEvent::new(
+                "t1",
+                "user",
+                EventType::DependencyRemoved,
+                &DependencyPayload {
+                    depends_on_task_id: "t2".to_string(),
+                },
+            ),
+            "",
+        )
+        .unwrap();
+
+        assert_eq!(count_entity_links(&conn), 0, "blocks edge must be removed");
+    }
+
+    #[test]
+    fn dual_write_parent_set_creates_entity_link() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("parent", "Parent", 2), "").unwrap();
+        apply_event(&conn, &make_created_event("child", "Child", 2), "").unwrap();
+
+        let parent_set = TaskEvent::new(
+            "child",
+            "user",
+            EventType::ParentSet,
+            &ParentSetPayload {
+                parent_task_id: Some("parent".to_string()),
+            },
+        );
+        apply_event(&conn, &parent_set, "").unwrap();
+
+        assert!(
+            entity_link_exists(&conn, "parent", "child", "parent_of"),
+            "entity_links must contain parent_of edge parent→child"
+        );
+        assert_eq!(count_entity_links(&conn), 1);
+    }
+
+    #[test]
+    fn dual_write_parent_cleared_removes_entity_link() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("parent", "Parent", 2), "").unwrap();
+        apply_event(&conn, &make_created_event("child", "Child", 2), "").unwrap();
+
+        apply_event(
+            &conn,
+            &TaskEvent::new(
+                "child",
+                "user",
+                EventType::ParentSet,
+                &ParentSetPayload {
+                    parent_task_id: Some("parent".to_string()),
+                },
+            ),
+            "",
+        )
+        .unwrap();
+        assert_eq!(count_entity_links(&conn), 1);
+
+        apply_event(
+            &conn,
+            &TaskEvent::new(
+                "child",
+                "user",
+                EventType::ParentSet,
+                &ParentSetPayload {
+                    parent_task_id: None,
+                },
+            ),
+            "",
+        )
+        .unwrap();
+
+        assert_eq!(
+            count_entity_links(&conn),
+            0,
+            "parent_of edge must be removed on parent clear"
+        );
+    }
+
+    #[test]
+    fn dual_write_cardinality_matches_legacy_counts() {
+        let conn = setup();
+        // Create 4 tasks
+        for id in ["t1", "t2", "t3", "t4"] {
+            apply_event(&conn, &make_created_event(id, id, 2), "").unwrap();
+        }
+
+        // 2 dep edges: t1→t2, t1→t3
+        apply_event(
+            &conn,
+            &TaskEvent::new(
+                "t1",
+                "user",
+                EventType::DependencyAdded,
+                &DependencyPayload {
+                    depends_on_task_id: "t2".to_string(),
+                },
+            ),
+            "",
+        )
+        .unwrap();
+        apply_event(
+            &conn,
+            &TaskEvent::new(
+                "t1",
+                "user",
+                EventType::DependencyAdded,
+                &DependencyPayload {
+                    depends_on_task_id: "t3".to_string(),
+                },
+            ),
+            "",
+        )
+        .unwrap();
+
+        // 1 parent edge: t4 child of t1
+        apply_event(
+            &conn,
+            &TaskEvent::new(
+                "t4",
+                "user",
+                EventType::ParentSet,
+                &ParentSetPayload {
+                    parent_task_id: Some("t1".to_string()),
+                },
+            ),
+            "",
+        )
+        .unwrap();
+
+        let dep_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_deps", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(dep_count, 2, "legacy task_deps must have 2 rows");
+
+        assert_eq!(
+            count_entity_links(&conn),
+            3,
+            "entity_links must equal dep_count + parent_count = 2 + 1"
+        );
+    }
+
+    #[test]
+    fn dual_write_parent_clear_noop_when_no_prior_parent() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("orphan", "Orphan", 2), "").unwrap();
+
+        // Clear parent on a task that never had one — must not error, must not insert link
+        apply_event(
+            &conn,
+            &TaskEvent::new(
+                "orphan",
+                "user",
+                EventType::ParentSet,
+                &ParentSetPayload {
+                    parent_task_id: None,
+                },
+            ),
+            "",
+        )
+        .unwrap();
+
+        assert_eq!(count_entity_links(&conn), 0);
     }
 }

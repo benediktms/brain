@@ -174,10 +174,22 @@ pub fn get_record_tags(conn: &Connection, record_id: &str) -> Result<Vec<String>
 }
 
 /// Get all links for a record.
+///
+/// Reads from `entity_links` (covers edges originating from this record).
+/// `record_links` is kept as a dual-write legacy projection until Wave 7 drops it.
 pub fn get_record_links(conn: &Connection, record_id: &str) -> Result<Vec<RecordLink>> {
     let mut stmt = conn.prepare(
-        "SELECT record_id, task_id, chunk_id, created_at \
-         FROM record_links WHERE record_id = ?1 ORDER BY created_at ASC",
+        "SELECT
+             from_id                                               AS record_id,
+             CASE WHEN to_type = 'TASK'  THEN to_id END           AS task_id,
+             CASE WHEN to_type = 'CHUNK' THEN to_id END           AS chunk_id,
+             CAST(strftime('%s', created_at) AS INTEGER)           AS created_at
+           FROM entity_links
+          WHERE from_type = 'RECORD'
+            AND from_id   = ?1
+            AND edge_kind = 'covers'
+            AND to_type  IN ('TASK', 'CHUNK')
+          ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map([record_id], |row| {
         Ok(RecordLink {
@@ -784,6 +796,120 @@ mod tests {
         create_record(&conn, "r1", "Record", "report");
         let links = get_record_links(&conn, "r1").unwrap();
         assert!(links.is_empty());
+    }
+
+    // Wave 5 — reader cutover tests: get_record_links now reads entity_links
+
+    #[test]
+    fn test_get_record_links_via_entity_links() {
+        let conn = setup();
+        create_record(&conn, "rec-wave5", "Wave5 Record", "report");
+
+        // Seed via dual-write apply_event path (writes both record_links and entity_links).
+        let ev_task = RecordEvent::new(
+            "rec-wave5",
+            "agent",
+            RecordEventType::LinkAdded,
+            &LinkPayload {
+                task_id: Some("task-w5".to_string()),
+                chunk_id: None,
+            },
+        );
+        apply_event(&conn, &ev_task, "").unwrap();
+
+        let ev_chunk = RecordEvent::new(
+            "rec-wave5",
+            "agent",
+            RecordEventType::LinkAdded,
+            &LinkPayload {
+                task_id: None,
+                chunk_id: Some("chunk-w5".to_string()),
+            },
+        );
+        apply_event(&conn, &ev_chunk, "").unwrap();
+
+        let links = get_record_links(&conn, "rec-wave5").unwrap();
+        assert_eq!(links.len(), 2, "must return both covers edges");
+
+        let task_link = links.iter().find(|l| l.task_id.is_some()).unwrap();
+        assert_eq!(task_link.record_id, "rec-wave5");
+        assert_eq!(task_link.task_id.as_deref(), Some("task-w5"));
+        assert!(task_link.chunk_id.is_none());
+
+        let chunk_link = links.iter().find(|l| l.chunk_id.is_some()).unwrap();
+        assert_eq!(chunk_link.record_id, "rec-wave5");
+        assert_eq!(chunk_link.chunk_id.as_deref(), Some("chunk-w5"));
+        assert!(chunk_link.task_id.is_none());
+    }
+
+    #[test]
+    fn test_get_record_links_filters_unrelated_edges() {
+        let conn = setup();
+        create_record(&conn, "rec-filter", "Filter Record", "report");
+
+        // Seed a valid covers edge.
+        apply_event(
+            &conn,
+            &RecordEvent::new(
+                "rec-filter",
+                "agent",
+                RecordEventType::LinkAdded,
+                &LinkPayload {
+                    task_id: Some("task-keep".to_string()),
+                    chunk_id: None,
+                },
+            ),
+            "",
+        )
+        .unwrap();
+
+        // Manually insert an entity_links row with a different edge_kind (e.g. 'blocks')
+        // and a TASK→RECORD row — these must NOT appear in get_record_links output.
+        conn.execute(
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at)
+             VALUES ('fake-blocks', 'RECORD', 'rec-filter', 'TASK', 'task-noise', 'blocks', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at)
+             VALUES ('fake-task-src', 'TASK', 'task-other', 'RECORD', 'rec-filter', 'covers', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let links = get_record_links(&conn, "rec-filter").unwrap();
+        assert_eq!(
+            links.len(),
+            1,
+            "only the valid covers edge must be returned"
+        );
+        assert_eq!(links[0].task_id.as_deref(), Some("task-keep"));
+    }
+
+    #[test]
+    fn test_get_record_links_ordering_asc_by_created_at() {
+        let conn = setup();
+        create_record(&conn, "rec-order", "Order Record", "report");
+
+        // Insert entity_links rows directly with controlled timestamps (RFC3339 strings).
+        conn.execute(
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at)
+             VALUES ('link-late', 'RECORD', 'rec-order', 'TASK', 'task-late', 'covers', '2024-01-01T00:00:02Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at)
+             VALUES ('link-early', 'RECORD', 'rec-order', 'TASK', 'task-early', 'covers', '2024-01-01T00:00:01Z')",
+            [],
+        )
+        .unwrap();
+
+        let links = get_record_links(&conn, "rec-order").unwrap();
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].task_id.as_deref(), Some("task-early"));
+        assert_eq!(links[1].task_id.as_deref(), Some("task-late"));
     }
 
     // -- record_exists tests --

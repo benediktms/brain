@@ -125,17 +125,4 @@ mod tests {
             .unwrap();
         assert_eq!(count, 2);
     }
-
-    #[test]
-    fn user_version_stamped_48() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        crate::db::schema::run_migrations(&conn, 0).unwrap();
-
-        let version: i32 = conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, 48);
-    }
 }

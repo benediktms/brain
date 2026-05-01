@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::Result;
 
-use super::{ANCESTOR_BLOCKED_CTE, TASK_COLUMNS, TaskRow, row_to_task};
+use super::{ANCESTOR_BLOCKED_CTE, TASK_COLUMNS, TASK_COLUMNS_T, TaskRow, row_to_task};
 
 /// Build a brain_id filter clause and push the param value.
 ///
@@ -49,9 +49,10 @@ pub fn list_ready(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskR
            AND t.blocked_reason IS NULL
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
-               SELECT 1 FROM task_deps d
-               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
-               WHERE d.task_id = t.task_id
+               SELECT 1 FROM entity_links el
+               LEFT JOIN tasks dep ON dep.task_id = el.to_id
+               WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='blocks'
+                 AND el.from_id = t.task_id
                  AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
            )
            AND NOT EXISTS (
@@ -88,9 +89,10 @@ pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Resul
            AND t.task_type != 'epic'
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
-               SELECT 1 FROM task_deps d
-               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
-               WHERE d.task_id = t.task_id
+               SELECT 1 FROM entity_links el
+               LEFT JOIN tasks dep ON dep.task_id = el.to_id
+               WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='blocks'
+                 AND el.from_id = t.task_id
                  AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
            )
            AND NOT EXISTS (
@@ -132,9 +134,10 @@ pub fn list_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<Tas
                t.blocked_reason IS NOT NULL
                OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
                OR EXISTS (
-                   SELECT 1 FROM task_deps d
-                   LEFT JOIN tasks dep ON dep.task_id = d.depends_on
-                   WHERE d.task_id = t.task_id
+                   SELECT 1 FROM entity_links el
+                   LEFT JOIN tasks dep ON dep.task_id = el.to_id
+                   WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='blocks'
+                     AND el.from_id = t.task_id
                      AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
                )
                OR EXISTS (
@@ -261,21 +264,22 @@ pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
 pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Result<Vec<String>> {
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
-         SELECT d.task_id
-         FROM task_deps d
-         JOIN tasks t ON t.task_id = d.task_id
-         WHERE d.depends_on = ?1
+         SELECT el.from_id
+         FROM entity_links el
+         JOIN tasks t ON t.task_id = el.from_id
+         WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='blocks' AND el.to_id = ?1
            AND t.status IN ('open', 'in_progress')
            AND t.blocked_reason IS NULL
            AND NOT EXISTS (
-               SELECT 1 FROM task_deps d2
-               LEFT JOIN tasks dep ON dep.task_id = d2.depends_on
-               WHERE d2.task_id = d.task_id
+               SELECT 1 FROM entity_links el2
+               LEFT JOIN tasks dep ON dep.task_id = el2.to_id
+               WHERE el2.from_type='TASK' AND el2.to_type='TASK' AND el2.edge_kind='blocks'
+                 AND el2.from_id = el.from_id
                  AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
            )
            AND NOT EXISTS (
                SELECT 1 FROM task_external_ids x
-               WHERE x.task_id = d.task_id
+               WHERE x.task_id = el.from_id
                  AND x.blocking = 1
                  AND x.resolved_at IS NULL
            )
@@ -290,8 +294,11 @@ pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Resul
 /// Get child tasks of a parent.
 pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskRow>> {
     let sql = format!(
-        "SELECT {TASK_COLUMNS} FROM tasks WHERE parent_task_id = ?1
-         ORDER BY priority ASC, created_at ASC, task_id ASC"
+        "SELECT {TASK_COLUMNS_T} FROM tasks t
+         JOIN entity_links el ON el.to_id = t.task_id
+         WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='parent_of'
+           AND el.from_id = ?1
+         ORDER BY t.child_seq ASC, t.priority ASC, t.created_at ASC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([parent_task_id], row_to_task)?;
@@ -301,12 +308,12 @@ pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskR
 /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
 pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<TaskRow>> {
     let sql = format!(
-        "SELECT {TASK_COLUMNS} FROM tasks
-         WHERE task_id IN (
-             SELECT d.task_id FROM task_deps d WHERE d.depends_on = ?1
-         )
-         AND status NOT IN ('done', 'cancelled')
-         ORDER BY priority ASC, task_id ASC"
+        "SELECT {TASK_COLUMNS_T} FROM tasks t
+         JOIN entity_links el ON el.from_id = t.task_id
+         WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='blocks'
+           AND el.to_id = ?1
+           AND t.status NOT IN ('done', 'cancelled')
+         ORDER BY t.priority ASC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([task_id], row_to_task)?;

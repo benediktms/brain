@@ -417,18 +417,32 @@ async fn mcp_handler_status_returns_expected_json_fields() {
 
 /// Inject an orphan dep row directly (bypassing the event layer which enforces
 /// task_exists). FK checks are disabled for the insert.
+///
+/// Mirrors what dual-write would produce by writing into both `task_deps`
+/// (legacy) and `entity_links` (Wave 5 reader source). Both tables must stay
+/// consistent for hot-path readers to behave correctly during the dual-write
+/// window.
 fn inject_orphan_dep(db: &brain_persistence::db::Db, task_id: &str, depends_on: &str) {
     db.with_write_conn(|conn| {
         // Restore FK enforcement unconditionally — `?` on the INSERT would
         // otherwise return the pooled connection with FK disabled, polluting
         // every subsequent caller of the pool.
         conn.execute_batch("PRAGMA foreign_keys = OFF")?;
-        let insert_result = conn.execute(
+        let task_deps_result = conn.execute(
             "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, ?2)",
             rusqlite::params![task_id, depends_on],
         );
+        let entity_links_result = conn.execute(
+            "INSERT OR IGNORE INTO entity_links \
+                 (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope) \
+             VALUES \
+                 (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', \
+                  strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)",
+            rusqlite::params![task_id, depends_on],
+        );
         conn.execute_batch("PRAGMA foreign_keys = ON")?;
-        insert_result?;
+        task_deps_result?;
+        entity_links_result?;
         Ok(())
     })
     .unwrap();

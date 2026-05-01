@@ -211,3 +211,169 @@ impl McpTool for RecordLinkRemove {
         Box::pin(std::future::ready(self.execute(params, ctx)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::super::ToolRegistry;
+    use super::super::tests::create_test_context;
+    use super::{McpTool, RecordLinkAdd, RecordLinkRemove};
+
+    // Schema stability: the JSON Schema for records.link_add must not change
+    // without a deliberate breaking-change decision.
+    #[test]
+    fn test_records_link_add_schema_stable() {
+        let tool = RecordLinkAdd;
+        let schema = tool.definition().input_schema;
+        let expected = json!({
+            "type": "object",
+            "properties": {
+                "record_id": {
+                    "type": "string",
+                    "description": "The record ID to link from (full ID or unique prefix)"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID to link to (optional if chunk_id is provided)"
+                },
+                "chunk_id": {
+                    "type": "string",
+                    "description": "Note chunk ID to link to (optional if task_id is provided)"
+                }
+            },
+            "required": ["record_id"]
+        });
+        assert_eq!(
+            schema, expected,
+            "records.link_add schema changed — update golden or revert"
+        );
+    }
+
+    // Schema stability: the JSON Schema for records.link_remove must not change.
+    #[test]
+    fn test_records_link_remove_schema_stable() {
+        let tool = RecordLinkRemove;
+        let schema = tool.definition().input_schema;
+        let expected = json!({
+            "type": "object",
+            "properties": {
+                "record_id": {
+                    "type": "string",
+                    "description": "The record ID to unlink from (full ID or unique prefix)"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID to unlink (optional if chunk_id is provided)"
+                },
+                "chunk_id": {
+                    "type": "string",
+                    "description": "Note chunk ID to unlink (optional if task_id is provided)"
+                }
+            },
+            "required": ["record_id"]
+        });
+        assert_eq!(
+            schema, expected,
+            "records.link_remove schema changed — update golden or revert"
+        );
+    }
+
+    // Round-trip: add_link → verify via entity_links reader → remove → verify empty.
+    #[tokio::test]
+    async fn test_record_link_round_trip() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // Create a record first.
+        let create_result = registry
+            .dispatch(
+                "records.create_document",
+                json!({
+                    "title": "Link Round-Trip Test",
+                    "text": "body"
+                }),
+                &ctx,
+            )
+            .await;
+        assert_ne!(
+            create_result.is_error,
+            Some(true),
+            "create_document failed: {create_result:?}"
+        );
+
+        let created: serde_json::Value =
+            serde_json::from_str(&create_result.content[0].text).unwrap();
+        let record_id = created["record_id"].as_str().unwrap().to_string();
+
+        // Add a link.
+        let add_result = registry
+            .dispatch(
+                "records.link_add",
+                json!({
+                    "record_id": record_id,
+                    "task_id": "TST-01FAKE000000000000000000"
+                }),
+                &ctx,
+            )
+            .await;
+        assert_ne!(
+            add_result.is_error,
+            Some(true),
+            "link_add failed: {add_result:?}"
+        );
+
+        let add_body: serde_json::Value =
+            serde_json::from_str(&add_result.content[0].text).unwrap();
+        assert_eq!(add_body["action"].as_str(), Some("linked"));
+        assert_eq!(
+            add_body["task_id"].as_str(),
+            Some("TST-01FAKE000000000000000000")
+        );
+
+        // Verify link exists via entity_links reader (Wave 5 cutover path).
+        let links = ctx
+            .stores
+            .db_for_tests()
+            .with_read_conn(|conn| {
+                brain_persistence::db::records::queries::get_record_links(conn, &record_id)
+            })
+            .expect("get_record_links should succeed after add");
+        assert_eq!(links.len(), 1, "exactly one link expected after add");
+        assert_eq!(
+            links[0].task_id.as_deref(),
+            Some("TST-01FAKE000000000000000000")
+        );
+
+        // Remove the link.
+        let remove_result = registry
+            .dispatch(
+                "records.link_remove",
+                json!({
+                    "record_id": record_id,
+                    "task_id": "TST-01FAKE000000000000000000"
+                }),
+                &ctx,
+            )
+            .await;
+        assert_ne!(
+            remove_result.is_error,
+            Some(true),
+            "link_remove failed: {remove_result:?}"
+        );
+
+        let remove_body: serde_json::Value =
+            serde_json::from_str(&remove_result.content[0].text).unwrap();
+        assert_eq!(remove_body["action"].as_str(), Some("unlinked"));
+
+        // Verify link is gone via entity_links reader.
+        let links_after = ctx
+            .stores
+            .db_for_tests()
+            .with_read_conn(|conn| {
+                brain_persistence::db::records::queries::get_record_links(conn, &record_id)
+            })
+            .expect("get_record_links should succeed after remove");
+        assert!(links_after.is_empty(), "links must be empty after remove");
+    }
+}

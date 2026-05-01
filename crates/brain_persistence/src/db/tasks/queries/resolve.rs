@@ -26,7 +26,10 @@ pub fn blake3_short_hex(task_id: &str) -> String {
 pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> Result<i64> {
     let max: Option<i64> = conn
         .query_row(
-            "SELECT MAX(child_seq) FROM tasks WHERE parent_task_id = ?1",
+            "SELECT MAX(t.child_seq) FROM tasks t
+             JOIN entity_links el ON el.to_id = t.task_id
+             WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='parent_of'
+               AND el.from_id = ?1",
             [parent_task_id],
             |row| row.get(0),
         )
@@ -110,7 +113,10 @@ pub fn resolve_task_id_scoped(
             if let Ok(parent_id) = resolve_task_id_scoped(conn, parent_part, effective_brain_id) {
                 let child: Option<String> = conn
                     .query_row(
-                        "SELECT task_id FROM tasks WHERE parent_task_id = ?1 AND child_seq = ?2",
+                        "SELECT t.task_id FROM tasks t
+                         JOIN entity_links el ON el.to_id = t.task_id
+                         WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='parent_of'
+                           AND el.from_id = ?1 AND t.child_seq = ?2",
                         rusqlite::params![parent_id, seq],
                         |row| row.get(0),
                     )

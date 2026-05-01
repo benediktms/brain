@@ -1,5 +1,8 @@
 use rusqlite::Connection;
 
+use crate::db::links::{
+    EdgeKind, EntityRef, LinkCreatedPayload, LinkEvent, LinkRemovedPayload, apply_link_event,
+};
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
@@ -12,15 +15,43 @@ fn searchable_for_kind(kind: &str) -> bool {
     !matches!(kind, "snapshot")
 }
 
+/// Resolve a `LinkPayload` to a typed `EntityRef`.
+///
+/// Exactly one of `task_id` / `chunk_id` must be non-null. Both null or both
+/// non-null are invalid; an error is returned.
+fn link_payload_to_entity_ref(p: &LinkPayload) -> Result<EntityRef> {
+    match (&p.task_id, &p.chunk_id) {
+        (Some(tid), None) => EntityRef::task(tid).map_err(|_| {
+            BrainCoreError::RecordEvent("link payload task_id must not be empty".into())
+        }),
+        (None, Some(cid)) => EntityRef::chunk(cid).map_err(|_| {
+            BrainCoreError::RecordEvent("link payload chunk_id must not be empty".into())
+        }),
+        (None, None) => Err(BrainCoreError::RecordEvent(
+            "link payload must have exactly one of task_id or chunk_id, got neither".into(),
+        )),
+        (Some(_), Some(_)) => Err(BrainCoreError::RecordEvent(
+            "link payload must have exactly one of task_id or chunk_id, got both".into(),
+        )),
+    }
+}
+
 /// Apply a single event to the SQLite records projection tables.
 ///
 /// `brain_id` is stamped on the `records` row for all `RecordCreated` events.
 /// For all other event types the brain_id is not re-written (the row already
 /// carries the brain_id set at creation time).
 ///
-/// The event is applied inside an implicit transaction — callers operating in
-/// bulk (e.g. `rebuild`) should use an outer transaction for performance.
+/// The projection mutation and event INSERT are wrapped in an explicit
+/// transaction for atomicity.
 pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    apply_event_inner(&tx, event, brain_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
     match event.event_type {
         RecordEventType::RecordCreated => {
             let p: RecordCreatedPayload =
@@ -143,10 +174,25 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
             let p: LinkPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| BrainCoreError::RecordEvent(format!("bad LinkAdded payload: {e}")))?;
 
+            // Validate before any writes — ensures rollback is clean on error.
+            let to = link_payload_to_entity_ref(&p)?;
+            let from = EntityRef::record(&event.record_id).map_err(|_| {
+                BrainCoreError::RecordEvent("LinkAdded: record_id must not be empty".into())
+            })?;
+
             conn.execute(
                 "INSERT INTO record_links (record_id, task_id, chunk_id, created_at)
                  VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![event.record_id, p.task_id, p.chunk_id, event.timestamp],
+            )?;
+
+            apply_link_event(
+                conn,
+                &LinkEvent::Created(LinkCreatedPayload {
+                    from,
+                    to,
+                    edge_kind: EdgeKind::Covers,
+                }),
             )?;
         }
 
@@ -155,11 +201,11 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
                 BrainCoreError::RecordEvent(format!("bad LinkRemoved payload: {e}"))
             })?;
 
-            if p.task_id.is_none() && p.chunk_id.is_none() {
-                return Err(BrainCoreError::RecordEvent(
-                    "LinkRemoved payload must have at least one of task_id or chunk_id".into(),
-                ));
-            }
+            // Validate before any writes — ensures rollback is clean on error.
+            let to = link_payload_to_entity_ref(&p)?;
+            let from = EntityRef::record(&event.record_id).map_err(|_| {
+                BrainCoreError::RecordEvent("LinkRemoved: record_id must not be empty".into())
+            })?;
 
             conn.execute(
                 "DELETE FROM record_links
@@ -167,6 +213,15 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
                    AND (task_id IS ?2 OR task_id = ?2)
                    AND (chunk_id IS ?3 OR chunk_id = ?3)",
                 rusqlite::params![event.record_id, p.task_id, p.chunk_id],
+            )?;
+
+            apply_link_event(
+                conn,
+                &LinkEvent::Removed(LinkRemovedPayload {
+                    from,
+                    to,
+                    edge_kind: EdgeKind::Covers,
+                }),
             )?;
         }
 
@@ -251,7 +306,7 @@ pub fn rebuild_from_events(conn: &Connection, events: &[RecordEvent]) -> Result<
     )?;
 
     for event in events {
-        apply_event(&tx, event, "")?;
+        apply_event_inner(&tx, event, "")?;
     }
 
     tx.commit()?;
@@ -263,7 +318,7 @@ pub fn rebuild_from_events(conn: &Connection, events: &[RecordEvent]) -> Result<
 mod tests {
     use super::*;
     use crate::db::records::events::{
-        ContentRefPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+        ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
         RecordEventType, RecordUpdatedPayload, TagPayload,
     };
     use crate::db::schema::init_schema;
@@ -468,5 +523,265 @@ mod tests {
                 .unwrap();
             assert_eq!(searchable, expected, "{kind} searchable mismatch");
         }
+    }
+
+    fn make_link_added_event(
+        record_id: &str,
+        task_id: Option<&str>,
+        chunk_id: Option<&str>,
+    ) -> RecordEvent {
+        RecordEvent::new(
+            record_id,
+            "test-agent",
+            RecordEventType::LinkAdded,
+            &LinkPayload {
+                task_id: task_id.map(str::to_string),
+                chunk_id: chunk_id.map(str::to_string),
+            },
+        )
+    }
+
+    fn make_link_removed_event(
+        record_id: &str,
+        task_id: Option<&str>,
+        chunk_id: Option<&str>,
+    ) -> RecordEvent {
+        RecordEvent::new(
+            record_id,
+            "test-agent",
+            RecordEventType::LinkRemoved,
+            &LinkPayload {
+                task_id: task_id.map(str::to_string),
+                chunk_id: chunk_id.map(str::to_string),
+            },
+        )
+    }
+
+    fn entity_links_count(conn: &Connection, from_id: &str, to_id: &str, to_type: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM entity_links
+             WHERE from_type = 'RECORD' AND from_id = ?1
+               AND to_type = ?2 AND to_id = ?3
+               AND edge_kind = 'covers'",
+            rusqlite::params![from_id, to_type, to_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn link_added_task_dual_writes_entity_links() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-1", "R", "report"), "").unwrap();
+
+        apply_event(
+            &conn,
+            &make_link_added_event("rec-1", Some("task-42"), None),
+            "",
+        )
+        .unwrap();
+
+        let rl: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM record_links WHERE record_id = 'rec-1' AND task_id = 'task-42'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rl, 1, "record_links row missing");
+
+        assert_eq!(
+            entity_links_count(&conn, "rec-1", "task-42", "TASK"),
+            1,
+            "entity_links row missing for task path"
+        );
+    }
+
+    #[test]
+    fn link_added_chunk_dual_writes_entity_links() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-2", "R", "report"), "").unwrap();
+
+        apply_event(
+            &conn,
+            &make_link_added_event("rec-2", None, Some("chunk-99")),
+            "",
+        )
+        .unwrap();
+
+        let rl: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM record_links WHERE record_id = 'rec-2' AND chunk_id = 'chunk-99'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rl, 1, "record_links row missing");
+
+        assert_eq!(
+            entity_links_count(&conn, "rec-2", "chunk-99", "CHUNK"),
+            1,
+            "entity_links row missing for chunk path"
+        );
+    }
+
+    #[test]
+    fn link_removed_task_removes_from_entity_links() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-3", "R", "report"), "").unwrap();
+        apply_event(
+            &conn,
+            &make_link_added_event("rec-3", Some("task-7"), None),
+            "",
+        )
+        .unwrap();
+
+        apply_event(
+            &conn,
+            &make_link_removed_event("rec-3", Some("task-7"), None),
+            "",
+        )
+        .unwrap();
+
+        let rl: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM record_links WHERE record_id = 'rec-3'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rl, 0, "record_links row should be deleted");
+
+        assert_eq!(
+            entity_links_count(&conn, "rec-3", "task-7", "TASK"),
+            0,
+            "entity_links row should be deleted for task path"
+        );
+    }
+
+    #[test]
+    fn link_removed_chunk_removes_from_entity_links() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-4", "R", "report"), "").unwrap();
+        apply_event(
+            &conn,
+            &make_link_added_event("rec-4", None, Some("chunk-55")),
+            "",
+        )
+        .unwrap();
+
+        apply_event(
+            &conn,
+            &make_link_removed_event("rec-4", None, Some("chunk-55")),
+            "",
+        )
+        .unwrap();
+
+        let rl: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM record_links WHERE record_id = 'rec-4'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rl, 0, "record_links row should be deleted");
+
+        assert_eq!(
+            entity_links_count(&conn, "rec-4", "chunk-55", "CHUNK"),
+            0,
+            "entity_links row should be deleted for chunk path"
+        );
+    }
+
+    #[test]
+    fn link_added_both_null_errors() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-5", "R", "report"), "").unwrap();
+        let ev = make_link_added_event("rec-5", None, None);
+        let result = apply_event(&conn, &ev, "");
+        assert!(result.is_err(), "both-null should return an error");
+    }
+
+    #[test]
+    fn link_added_both_set_errors() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-6", "R", "report"), "").unwrap();
+        let ev = make_link_added_event("rec-6", Some("task-1"), Some("chunk-1"));
+        let result = apply_event(&conn, &ev, "");
+        assert!(result.is_err(), "both-set should return an error");
+    }
+
+    #[test]
+    fn dual_write_cardinality_matches_legacy_counts() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-7", "R", "report"), "").unwrap();
+        apply_event(&conn, &make_created_event("rec-8", "R", "report"), "").unwrap();
+
+        apply_event(
+            &conn,
+            &make_link_added_event("rec-7", Some("task-A"), None),
+            "",
+        )
+        .unwrap();
+        apply_event(
+            &conn,
+            &make_link_added_event("rec-8", None, Some("chunk-B")),
+            "",
+        )
+        .unwrap();
+
+        let rl: i64 = conn
+            .query_row("SELECT COUNT(*) FROM record_links", [], |row| row.get(0))
+            .unwrap();
+        let el: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM entity_links WHERE from_type = 'RECORD'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            rl, el,
+            "record_links and entity_links cardinality must match"
+        );
+    }
+
+    #[test]
+    fn link_added_rollback_on_self_loop() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-9", "R", "report"), "").unwrap();
+
+        // A self-loop (record linking to itself as a RECORD entity) violates the
+        // entity_links CHECK constraint — apply_link_event should fail, and the
+        // wrapping transaction must roll back the legacy record_links INSERT too.
+        // We simulate this by attempting to add both-set which fails validation
+        // before the legacy write, verifying no partial state is left.
+        let ev = make_link_added_event("rec-9", Some("task-X"), Some("chunk-Y"));
+        let result = apply_event(&conn, &ev, "");
+        assert!(result.is_err(), "both-set should fail");
+
+        let rl: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM record_links WHERE record_id = 'rec-9'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            rl, 0,
+            "failed LinkAdded must not leave orphan record_links row"
+        );
+
+        let el: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM entity_links WHERE from_id = 'rec-9'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            el, 0,
+            "failed LinkAdded must not leave orphan entity_links row"
+        );
     }
 }

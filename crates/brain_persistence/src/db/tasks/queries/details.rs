@@ -158,9 +158,11 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
            AND t.blocked_reason IS NULL
            AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
            AND NOT EXISTS (
-               SELECT 1 FROM task_deps d
-               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
-               WHERE d.task_id = t.task_id
+               SELECT 1 FROM entity_links el
+               LEFT JOIN tasks dep ON dep.task_id = el.to_id
+               WHERE el.from_type = 'TASK' AND el.to_type = 'TASK'
+                 AND el.edge_kind = 'blocks'
+                 AND el.from_id = t.task_id
                  AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
            )
            AND NOT EXISTS (
@@ -187,9 +189,11 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
                t.blocked_reason IS NOT NULL
                OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
                OR EXISTS (
-                   SELECT 1 FROM task_deps d
-                   LEFT JOIN tasks dep ON dep.task_id = d.depends_on
-                   WHERE d.task_id = t.task_id
+                   SELECT 1 FROM entity_links el
+                   LEFT JOIN tasks dep ON dep.task_id = el.to_id
+                   WHERE el.from_type = 'TASK' AND el.to_type = 'TASK'
+                     AND el.edge_kind = 'blocks'
+                     AND el.from_id = t.task_id
                      AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
                )
                OR EXISTS (
