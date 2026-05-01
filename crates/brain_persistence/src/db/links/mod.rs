@@ -39,6 +39,60 @@ pub struct EntityRef {
     pub id: String,
 }
 
+/// Error returned by the validating [`EntityRef`] constructors.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum EntityRefError {
+    #[error("EntityRef id must not be empty")]
+    EmptyId,
+}
+
+impl EntityRef {
+    /// Ergonomic, validating constructor. Rejects an empty `id`.
+    ///
+    /// Direct struct construction (`EntityRef { kind, id }`) remains valid for
+    /// callers that have already validated the id.
+    pub fn new(
+        kind: EntityType,
+        id: impl Into<String>,
+    ) -> std::result::Result<Self, EntityRefError> {
+        let id = id.into();
+        if id.is_empty() {
+            return Err(EntityRefError::EmptyId);
+        }
+        Ok(Self { kind, id })
+    }
+
+    /// Shorthand: `EntityRef { kind: EntityType::Task, id }`.
+    pub fn task(id: impl Into<String>) -> std::result::Result<Self, EntityRefError> {
+        Self::new(EntityType::Task, id)
+    }
+
+    /// Shorthand: `EntityRef { kind: EntityType::Record, id }`.
+    pub fn record(id: impl Into<String>) -> std::result::Result<Self, EntityRefError> {
+        Self::new(EntityType::Record, id)
+    }
+
+    /// Shorthand: `EntityRef { kind: EntityType::Episode, id }`.
+    pub fn episode(id: impl Into<String>) -> std::result::Result<Self, EntityRefError> {
+        Self::new(EntityType::Episode, id)
+    }
+
+    /// Shorthand: `EntityRef { kind: EntityType::Procedure, id }`.
+    pub fn procedure(id: impl Into<String>) -> std::result::Result<Self, EntityRefError> {
+        Self::new(EntityType::Procedure, id)
+    }
+
+    /// Shorthand: `EntityRef { kind: EntityType::Chunk, id }`.
+    pub fn chunk(id: impl Into<String>) -> std::result::Result<Self, EntityRefError> {
+        Self::new(EntityType::Chunk, id)
+    }
+
+    /// Shorthand: `EntityRef { kind: EntityType::Note, id }`.
+    pub fn note(id: impl Into<String>) -> std::result::Result<Self, EntityRefError> {
+        Self::new(EntityType::Note, id)
+    }
+}
+
 /// The semantic relationship expressed by a directed edge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,9 +110,15 @@ impl EdgeKind {
     /// Returns `true` for edge kinds that must form a directed acyclic graph.
     ///
     /// Cycle-prevention logic MUST be applied before inserting edges of these
-    /// kinds. `ParentOf` and `Blocks` are the two DAG-constrained edges.
+    /// kinds:
+    ///
+    /// - `ParentOf` — hierarchy edges cannot be cyclic (A is parent of B is parent of A
+    ///   implies A is its own ancestor).
+    /// - `Blocks` — circular blocking is a deadlock by definition.
+    /// - `Supersedes` — A→B→A means "A supersedes B supersedes A", which is semantically
+    ///   incoherent; cycles must be rejected.
     pub fn requires_dag(&self) -> bool {
-        matches!(self, Self::ParentOf | Self::Blocks)
+        matches!(self, Self::ParentOf | Self::Blocks | Self::Supersedes)
     }
 }
 
@@ -304,13 +364,13 @@ mod tests {
     fn edge_kind_requires_dag_truth_table() {
         assert!(EdgeKind::ParentOf.requires_dag(), "ParentOf must be DAG");
         assert!(EdgeKind::Blocks.requires_dag(), "Blocks must be DAG");
+        assert!(
+            EdgeKind::Supersedes.requires_dag(),
+            "Supersedes must be DAG — A→B→A is semantically incoherent"
+        );
         assert!(!EdgeKind::Covers.requires_dag(), "Covers is not DAG");
         assert!(!EdgeKind::RelatesTo.requires_dag(), "RelatesTo is not DAG");
         assert!(!EdgeKind::SeeAlso.requires_dag(), "SeeAlso is not DAG");
-        assert!(
-            !EdgeKind::Supersedes.requires_dag(),
-            "Supersedes is not DAG"
-        );
         assert!(
             !EdgeKind::Contradicts.requires_dag(),
             "Contradicts is not DAG"
@@ -393,5 +453,99 @@ mod tests {
             serde_json::to_string(&EdgeKind::Covers).unwrap(),
             "\"covers\""
         );
+    }
+
+    // ── EntityRef constructor tests (Finding 8) ────────────────────────────
+
+    #[test]
+    fn entity_ref_constructor_rejects_empty_id() {
+        assert_eq!(
+            EntityRef::new(EntityType::Task, ""),
+            Err(EntityRefError::EmptyId)
+        );
+        assert_eq!(EntityRef::task(""), Err(EntityRefError::EmptyId));
+        assert_eq!(EntityRef::record(""), Err(EntityRefError::EmptyId));
+        assert_eq!(EntityRef::episode(""), Err(EntityRefError::EmptyId));
+        assert_eq!(EntityRef::procedure(""), Err(EntityRefError::EmptyId));
+        assert_eq!(EntityRef::chunk(""), Err(EntityRefError::EmptyId));
+        assert_eq!(EntityRef::note(""), Err(EntityRefError::EmptyId));
+    }
+
+    #[test]
+    fn entity_ref_task_helper_round_trips() {
+        let r = EntityRef::task("task-123").unwrap();
+        assert_eq!(r.kind, EntityType::Task);
+        assert_eq!(r.id, "task-123");
+
+        // Remaining helpers smoke-tested.
+        assert_eq!(EntityRef::record("rec-1").unwrap().kind, EntityType::Record);
+        assert_eq!(
+            EntityRef::episode("ep-1").unwrap().kind,
+            EntityType::Episode
+        );
+        assert_eq!(
+            EntityRef::procedure("proc-1").unwrap().kind,
+            EntityType::Procedure
+        );
+        assert_eq!(EntityRef::chunk("chunk-1").unwrap().kind, EntityType::Chunk);
+        assert_eq!(EntityRef::note("note-1").unwrap().kind, EntityType::Note);
+    }
+
+    // ── DRY mirror tests: entity_type_str / edge_kind_str vs. serde (Finding 9) ──
+    //
+    // `entity_type_str` and `edge_kind_str` in projections.rs duplicate what
+    // serde already produces. We intentionally keep the static functions (no
+    // runtime JSON overhead, no quote stripping) but pin them against serde so
+    // the duplication is a verified mirror, not drift-prone dead code.
+
+    #[test]
+    fn entity_type_str_matches_serde() {
+        use crate::db::links::projections::entity_type_str_for_test as entity_type_str;
+        let variants = [
+            EntityType::Task,
+            EntityType::Record,
+            EntityType::Episode,
+            EntityType::Procedure,
+            EntityType::Chunk,
+            EntityType::Note,
+        ];
+        for variant in variants {
+            let from_fn = entity_type_str(variant);
+            let from_serde = serde_json::to_value(variant)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                from_fn, from_serde,
+                "entity_type_str({variant:?}) diverges from serde"
+            );
+        }
+    }
+
+    #[test]
+    fn edge_kind_str_matches_serde() {
+        use crate::db::links::projections::edge_kind_str_for_test as edge_kind_str;
+        let variants = [
+            EdgeKind::ParentOf,
+            EdgeKind::Blocks,
+            EdgeKind::Covers,
+            EdgeKind::RelatesTo,
+            EdgeKind::SeeAlso,
+            EdgeKind::Supersedes,
+            EdgeKind::Contradicts,
+        ];
+        for variant in variants {
+            let from_fn = edge_kind_str(variant);
+            let from_serde = serde_json::to_value(variant)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                from_fn, from_serde,
+                "edge_kind_str({variant:?}) diverges from serde"
+            );
+        }
     }
 }
