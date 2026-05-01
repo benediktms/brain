@@ -3,6 +3,13 @@
 //! Backing SQL table: `entity_links` (created in v48→v49 migration).
 //! The legacy `links` table (note/wiki linking, used by `pagerank.rs`) is a
 //! separate domain and is not touched by this module.
+//!
+//! The Rust module path is `crate::db::links`; the SQL table is `entity_links`.
+//! This asymmetry exists to avoid a name collision with the legacy wiki-link
+//! table while keeping the module name concise.
+
+pub mod projections;
+pub use projections::{LinkEvent, apply_link_event};
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
