@@ -1,8 +1,204 @@
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::db::comparator;
 use crate::error::Result;
 
 use super::{ANCESTOR_BLOCKED_CTE, TASK_COLUMNS, TASK_COLUMNS_T, TaskRow, row_to_task};
+
+// ---------------------------------------------------------------------------
+// Legacy CTE (task_deps / parent_task_id) — kept for comparator soak window.
+// Wave 7 deletes this block alongside the comparator wraps.
+// ---------------------------------------------------------------------------
+
+const LEGACY_ANCESTOR_BLOCKED_CTE: &str = "\
+WITH RECURSIVE ancestor_chain(tid, ancestor_id) AS (
+    SELECT task_id, parent_task_id FROM tasks WHERE parent_task_id IS NOT NULL
+    UNION ALL
+    SELECT ac.tid, t.parent_task_id
+    FROM ancestor_chain ac
+    JOIN tasks t ON t.task_id = ac.ancestor_id
+    WHERE t.parent_task_id IS NOT NULL
+),
+has_blocked_ancestor(tid) AS (
+    SELECT DISTINCT ac.tid
+    FROM ancestor_chain ac
+    JOIN tasks a ON a.task_id = ac.ancestor_id
+    WHERE a.status NOT IN ('done', 'cancelled')
+      AND (
+          a.blocked_reason IS NOT NULL
+          OR (a.defer_until IS NOT NULL AND a.defer_until > strftime('%s', 'now'))
+          OR EXISTS (
+              SELECT 1 FROM task_deps d
+              LEFT JOIN tasks dep ON dep.task_id = d.depends_on
+              WHERE d.task_id = a.task_id
+                AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+          )
+          OR EXISTS (
+              SELECT 1 FROM task_external_ids x
+              WHERE x.task_id = a.task_id
+                AND x.blocking = 1
+                AND x.resolved_at IS NULL
+          )
+      )
+) ";
+
+fn comparator_legacy_list_ready(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<String>> {
+    let (brain_clause, brain_params) = brain_id_filter(brain_id);
+    let sql = format!(
+        "{LEGACY_ANCESTOR_BLOCKED_CTE}
+         SELECT task_id
+         FROM tasks t
+         WHERE t.status IN ('open', 'in_progress')
+           AND t.blocked_reason IS NULL
+           AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
+           AND NOT EXISTS (
+               SELECT 1 FROM task_deps d
+               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
+               WHERE d.task_id = t.task_id
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM task_external_ids x
+               WHERE x.task_id = t.task_id
+                 AND x.blocking = 1
+                 AND x.resolved_at IS NULL
+           )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
+           {brain_clause}
+         ORDER BY t.task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), |row| {
+        row.get::<_, String>(0)
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+fn comparator_legacy_list_ready_actionable(
+    conn: &Connection,
+    brain_id: Option<&str>,
+) -> Result<Vec<String>> {
+    let (brain_clause, brain_params) = brain_id_filter(brain_id);
+    let sql = format!(
+        "{LEGACY_ANCESTOR_BLOCKED_CTE}
+         SELECT task_id
+         FROM tasks t
+         WHERE t.status IN ('open', 'in_progress')
+           AND t.blocked_reason IS NULL
+           AND t.task_type != 'epic'
+           AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
+           AND NOT EXISTS (
+               SELECT 1 FROM task_deps d
+               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
+               WHERE d.task_id = t.task_id
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM task_external_ids x
+               WHERE x.task_id = t.task_id
+                 AND x.blocking = 1
+                 AND x.resolved_at IS NULL
+           )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
+           {brain_clause}
+         ORDER BY t.task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), |row| {
+        row.get::<_, String>(0)
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+fn comparator_legacy_list_blocked(
+    conn: &Connection,
+    brain_id: Option<&str>,
+) -> Result<Vec<String>> {
+    let (brain_clause, brain_params) = brain_id_filter(brain_id);
+    let sql = format!(
+        "{LEGACY_ANCESTOR_BLOCKED_CTE}
+         SELECT task_id
+         FROM tasks t
+         WHERE t.status IN ('open', 'in_progress', 'blocked')
+           AND (
+               t.blocked_reason IS NOT NULL
+               OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
+               OR EXISTS (
+                   SELECT 1 FROM task_deps d
+                   LEFT JOIN tasks dep ON dep.task_id = d.depends_on
+                   WHERE d.task_id = t.task_id
+                     AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+               )
+               OR EXISTS (
+                   SELECT 1 FROM task_external_ids x
+                   WHERE x.task_id = t.task_id
+                     AND x.blocking = 1
+                     AND x.resolved_at IS NULL
+               )
+               OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
+           )
+           {brain_clause}
+         ORDER BY t.task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), |row| {
+        row.get::<_, String>(0)
+    })?;
+    crate::db::collect_rows(rows)
+}
+
+fn comparator_legacy_list_newly_unblocked(
+    conn: &Connection,
+    completed_task_id: &str,
+) -> Result<Vec<String>> {
+    let sql = format!(
+        "{LEGACY_ANCESTOR_BLOCKED_CTE}
+         SELECT d.task_id
+         FROM task_deps d
+         JOIN tasks t ON t.task_id = d.task_id
+         WHERE d.depends_on = ?1
+           AND t.status IN ('open', 'in_progress')
+           AND t.blocked_reason IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM task_deps d2
+               LEFT JOIN tasks dep ON dep.task_id = d2.depends_on
+               WHERE d2.task_id = d.task_id
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM task_external_ids x
+               WHERE x.task_id = d.task_id
+                 AND x.blocking = 1
+                 AND x.resolved_at IS NULL
+           )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([completed_task_id], |row| row.get::<_, String>(0))?;
+    crate::db::collect_rows(rows)
+}
+
+fn comparator_legacy_get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id FROM tasks WHERE parent_task_id = ?1
+         ORDER BY task_id ASC",
+    )?;
+    let rows = stmt.query_map([parent_task_id], |row| row.get::<_, String>(0))?;
+    crate::db::collect_rows(rows)
+}
+
+fn comparator_legacy_get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id FROM tasks
+         WHERE task_id IN (
+             SELECT d.task_id FROM task_deps d WHERE d.depends_on = ?1
+         )
+         AND status NOT IN ('done', 'cancelled')
+         ORDER BY task_id ASC",
+    )?;
+    let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
+    crate::db::collect_rows(rows)
+}
 
 /// Build a brain_id filter clause and push the param value.
 ///
@@ -40,6 +236,17 @@ fn brain_id_filter_bare(brain_id: Option<&str>) -> (String, Vec<String>) {
 /// alongside the dep clause, not inside it — readiness requires both no
 /// unresolved internal deps AND no unresolved external blockers.
 pub fn list_ready(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let new_result = list_ready_via_entity_links(conn, brain_id)?;
+    if comparator::comparator_enabled() {
+        let legacy_ids = comparator_legacy_list_ready(conn, brain_id)?;
+        let mut new_ids: Vec<String> = new_result.iter().map(|t| t.task_id.clone()).collect();
+        new_ids.sort();
+        comparator::compare("list_ready", &new_ids, &legacy_ids);
+    }
+    Ok(new_result)
+}
+
+fn list_ready_via_entity_links(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
     let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
@@ -68,7 +275,6 @@ pub fn list_ready(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskR
                   t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
-
     let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
@@ -79,6 +285,20 @@ pub fn list_ready(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskR
 /// External-blocker semantics match `list_ready`: tasks with an unresolved
 /// blocking external_id are excluded.
 pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let new_result = list_ready_actionable_via_entity_links(conn, brain_id)?;
+    if comparator::comparator_enabled() {
+        let legacy_ids = comparator_legacy_list_ready_actionable(conn, brain_id)?;
+        let mut new_ids: Vec<String> = new_result.iter().map(|t| t.task_id.clone()).collect();
+        new_ids.sort();
+        comparator::compare("list_ready_actionable", &new_ids, &legacy_ids);
+    }
+    Ok(new_result)
+}
+
+fn list_ready_actionable_via_entity_links(
+    conn: &Connection,
+    brain_id: Option<&str>,
+) -> Result<Vec<TaskRow>> {
     let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
@@ -108,7 +328,6 @@ pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Resul
                   t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
-
     let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
@@ -124,6 +343,20 @@ pub fn list_ready_actionable(conn: &Connection, brain_id: Option<&str>) -> Resul
 /// A task whose only blocker is an unresolved external blocker is included
 /// here via the parallel `EXISTS` clause on `task_external_ids`.
 pub fn list_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<TaskRow>> {
+    let new_result = list_blocked_via_entity_links(conn, brain_id)?;
+    if comparator::comparator_enabled() {
+        let legacy_ids = comparator_legacy_list_blocked(conn, brain_id)?;
+        let mut new_ids: Vec<String> = new_result.iter().map(|t| t.task_id.clone()).collect();
+        new_ids.sort();
+        comparator::compare("list_blocked", &new_ids, &legacy_ids);
+    }
+    Ok(new_result)
+}
+
+fn list_blocked_via_entity_links(
+    conn: &Connection,
+    brain_id: Option<&str>,
+) -> Result<Vec<TaskRow>> {
     let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
@@ -154,7 +387,6 @@ pub fn list_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<Tas
                   t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
-
     let rows = stmt.query_map(rusqlite::params_from_iter(brain_params.iter()), row_to_task)?;
     crate::db::collect_rows(rows)
 }
@@ -262,6 +494,21 @@ pub fn get_task(conn: &Connection, task_id: &str) -> Result<Option<TaskRow>> {
 /// is also excluded — the same NOT EXISTS clause used by `list_ready` is
 /// applied here so cross-system blockers correctly suppress unblock events.
 pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Result<Vec<String>> {
+    let new_result = list_newly_unblocked_via_entity_links(conn, completed_task_id)?;
+    if comparator::comparator_enabled() {
+        let mut legacy_ids = comparator_legacy_list_newly_unblocked(conn, completed_task_id)?;
+        legacy_ids.sort();
+        let mut new_sorted = new_result.clone();
+        new_sorted.sort();
+        comparator::compare("list_newly_unblocked", &new_sorted, &legacy_ids);
+    }
+    Ok(new_result)
+}
+
+fn list_newly_unblocked_via_entity_links(
+    conn: &Connection,
+    completed_task_id: &str,
+) -> Result<Vec<String>> {
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
          SELECT el.from_id
@@ -286,13 +533,23 @@ pub fn list_newly_unblocked(conn: &Connection, completed_task_id: &str) -> Resul
            AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)"
     );
     let mut stmt = conn.prepare(&sql)?;
-
     let rows = stmt.query_map([completed_task_id], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
 }
 
 /// Get child tasks of a parent.
 pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskRow>> {
+    let new_result = get_children_via_entity_links(conn, parent_task_id)?;
+    if comparator::comparator_enabled() {
+        let legacy_ids = comparator_legacy_get_children(conn, parent_task_id)?;
+        let mut new_ids: Vec<String> = new_result.iter().map(|t| t.task_id.clone()).collect();
+        new_ids.sort();
+        comparator::compare("get_children", &new_ids, &legacy_ids);
+    }
+    Ok(new_result)
+}
+
+fn get_children_via_entity_links(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskRow>> {
     let sql = format!(
         "SELECT {TASK_COLUMNS_T} FROM tasks t
          JOIN entity_links el ON el.to_id = t.task_id
@@ -307,6 +564,17 @@ pub fn get_children(conn: &Connection, parent_task_id: &str) -> Result<Vec<TaskR
 
 /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
 pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<TaskRow>> {
+    let new_result = get_tasks_blocking_via_entity_links(conn, task_id)?;
+    if comparator::comparator_enabled() {
+        let legacy_ids = comparator_legacy_get_tasks_blocking(conn, task_id)?;
+        let mut new_ids: Vec<String> = new_result.iter().map(|t| t.task_id.clone()).collect();
+        new_ids.sort();
+        comparator::compare("get_tasks_blocking", &new_ids, &legacy_ids);
+    }
+    Ok(new_result)
+}
+
+fn get_tasks_blocking_via_entity_links(conn: &Connection, task_id: &str) -> Result<Vec<TaskRow>> {
     let sql = format!(
         "SELECT {TASK_COLUMNS_T} FROM tasks t
          JOIN entity_links el ON el.from_id = t.task_id

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::db::comparator;
 use crate::error::{BrainCoreError, Result};
 
 /// Minimum ULID prefix length (after project prefix + separator).
@@ -178,6 +179,30 @@ pub fn get_record_tags(conn: &Connection, record_id: &str) -> Result<Vec<String>
 /// Reads from `entity_links` (covers edges originating from this record).
 /// `record_links` is kept as a dual-write legacy projection until Wave 7 drops it.
 pub fn get_record_links(conn: &Connection, record_id: &str) -> Result<Vec<RecordLink>> {
+    let new_result = get_record_links_via_entity_links(conn, record_id)?;
+    if comparator::comparator_enabled() {
+        let legacy_ids = comparator_legacy_get_record_links(conn, record_id)?;
+        let mut new_ids: Vec<String> = new_result
+            .iter()
+            .map(|l| {
+                // Stable key: combine task_id and chunk_id to identify the link.
+                format!(
+                    "{}:{}",
+                    l.task_id.as_deref().unwrap_or(""),
+                    l.chunk_id.as_deref().unwrap_or("")
+                )
+            })
+            .collect();
+        new_ids.sort();
+        comparator::compare("get_record_links", &new_ids, &legacy_ids);
+    }
+    Ok(new_result)
+}
+
+fn get_record_links_via_entity_links(
+    conn: &Connection,
+    record_id: &str,
+) -> Result<Vec<RecordLink>> {
     let mut stmt = conn.prepare(
         "SELECT
              from_id                                               AS record_id,
@@ -200,6 +225,29 @@ pub fn get_record_links(conn: &Connection, record_id: &str) -> Result<Vec<Record
         })
     })?;
     crate::db::collect_rows(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Legacy helper (record_links) — kept for comparator soak window.
+// Wave 7 deletes this block alongside the comparator wrap.
+// ---------------------------------------------------------------------------
+
+fn comparator_legacy_get_record_links(conn: &Connection, record_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id, chunk_id FROM record_links WHERE record_id = ?1 ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map([record_id], |row| {
+        let task_id: Option<String> = row.get(0)?;
+        let chunk_id: Option<String> = row.get(1)?;
+        Ok(format!(
+            "{}:{}",
+            task_id.as_deref().unwrap_or(""),
+            chunk_id.as_deref().unwrap_or("")
+        ))
+    })?;
+    let mut ids: Vec<String> = crate::db::collect_rows(rows)?;
+    ids.sort();
+    Ok(ids)
 }
 
 /// Check if a record exists in the projection.
