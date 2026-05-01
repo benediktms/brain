@@ -55,8 +55,7 @@ pub fn common_dir(path: &Path) -> io::Result<Option<PathBuf>> {
 }
 
 const DEFAULT_GIT_CACHE_CAP: usize = 4096;
-const DEFAULT_GIT_CACHE_CAP_NZ: NonZeroUsize =
-    NonZeroUsize::new(DEFAULT_GIT_CACHE_CAP).unwrap();
+const DEFAULT_GIT_CACHE_CAP_NZ: NonZeroUsize = NonZeroUsize::new(DEFAULT_GIT_CACHE_CAP).unwrap();
 
 /// Returns the process-global git common-dir cache.
 ///
@@ -225,7 +224,8 @@ mod tests {
         let tmps: Vec<TempDir> = (0..=n).map(|_| TempDir::new().unwrap()).collect();
         for (i, tmp) in tmps.iter().enumerate() {
             // Insert as-if common_dir_cached did: canonicalized path → None result
-            let key = std::fs::canonicalize(tmp.path()).unwrap_or_else(|_| tmp.path().to_path_buf());
+            let key =
+                std::fs::canonicalize(tmp.path()).unwrap_or_else(|_| tmp.path().to_path_buf());
             c.put(key, Some(PathBuf::from(format!("/fake/git/{i}"))));
         }
 
