@@ -92,7 +92,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(table_count, 1, "entity_links table must exist after migration");
+        assert_eq!(
+            table_count, 1,
+            "entity_links table must exist after migration"
+        );
 
         for idx in &[
             "idx_entity_links_unique",

@@ -300,8 +300,14 @@ mod tests {
         assert!(!EdgeKind::Covers.requires_dag(), "Covers is not DAG");
         assert!(!EdgeKind::RelatesTo.requires_dag(), "RelatesTo is not DAG");
         assert!(!EdgeKind::SeeAlso.requires_dag(), "SeeAlso is not DAG");
-        assert!(!EdgeKind::Supersedes.requires_dag(), "Supersedes is not DAG");
-        assert!(!EdgeKind::Contradicts.requires_dag(), "Contradicts is not DAG");
+        assert!(
+            !EdgeKind::Supersedes.requires_dag(),
+            "Supersedes is not DAG"
+        );
+        assert!(
+            !EdgeKind::Contradicts.requires_dag(),
+            "Contradicts is not DAG"
+        );
     }
 
     #[test]
@@ -338,5 +344,47 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         let decoded: LinkRemovedPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn entity_ref_serde_round_trip_pins_wire_shape() {
+        let r = EntityRef {
+            kind: EntityType::Task,
+            id: "task-123".to_string(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(json, r#"{"kind":"TASK","id":"task-123"}"#);
+        let decoded: EntityRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, r);
+    }
+
+    /// Pins the serde wire-string values used for `EntityType` and `EdgeKind`
+    /// against the literal strings stored in SQL (notably the partial-index
+    /// predicates `from_type = 'TASK'` and `edge_kind = 'parent_of'` /
+    /// `'blocks'` in the v48→v49 migration). A rename of any enum variant
+    /// would break the partial-index hot path silently — this test forces a
+    /// compile-time review whenever the wire shape moves.
+    #[test]
+    fn serde_strings_match_sql_partial_index_predicates() {
+        assert_eq!(
+            serde_json::to_string(&EntityType::Task).unwrap(),
+            "\"TASK\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EntityType::Record).unwrap(),
+            "\"RECORD\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EdgeKind::ParentOf).unwrap(),
+            "\"parent_of\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EdgeKind::Blocks).unwrap(),
+            "\"blocks\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EdgeKind::Covers).unwrap(),
+            "\"covers\""
+        );
     }
 }

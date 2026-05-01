@@ -125,5 +125,4 @@ mod tests {
             .unwrap();
         assert_eq!(count, 2);
     }
-
 }
