@@ -47,6 +47,7 @@ tempfile = "3"
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 dashmap = "6"
+lru = "0.12"
 # Pure-Rust git repository discovery (used by `git::common_dir` to resolve the
 # shared `.git` directory across linked worktrees). gix-hash is a transitive
 # of gix-discover but requires an explicit hash-backend feature.

@@ -10,10 +10,11 @@
 //! common-dir matches a registered brain root's common-dir, the worktree is
 //! attached to that brain instead of registering a new one.
 
-use dashmap::DashMap;
+use lru::LruCache;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// Resolve the canonicalized common-dir (shared `.git` directory) for a path.
 ///
@@ -51,22 +52,35 @@ pub fn common_dir(path: &Path) -> io::Result<Option<PathBuf>> {
     Ok(Some(std::fs::canonicalize(&common)?))
 }
 
-fn cache() -> &'static DashMap<PathBuf, Option<PathBuf>> {
-    static CACHE: OnceLock<DashMap<PathBuf, Option<PathBuf>>> = OnceLock::new();
-    CACHE.get_or_init(DashMap::new)
+const DEFAULT_GIT_CACHE_CAP: usize = 4096;
+
+fn cache() -> &'static Mutex<LruCache<PathBuf, Option<PathBuf>>> {
+    static CACHE: OnceLock<Mutex<LruCache<PathBuf, Option<PathBuf>>>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let cap = std::env::var("BRAIN_GIT_CACHE_CAP")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_GIT_CACHE_CAP);
+        let cap = NonZeroUsize::new(cap).unwrap_or(NonZeroUsize::new(DEFAULT_GIT_CACHE_CAP).unwrap());
+        Mutex::new(LruCache::new(cap))
+    })
 }
 
 /// Cached variant of [`common_dir`]. Memoizes by canonicalized input path.
+/// Bounded LRU; capacity defaults to 4096, tunable via `BRAIN_GIT_CACHE_CAP`.
 /// Process-lifetime cache; not persisted.
 pub fn common_dir_cached(path: &Path) -> io::Result<Option<PathBuf>> {
     // Canonicalize the input so symlinked/`..`-laden equivalents share a cache slot.
     // Fall back to the raw path if canonicalization fails (e.g. path doesn't exist).
     let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    if let Some(hit) = cache().get(&key) {
-        return Ok(hit.clone());
+    {
+        let mut guard = cache().lock().unwrap();
+        if let Some(hit) = guard.get(&key) {
+            return Ok(hit.clone());
+        }
     }
     let resolved = common_dir(&key)?;
-    cache().insert(key, resolved.clone());
+    cache().lock().unwrap().put(key, resolved.clone());
     Ok(resolved)
 }
 
@@ -146,5 +160,33 @@ mod tests {
         let second = common_dir_cached(tmp.path()).unwrap();
         assert_eq!(first, second);
         assert!(first.is_some());
+    }
+
+    #[test]
+    fn lru_cache_bounded_eviction() {
+        use lru::LruCache;
+        use std::num::NonZeroUsize;
+        use std::path::PathBuf;
+
+        // Verify LruCache itself: inserting N+1 items into a capacity-N cache
+        // keeps len == N (the oldest entry is evicted).
+        let n: usize = 4;
+        let mut cache: LruCache<PathBuf, Option<PathBuf>> =
+            LruCache::new(NonZeroUsize::new(n).unwrap());
+
+        for i in 0..=n {
+            cache.put(PathBuf::from(format!("/fake/path/{i}")), None);
+        }
+
+        assert_eq!(
+            cache.len(),
+            n,
+            "cache must not exceed capacity after N+1 insertions"
+        );
+        // The first entry (i=0) must have been evicted.
+        assert!(
+            cache.peek(&PathBuf::from("/fake/path/0")).is_none(),
+            "oldest entry must be evicted"
+        );
     }
 }
