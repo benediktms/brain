@@ -12,13 +12,13 @@ use super::migrations::{
     migrate_v34_to_v35, migrate_v35_to_v36, migrate_v36_to_v37, migrate_v37_to_v38,
     migrate_v38_to_v39, migrate_v39_to_v40, migrate_v40_to_v41, migrate_v41_to_v42,
     migrate_v42_to_v43, migrate_v43_to_v44, migrate_v44_to_v45, migrate_v45_to_v46,
-    migrate_v46_to_v47, migrate_v47_to_v48, migrate_v48_to_v49,
+    migrate_v46_to_v47, migrate_v47_to_v48, migrate_v48_to_v49, migrate_v49_to_v50,
 };
 use crate::error::{BrainCoreError, Result};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
-pub const SCHEMA_VERSION: i32 = 49;
+pub const SCHEMA_VERSION: i32 = 50;
 
 /// Initialize the database schema: WAL mode, foreign keys, and all tables.
 ///
@@ -103,6 +103,7 @@ pub(crate) fn run_migrations(conn: &Connection, from_version: i32) -> Result<()>
             46 => migrate_v46_to_v47(conn)?,
             47 => migrate_v47_to_v48(conn)?,
             48 => migrate_v48_to_v49(conn)?,
+            49 => migrate_v49_to_v50(conn)?,
             other => {
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",

@@ -1,17 +1,17 @@
 use brain_persistence::db::schema::init_schema;
 use rusqlite::Connection;
 
-/// Build a v48 fixture: initialise the current schema (v49) and downgrade
-/// the user_version to 48, dropping the v49-shape `entity_links` table and
-/// indexes so a subsequent `init_schema` exercises the real v48→v49 migration.
+/// Build a v48 fixture: initialise the current schema (v50) and downgrade
+/// the user_version to 48, dropping the entity_links table and all its indexes
+/// so a subsequent `init_schema` exercises v48→v49 and then v49→v50.
 /// Mirrors the snapshot pattern from `migration_v44_fixture_test.rs`.
 fn snapshot_at_v48() -> Connection {
     let conn = Connection::open_in_memory().expect("open in-memory sqlite");
     conn.pragma_update(None, "journal_mode", "WAL").unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
 
-    // Bring the DB up to current SCHEMA_VERSION (v49), then remove the v49
-    // `entity_links` table and stamp user_version back to 48.
+    // Bring the DB up to current SCHEMA_VERSION (v50), then remove the entity_links
+    // table and all its indexes, and stamp user_version back to 48.
     init_schema(&conn).expect("initialize current schema");
 
     conn.execute_batch(
@@ -22,7 +22,7 @@ fn snapshot_at_v48() -> Connection {
          DROP INDEX IF EXISTS idx_entity_links_unique;
          DROP TABLE IF EXISTS entity_links;",
     )
-    .expect("remove v49-shape entity_links table and indexes");
+    .expect("remove entity_links table and indexes");
 
     conn.pragma_update(None, "user_version", 48)
         .expect("downgrade user_version to v48 fixture");
@@ -105,7 +105,7 @@ fn test_migration_v49_creates_entity_links_table_and_indexes() {
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    // init_schema runs all migrations forward. v49 is the current tip.
+    // init_schema runs all migrations forward to the current tip (v50).
     assert!(
         version >= 49,
         "init_schema should land at >= v49 (got {version})"
@@ -116,16 +116,28 @@ fn test_migration_v49_creates_entity_links_table_and_indexes() {
         "entity_links table must exist after migration"
     );
 
+    // The covering composite and traversal indexes survive v49→v50.
     for idx in &[
         "idx_entity_links_unique",
         "idx_entity_links_outgoing",
         "idx_entity_links_incoming",
-        "idx_entity_links_blocks_partial",
-        "idx_entity_links_parent_of_partial",
     ] {
         assert!(
             index_exists(&conn, idx),
             "index {idx} must exist after migration"
+        );
+    }
+
+    // The two partial indexes were created by v48→v49 but dropped by v49→v50
+    // (planner never selected them; covering composite suffices). After a full
+    // init_schema run they are absent.
+    for idx in &[
+        "idx_entity_links_blocks_partial",
+        "idx_entity_links_parent_of_partial",
+    ] {
+        assert!(
+            !index_exists(&conn, idx),
+            "index {idx} must be absent after v49→v50 drops it"
         );
     }
 }
@@ -153,7 +165,8 @@ fn test_migration_v49_partial_indexes_exist_via_pragma() {
     let conn = snapshot_at_v48();
     init_schema(&conn).unwrap();
 
-    // Verify partial indexes via PRAGMA index_list(entity_links) as required by spec.
+    // After a full init_schema run (v48→v49→v50), the partial indexes are dropped
+    // by v49→v50. Verify they are absent via PRAGMA index_list.
     let mut stmt = conn.prepare("PRAGMA index_list(entity_links)").unwrap();
     let index_names: Vec<String> = stmt
         .query_map([], |row| {
@@ -165,12 +178,12 @@ fn test_migration_v49_partial_indexes_exist_via_pragma() {
         .collect();
 
     assert!(
-        index_names.contains(&"idx_entity_links_blocks_partial".to_string()),
-        "idx_entity_links_blocks_partial must appear in PRAGMA index_list(entity_links); got {index_names:?}"
+        !index_names.contains(&"idx_entity_links_blocks_partial".to_string()),
+        "idx_entity_links_blocks_partial must be absent after v49→v50; got {index_names:?}"
     );
     assert!(
-        index_names.contains(&"idx_entity_links_parent_of_partial".to_string()),
-        "idx_entity_links_parent_of_partial must appear in PRAGMA index_list(entity_links); got {index_names:?}"
+        !index_names.contains(&"idx_entity_links_parent_of_partial".to_string()),
+        "idx_entity_links_parent_of_partial must be absent after v49→v50; got {index_names:?}"
     );
 }
 
@@ -185,10 +198,19 @@ fn test_migration_v49_self_loop_check_constraint() {
          VALUES ('01JSELF', 'TASK', 'task-1', 'TASK', 'task-1', 'blocks', '2026-05-01T00:00:00Z')",
         [],
     );
-    assert!(
-        result.is_err(),
-        "self-loop CHECK (NOT (from_type = to_type AND from_id = to_id)) must fire"
-    );
+
+    // Tightened assertion: must fail with the CHECK constraint extended error code (275),
+    // not merely any error (which could mask UNIQUE/NOT NULL/FK violations).
+    match result {
+        Err(rusqlite::Error::SqliteFailure(err, _))
+            if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK =>
+        {
+            // Expected: SQLite CHECK constraint fired.
+        }
+        other => {
+            panic!("expected SQLITE_CONSTRAINT_CHECK (275) for self-loop insert, got: {other:?}")
+        }
+    }
 }
 
 #[test]

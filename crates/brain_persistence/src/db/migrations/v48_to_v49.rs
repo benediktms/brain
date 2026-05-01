@@ -1,5 +1,10 @@
 //! v48 → v49: polymorphic `entity_links` table with full index set.
 //!
+//! **Note:** The two partial indexes introduced here (`idx_entity_links_blocks_partial`
+//! and `idx_entity_links_parent_of_partial`) were subsequently dropped in v50.
+//! The SQLite query planner never selected them — the covering composite
+//! `idx_entity_links_unique` suffices for all hot-path queries.
+//!
 //! ## Purpose
 //!
 //! Introduces a single edge table that unifies all cross-entity relationships
