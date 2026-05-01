@@ -83,55 +83,12 @@ pub fn migrate_v48_to_v49(conn: &Connection) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn table_and_indexes_created_after_migration() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        crate::db::schema::run_migrations(&conn, 0).unwrap();
-
-        let table_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='entity_links'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            table_count, 1,
-            "entity_links table must exist after migration"
-        );
-
-        for idx in &[
-            "idx_entity_links_unique",
-            "idx_entity_links_outgoing",
-            "idx_entity_links_incoming",
-            "idx_entity_links_blocks_partial",
-            "idx_entity_links_parent_of_partial",
-        ] {
-            let n: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
-                    [idx],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(n, 1, "index {idx} must exist after migration");
-        }
-    }
-
-    #[test]
-    fn user_version_stamped_49() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        crate::db::schema::run_migrations(&conn, 0).unwrap();
-
-        let version: i32 = conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, 49);
-    }
+    // Per-version invariants previously asserted here have been moved to
+    // dedicated fixture tests. The v49-shape table and indexes are covered by
+    // `tests/migration_v49_fixture_test.rs`; the v50 amendment that drops the
+    // partial indexes is covered by `tests/migration_v50_fixture_test.rs`.
+    // Re-running migrations to current and asserting v49 specifics here became
+    // brittle once v50 shipped.
 
     #[test]
     fn self_loop_check_constraint_fires() {
@@ -145,6 +102,10 @@ mod tests {
              VALUES ('01JSELF', 'TASK', 'task-1', 'TASK', 'task-1', 'blocks', '2026-05-01T00:00:00Z')",
             [],
         );
-        assert!(result.is_err(), "self-loop CHECK constraint must fire");
+        match result {
+            Err(rusqlite::Error::SqliteFailure(ffi_err, _))
+                if ffi_err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK => {}
+            other => panic!("expected SQLITE_CONSTRAINT_CHECK (275); got {other:?}"),
+        }
     }
 }
