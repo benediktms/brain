@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::chunker::CHUNKER_VERSION;
 use crate::ports::{ChunkIndexWriter, FileMetaReader, FileMetaWriter, SchemaMeta};
@@ -121,7 +121,7 @@ where
         let path_str = path.to_string_lossy().to_string();
         let found = self.db.clear_content_hash_by_path(&path_str)?;
         if !found {
-            info!(path = %path_str, "file not in index, indexing fresh");
+            debug!(path = %path_str, "file not in index, indexing fresh");
         }
         self.index_file(path).await
     }

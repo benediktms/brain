@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::embedder::{Embed, embed_batch_async};
 use crate::l0_generate::{generate_episode_l0, generate_procedure_l0};
@@ -54,7 +54,7 @@ pub async fn poll_stale_tasks(
         return 0;
     }
 
-    info!(count = rows.len(), "embed_poll: embedding stale tasks");
+    debug!(count = rows.len(), "embed_poll: embedding stale tasks");
 
     // ── 2. Fetch labels for each task ────────────────────────────────────
     let task_id_refs: Vec<&str> = rows.iter().map(|r| r.task_id.as_str()).collect();
@@ -180,7 +180,7 @@ pub async fn poll_stale_tasks(
     }
 
     let count = embedded_task_ids.len();
-    info!(count, "embed_poll: tasks embedded");
+    debug!(count, "embed_poll: tasks embedded");
     count
 }
 
@@ -212,7 +212,7 @@ pub async fn poll_stale_chunks(
         return 0;
     }
 
-    info!(count = rows.len(), "embed_poll: embedding stale chunks");
+    debug!(count = rows.len(), "embed_poll: embedding stale chunks");
 
     // ── Batch embed ───────────────────────────────────────────────────────
     let texts: Vec<String> = rows.iter().map(|r| r.content.clone()).collect();
@@ -291,7 +291,7 @@ pub async fn poll_stale_chunks(
     }
 
     let count = embedded_chunk_ids.len();
-    info!(count, "embed_poll: chunks embedded");
+    debug!(count, "embed_poll: chunks embedded");
     count
 }
 
@@ -328,7 +328,7 @@ pub async fn poll_stale_records(
         return 0;
     }
 
-    info!(count = rows.len(), "embed_poll: embedding stale records");
+    debug!(count = rows.len(), "embed_poll: embedding stale records");
 
     // ── 2. Fetch tags for each record ────────────────────────────────────
     let record_id_refs: Vec<&str> = rows.iter().map(|r| r.record_id.as_str()).collect();
@@ -428,7 +428,7 @@ pub async fn poll_stale_records(
     }
 
     let count = embedded_record_ids.len();
-    info!(count, "embed_poll: records embedded");
+    debug!(count, "embed_poll: records embedded");
     count
 }
 
@@ -504,7 +504,7 @@ where
         return 0;
     }
 
-    info!(count = rows.len(), "embed_poll: embedding stale summaries");
+    debug!(count = rows.len(), "embed_poll: embedding stale summaries");
 
     let texts: Vec<String> = rows.iter().map(|r| r.content.clone()).collect();
     let embeddings = match embed_batch_async(embedder, texts).await {
@@ -632,7 +632,7 @@ where
     }
 
     let count = embedded_summary_ids.len();
-    info!(count, "embed_poll: summaries embedded");
+    debug!(count, "embed_poll: summaries embedded");
     count
 }
 

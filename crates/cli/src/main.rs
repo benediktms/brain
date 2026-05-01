@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::*;
-use crate::commands::daemon::Daemon;
+use crate::commands::daemon::{Daemon, LogOverrides};
 
 mod cli;
 mod commands;
@@ -58,11 +58,24 @@ fn main() -> Result<()> {
     resolve_defaults(&mut cli);
 
     if let Command::Daemon {
-        action: DaemonAction::Start { .. },
+        action:
+            DaemonAction::Start {
+                log_filter,
+                log_max_files,
+                log_max_size_mb,
+                log_format,
+                ..
+            },
     } = &cli.command
     {
         let daemon = Daemon::new()?;
-        daemon.start()?;
+        daemon.start(LogOverrides {
+            log_filter: log_filter.clone(),
+            log_max_files: *log_max_files,
+            log_max_size_mb: *log_max_size_mb,
+            user_set_max_size_mb: log_max_size_mb.is_some(),
+            log_format: log_format.clone(),
+        })?;
         // Only the child process reaches here — parent called exit(0).
     }
 
@@ -103,7 +116,7 @@ mod tests {
         let cli = Cli::try_parse_from(["brain", "daemon", "start"]).unwrap();
         match cli.command {
             Command::Daemon {
-                action: DaemonAction::Start { notes_path },
+                action: DaemonAction::Start { notes_path, .. },
             } => {
                 assert!(
                     notes_path.is_none(),
@@ -119,7 +132,7 @@ mod tests {
         let cli = Cli::try_parse_from(["brain", "daemon", "start", "./notes"]).unwrap();
         match cli.command {
             Command::Daemon {
-                action: DaemonAction::Start { notes_path },
+                action: DaemonAction::Start { notes_path, .. },
             } => {
                 assert_eq!(
                     notes_path,

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::doctor::{CheckStatus, DoctorReport};
 use crate::ports::{ChunkIndexWriter, FileMetaReader, FileMetaWriter, MaintenanceOps, SchemaMeta};
@@ -275,8 +275,8 @@ where
         match event {
             crate::watcher::FileEvent::Created(path) | crate::watcher::FileEvent::Changed(path) => {
                 match self.index_file(&path).await {
-                    Ok(true) => info!(path = %path.display(), "re-indexed"),
-                    Ok(false) => info!(path = %path.display(), "unchanged, skipped"),
+                    Ok(true) => debug!(path = %path.display(), "re-indexed"),
+                    Ok(false) => debug!(path = %path.display(), "unchanged, skipped"),
                     Err(e) => warn!(path = %path.display(), error = %e, "index failed"),
                 }
             }
