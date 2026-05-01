@@ -135,8 +135,9 @@ fn test_migration_v50_user_version_stamped() {
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(
-        version, 50,
-        "user_version must be 50 after v49→v50 migration"
+    // init_schema runs all migrations forward to the current tip (>= v50).
+    assert!(
+        version >= 50,
+        "user_version must be >= 50 after v49→v50 migration (got {version})"
     );
 }
