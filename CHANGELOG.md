@@ -2,12 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.8] - 2026-05-01
 
-### Removed
+### Bug Fixes
 
-- Removed legacy `memory.search_minimal` and `memory.expand` MCP tools. Use `memory.retrieve` instead.
-- Removed corresponding CLI surface: `brain query`, `brain memory search`, `brain memory expand`, and the `--intent` ranking-profile flag. Use `brain memory retrieve` (with `--strategy`/`-s`) instead.
+- Make BRAIN_HOME authoritative for path resolution (#104)
+- Retrieval includes vetted band, not just trusted
+- Handle nested transcript format and write vetted trust
+- Emit minimal ack for Stop/PreCompact (no hookSpecificOutput)
+
+### Features
+
+- Cwd-based brain inference + show unscoped brain in list (#107)
+- Cross-brain task transfer (preserve-ID) (#106)
+- Auto-attach git worktrees to existing brain (#103)
+- Deepen Claude Code hook integration
+- PreToolUse:Edit|Write injects file-scoped memory (opt-in)
+- Stop hook captures session episode from transcript
+- Replace PreCompact stub with edited-files snapshot
+- Add --output=hook-envelope and --frame=safety output flags
+- Summarize hooks in dry-run output (#102)
+- Hook-injection sanitization (brn-5da.9) (#101)
+- Trust/provenance schema for hook-ingested records (brn-5da.8) (#100)
+- Canonicalize plugin templates (brn-5da.6) (#99)
+
+### Refactoring
+
+- Remove legacy CLI surface and clean up dead code (#98)
+- Remove legacy search_minimal and expand tools (#97)
 
 ## [0.3.7] - 2026-04-29
 
