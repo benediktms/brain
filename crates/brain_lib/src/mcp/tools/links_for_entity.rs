@@ -4,7 +4,9 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use brain_persistence::db::links::{EdgeKind, EntityRef, EntityType, LinkError, for_entity};
+use brain_persistence::db::links::{
+    EntityRef, LinkError, edge_kind_str, entity_type_from_str, entity_type_str, for_entity,
+};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -24,41 +26,6 @@ struct EntityRefInput {
     id: String,
 }
 
-fn parse_entity_type(s: &str) -> Option<EntityType> {
-    match s {
-        "TASK" => Some(EntityType::Task),
-        "RECORD" => Some(EntityType::Record),
-        "EPISODE" => Some(EntityType::Episode),
-        "PROCEDURE" => Some(EntityType::Procedure),
-        "CHUNK" => Some(EntityType::Chunk),
-        "NOTE" => Some(EntityType::Note),
-        _ => None,
-    }
-}
-
-fn edge_kind_str(k: EdgeKind) -> &'static str {
-    match k {
-        EdgeKind::ParentOf => "parent_of",
-        EdgeKind::Blocks => "blocks",
-        EdgeKind::Covers => "covers",
-        EdgeKind::RelatesTo => "relates_to",
-        EdgeKind::SeeAlso => "see_also",
-        EdgeKind::Supersedes => "supersedes",
-        EdgeKind::Contradicts => "contradicts",
-    }
-}
-
-fn entity_type_str(t: EntityType) -> &'static str {
-    match t {
-        EntityType::Task => "TASK",
-        EntityType::Record => "RECORD",
-        EntityType::Episode => "EPISODE",
-        EntityType::Procedure => "PROCEDURE",
-        EntityType::Chunk => "CHUNK",
-        EntityType::Note => "NOTE",
-    }
-}
-
 fn entity_ref_to_json(r: &EntityRef) -> Value {
     json!({
         "type": entity_type_str(r.kind),
@@ -75,7 +42,7 @@ impl LinksForEntity {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let kind = match parse_entity_type(&params.entity.entity_type) {
+        let kind = match entity_type_from_str(&params.entity.entity_type) {
             Some(k) => k,
             None => {
                 return ToolCallResult::error(format!(

@@ -4,7 +4,9 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use brain_persistence::db::links::{EdgeKind, EntityRef, EntityType, LinkError, remove_link};
+use brain_persistence::db::links::{
+    EntityRef, LinkError, edge_kind_from_str, entity_type_from_str, remove_link,
+};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -25,33 +27,8 @@ struct EntityRefInput {
     id: String,
 }
 
-fn parse_entity_type(s: &str) -> Option<EntityType> {
-    match s {
-        "TASK" => Some(EntityType::Task),
-        "RECORD" => Some(EntityType::Record),
-        "EPISODE" => Some(EntityType::Episode),
-        "PROCEDURE" => Some(EntityType::Procedure),
-        "CHUNK" => Some(EntityType::Chunk),
-        "NOTE" => Some(EntityType::Note),
-        _ => None,
-    }
-}
-
-fn parse_edge_kind(s: &str) -> Option<EdgeKind> {
-    match s {
-        "parent_of" => Some(EdgeKind::ParentOf),
-        "blocks" => Some(EdgeKind::Blocks),
-        "covers" => Some(EdgeKind::Covers),
-        "relates_to" => Some(EdgeKind::RelatesTo),
-        "see_also" => Some(EdgeKind::SeeAlso),
-        "supersedes" => Some(EdgeKind::Supersedes),
-        "contradicts" => Some(EdgeKind::Contradicts),
-        _ => None,
-    }
-}
-
 fn resolve_entity_ref(input: EntityRefInput) -> Result<EntityRef, String> {
-    let kind = parse_entity_type(&input.entity_type)
+    let kind = entity_type_from_str(&input.entity_type)
         .ok_or_else(|| format!("unknown entity type: {}", input.entity_type))?;
     EntityRef::new(kind, input.id).map_err(|e| e.to_string())
 }
@@ -75,37 +52,12 @@ impl LinksRemove {
             Err(e) => return ToolCallResult::error(format!("Invalid 'to': {e}")),
         };
 
-        let edge_kind = match parse_edge_kind(&params.edge_kind) {
+        let edge_kind = match edge_kind_from_str(&params.edge_kind) {
             Some(k) => k,
             None => {
                 return ToolCallResult::error(format!("unknown edge_kind: {}", params.edge_kind));
             }
         };
-
-        // Probe whether the edge exists before removal so we can report the removed flag.
-        // The persistence layer's remove_link is a no-op on missing edges (idempotent),
-        // so we query for_entity first to determine presence.
-        let probe_from = from.clone();
-        let probe_to = to.clone();
-        let probe_kind = edge_kind;
-        let exists = ctx
-            .stores
-            .inner_db()
-            .with_read_conn(|conn| {
-                brain_persistence::db::links::for_entity(conn, probe_from.clone())
-                    .map(|links| {
-                        links.iter().any(|l| {
-                            l.from == probe_from && l.to == probe_to && l.edge_kind == probe_kind
-                        })
-                    })
-                    .map_err(|e| match e {
-                        LinkError::Database(msg) => {
-                            brain_persistence::error::BrainCoreError::Database(msg)
-                        }
-                        LinkError::Cycle(_) => unreachable!("for_entity never returns Cycle"),
-                    })
-            })
-            .unwrap_or(false);
 
         let result = ctx.stores.inner_db().with_write_conn(|conn| {
             remove_link(conn, from, to, edge_kind).map_err(|e| match e {
@@ -115,7 +67,7 @@ impl LinksRemove {
         });
 
         match result {
-            Ok(()) => json_response(&json!({ "removed": exists })),
+            Ok(removed) => json_response(&json!({ "removed": removed })),
             Err(e) => ToolCallResult::error(format!("Internal error: {e}")),
         }
     }

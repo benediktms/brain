@@ -10,7 +10,7 @@
 use rusqlite::Connection;
 use ulid::Ulid;
 
-use crate::db::links::{EdgeKind, EntityType, LinkCreatedPayload, LinkRemovedPayload};
+use crate::db::links::{LinkCreatedPayload, LinkRemovedPayload, edge_kind_str, entity_type_str};
 use crate::error::Result;
 
 // ── Event enum ────────────────────────────────────────────────────────────────
@@ -43,43 +43,6 @@ use crate::error::Result;
 pub enum LinkEvent {
     Created(LinkCreatedPayload),
     Removed(LinkRemovedPayload),
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn entity_type_str(t: EntityType) -> &'static str {
-    match t {
-        EntityType::Task => "TASK",
-        EntityType::Record => "RECORD",
-        EntityType::Episode => "EPISODE",
-        EntityType::Procedure => "PROCEDURE",
-        EntityType::Chunk => "CHUNK",
-        EntityType::Note => "NOTE",
-    }
-}
-
-fn edge_kind_str(k: EdgeKind) -> &'static str {
-    match k {
-        EdgeKind::ParentOf => "parent_of",
-        EdgeKind::Blocks => "blocks",
-        EdgeKind::Covers => "covers",
-        EdgeKind::RelatesTo => "relates_to",
-        EdgeKind::SeeAlso => "see_also",
-        EdgeKind::Supersedes => "supersedes",
-        EdgeKind::Contradicts => "contradicts",
-    }
-}
-
-// Re-exported under distinct names so the DRY-mirror tests in `mod.rs` can
-// reference them without leaking the private helpers into the public API.
-#[cfg(test)]
-pub(crate) fn entity_type_str_for_test(t: EntityType) -> &'static str {
-    entity_type_str(t)
-}
-
-#[cfg(test)]
-pub(crate) fn edge_kind_str_for_test(k: EdgeKind) -> &'static str {
-    edge_kind_str(k)
 }
 
 // ── Projection ────────────────────────────────────────────────────────────────
@@ -128,25 +91,39 @@ pub fn apply_link_event(conn: &Connection, event: &LinkEvent) -> Result<()> {
         }
 
         LinkEvent::Removed(p) => {
-            let from_type = entity_type_str(p.from.kind);
-            let from_id = &p.from.id;
-            let to_type = entity_type_str(p.to.kind);
-            let to_id = &p.to.id;
-            let edge_kind = edge_kind_str(p.edge_kind);
-
-            conn.execute(
-                "DELETE FROM entity_links
-                 WHERE from_type = ?1
-                   AND from_id   = ?2
-                   AND to_type   = ?3
-                   AND to_id     = ?4
-                   AND edge_kind = ?5",
-                rusqlite::params![from_type, from_id, to_type, to_id, edge_kind],
-            )?;
+            apply_link_remove_inner(conn, p)?;
         }
     }
 
     Ok(())
+}
+
+/// Delete the edge described by `payload` and return `true` if a row was deleted.
+///
+/// Unlike [`apply_link_event`] for `Removed`, this variant surfaces the
+/// rows-affected count so callers can distinguish "deleted" from "no-op".
+pub fn apply_link_remove(conn: &Connection, payload: &LinkRemovedPayload) -> Result<bool> {
+    let rows = apply_link_remove_inner(conn, payload)?;
+    Ok(rows > 0)
+}
+
+fn apply_link_remove_inner(conn: &Connection, p: &LinkRemovedPayload) -> Result<usize> {
+    let from_type = entity_type_str(p.from.kind);
+    let from_id = &p.from.id;
+    let to_type = entity_type_str(p.to.kind);
+    let to_id = &p.to.id;
+    let edge_kind = edge_kind_str(p.edge_kind);
+
+    let rows = conn.execute(
+        "DELETE FROM entity_links
+         WHERE from_type = ?1
+           AND from_id   = ?2
+           AND to_type   = ?3
+           AND to_id     = ?4
+           AND edge_kind = ?5",
+        rusqlite::params![from_type, from_id, to_type, to_id, edge_kind],
+    )?;
+    Ok(rows)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

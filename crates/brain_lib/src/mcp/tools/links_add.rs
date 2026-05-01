@@ -4,7 +4,10 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use brain_persistence::db::links::{EdgeKind, EntityRef, EntityType, LinkError, add_link_checked};
+use brain_persistence::db::links::{
+    EntityRef, LinkError, add_link_checked, edge_kind_from_str, entity_type_from_str,
+    entity_type_str,
+};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -25,33 +28,8 @@ struct EntityRefInput {
     id: String,
 }
 
-fn parse_entity_type(s: &str) -> Option<EntityType> {
-    match s {
-        "TASK" => Some(EntityType::Task),
-        "RECORD" => Some(EntityType::Record),
-        "EPISODE" => Some(EntityType::Episode),
-        "PROCEDURE" => Some(EntityType::Procedure),
-        "CHUNK" => Some(EntityType::Chunk),
-        "NOTE" => Some(EntityType::Note),
-        _ => None,
-    }
-}
-
-fn parse_edge_kind(s: &str) -> Option<EdgeKind> {
-    match s {
-        "parent_of" => Some(EdgeKind::ParentOf),
-        "blocks" => Some(EdgeKind::Blocks),
-        "covers" => Some(EdgeKind::Covers),
-        "relates_to" => Some(EdgeKind::RelatesTo),
-        "see_also" => Some(EdgeKind::SeeAlso),
-        "supersedes" => Some(EdgeKind::Supersedes),
-        "contradicts" => Some(EdgeKind::Contradicts),
-        _ => None,
-    }
-}
-
 fn resolve_entity_ref(input: EntityRefInput) -> Result<EntityRef, String> {
-    let kind = parse_entity_type(&input.entity_type)
+    let kind = entity_type_from_str(&input.entity_type)
         .ok_or_else(|| format!("unknown entity type: {}", input.entity_type))?;
     EntityRef::new(kind, input.id).map_err(|e| e.to_string())
 }
@@ -75,41 +53,42 @@ impl LinksAdd {
             Err(e) => return ToolCallResult::error(format!("Invalid 'to': {e}")),
         };
 
-        let edge_kind_str = params.edge_kind.as_deref().unwrap_or("relates_to");
-        let edge_kind = match parse_edge_kind(edge_kind_str) {
+        let edge_kind_wire = params.edge_kind.as_deref().unwrap_or("relates_to");
+        let edge_kind = match edge_kind_from_str(edge_kind_wire) {
             Some(k) => k,
             None => {
-                return ToolCallResult::error(format!("unknown edge_kind: {edge_kind_str}"));
+                return ToolCallResult::error(format!("unknown edge_kind: {edge_kind_wire}"));
             }
         };
 
-        let from_type = format!("{:?}", from.kind).to_uppercase();
+        let from_type = entity_type_str(from.kind);
         let from_id = from.id.clone();
-        let to_type = format!("{:?}", to.kind).to_uppercase();
+        let to_type = entity_type_str(to.kind);
         let to_id = to.id.clone();
 
+        let mut link_err: Option<LinkError> = None;
         let result = ctx.stores.inner_db().with_write_conn(|conn| {
-            add_link_checked(conn, from, to, edge_kind).map_err(|e| match e {
-                LinkError::Cycle(kind) => {
-                    brain_persistence::error::BrainCoreError::Database(format!("CYCLE:{kind:?}"))
+            match add_link_checked(conn, from, to, edge_kind) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    let msg = e.to_string();
+                    link_err = Some(e);
+                    Err(brain_persistence::error::BrainCoreError::Database(msg))
                 }
-                LinkError::Database(msg) => brain_persistence::error::BrainCoreError::Database(msg),
-            })
+            }
         });
 
         match result {
             Ok(()) => {
-                let id = format!("{from_type}:{from_id}->{edge_kind_str}->{to_type}:{to_id}");
+                let id = format!("{from_type}:{from_id}->{edge_kind_wire}->{to_type}:{to_id}");
                 json_response(&json!({ "id": id }))
             }
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.starts_with("CYCLE:") {
-                    ToolCallResult::error(format!("would create a cycle in {edge_kind_str} graph"))
-                } else {
-                    ToolCallResult::error(format!("Internal error: {msg}"))
+            Err(e) => match link_err {
+                Some(LinkError::Cycle(_)) => {
+                    ToolCallResult::error(format!("would create a cycle in {edge_kind_wire} graph"))
                 }
-            }
+                _ => ToolCallResult::error(format!("Internal error: {e}")),
+            },
         }
     }
 }
@@ -138,7 +117,7 @@ impl McpTool for LinksAdd {
 
         ToolDefinition {
             name: self.name().into(),
-            description: "Add a directed polymorphic edge between two entities. Defaults to 'relates_to' when edge_kind is omitted. DAG kinds (parent_of, blocks, supersedes) are cycle-checked.".into(),
+            description: "Add a directed polymorphic edge between two entities. Defaults to 'relates_to' when edge_kind is omitted. DAG kinds (parent_of, blocks, supersedes) are cycle-checked. Idempotent: re-adding an existing edge returns the same synthesised id without inserting a new row. The returned id is a deterministic compound key (FROM_TYPE:from_id->edge->TO_TYPE:to_id), not a durable ULID.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

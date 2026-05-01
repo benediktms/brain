@@ -10,8 +10,9 @@ use thiserror::Error;
 use tracing::warn;
 
 use crate::db::links::{
-    EdgeKind, EntityRef, EntityType, LinkCreatedPayload, LinkRemovedPayload,
-    projections::{LinkEvent, apply_link_event},
+    EdgeKind, EntityRef, LinkCreatedPayload, LinkRemovedPayload, edge_kind_from_str, edge_kind_str,
+    entity_type_from_str, entity_type_str,
+    projections::{LinkEvent, apply_link_event, apply_link_remove},
 };
 
 // ── Error ─────────────────────────────────────────────────────────────────────
@@ -45,56 +46,6 @@ pub struct EntityLink {
     pub from: EntityRef,
     pub to: EntityRef,
     pub edge_kind: EdgeKind,
-}
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
-fn entity_type_from_str(s: &str) -> Option<EntityType> {
-    match s {
-        "TASK" => Some(EntityType::Task),
-        "RECORD" => Some(EntityType::Record),
-        "EPISODE" => Some(EntityType::Episode),
-        "PROCEDURE" => Some(EntityType::Procedure),
-        "CHUNK" => Some(EntityType::Chunk),
-        "NOTE" => Some(EntityType::Note),
-        _ => None,
-    }
-}
-
-fn edge_kind_from_str(s: &str) -> Option<EdgeKind> {
-    match s {
-        "parent_of" => Some(EdgeKind::ParentOf),
-        "blocks" => Some(EdgeKind::Blocks),
-        "covers" => Some(EdgeKind::Covers),
-        "relates_to" => Some(EdgeKind::RelatesTo),
-        "see_also" => Some(EdgeKind::SeeAlso),
-        "supersedes" => Some(EdgeKind::Supersedes),
-        "contradicts" => Some(EdgeKind::Contradicts),
-        _ => None,
-    }
-}
-
-fn entity_type_str(t: EntityType) -> &'static str {
-    match t {
-        EntityType::Task => "TASK",
-        EntityType::Record => "RECORD",
-        EntityType::Episode => "EPISODE",
-        EntityType::Procedure => "PROCEDURE",
-        EntityType::Chunk => "CHUNK",
-        EntityType::Note => "NOTE",
-    }
-}
-
-fn edge_kind_str(k: EdgeKind) -> &'static str {
-    match k {
-        EdgeKind::ParentOf => "parent_of",
-        EdgeKind::Blocks => "blocks",
-        EdgeKind::Covers => "covers",
-        EdgeKind::RelatesTo => "relates_to",
-        EdgeKind::SeeAlso => "see_also",
-        EdgeKind::Supersedes => "supersedes",
-        EdgeKind::Contradicts => "contradicts",
-    }
 }
 
 // ── Cycle detection ───────────────────────────────────────────────────────────
@@ -191,27 +142,28 @@ pub fn add_link_checked(
 
 /// Delete the directed edge `from → to` of `edge_kind`.
 ///
-/// Emits a `LinkRemoved` event through the Wave 1 projection. If no matching
-/// edge exists the operation is a no-op (idempotent).
+/// Returns `true` when an edge was found and deleted, `false` when no matching
+/// row existed (idempotent). The removal executes atomically within a single
+/// write transaction — no separate existence probe is required.
 pub fn remove_link(
     conn: &Connection,
     from: EntityRef,
     to: EntityRef,
     edge_kind: EdgeKind,
-) -> Result<(), LinkError> {
+) -> Result<bool, LinkError> {
     let tx = conn.unchecked_transaction()?;
 
-    apply_link_event(
+    let removed = apply_link_remove(
         &tx,
-        &LinkEvent::Removed(LinkRemovedPayload {
+        &LinkRemovedPayload {
             from,
             to,
             edge_kind,
-        }),
+        },
     )?;
 
     tx.commit()?;
-    Ok(())
+    Ok(removed)
 }
 
 /// Return all edges where `entity` is either the source or the target.
@@ -395,7 +347,8 @@ mod tests {
         add_link_checked(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
         assert_eq!(count_rows(&conn), 1);
 
-        remove_link(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
+        let removed = remove_link(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
+        assert!(removed, "must return true when edge existed");
         assert_eq!(count_rows(&conn), 0);
     }
 
@@ -403,8 +356,9 @@ mod tests {
     fn remove_link_idempotent() {
         let conn = open_db();
 
-        // Removing a non-existent edge must succeed without error
-        remove_link(&conn, task("ghost"), task("nowhere"), EdgeKind::Blocks).unwrap();
+        // Removing a non-existent edge must succeed and return false
+        let removed = remove_link(&conn, task("ghost"), task("nowhere"), EdgeKind::Blocks).unwrap();
+        assert!(!removed, "must return false when no edge existed");
         assert_eq!(count_rows(&conn), 0);
     }
 
@@ -415,8 +369,8 @@ mod tests {
         add_link_checked(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
         add_link_checked(&conn, task("C"), task("D"), EdgeKind::RelatesTo).unwrap();
 
-        remove_link(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
-
+        let removed = remove_link(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
+        assert!(removed, "must return true for existing edge");
         assert_eq!(count_rows(&conn), 1, "unrelated edge must survive");
     }
 
@@ -426,7 +380,8 @@ mod tests {
 
         // A → B (Blocks), then remove, then C → A allowed (no residual cycle)
         add_link_checked(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
-        remove_link(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
+        let removed = remove_link(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
+        assert!(removed);
 
         // After removal, B → A is no longer blocked by a cycle
         add_link_checked(&conn, task("B"), task("A"), EdgeKind::Blocks).unwrap();

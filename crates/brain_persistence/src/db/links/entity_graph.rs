@@ -124,6 +124,60 @@ pub struct LinkRemovedPayload {
     pub edge_kind: EdgeKind,
 }
 
+// ── String conversion helpers ──────────────────────────────────────────────
+
+/// Canonical SQL wire string for an [`EntityType`] variant.
+pub fn entity_type_str(t: EntityType) -> &'static str {
+    match t {
+        EntityType::Task => "TASK",
+        EntityType::Record => "RECORD",
+        EntityType::Episode => "EPISODE",
+        EntityType::Procedure => "PROCEDURE",
+        EntityType::Chunk => "CHUNK",
+        EntityType::Note => "NOTE",
+    }
+}
+
+/// Canonical SQL wire string for an [`EdgeKind`] variant.
+pub fn edge_kind_str(k: EdgeKind) -> &'static str {
+    match k {
+        EdgeKind::ParentOf => "parent_of",
+        EdgeKind::Blocks => "blocks",
+        EdgeKind::Covers => "covers",
+        EdgeKind::RelatesTo => "relates_to",
+        EdgeKind::SeeAlso => "see_also",
+        EdgeKind::Supersedes => "supersedes",
+        EdgeKind::Contradicts => "contradicts",
+    }
+}
+
+/// Parse an SQL wire string into an [`EntityType`], or `None` if unrecognised.
+pub fn entity_type_from_str(s: &str) -> Option<EntityType> {
+    match s {
+        "TASK" => Some(EntityType::Task),
+        "RECORD" => Some(EntityType::Record),
+        "EPISODE" => Some(EntityType::Episode),
+        "PROCEDURE" => Some(EntityType::Procedure),
+        "CHUNK" => Some(EntityType::Chunk),
+        "NOTE" => Some(EntityType::Note),
+        _ => None,
+    }
+}
+
+/// Parse an SQL wire string into an [`EdgeKind`], or `None` if unrecognised.
+pub fn edge_kind_from_str(s: &str) -> Option<EdgeKind> {
+    match s {
+        "parent_of" => Some(EdgeKind::ParentOf),
+        "blocks" => Some(EdgeKind::Blocks),
+        "covers" => Some(EdgeKind::Covers),
+        "relates_to" => Some(EdgeKind::RelatesTo),
+        "see_also" => Some(EdgeKind::SeeAlso),
+        "supersedes" => Some(EdgeKind::Supersedes),
+        "contradicts" => Some(EdgeKind::Contradicts),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,7 +361,6 @@ mod tests {
 
     #[test]
     fn entity_type_str_matches_serde() {
-        use crate::db::links::projections::entity_type_str_for_test as entity_type_str;
         let variants = [
             EntityType::Task,
             EntityType::Record,
@@ -332,7 +385,6 @@ mod tests {
 
     #[test]
     fn edge_kind_str_matches_serde() {
-        use crate::db::links::projections::edge_kind_str_for_test as edge_kind_str;
         let variants = [
             EdgeKind::ParentOf,
             EdgeKind::Blocks,

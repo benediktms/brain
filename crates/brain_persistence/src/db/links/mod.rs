@@ -15,4 +15,4 @@ pub mod projections;
 pub use api::{EntityLink, LinkError, add_link_checked, for_entity, remove_link};
 pub use entity_graph::*;
 pub use file_links::*;
-pub use projections::{LinkEvent, apply_link_event};
+pub use projections::{LinkEvent, apply_link_event, apply_link_remove};
