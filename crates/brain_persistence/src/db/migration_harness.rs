@@ -25,6 +25,7 @@ use super::migrations::{
     migrate_v38_to_v39, migrate_v39_to_v40, migrate_v40_to_v41, migrate_v41_to_v42,
     migrate_v42_to_v43, migrate_v43_to_v44, migrate_v44_to_v45, migrate_v45_to_v46,
     migrate_v46_to_v47, migrate_v47_to_v48, migrate_v48_to_v49, migrate_v49_to_v50,
+    migrate_v50_to_v51,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -91,6 +92,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             47 => migrate_v47_to_v48(&conn).unwrap(),
             48 => migrate_v48_to_v49(&conn).unwrap(),
             49 => migrate_v49_to_v50(&conn).unwrap(),
+            50 => migrate_v50_to_v51(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
