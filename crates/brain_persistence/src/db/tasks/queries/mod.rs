@@ -34,13 +34,20 @@ pub struct TaskRow {
 }
 
 pub(super) const TASK_COLUMNS: &str = "task_id, title, description, status, priority, blocked_reason, due_ts, \
-     task_type, assignee, defer_until, parent_task_id, child_seq, created_at, updated_at, display_id";
+     task_type, assignee, defer_until, \
+     (SELECT el.from_id FROM entity_links el \
+      WHERE el.to_type='TASK' AND el.to_id=task_id \
+        AND el.from_type='TASK' AND el.edge_kind='parent_of' LIMIT 1) AS parent_task_id, \
+     child_seq, created_at, updated_at, display_id";
 
 /// Same column list as [`TASK_COLUMNS`] but every column is qualified with the
 /// `t.` alias. Required for any SELECT that joins `entity_links`, since both
 /// tables expose `created_at` (and would clash on any future shared column).
 pub(super) const TASK_COLUMNS_T: &str = "t.task_id, t.title, t.description, t.status, t.priority, \
-     t.blocked_reason, t.due_ts, t.task_type, t.assignee, t.defer_until, t.parent_task_id, \
+     t.blocked_reason, t.due_ts, t.task_type, t.assignee, t.defer_until, \
+     (SELECT el.from_id FROM entity_links el \
+      WHERE el.to_type='TASK' AND el.to_id=t.task_id \
+        AND el.from_type='TASK' AND el.edge_kind='parent_of' LIMIT 1) AS parent_task_id, \
      t.child_seq, t.created_at, t.updated_at, t.display_id";
 
 /// Reusable `WITH RECURSIVE` CTE that produces `has_blocked_ancestor(tid)` — the set
@@ -1464,5 +1471,151 @@ mod tests {
         let (ready, blocked) = count_ready_blocked(&conn, None).unwrap();
         assert_eq!(ready, 1, "only t1 should be ready");
         assert_eq!(blocked, 1, "t2 with orphan dep should be blocked");
+    }
+
+    // -- Wave 6.1 reader cutover: entity_links tests --
+
+    /// get_dependency_summary reads entity_links blocks edges — N deps via DependencyAdded.
+    #[test]
+    fn test_dependency_summary_via_entity_links() {
+        let conn = setup();
+        create_task(&conn, "dep1", "Dep 1", 2);
+        create_task(&conn, "dep2", "Dep 2", 2);
+        create_task(&conn, "dep3", "Dep 3", 2);
+        create_task(&conn, "target", "Target", 1);
+
+        add_dep(&conn, "target", "dep1");
+        add_dep(&conn, "target", "dep2");
+        add_dep(&conn, "target", "dep3");
+
+        let summary = get_dependency_summary(&conn, "target").unwrap();
+        assert_eq!(summary.total_deps, 3, "total_deps via entity_links");
+        assert_eq!(summary.done_deps, 0);
+        assert_eq!(summary.blocking_task_ids.len(), 3);
+
+        set_status(&conn, "dep1", "done");
+        set_status(&conn, "dep2", "cancelled");
+
+        let summary = get_dependency_summary(&conn, "target").unwrap();
+        assert_eq!(summary.total_deps, 3);
+        assert_eq!(summary.done_deps, 2, "done + cancelled count as done");
+        assert_eq!(
+            summary.blocking_task_ids,
+            vec!["dep3"],
+            "only dep3 still blocking"
+        );
+    }
+
+    /// list_all_deps reads entity_links blocks edges for bulk export.
+    #[test]
+    fn test_list_all_deps_via_entity_links() {
+        let conn = setup();
+        create_task(&conn, "a", "A", 2);
+        create_task(&conn, "b", "B", 2);
+        create_task(&conn, "c", "C", 2);
+
+        add_dep(&conn, "a", "b");
+        add_dep(&conn, "a", "c");
+
+        let deps = list_all_deps(&conn).unwrap();
+        assert_eq!(deps.len(), 2);
+        let mut pairs: Vec<(String, String)> = deps
+            .into_iter()
+            .map(|d| (d.task_id, d.depends_on))
+            .collect();
+        pairs.sort();
+        assert_eq!(pairs[0], ("a".to_string(), "b".to_string()));
+        assert_eq!(pairs[1], ("a".to_string(), "c".to_string()));
+    }
+
+    /// get_deps_for_task reads entity_links blocks edges for a single task.
+    #[test]
+    fn test_get_deps_for_task_via_entity_links() {
+        let conn = setup();
+        create_task(&conn, "x", "X", 2);
+        create_task(&conn, "y", "Y", 2);
+        create_task(&conn, "z", "Z", 2);
+
+        add_dep(&conn, "x", "y");
+        add_dep(&conn, "x", "z");
+
+        let mut deps = get_deps_for_task(&conn, "x").unwrap();
+        deps.sort();
+        assert_eq!(deps, vec!["y".to_string(), "z".to_string()]);
+
+        // Task with no deps
+        let empty = get_deps_for_task(&conn, "y").unwrap();
+        assert!(empty.is_empty());
+    }
+
+    /// row_to_task reads parent_task_id from entity_links parent_of edge via scalar subquery.
+    #[test]
+    fn test_row_to_task_parent_via_entity_links() {
+        let conn = setup();
+
+        // Create parent with TaskCreated payload carrying parent_task_id.
+        create_task(&conn, "parent", "Parent Task", 1);
+        let ev = TaskEvent::from_payload(
+            "child",
+            "user",
+            TaskCreatedPayload {
+                title: "Child Task".to_string(),
+                description: None,
+                priority: 2,
+                status: TaskStatus::Open,
+                due_ts: None,
+                task_type: None,
+                assignee: None,
+                defer_until: None,
+                parent_task_id: Some("parent".to_string()),
+                display_id: None,
+            },
+        );
+        apply_event(&conn, &ev, "").unwrap();
+
+        let task = get_task(&conn, "child").unwrap().unwrap();
+        assert_eq!(
+            task.parent_task_id.as_deref(),
+            Some("parent"),
+            "row_to_task must source parent_task_id from entity_links parent_of edge"
+        );
+
+        // Task without a parent must have None
+        let parent_row = get_task(&conn, "parent").unwrap().unwrap();
+        assert!(
+            parent_row.parent_task_id.is_none(),
+            "top-level task must have None parent_task_id"
+        );
+    }
+
+    /// compact_ids produces dot-notation for parent+child wired via ParentSet event.
+    #[test]
+    fn test_compact_ids_dot_notation_via_entity_links() {
+        let conn = setup();
+        create_task(&conn, "BRN-01PARENT001", "Parent", 1);
+        create_task(&conn, "BRN-01CHILD0001", "Child 1", 2);
+        create_task(&conn, "BRN-01CHILD0002", "Child 2", 2);
+
+        // Wire via ParentSet — emits entity_links parent_of edges.
+        set_parent(&conn, "BRN-01CHILD0001", "BRN-01PARENT001");
+        set_parent(&conn, "BRN-01CHILD0002", "BRN-01PARENT001");
+
+        let compact = compact_ids(&conn).unwrap();
+
+        let parent_id = compact["BRN-01PARENT001"].clone();
+        let child1_id = &compact["BRN-01CHILD0001"];
+        let child2_id = &compact["BRN-01CHILD0002"];
+
+        // Children must use dot-notation: {parent_compact}.{child_seq}
+        assert!(
+            child1_id.starts_with(&format!("{parent_id}.")),
+            "child1 compact ID must start with parent compact ID: parent={parent_id} child={child1_id}"
+        );
+        assert!(
+            child2_id.starts_with(&format!("{parent_id}.")),
+            "child2 compact ID must start with parent compact ID: parent={parent_id} child={child2_id}"
+        );
+        // Distinct children must have distinct compact IDs
+        assert_ne!(child1_id, child2_id);
     }
 }

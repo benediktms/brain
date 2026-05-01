@@ -7,7 +7,7 @@ use super::ANCESTOR_BLOCKED_CTE;
 
 /// Summary of a task's dependency state. The two domains are kept disjoint
 /// so each field has one source of truth:
-/// - `total_deps` / `done_deps` / `blocking_task_ids` cover `task_deps` rows.
+/// - `total_deps` / `done_deps` / `blocking_task_ids` cover `entity_links` blocks edges.
 /// - `external_blocker_unresolved_count` covers `task_external_ids` rows
 ///   with `blocking = 1 AND resolved_at IS NULL`.
 ///
@@ -23,8 +23,8 @@ pub struct DependencySummary {
 
 /// Get the dependency summary for a task.
 ///
-/// `total_deps` / `done_deps` / `blocking_task_ids` count `task_deps` rows
-/// only. The LEFT JOIN keeps orphaned references (target task absent from
+/// `total_deps` / `done_deps` / `blocking_task_ids` count `entity_links` blocks
+/// edges only. The LEFT JOIN keeps orphaned references (target task absent from
 /// the DB — e.g. cross-brain task in an unregistered brain, or a deleted
 /// dep target) blocking rather than silently dropping them.
 ///
@@ -34,10 +34,11 @@ pub struct DependencySummary {
 /// the resolved-history view.
 pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<DependencySummary> {
     let mut stmt = conn.prepare(
-        "SELECT d.depends_on, t.status
-         FROM task_deps d
-         LEFT JOIN tasks t ON t.task_id = d.depends_on
-         WHERE d.task_id = ?1",
+        "SELECT el.to_id, t.status
+         FROM entity_links el
+         LEFT JOIN tasks t ON t.task_id = el.to_id
+         WHERE el.from_type='TASK' AND el.from_id = ?1
+           AND el.to_type='TASK' AND el.edge_kind='blocks'",
     )?;
 
     let mut total_deps = 0;
@@ -332,7 +333,10 @@ pub struct TaskDep {
 
 /// List all dependency edges (bulk load for export).
 pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
-    let mut stmt = conn.prepare("SELECT task_id, depends_on FROM task_deps")?;
+    let mut stmt = conn.prepare(
+        "SELECT from_id, to_id FROM entity_links
+         WHERE from_type='TASK' AND to_type='TASK' AND edge_kind='blocks'",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok(TaskDep {
             task_id: row.get(0)?,
@@ -344,7 +348,10 @@ pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
 
 /// Get all dependency targets for a task (what it depends on).
 pub fn get_deps_for_task(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT depends_on FROM task_deps WHERE task_id = ?1")?;
+    let mut stmt = conn.prepare(
+        "SELECT to_id FROM entity_links
+         WHERE from_type='TASK' AND from_id=?1 AND to_type='TASK' AND edge_kind='blocks'",
+    )?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
 }
