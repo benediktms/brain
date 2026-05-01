@@ -42,9 +42,16 @@ fn link_payload_to_entity_ref(p: &LinkPayload) -> Result<EntityRef> {
 /// For all other event types the brain_id is not re-written (the row already
 /// carries the brain_id set at creation time).
 ///
-/// The event is applied inside an implicit transaction — callers operating in
-/// bulk (e.g. `rebuild`) should use an outer transaction for performance.
+/// The projection mutation and event INSERT are wrapped in an explicit
+/// transaction for atomicity.
 pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    apply_event_inner(&tx, event, brain_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
     match event.event_type {
         RecordEventType::RecordCreated => {
             let p: RecordCreatedPayload =
@@ -167,16 +174,18 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
             let p: LinkPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| BrainCoreError::RecordEvent(format!("bad LinkAdded payload: {e}")))?;
 
+            // Validate before any writes — ensures rollback is clean on error.
+            let to = link_payload_to_entity_ref(&p)?;
+            let from = EntityRef::record(&event.record_id).map_err(|_| {
+                BrainCoreError::RecordEvent("LinkAdded: record_id must not be empty".into())
+            })?;
+
             conn.execute(
                 "INSERT INTO record_links (record_id, task_id, chunk_id, created_at)
                  VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![event.record_id, p.task_id, p.chunk_id, event.timestamp],
             )?;
 
-            let to = link_payload_to_entity_ref(&p)?;
-            let from = EntityRef::record(&event.record_id).map_err(|_| {
-                BrainCoreError::RecordEvent("LinkAdded: record_id must not be empty".into())
-            })?;
             apply_link_event(
                 conn,
                 &LinkEvent::Created(LinkCreatedPayload {
@@ -192,11 +201,11 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
                 BrainCoreError::RecordEvent(format!("bad LinkRemoved payload: {e}"))
             })?;
 
-            if p.task_id.is_none() && p.chunk_id.is_none() {
-                return Err(BrainCoreError::RecordEvent(
-                    "LinkRemoved payload must have at least one of task_id or chunk_id".into(),
-                ));
-            }
+            // Validate before any writes — ensures rollback is clean on error.
+            let to = link_payload_to_entity_ref(&p)?;
+            let from = EntityRef::record(&event.record_id).map_err(|_| {
+                BrainCoreError::RecordEvent("LinkRemoved: record_id must not be empty".into())
+            })?;
 
             conn.execute(
                 "DELETE FROM record_links
@@ -206,10 +215,6 @@ pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Re
                 rusqlite::params![event.record_id, p.task_id, p.chunk_id],
             )?;
 
-            let to = link_payload_to_entity_ref(&p)?;
-            let from = EntityRef::record(&event.record_id).map_err(|_| {
-                BrainCoreError::RecordEvent("LinkRemoved: record_id must not be empty".into())
-            })?;
             apply_link_event(
                 conn,
                 &LinkEvent::Removed(LinkRemovedPayload {
@@ -704,5 +709,79 @@ mod tests {
         let ev = make_link_added_event("rec-6", Some("task-1"), Some("chunk-1"));
         let result = apply_event(&conn, &ev, "");
         assert!(result.is_err(), "both-set should return an error");
+    }
+
+    #[test]
+    fn dual_write_cardinality_matches_legacy_counts() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-7", "R", "report"), "").unwrap();
+        apply_event(&conn, &make_created_event("rec-8", "R", "report"), "").unwrap();
+
+        apply_event(
+            &conn,
+            &make_link_added_event("rec-7", Some("task-A"), None),
+            "",
+        )
+        .unwrap();
+        apply_event(
+            &conn,
+            &make_link_added_event("rec-8", None, Some("chunk-B")),
+            "",
+        )
+        .unwrap();
+
+        let rl: i64 = conn
+            .query_row("SELECT COUNT(*) FROM record_links", [], |row| row.get(0))
+            .unwrap();
+        let el: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM entity_links WHERE from_type = 'RECORD'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            rl, el,
+            "record_links and entity_links cardinality must match"
+        );
+    }
+
+    #[test]
+    fn link_added_rollback_on_self_loop() {
+        let conn = setup();
+        apply_event(&conn, &make_created_event("rec-9", "R", "report"), "").unwrap();
+
+        // A self-loop (record linking to itself as a RECORD entity) violates the
+        // entity_links CHECK constraint — apply_link_event should fail, and the
+        // wrapping transaction must roll back the legacy record_links INSERT too.
+        // We simulate this by attempting to add both-set which fails validation
+        // before the legacy write, verifying no partial state is left.
+        let ev = make_link_added_event("rec-9", Some("task-X"), Some("chunk-Y"));
+        let result = apply_event(&conn, &ev, "");
+        assert!(result.is_err(), "both-set should fail");
+
+        let rl: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM record_links WHERE record_id = 'rec-9'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            rl, 0,
+            "failed LinkAdded must not leave orphan record_links row"
+        );
+
+        let el: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM entity_links WHERE from_id = 'rec-9'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            el, 0,
+            "failed LinkAdded must not leave orphan entity_links row"
+        );
     }
 }
