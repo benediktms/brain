@@ -1,6 +1,9 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::*;
@@ -16,9 +19,14 @@ fn resolve_brain_root() -> Result<Option<PathBuf>> {
     Ok(brain_lib::config::find_brain_root(&cwd))
 }
 
-// ── async dispatch ──────────────────────────────────────────
+/// Holds the `WorkerGuard` for the daemon log sink for the process lifetime.
+/// Must be set exactly once, after fork, in the child process.
+static DAEMON_LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
-pub(crate) async fn async_main(cli: Cli) -> Result<()> {
+/// Initialize tracing for CLI (interactive) usage.
+///
+/// Writes to stderr. Respects the `BRAIN_LOG_FORMAT=json` env var.
+pub(crate) fn init_tracing_for_cli() -> anyhow::Result<()> {
     let env_filter = EnvFilter::from_default_env().add_directive("info".parse()?);
     let use_json = std::env::var("BRAIN_LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
@@ -35,6 +43,100 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             .with_env_filter(env_filter)
             .with_writer(std::io::stderr)
             .init();
+    }
+    Ok(())
+}
+
+/// Initialize tracing for daemon usage, writing to a rotating file appender.
+///
+/// MUST be called strictly after `fork()` in the child process — the
+/// `non_blocking` writer spawns a background thread, and threads do not
+/// survive across `fork()` on Unix.
+///
+/// The returned `WorkerGuard` is stored in a process-lifetime `OnceLock`.
+/// Callers must not drop it early.
+///
+/// Under sustained log saturation, the bounded channel (default 128k lines)
+/// drops oldest entries silently — adjust `RUST_LOG` / `log_filter` if this
+/// becomes a concern.
+pub(crate) fn init_tracing_for_daemon(
+    config: &brain_lib::config::GlobalConfig,
+    log_dir: PathBuf,
+    user_set_max_size_mb: bool,
+) {
+    let filter_str = config
+        .log_filter
+        .as_deref()
+        .unwrap_or(brain_lib::config::DEFAULT_LOG_FILTER);
+
+    // RUST_LOG wins over config file.
+    let env_filter = match std::env::var("RUST_LOG") {
+        Ok(_) => EnvFilter::from_env("RUST_LOG"),
+        Err(_) => EnvFilter::new(filter_str),
+    };
+
+    let max_files = config.log_max_files.unwrap_or(3) as usize;
+    let use_json = config
+        .log_format
+        .as_deref()
+        .map(|f| f.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+
+    let file_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("brain")
+        .filename_suffix("log")
+        .max_log_files(max_files)
+        .build(&log_dir)
+        .expect("failed to initialize rolling file appender");
+
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    if use_json {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(non_blocking)
+            .with_ansi(false)
+            .json()
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(non_blocking)
+            .with_ansi(false)
+            .init();
+    }
+
+    // Store the guard for the process lifetime. If already set (should not
+    // happen in daemon flow), drop the new guard and log a warning.
+    if DAEMON_LOG_GUARD.set(guard).is_err() {
+        tracing::warn!("init_tracing_for_daemon called more than once; extra guard dropped");
+    }
+
+    // Warn when the user explicitly supplied --log-max-size-mb: size-based
+    // rotation is reserved for a future tracing-appender version; the current
+    // rotation strategy is daily and ignores size thresholds entirely.
+    if user_set_max_size_mb {
+        tracing::warn!(
+            requested_mb = ?config.log_max_size_mb,
+            "log_max_size_mb is reserved for future use; current rotation is daily and ignores size",
+        );
+    }
+}
+
+// ── async dispatch ──────────────────────────────────────────
+
+pub(crate) async fn async_main(cli: Cli) -> Result<()> {
+    // Daemon path: tracing is initialized post-fork inside daemon.rs.
+    // All other commands initialize here for CLI usage.
+    let is_daemon_start = matches!(
+        &cli.command,
+        Command::Daemon {
+            action: DaemonAction::Start { .. },
+        }
+    );
+    if !is_daemon_start {
+        init_tracing_for_cli()?;
     }
 
     // Warn if ~/.brain has overly broad permissions.
@@ -55,8 +157,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Daemon { action } => {
             let daemon = commands::daemon::Daemon::new()?;
             match action {
-                DaemonAction::Start { notes_path } => {
+                DaemonAction::Start { notes_path, .. } => {
                     // Child process after fork — run watch directly.
+                    // Log init already done in daemon.rs::start() post-fork.
                     let outcome = match notes_path {
                         Some(path) => {
                             commands::watch::run(path, cli.model_dir, cli.lance_db, cli.sqlite_db)

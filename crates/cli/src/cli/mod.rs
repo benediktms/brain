@@ -654,7 +654,7 @@ pub(crate) enum DaemonAction {
     #[command(long_about = "Start the daemon in the background.\n\n\
         Forks a child process, detaches it from the terminal via setsid, and \
         writes its PID to ~/.brain/brain.pid. The child process runs the watcher \
-        loop, logging to ~/.brain/brain.log.\n\n\
+        loop, logging to ~/.brain/logs/brain.<date>.log via tracing-appender.\n\n\
         When no path is given, watches all brain projects registered in \
         ~/.brain/state_projection.toml. When a path is given, watches only that directory \
         (legacy single-brain mode).")]
@@ -662,6 +662,20 @@ pub(crate) enum DaemonAction {
         /// Path to notes directory. When omitted, watches all registered brains from the global registry.
         #[arg(value_hint = ValueHint::DirPath)]
         notes_path: Option<PathBuf>,
+        /// Override the EnvFilter directive string (e.g. "warn,brain_lib=info").
+        /// Takes precedence over config file; RUST_LOG still wins over this flag.
+        #[arg(long)]
+        log_filter: Option<String>,
+        /// Maximum number of rotating log files to keep (default: 3).
+        #[arg(long)]
+        log_max_files: Option<u32>,
+        /// Reserved for future use; current rotation is daily. Supplying this flag emits a
+        /// startup warning. Default: 100.
+        #[arg(long)]
+        log_max_size_mb: Option<u64>,
+        /// Log output format: "plain" (default) or "json".
+        #[arg(long, value_parser = ["plain", "json"])]
+        log_format: Option<String>,
     },
     /// Stop the running daemon
     #[command(long_about = "Stop the running daemon.\n\n\

@@ -44,9 +44,9 @@ mod platform {
         let home = dirs::home_dir()
             .map(|h| h.display().to_string())
             .unwrap_or_default();
-        let log_path = format!("{home}/.brain/brain-launchd.log");
-        let err_path = format!("{home}/.brain/brain-launchd.err");
 
+        // tracing-appender owns the log file via rotating file appender.
+        // Redirect launchd stdout/stderr to /dev/null to prevent double-writing.
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -68,9 +68,9 @@ mod platform {
         <false/>
     </dict>
     <key>StandardOutPath</key>
-    <string>{log_path}</string>
+    <string>/dev/null</string>
     <key>StandardErrorPath</key>
-    <string>{err_path}</string>
+    <string>/dev/null</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -115,6 +115,8 @@ mod platform {
         println!("  Label:  {SERVICE_LABEL}");
         println!("\nThe daemon will start automatically on login.");
         println!("Use `brain daemon uninstall` to remove.");
+        println!("View logs: ~/.brain/logs/brain.<date>.log");
+        println!("  (tracing-appender writes directly to file; stdout/launchd will be near-empty)");
         Ok(())
     }
 
@@ -252,7 +254,10 @@ WantedBy=default.target
         println!("  Name:   {UNIT_NAME}");
         println!("\nThe daemon will start automatically on login.");
         println!("Use `brain daemon uninstall` to remove.");
-        println!("View logs: journalctl --user -u {UNIT_NAME} -f");
+        println!("View logs: ~/.brain/logs/brain.<date>.log");
+        println!(
+            "  (tracing-appender writes directly to file; stdout/journald will be near-empty)"
+        );
         Ok(())
     }
 

@@ -6,8 +6,21 @@ use anyhow::{Context, Result, bail};
 
 pub struct Daemon {
     pid_path: PathBuf,
-    log_path: PathBuf,
+    log_dir: PathBuf,
     lock_path: PathBuf,
+}
+
+/// CLI-level overrides for the log sink. Fields shadow config-file values when
+/// `Some`. Applied before `init_tracing_for_daemon` in the forked child.
+#[derive(Debug, Default)]
+pub(crate) struct LogOverrides {
+    pub(crate) log_filter: Option<String>,
+    pub(crate) log_max_files: Option<u32>,
+    pub(crate) log_max_size_mb: Option<u64>,
+    /// True when `--log-max-size-mb` was explicitly supplied on the CLI.
+    /// Used to emit a warning that size-based rotation is not yet implemented.
+    pub(crate) user_set_max_size_mb: bool,
+    pub(crate) log_format: Option<String>,
 }
 
 impl Daemon {
@@ -17,17 +30,26 @@ impl Daemon {
             .join(".brain");
         brain_lib::fs_permissions::ensure_private_dir(&home).map_err(|e| anyhow::anyhow!("{e}"))?;
         let pid_path = home.join("brain.pid");
-        let log_path = home.join("brain.log");
+        let log_dir = home.join("logs");
         let lock_path = home.join("brain.lock");
         Ok(Self {
             pid_path,
-            log_path,
+            log_dir,
             lock_path,
         })
     }
 
     /// Fork, setsid, redirect fds, write PID. Parent exits; child returns.
-    pub fn start(&self) -> Result<()> {
+    pub fn start(&self, overrides: LogOverrides) -> Result<()> {
+        // One-time cleanup of legacy log paths superseded by ~/.brain/logs/.
+        let brain_home = self
+            .log_dir
+            .parent()
+            .expect("log_dir always has a parent (~/.brain)");
+        let _ = fs::remove_file(brain_home.join("brain-launchd.log"));
+        let _ = fs::remove_file(brain_home.join("brain-launchd.err"));
+        let _ = fs::remove_file(brain_home.join("brain.log"));
+
         // Acquire an exclusive, non-blocking lock to prevent concurrent starts.
         // The child inherits the open FD (and thus the lock) after fork.
         let lock_file = fs::OpenOptions::new()
@@ -72,20 +94,56 @@ impl Daemon {
             }
         }
 
-        let log_file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)?;
+        // Ensure log directory exists before fork so the child can write to it.
+        fs::create_dir_all(&self.log_dir)
+            .with_context(|| format!("failed to create log dir {}", self.log_dir.display()))?;
+
+        // Surface the deprecation warning to the user immediately, before
+        // forking.  The in-child tracing::warn! still fires for the daemon log.
+        if overrides.user_set_max_size_mb {
+            eprintln!(
+                "warning: --log-max-size-mb is reserved for future use; current rotation is daily"
+            );
+        }
 
         let pid = unsafe { libc::fork() };
         match pid {
             -1 => bail!("fork failed: {}", std::io::Error::last_os_error()),
             0 => {
-                // Child: new session, redirect fds
+                // Child: new session. Redirect stdin to /dev/null; stdout/stderr
+                // are left untouched — tracing-appender writes directly to the
+                // log file, bypassing fd 1/2 entirely.
                 if unsafe { libc::setsid() } == -1 {
                     bail!("setsid failed: {}", std::io::Error::last_os_error());
                 }
-                self.redirect_fds(&log_file)?;
+                // Redirect stdin to /dev/null only.
+                let devnull = fs::File::open("/dev/null")?;
+                unsafe { libc::dup2(devnull.as_raw_fd() as libc::c_int, 0) };
+                drop(devnull);
+
+                // Initialize the log sink now that we are the daemon child.
+                // This MUST happen after fork — non_blocking spawns a thread.
+                // CLI flags override config-file values; RUST_LOG still wins.
+                let user_set_max_size_mb = overrides.user_set_max_size_mb;
+                let mut config = brain_lib::config::load_global_config().unwrap_or_default();
+                if let Some(v) = overrides.log_filter {
+                    config.log_filter = Some(v);
+                }
+                if let Some(v) = overrides.log_max_files {
+                    config.log_max_files = Some(v);
+                }
+                if let Some(v) = overrides.log_max_size_mb {
+                    config.log_max_size_mb = Some(v);
+                }
+                if let Some(v) = overrides.log_format {
+                    config.log_format = Some(v);
+                }
+                crate::dispatch::init_tracing_for_daemon(
+                    &config,
+                    self.log_dir.clone(),
+                    user_set_max_size_mb,
+                );
+
                 // Write PID from child (getpid is accurate post-setsid)
                 let child_pid = unsafe { libc::getpid() };
                 let mtime_line = current_exe_mtime()
@@ -97,7 +155,7 @@ impl Daemon {
             _parent => {
                 // Parent: print info and exit
                 println!("Daemon started (PID: {pid})");
-                println!("Logs: {}", self.log_path.display());
+                println!("Logs: {}", self.log_dir.display());
                 std::process::exit(0);
             }
         }
@@ -150,17 +208,6 @@ impl Daemon {
                 println!("Daemon is not running (stale PID file for {pid})");
             }
             None => println!("Daemon is not running"),
-        }
-        Ok(())
-    }
-
-    fn redirect_fds(&self, log_file: &fs::File) -> Result<()> {
-        let devnull = fs::File::open("/dev/null")?;
-        let log_fd = log_file.as_raw_fd();
-        unsafe {
-            libc::dup2(devnull.as_raw_fd(), 0);
-            libc::dup2(log_fd, 1);
-            libc::dup2(log_fd, 2);
         }
         Ok(())
     }
@@ -399,7 +446,7 @@ mod tests {
     fn test_stop_does_not_delete_socket_file() {
         let tmp = tempfile::TempDir::new().unwrap();
         let pid_path = tmp.path().join("brain.pid");
-        let log_path = tmp.path().join("brain.log");
+        let log_dir = tmp.path().join("logs");
         let sock_path = tmp.path().join("brain.sock");
 
         // Create a dummy socket file.
@@ -415,7 +462,7 @@ mod tests {
 
         let daemon = Daemon {
             pid_path,
-            log_path,
+            log_dir,
             lock_path: tmp.path().join("brain.lock"),
         };
         daemon.stop().unwrap();

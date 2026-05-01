@@ -11,19 +11,51 @@ use crate::error::{BrainCoreError, Result};
 use brain_persistence::store::{Store, StoreReader};
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Default EnvFilter directive for the daemon log sink.
+///
+/// Used as the fallback when no `log_filter` is set in the config file and
+/// `RUST_LOG` is not present. Both the config default and the daemon init
+/// fallback reference this constant so the string stays in one place.
+pub const DEFAULT_LOG_FILTER: &str =
+    "info,brain_lib::pipeline=info,brain_lib::pipeline::embed_poll=warn";
+
+// ---------------------------------------------------------------------------
 // State projection (~/.brain/state_projection.toml)
 // ---------------------------------------------------------------------------
 
 /// Top-level state projection stored at `$BRAIN_HOME/state_projection.toml`.
 ///
-/// This file is an auto-generated projection of the DB state.
-/// Manual edits will be overwritten by the daemon.
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// This file is part-projection / part-override:
+/// - Most fields (`brains`, `providers`, `model_dir`, `log_level`,
+///   `last_projected_at`) are projected from the SQLite DB; manual edits to
+///   those will be overwritten by the daemon.
+/// - The daemon-logging fields (`log_filter`, `log_max_size_mb`,
+///   `log_max_files`, `log_format`) are user-owned overrides — by design, not
+///   DB-backed. They round-trip through TOML faithfully; the projection
+///   contract does not apply to them. Manual edits persist across daemon
+///   restarts.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GlobalConfig {
     /// Default model directory (optional override).
     pub model_dir: Option<PathBuf>,
     /// Default log level.
     pub log_level: Option<String>,
+    /// EnvFilter directive string for the daemon log sink.
+    /// Example: `"info,brain_lib::pipeline::embed_poll=warn"`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_filter: Option<String>,
+    /// Maximum log file size in MB before rotation (daemon only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_max_size_mb: Option<u64>,
+    /// Maximum number of rotated log files to retain (daemon only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_max_files: Option<u32>,
+    /// Log output format: `"plain"` or `"json"` (daemon only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_format: Option<String>,
     /// ISO-8601 timestamp of the last DB → state_projection.toml projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_projected_at: Option<String>,
@@ -34,6 +66,22 @@ pub struct GlobalConfig {
     /// Read-only projection from DB — do not edit manually.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<ProviderEntry>,
+}
+
+impl Default for GlobalConfig {
+    fn default() -> Self {
+        Self {
+            model_dir: None,
+            log_level: None,
+            log_filter: Some(DEFAULT_LOG_FILTER.to_string()),
+            log_max_size_mb: Some(100),
+            log_max_files: Some(3),
+            log_format: Some("plain".to_string()),
+            last_projected_at: None,
+            brains: HashMap::new(),
+            providers: Vec::new(),
+        }
+    }
 }
 
 /// A projected provider entry in state_projection.toml (metadata only, no secrets).
@@ -243,7 +291,12 @@ pub fn save_global_config(cfg: &GlobalConfig) -> Result<()> {
     let body = toml::to_string_pretty(cfg)
         .map_err(|e| BrainCoreError::Config(format!("failed to serialize config: {e}")))?;
     let text = format!(
-        "# Auto-generated projection of DB state. Manual edits will be overwritten.\n\n{body}"
+        "# Auto-generated projection of DB state.\n\
+         # The `log_filter`, `log_max_size_mb`, `log_max_files`, and `log_format` fields\n\
+         # are user-editable; all other fields are projected from the DB and will be\n\
+         # overwritten on next projection.\n\
+         \n\
+         {body}"
     );
     std::fs::write(&path, text).map_err(BrainCoreError::Io)?;
     Ok(())
