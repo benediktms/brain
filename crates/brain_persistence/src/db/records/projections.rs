@@ -306,7 +306,7 @@ pub fn rebuild_from_events(conn: &Connection, events: &[RecordEvent]) -> Result<
     )?;
 
     for event in events {
-        apply_event(&tx, event, "")?;
+        apply_event_inner(&tx, event, "")?;
     }
 
     tx.commit()?;
