@@ -79,6 +79,25 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                     Err(e) => return Err(e.into()),
                 }
             }
+
+            // Dual-write the parent edge into entity_links if the task was
+            // created with a parent already set (mirrors the ParentSet handler).
+            if let Some(parent_id) = p.parent_task_id.as_deref() {
+                apply_link_event(
+                    conn,
+                    &LinkEvent::Created(LinkCreatedPayload {
+                        from: EntityRef {
+                            kind: crate::db::links::EntityType::Task,
+                            id: parent_id.to_string(),
+                        },
+                        to: EntityRef {
+                            kind: crate::db::links::EntityType::Task,
+                            id: event.task_id.clone(),
+                        },
+                        edge_kind: EdgeKind::ParentOf,
+                    }),
+                )?;
+            }
         }
 
         EventType::TaskUpdated => {
