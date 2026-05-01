@@ -1032,10 +1032,22 @@ mod tests {
 
     /// Insert a row directly into `task_deps` with FK checks disabled so we
     /// can create orphaned deps (depends_on has no matching tasks row).
+    ///
+    /// Mirrors what dual-write would produce by writing into both `task_deps`
+    /// (legacy) and `entity_links` (Wave 5 reader source).
     fn insert_orphan_dep(conn: &Connection, task_id: &str, depends_on: &str) {
         conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
         conn.execute(
             "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?1, ?2)",
+            rusqlite::params![task_id, depends_on],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO entity_links \
+                 (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope) \
+             VALUES \
+                 (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', \
+                  strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)",
             rusqlite::params![task_id, depends_on],
         )
         .unwrap();
