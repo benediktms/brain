@@ -807,6 +807,45 @@ impl BrainStores {
             brain_home,
         })
     }
+
+    /// If cwd sits inside a registered brain's root directory, scope `tasks`
+    /// to that brain. Otherwise leave it unscoped.
+    ///
+    /// Walks up from cwd to the nearest `.brain/brain.toml` marker, then
+    /// matches the resulting root path against the `roots` array of every
+    /// active registered brain. The match is exact-equality on the
+    /// canonical root path string.
+    ///
+    /// This is a CLI ergonomics helper — `brain tasks <subcommand>` invoked
+    /// inside a project directory should default to that project's brain
+    /// rather than the unscoped fallback.
+    pub fn scope_tasks_to_cwd(mut self) -> Result<Self> {
+        let cwd = match std::env::current_dir() {
+            Ok(c) => c,
+            Err(_) => return Ok(self),
+        };
+        let Some(brain_root) = crate::config::find_brain_root(&cwd) else {
+            return Ok(self);
+        };
+        let target = brain_root.to_string_lossy().into_owned();
+
+        let rows = self.db.list_brains(true)?;
+        for row in rows {
+            let Some(roots_json) = row.roots_json.as_ref() else {
+                continue;
+            };
+            let Ok(roots) = serde_json::from_str::<Vec<String>>(roots_json) else {
+                continue;
+            };
+            if roots.iter().any(|r| r == &target) {
+                self.tasks = self.tasks.with_remote_brain_id(&row.brain_id, &row.name)?;
+                self.brain_id = row.brain_id;
+                self.brain_name = row.name;
+                return Ok(self);
+            }
+        }
+        Ok(self)
+    }
 }
 
 #[cfg(test)]

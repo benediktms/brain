@@ -40,7 +40,10 @@ pub struct TaskCtx {
 
 impl TaskCtx {
     pub fn new(sqlite_db: &Path, lance_db: Option<&Path>, output: OutputFormat) -> Result<Self> {
-        let stores = BrainStores::from_path(sqlite_db, lance_db)?;
+        // Auto-detect cwd brain so `brain tasks <subcommand>` invoked inside
+        // a project directory defaults to that project's brain instead of
+        // the unscoped fallback. Falls through to unscoped on no match.
+        let stores = BrainStores::from_path(sqlite_db, lance_db)?.scope_tasks_to_cwd()?;
         Ok(Self {
             store: stores.tasks,
             output,

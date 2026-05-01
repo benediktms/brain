@@ -20,17 +20,44 @@ pub fn run_list(db_path: &Path, json: bool, all: bool, archived_only: bool) -> R
         rows
     };
 
+    // Synthetic "(unscoped)" row — a virtual brain that holds tasks/records
+    // not tied to any registered project. Tasks land here by default when
+    // `brain tasks create` is invoked outside any registered brain root and
+    // no `--brain` flag is passed. Surfaced under the `unscoped` key in
+    // JSON output (NOT inside `brains`) so consumers counting registered
+    // brains via `brains.len()` see the same number as before.
+    let unscoped_json = serde_json::json!({
+        "name": "(unscoped)",
+        "id": "",
+        "root": null,
+        "aliases": [],
+        "extra_roots": [],
+        "prefix": "NSX",
+        "archived": false,
+        "synthetic": true,
+    });
+    let show_unscoped = !archived_only;
+
     if rows.is_empty() {
         if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "brains": [],
-                    "count": 0
-                }))?
-            );
+            let mut out = serde_json::json!({
+                "brains": [],
+                "count": 0,
+            });
+            if show_unscoped {
+                out.as_object_mut()
+                    .unwrap()
+                    .insert("unscoped".to_string(), unscoped_json);
+            }
+            println!("{}", serde_json::to_string_pretty(&out)?);
         } else {
             println!("No brains registered. Run `brain init` in a project directory.");
+            if show_unscoped {
+                println!();
+                println!("(unscoped) []");
+                println!("  prefix: NSX");
+                println!("  note:   synthetic — holds tasks not tied to a registered brain");
+            }
         }
         return Ok(());
     }
@@ -62,13 +89,16 @@ pub fn run_list(db_path: &Path, json: bool, all: bool, archived_only: bool) -> R
             })
             .collect();
         let count = brains.len();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "brains": brains,
-                "count": count
-            }))?
-        );
+        let mut out = serde_json::json!({
+            "brains": brains,
+            "count": count,
+        });
+        if show_unscoped {
+            out.as_object_mut()
+                .unwrap()
+                .insert("unscoped".to_string(), unscoped_json);
+        }
+        println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
 
@@ -89,6 +119,13 @@ pub fn run_list(db_path: &Path, json: bool, all: bool, archived_only: bool) -> R
         if let Some(ref p) = row.prefix {
             println!("  prefix: {p}");
         }
+    }
+
+    // Append synthetic unscoped brain after registered rows.
+    if show_unscoped {
+        println!("(unscoped) []");
+        println!("  prefix: NSX");
+        println!("  note:   synthetic — holds tasks not tied to a registered brain");
     }
 
     Ok(())
