@@ -39,7 +39,7 @@ pub fn migrate_v48_to_v49(conn: &Connection) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute_batch(
-        "CREATE TABLE entity_links (
+        "CREATE TABLE IF NOT EXISTS entity_links (
              id          TEXT PRIMARY KEY,
              from_type   TEXT NOT NULL,
              from_id     TEXT NOT NULL,
@@ -51,20 +51,20 @@ pub fn migrate_v48_to_v49(conn: &Connection) -> Result<()> {
              CHECK (NOT (from_type = to_type AND from_id = to_id))
          );
 
-         CREATE UNIQUE INDEX idx_entity_links_unique
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_links_unique
              ON entity_links(from_type, from_id, to_type, to_id, edge_kind);
 
-         CREATE INDEX idx_entity_links_outgoing
+         CREATE INDEX IF NOT EXISTS idx_entity_links_outgoing
              ON entity_links(from_type, from_id, edge_kind);
 
-         CREATE INDEX idx_entity_links_incoming
+         CREATE INDEX IF NOT EXISTS idx_entity_links_incoming
              ON entity_links(to_type, to_id, edge_kind);
 
-         CREATE INDEX idx_entity_links_blocks_partial
+         CREATE INDEX IF NOT EXISTS idx_entity_links_blocks_partial
              ON entity_links(from_id, to_id)
              WHERE from_type = 'TASK' AND to_type = 'TASK' AND edge_kind = 'blocks';
 
-         CREATE INDEX idx_entity_links_parent_of_partial
+         CREATE INDEX IF NOT EXISTS idx_entity_links_parent_of_partial
              ON entity_links(from_id, to_id)
              WHERE from_type = 'TASK' AND to_type = 'TASK' AND edge_kind = 'parent_of';",
     )?;
