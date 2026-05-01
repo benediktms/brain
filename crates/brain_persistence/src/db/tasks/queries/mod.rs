@@ -44,17 +44,26 @@ pub(super) const TASK_COLUMNS: &str = "task_id, title, description, status, prio
 /// The dep check uses a LEFT JOIN so that an orphaned `depends_on` reference (target
 /// task not present in the DB) is treated as still-blocking rather than silently dropped.
 ///
-/// The external-blocker clause (`NOT EXISTS … task_external_ids x …`) sits ALONGSIDE
-/// the dep clause: a task with any unresolved external blocker is treated as blocked
-/// regardless of whether its `task_deps` set is empty.
+/// The external-blocker clause sits ALONGSIDE the dep clause: a task with any
+/// unresolved external blocker is treated as blocked regardless of whether its
+/// dependency set is empty.
+///
+/// Parent chain and blocking deps are both read from `entity_links` (Wave 5 cutover).
+/// `entity_links(from_id=parent, to_id=child, edge_kind='parent_of')` — from line 297
+/// of `tasks/projections.rs` (ParentSet handler). `entity_links(from_id=dependent,
+/// to_id=blocker, edge_kind='blocks')` — from line 167 of `tasks/projections.rs`
+/// (DependencyAdded handler).
 pub(super) const ANCESTOR_BLOCKED_CTE: &str = "\
 WITH RECURSIVE ancestor_chain(tid, ancestor_id) AS (
-    SELECT task_id, parent_task_id FROM tasks WHERE parent_task_id IS NOT NULL
+    SELECT to_id AS tid, from_id AS ancestor_id
+      FROM entity_links
+     WHERE from_type='TASK' AND to_type='TASK' AND edge_kind='parent_of'
     UNION ALL
-    SELECT ac.tid, t.parent_task_id
-    FROM ancestor_chain ac
-    JOIN tasks t ON t.task_id = ac.ancestor_id
-    WHERE t.parent_task_id IS NOT NULL
+    SELECT ac.tid, el.from_id
+      FROM ancestor_chain ac
+      JOIN entity_links el
+        ON el.to_type='TASK' AND el.to_id = ac.ancestor_id
+       AND el.from_type='TASK' AND el.edge_kind='parent_of'
 ),
 has_blocked_ancestor(tid) AS (
     SELECT DISTINCT ac.tid
@@ -65,9 +74,10 @@ has_blocked_ancestor(tid) AS (
           a.blocked_reason IS NOT NULL
           OR (a.defer_until IS NOT NULL AND a.defer_until > strftime('%s', 'now'))
           OR EXISTS (
-              SELECT 1 FROM task_deps d
-              LEFT JOIN tasks dep ON dep.task_id = d.depends_on
-              WHERE d.task_id = a.task_id
+              SELECT 1 FROM entity_links el2
+              LEFT JOIN tasks dep ON dep.task_id = el2.to_id
+              WHERE el2.from_type='TASK' AND el2.to_type='TASK' AND el2.edge_kind='blocks'
+                AND el2.from_id = a.task_id
                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
           )
           OR EXISTS (
@@ -823,6 +833,116 @@ mod tests {
             "child of unblocked parent should be ready"
         );
         assert!(ready_ids.contains(&"parent"));
+    }
+
+    // -- Wave 5 reader cutover: entity_links tests --
+    //
+    // These tests validate that the CTE and listing queries correctly use
+    // entity_links edges rather than task_deps / tasks.parent_task_id.
+    // All edges are wired via the dual-write path (apply_event), not direct INSERTs.
+
+    fn set_parent(conn: &Connection, task_id: &str, parent_id: &str) {
+        let ev = TaskEvent::new(
+            task_id,
+            "user",
+            EventType::ParentSet,
+            &ParentSetPayload {
+                parent_task_id: Some(parent_id.to_string()),
+            },
+        );
+        apply_event(conn, &ev, "").unwrap();
+    }
+
+    /// Three-deep parent chain via entity_links parent_of edges.
+    /// Grandparent is blocked by a blocks edge. Grandchild must appear in has_blocked_ancestor.
+    #[test]
+    fn test_ancestor_blocked_via_entity_links() {
+        let conn = setup();
+        create_task(&conn, "gp", "Grandparent", 1);
+        create_task(&conn, "blocker", "Blocker", 2);
+        create_task(&conn, "parent", "Parent", 2);
+        create_task(&conn, "child", "Child", 3);
+
+        // Wire parent chain via ParentSet (emits entity_links parent_of edges).
+        set_parent(&conn, "parent", "gp");
+        set_parent(&conn, "child", "parent");
+
+        // Block grandparent via DependencyAdded (emits entity_links blocks edge).
+        add_dep(&conn, "gp", "blocker");
+
+        let ready = list_ready(&conn, None).unwrap();
+        let ready_ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            !ready_ids.contains(&"child"),
+            "grandchild should NOT be ready when grandparent is blocked via entity_links: {ready_ids:?}"
+        );
+
+        let blocked = list_blocked(&conn, None).unwrap();
+        let blocked_ids: Vec<&str> = blocked.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            blocked_ids.contains(&"child"),
+            "grandchild should appear in blocked list via entity_links ancestor CTE: {blocked_ids:?}"
+        );
+
+        // Resolve grandparent's blocker — child becomes ready.
+        set_status(&conn, "blocker", "done");
+        let ready = list_ready(&conn, None).unwrap();
+        assert!(
+            ready.iter().any(|t| t.task_id == "child"),
+            "grandchild should be ready after grandparent's blocker is done"
+        );
+    }
+
+    /// get_children reads entity_links parent_of edges, returns all children in child_seq order.
+    #[test]
+    fn test_get_children_via_entity_links() {
+        let conn = setup();
+        create_task(&conn, "parent", "Parent", 1);
+        create_task(&conn, "c1", "Child 1", 2);
+        create_task(&conn, "c2", "Child 2", 2);
+        create_task(&conn, "c3", "Child 3", 2);
+
+        // Wire via ParentSet to populate entity_links parent_of edges.
+        set_parent(&conn, "c1", "parent");
+        set_parent(&conn, "c2", "parent");
+        set_parent(&conn, "c3", "parent");
+
+        let children = get_children(&conn, "parent").unwrap();
+        assert_eq!(children.len(), 3, "expected 3 children via entity_links");
+        // Verify child_seq ordering: c1 gets seq=1, c2 seq=2, c3 seq=3.
+        assert_eq!(children[0].task_id, "c1");
+        assert_eq!(children[1].task_id, "c2");
+        assert_eq!(children[2].task_id, "c3");
+    }
+
+    /// Task A blocked by task B via entity_links blocks edge — A is excluded from ready set.
+    #[test]
+    fn test_blocking_dep_via_entity_links() {
+        let conn = setup();
+        create_task(&conn, "blocker", "Blocker", 2);
+        create_task(&conn, "dependent", "Dependent", 1);
+
+        // Wire via DependencyAdded (emits entity_links blocks edge).
+        add_dep(&conn, "dependent", "blocker");
+
+        let ready = list_ready(&conn, None).unwrap();
+        let ready_ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+        assert!(
+            !ready_ids.contains(&"dependent"),
+            "dependent should NOT be in ready set while blocker is open: {ready_ids:?}"
+        );
+        assert!(
+            ready_ids.contains(&"blocker"),
+            "blocker itself should be ready: {ready_ids:?}"
+        );
+
+        // Resolve blocker — dependent becomes ready.
+        set_status(&conn, "blocker", "done");
+        let ready = list_ready(&conn, None).unwrap();
+        assert!(
+            ready.iter().any(|t| t.task_id == "dependent"),
+            "dependent should be ready after blocker is done"
+        );
     }
 
     // -- Invalid task_type handling tests --
