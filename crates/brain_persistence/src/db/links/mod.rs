@@ -2,7 +2,7 @@
 //!
 //! The Rust module path is `crate::db::links`; the polymorphic SQL table is
 //! `entity_links` (v49+). The legacy `links` table (note/wiki linking, used by
-//! `pagerank.rs`) is handled by `file_links`.
+//! the PageRank computation) is handled by `file_links`.
 //!
 //! This asymmetry avoids a name collision with the legacy wiki-link table while
 //! keeping the module name concise.

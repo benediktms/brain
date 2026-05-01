@@ -7,6 +7,7 @@
 
 use rusqlite::Connection;
 use thiserror::Error;
+use tracing::warn;
 
 use crate::db::links::{
     EdgeKind, EntityRef, EntityType, LinkCreatedPayload, LinkRemovedPayload,
@@ -117,26 +118,33 @@ fn would_create_cycle(
     // the graph is typed — a Task→Task edge and a Record→Task edge are distinct.
     // Cross-type DAGs (e.g. ParentOf between different entity types) are not
     // currently expected, but the constraint prevents cross-type false positives.
-    let reachable: bool = conn
-        .query_row(
-            "WITH RECURSIVE reachable(id) AS (
-                 SELECT to_id FROM entity_links
-                     WHERE from_type = ?1 AND from_id = ?2 AND edge_kind = ?3
-                 UNION
-                 SELECT entity_links.to_id FROM entity_links
-                     JOIN reachable ON entity_links.from_id = reachable.id
-                     WHERE entity_links.from_type = ?1 AND entity_links.edge_kind = ?3
-             )
-             SELECT 1 FROM reachable WHERE id = ?4 LIMIT 1",
-            rusqlite::params![
-                entity_type_str(from.kind),
-                to.id,
-                edge_kind_str(edge_kind),
-                from.id,
-            ],
-            |_| Ok(true),
-        )
-        .unwrap_or(false);
+    //
+    // UNION (not UNION ALL) deduplicates traversal and guarantees termination on
+    // corrupt-data cycles in entity_links — non-DAG kinds may legitimately contain
+    // cycles, and direct SQL writes bypass this validator. Differs from
+    // ANCESTOR_BLOCKED_CTE which walks tasks.parent_task_id (tree-shaped).
+    let reachable = match conn.query_row(
+        "WITH RECURSIVE reachable(id) AS (
+             SELECT to_id FROM entity_links
+                 WHERE from_type = ?1 AND from_id = ?2 AND edge_kind = ?3
+             UNION
+             SELECT entity_links.to_id FROM entity_links
+                 JOIN reachable ON entity_links.from_id = reachable.id
+                 WHERE entity_links.from_type = ?1 AND entity_links.edge_kind = ?3
+         )
+         SELECT 1 FROM reachable WHERE id = ?4 LIMIT 1",
+        rusqlite::params![
+            entity_type_str(from.kind),
+            to.id,
+            edge_kind_str(edge_kind),
+            from.id,
+        ],
+        |_| Ok(true),
+    ) {
+        Ok(_) => true,
+        Err(rusqlite::Error::QueryReturnedNoRows) => false,
+        Err(e) => return Err(LinkError::from(e)),
+    };
 
     Ok(reachable)
 }
@@ -158,6 +166,10 @@ pub fn add_link_checked(
     to: EntityRef,
     edge_kind: EdgeKind,
 ) -> Result<(), LinkError> {
+    if from.id == to.id && edge_kind.requires_dag() {
+        return Err(LinkError::Cycle(edge_kind));
+    }
+
     let tx = conn.unchecked_transaction()?;
 
     if edge_kind.requires_dag() && would_create_cycle(&tx, &from, &to, edge_kind)? {
@@ -206,6 +218,10 @@ pub fn remove_link(
 ///
 /// Both outgoing (`from = entity`) and incoming (`to = entity`) edges are
 /// included. Results are ordered by `created_at` ascending.
+///
+/// Rows whose `entity_type` or `edge_kind` columns contain unrecognised strings
+/// are silently skipped with a `warn!` log entry. This guards against schema
+/// additions that predate a running binary without surfacing an error to callers.
 pub fn for_entity(conn: &Connection, entity: EntityRef) -> Result<Vec<EntityLink>, LinkError> {
     let entity_type = entity_type_str(entity.kind);
 
@@ -228,20 +244,25 @@ pub fn for_entity(conn: &Connection, entity: EntityRef) -> Result<Vec<EntityLink
         })?
         .filter_map(|r| r.ok())
         .filter_map(|(ft, fi, tt, ti, ek)| {
-            let from_kind = entity_type_from_str(&ft)?;
-            let to_kind = entity_type_from_str(&tt)?;
-            let edge_kind = edge_kind_from_str(&ek)?;
-            Some(EntityLink {
-                from: EntityRef {
-                    kind: from_kind,
-                    id: fi,
-                },
-                to: EntityRef {
-                    kind: to_kind,
-                    id: ti,
-                },
-                edge_kind,
-            })
+            let from_kind = entity_type_from_str(&ft);
+            let to_kind = entity_type_from_str(&tt);
+            let edge_kind = edge_kind_from_str(&ek);
+            match (from_kind, to_kind, edge_kind) {
+                (Some(fk), Some(tk), Some(ek)) => Some(EntityLink {
+                    from: EntityRef { kind: fk, id: fi },
+                    to: EntityRef { kind: tk, id: ti },
+                    edge_kind: ek,
+                }),
+                _ => {
+                    warn!(
+                        from_type = %ft,
+                        to_type = %tt,
+                        edge_kind = %ek,
+                        "for_entity: skipping row with unrecognised entity_type or edge_kind"
+                    );
+                    None
+                }
+            }
         })
         .collect();
 
@@ -493,5 +514,73 @@ mod tests {
             add_link_checked(&conn, task("B"), task("A"), free_kind)
                 .unwrap_or_else(|e| panic!("{free_kind:?} must allow cycles but got error: {e}"));
         }
+    }
+
+    // ── Self-loop on DAG kind returns Cycle, not Database ────────────────────
+
+    #[test]
+    fn add_link_checked_rejects_self_loop_on_dag_kind() {
+        let conn = open_db();
+        let r = add_link_checked(&conn, task("T1"), task("T1"), EdgeKind::Blocks);
+        assert!(
+            matches!(r, Err(LinkError::Cycle(EdgeKind::Blocks))),
+            "expected Cycle(Blocks) for self-loop, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn self_loop_dag_all_kinds() {
+        for dag_kind in [EdgeKind::ParentOf, EdgeKind::Blocks, EdgeKind::Supersedes] {
+            let conn = open_db();
+            let r = add_link_checked(&conn, task("X"), task("X"), dag_kind);
+            assert!(
+                matches!(r, Err(LinkError::Cycle(_))),
+                "{dag_kind:?} self-loop must return Cycle, got {r:?}"
+            );
+        }
+    }
+
+    // ── would_create_cycle propagates DB errors ───────────────────────────────
+
+    #[test]
+    fn would_create_cycle_propagates_schema_error() {
+        // Open a connection with entity_links dropped — the CTE will error,
+        // which must surface as LinkError::Database, not silently return false.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        crate::db::schema::run_migrations(&conn, 0).unwrap();
+        conn.execute_batch("DROP TABLE entity_links;").unwrap();
+
+        let r = would_create_cycle(&conn, &task("A"), &task("B"), EdgeKind::Blocks);
+        assert!(
+            matches!(r, Err(LinkError::Database(_))),
+            "expected Database error when table missing, got {r:?}"
+        );
+    }
+
+    // ── for_entity ordering ───────────────────────────────────────────────────
+
+    #[test]
+    fn for_entity_results_ordered_by_created_at() {
+        let conn = open_db();
+
+        // Insert in known order; created_at is auto-set to current timestamp.
+        // SQLite CURRENT_TIMESTAMP has 1-second resolution, so we rely on
+        // insertion order within the same second — or use a slight delay.
+        // The ORDER BY created_at ASC is contractual per the doc comment.
+        add_link_checked(&conn, task("A"), task("B"), EdgeKind::Blocks).unwrap();
+        add_link_checked(&conn, task("A"), task("C"), EdgeKind::RelatesTo).unwrap();
+        add_link_checked(&conn, task("A"), task("D"), EdgeKind::SeeAlso).unwrap();
+
+        let links = for_entity(&conn, task("A")).unwrap();
+        assert_eq!(links.len(), 3);
+        // All three share the same `from`, so verify to IDs are in insertion order.
+        let to_ids: Vec<&str> = links.iter().map(|l| l.to.id.as_str()).collect();
+        assert_eq!(
+            to_ids,
+            vec!["B", "C", "D"],
+            "results must be ordered by created_at ASC"
+        );
     }
 }
