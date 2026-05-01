@@ -331,6 +331,7 @@ Brain verifies model integrity at startup using built-in BLAKE3 hashing regardle
 |----------|-------------|---------|
 | `BRAIN_MODEL_DIR` | Path to model directory | `./.brain/models/bge-small-en-v1.5` |
 | `BRAIN_HOME` | Brain home directory | `~/.brain` |
+| `BRAIN_GIT_CACHE_CAP` | Maximum entries in the git common-dir LRU cache | `4096` |
 
 Example — use a model from a custom location:
 

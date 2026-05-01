@@ -708,6 +708,7 @@ dependencies = [
  "gix-discover",
  "gix-hash",
  "ignore",
+ "lru",
  "nanoid",
  "notify-debouncer-full",
  "proptest",
