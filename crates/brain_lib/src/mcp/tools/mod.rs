@@ -2,6 +2,9 @@ mod brains_list;
 mod helpers;
 /// MCP tool definitions and handlers.
 mod jobs_status;
+mod links_add;
+mod links_for_entity;
+mod links_remove;
 mod mem_consolidate;
 mod mem_reflect;
 mod mem_retrieve;
@@ -123,6 +126,9 @@ impl ToolRegistry {
                 Box::new(record_tag::RecordTagRemove),
                 Box::new(record_link::RecordLinkAdd),
                 Box::new(record_link::RecordLinkRemove),
+                Box::new(links_add::LinksAdd),
+                Box::new(links_remove::LinksRemove),
+                Box::new(links_for_entity::LinksForEntity),
                 Box::new(brains_list::BrainsList),
                 Box::new(jobs_status::JobsStatus),
                 Box::new(tags_recluster::TagsRecluster),
@@ -159,7 +165,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 35); // +1 tasks.transfer
+        assert_eq!(defs.len(), 38); // +1 tasks.transfer, +3 links.*
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.retrieve"));
