@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 //! Integration tests for directory/tag hierarchy summaries.
 //!
 //! Tests verify that `generate_scope_summary`, `get_scope_summary`,

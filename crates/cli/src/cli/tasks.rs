@@ -228,6 +228,20 @@ pub(crate) enum TasksAction {
 
     /// List all labels with counts
     Labels,
+
+    /// Transfer a task to a different brain
+    Transfer {
+        /// Task ID to transfer (full ID or short hash)
+        task_id: String,
+
+        /// Target brain (name, brain_id, or alias)
+        #[arg(long, required = true, value_name = "BRAIN")]
+        to: String,
+
+        /// Print what would happen without making any changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 // ── dependency subcommands ──────────────────────────────────

@@ -5,7 +5,8 @@ use crate::error::{BrainCoreError, Result};
 use super::events::{
     CommentPayload, DependencyPayload, EventType, ExternalBlockerAddedPayload,
     ExternalBlockerResolvedPayload, ExternalIdPayload, LabelPayload, NoteLinkPayload,
-    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskUpdatedPayload,
+    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskTransferredPayload,
+    TaskUpdatedPayload,
 };
 use super::queries::next_child_seq;
 
@@ -300,6 +301,20 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
             )?;
         }
 
+        EventType::TaskTransferred => {
+            // Replay path: apply the brain_id and display_id from the payload to the
+            // tasks row. The transfer transaction applies this directly; the projection
+            // here is for event-log replay consistency.
+            let p: TaskTransferredPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("bad TaskTransferred payload: {e}"))
+                })?;
+            conn.execute(
+                "UPDATE tasks SET brain_id = ?1, display_id = ?2, updated_at = ?3 WHERE task_id = ?4",
+                rusqlite::params![p.to_brain_id, p.to_display_id, event.timestamp, event.task_id],
+            )?;
+        }
+
         EventType::ExternalBlockerResolved => {
             // Stamp `resolved_at` on the matching blocker row. Read the row
             // state first so we can differentiate the four outcomes for an
@@ -501,7 +516,8 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
         | EventType::ExternalIdAdded
         | EventType::ExternalIdRemoved
         | EventType::ExternalBlockerAdded
-        | EventType::ExternalBlockerResolved => {
+        | EventType::ExternalBlockerResolved
+        | EventType::TaskTransferred => {
             if !task_exists(&tx, &event.task_id)? {
                 return Err(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",

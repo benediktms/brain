@@ -307,6 +307,7 @@ mod tests {
         // Acquire the lock.
         let lock_file = fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&lock_path)
             .unwrap();
@@ -317,6 +318,7 @@ mod tests {
         // Second attempt should fail (EWOULDBLOCK).
         let lock_file2 = fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&lock_path)
             .unwrap();
@@ -333,6 +335,7 @@ mod tests {
     // ── kill_and_wait tests ──────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::zombie_processes)] // kill_and_wait reaps the process via libc
     fn test_kill_and_wait_kills_normal_process() {
         use std::process::Command;
         // Spawn a process that sleeps forever but responds to SIGTERM.

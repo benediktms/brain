@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 //! Property-based tests using proptest for invariant verification.
 //!
 //! Pure tests use the default 256 cases; async/DB tests use reduced counts.

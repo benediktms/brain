@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 /// CLI integration tests.
 ///
 /// These tests exercise the compiled `brain` binary through `assert_cmd`.
@@ -1303,4 +1305,18 @@ fn tasks_external_blocker_excluded_from_ready_and_shown_on_get() {
         .success()
         .stdout(predicate::str::contains("PLAT-42"))
         .stdout(predicate::str::contains("jira"));
+}
+
+// ---------------------------------------------------------------------------
+// brain tasks transfer
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tasks_transfer_help_shows_usage() {
+    brain_cmd()
+        .args(["tasks", "transfer", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--to"))
+        .stdout(predicate::str::contains("--dry-run"));
 }

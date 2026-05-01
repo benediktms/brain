@@ -504,6 +504,34 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 TasksAction::Next { k } => {
                     commands::tasks::run::next(&ctx, k)?;
                 }
+                TasksAction::Transfer {
+                    task_id,
+                    to,
+                    dry_run,
+                } => {
+                    use commands::tasks::run::TransferParams;
+                    // Open a writable LanceDB handle so vector rows are
+                    // re-stamped to the target brain. If the open fails (e.g.
+                    // path missing in tests), proceed without — `transfer_task`
+                    // tolerates `None` and logs a warning if vectors drift.
+                    let vector_store = if dry_run {
+                        None
+                    } else {
+                        brain_persistence::store::Store::open_or_create(&cli.lance_db)
+                            .await
+                            .ok()
+                    };
+                    commands::tasks::run::transfer(
+                        &ctx,
+                        TransferParams {
+                            task_id,
+                            to,
+                            dry_run,
+                        },
+                        vector_store.as_ref(),
+                    )
+                    .await?;
+                }
             }
         }
         Command::Snapshots { json, action } => {

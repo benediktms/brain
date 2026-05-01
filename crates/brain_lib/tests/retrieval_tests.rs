@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 //! Phase 2 integration tests: hybrid retrieval, FTS5, links, ranking, MCP round-trip.
 //!
 //! Uses MockEmbedder (deterministic hash-based vectors) and in-memory/tempdir

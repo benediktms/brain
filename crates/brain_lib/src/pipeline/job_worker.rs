@@ -1,3 +1,7 @@
+// Pre-existing technical debt: raw rusqlite usage inside test modules below.
+// Architectural cleanup tracked separately; this allow keeps the workspace lint clean.
+#![allow(clippy::disallowed_macros)]
+
 //! Job worker: claims pending jobs from the queue and dispatches to handlers
 //! based on the typed [`JobPayload`] variant.
 //!

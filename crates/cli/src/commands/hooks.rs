@@ -1,3 +1,6 @@
+// Pre-existing technical debt: raw rusqlite usage in test setup below.
+#![allow(clippy::disallowed_macros)]
+
 use std::fs;
 use std::io::Read as _;
 use std::path::Path;

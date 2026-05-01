@@ -33,6 +33,7 @@ mod task_labels_batch;
 mod task_labels_summary;
 mod task_list;
 mod task_next;
+mod task_transfer;
 
 pub use helpers::*;
 pub use scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, Scope, resolve_scope, resolve_single_scope};
@@ -107,6 +108,7 @@ impl ToolRegistry {
                 Box::new(task_labels_summary::TaskLabelsSummary),
                 Box::new(task_list::TaskList),
                 Box::new(task_next::TaskNext),
+                Box::new(task_transfer::TaskTransfer),
                 Box::new(status::Status),
                 Box::new(record_create_document::RecordCreateDocument),
                 Box::new(record_create_analysis::RecordCreateAnalysis),
@@ -157,7 +159,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 34);
+        assert_eq!(defs.len(), 35); // +1 tasks.transfer
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.retrieve"));

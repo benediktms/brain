@@ -1,3 +1,9 @@
+#![allow(
+    clippy::disallowed_macros,
+    clippy::disallowed_types,
+    clippy::collapsible_if
+)]
+
 //! Acceptance tests for the `memory.retrieve` MCP tool.
 //!
 //! Run: cargo test -p brain-lib --test retrieve_acceptance_tests

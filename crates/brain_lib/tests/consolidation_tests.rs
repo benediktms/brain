@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_macros, clippy::disallowed_types)]
+
 //! Integration tests for `memory.consolidate`.
 //!
 //! These tests verify the behaviour of [`brain_lib::consolidation::consolidate_episodes`]
