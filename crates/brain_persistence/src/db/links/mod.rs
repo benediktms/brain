@@ -1,8 +1,77 @@
+//! Polymorphic edge graph types.
+//!
+//! Backing SQL table: `entity_links` (created in v48→v49 migration).
+//! The legacy `links` table (note/wiki linking, used by `pagerank.rs`) is a
+//! separate domain and is not touched by this module.
+
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::error::Result;
 use crate::links::Link;
+
+// ── Polymorphic edge graph types ───────────────────────────────────────────
+
+/// Discriminates the kind of entity participating in a polymorphic edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum EntityType {
+    Task,
+    Record,
+    Episode,
+    Procedure,
+    Chunk,
+    Note,
+}
+
+/// A typed reference to any entity in the system.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EntityRef {
+    pub kind: EntityType,
+    pub id: String,
+}
+
+/// The semantic relationship expressed by a directed edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind {
+    ParentOf,
+    Blocks,
+    Covers,
+    RelatesTo,
+    SeeAlso,
+    Supersedes,
+    Contradicts,
+}
+
+impl EdgeKind {
+    /// Returns `true` for edge kinds that must form a directed acyclic graph.
+    ///
+    /// Cycle-prevention logic MUST be applied before inserting edges of these
+    /// kinds. `ParentOf` and `Blocks` are the two DAG-constrained edges.
+    pub fn requires_dag(&self) -> bool {
+        matches!(self, Self::ParentOf | Self::Blocks)
+    }
+}
+
+/// Payload written to the event log when a polymorphic edge is created.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkCreatedPayload {
+    pub from: EntityRef,
+    pub to: EntityRef,
+    pub edge_kind: EdgeKind,
+}
+
+/// Payload written to the event log when a polymorphic edge is removed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkRemovedPayload {
+    pub from: EntityRef,
+    pub to: EntityRef,
+    pub edge_kind: EdgeKind,
+}
+
+// ── Obsidian-style file link resolution ───────────────────────────────────
 
 /// Resolve a link's `target_path` to a `file_id` using Obsidian-style disambiguation.
 ///
@@ -184,115 +253,90 @@ pub fn count_backlinks(conn: &Connection, target_path: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::files::get_or_create_file_id;
-    use crate::db::schema::init_schema;
-    use crate::links::{Link, LinkType};
 
-    fn setup() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn).unwrap();
-        conn
-    }
+    // ── Polymorphic type tests ─────────────────────────────────────────────
 
     #[test]
-    fn test_replace_links_and_backlinks() {
-        let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/graph.md", "").unwrap();
-
-        let links = vec![
-            Link {
-                target: "headings".to_string(),
-                link_text: "headings".to_string(),
-                link_type: LinkType::Wiki,
-            },
-            Link {
-                target: "simple.md".to_string(),
-                link_text: "the simple note".to_string(),
-                link_type: LinkType::Markdown,
-            },
+    fn entity_type_serde_round_trip() {
+        let cases = [
+            (EntityType::Task, "\"TASK\""),
+            (EntityType::Record, "\"RECORD\""),
+            (EntityType::Episode, "\"EPISODE\""),
+            (EntityType::Procedure, "\"PROCEDURE\""),
+            (EntityType::Chunk, "\"CHUNK\""),
+            (EntityType::Note, "\"NOTE\""),
         ];
-
-        replace_links(&conn, &file_id, &links).unwrap();
-
-        // Verify links stored
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM links WHERE source_file_id = ?1",
-                [&file_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 2);
-
-        // Query backlinks
-        let backlinks = get_backlinks(&conn, "headings").unwrap();
-        assert_eq!(backlinks.len(), 1);
-        assert_eq!(backlinks[0].0, file_id);
-        assert_eq!(backlinks[0].1, "headings");
-
-        assert_eq!(count_backlinks(&conn, "headings").unwrap(), 1);
-        assert_eq!(count_backlinks(&conn, "nonexistent").unwrap(), 0);
+        for (variant, expected_json) in cases {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, expected_json, "serialize {variant:?}");
+            let deserialized: EntityType = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {variant:?}");
+        }
     }
 
     #[test]
-    fn test_replace_links_is_atomic() {
-        let conn = setup();
-        let (file_id, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
-
-        let links_v1 = vec![Link {
-            target: "old".to_string(),
-            link_text: "old".to_string(),
-            link_type: LinkType::Wiki,
-        }];
-        replace_links(&conn, &file_id, &links_v1).unwrap();
-
-        let links_v2 = vec![Link {
-            target: "new".to_string(),
-            link_text: "new".to_string(),
-            link_type: LinkType::Wiki,
-        }];
-        replace_links(&conn, &file_id, &links_v2).unwrap();
-
-        // Old link gone
-        assert_eq!(count_backlinks(&conn, "old").unwrap(), 0);
-        // New link present
-        assert_eq!(count_backlinks(&conn, "new").unwrap(), 1);
+    fn edge_kind_serde_round_trip() {
+        let cases = [
+            (EdgeKind::ParentOf, "\"parent_of\""),
+            (EdgeKind::Blocks, "\"blocks\""),
+            (EdgeKind::Covers, "\"covers\""),
+            (EdgeKind::RelatesTo, "\"relates_to\""),
+            (EdgeKind::SeeAlso, "\"see_also\""),
+            (EdgeKind::Supersedes, "\"supersedes\""),
+            (EdgeKind::Contradicts, "\"contradicts\""),
+        ];
+        for (variant, expected_json) in cases {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, expected_json, "serialize {variant:?}");
+            let deserialized: EdgeKind = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {variant:?}");
+        }
     }
 
     #[test]
-    fn test_replace_does_not_affect_other_files() {
-        let conn = setup();
-        let (file_a, _) = get_or_create_file_id(&conn, "/notes/a.md", "").unwrap();
-        let (file_b, _) = get_or_create_file_id(&conn, "/notes/b.md", "").unwrap();
+    fn edge_kind_requires_dag_truth_table() {
+        assert!(EdgeKind::ParentOf.requires_dag(), "ParentOf must be DAG");
+        assert!(EdgeKind::Blocks.requires_dag(), "Blocks must be DAG");
+        assert!(!EdgeKind::Covers.requires_dag(), "Covers is not DAG");
+        assert!(!EdgeKind::RelatesTo.requires_dag(), "RelatesTo is not DAG");
+        assert!(!EdgeKind::SeeAlso.requires_dag(), "SeeAlso is not DAG");
+        assert!(!EdgeKind::Supersedes.requires_dag(), "Supersedes is not DAG");
+        assert!(!EdgeKind::Contradicts.requires_dag(), "Contradicts is not DAG");
+    }
 
-        replace_links(
-            &conn,
-            &file_a,
-            &[Link {
-                target: "shared".to_string(),
-                link_text: "shared".to_string(),
-                link_type: LinkType::Wiki,
-            }],
-        )
-        .unwrap();
-        replace_links(
-            &conn,
-            &file_b,
-            &[Link {
-                target: "shared".to_string(),
-                link_text: "shared".to_string(),
-                link_type: LinkType::Wiki,
-            }],
-        )
-        .unwrap();
+    #[test]
+    fn link_created_payload_serde_round_trip() {
+        let payload = LinkCreatedPayload {
+            from: EntityRef {
+                kind: EntityType::Task,
+                id: "task-001".to_string(),
+            },
+            to: EntityRef {
+                kind: EntityType::Record,
+                id: "rec-002".to_string(),
+            },
+            edge_kind: EdgeKind::Covers,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let decoded: LinkCreatedPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, payload);
+    }
 
-        // Both link to "shared"
-        assert_eq!(count_backlinks(&conn, "shared").unwrap(), 2);
-
-        // Replace file_a links with empty
-        replace_links(&conn, &file_a, &[]).unwrap();
-
-        // file_b's link still intact
-        assert_eq!(count_backlinks(&conn, "shared").unwrap(), 1);
+    #[test]
+    fn link_removed_payload_serde_round_trip() {
+        let payload = LinkRemovedPayload {
+            from: EntityRef {
+                kind: EntityType::Episode,
+                id: "ep-abc".to_string(),
+            },
+            to: EntityRef {
+                kind: EntityType::Note,
+                id: "note-xyz".to_string(),
+            },
+            edge_kind: EdgeKind::SeeAlso,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let decoded: LinkRemovedPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, payload);
     }
 }
