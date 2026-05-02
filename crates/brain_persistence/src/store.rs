@@ -311,10 +311,10 @@ impl OptimizeScheduler {
                     false
                 }
             };
-            if above_threshold {
-                if let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank) {
-                    warn!(error = %e, "PageRank computation failed, will retry on next optimize");
-                }
+            if above_threshold
+                && let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank)
+            {
+                warn!(error = %e, "PageRank computation failed, will retry on next optimize");
             }
         }
     }
