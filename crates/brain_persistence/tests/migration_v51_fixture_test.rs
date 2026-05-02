@@ -1,17 +1,17 @@
 use brain_persistence::db::schema::init_schema;
 use rusqlite::Connection;
 
-/// Build a v50 fixture: initialise the current schema (v51) and downgrade
-/// user_version to 50 so a subsequent `init_schema` exercises v50→v51.
+/// Build a v51 fixture: initialise the current schema (v52) and downgrade
+/// user_version to 51 so a subsequent `init_schema` exercises v51→v52.
 ///
 /// We insert representative rows into `tasks`, `task_deps`, and `record_links`
 /// AFTER downgrading the version so the backfill has data to walk.
-fn snapshot_at_v50_with_data() -> Connection {
+fn snapshot_at_v51_with_data() -> Connection {
     let conn = Connection::open_in_memory().expect("open in-memory sqlite");
     conn.pragma_update(None, "journal_mode", "WAL").unwrap();
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
 
-    // Bring up to current schema (v51), then rewind to 50.
+    // Bring up to current schema (v52), then rewind to 51.
     init_schema(&conn).expect("initialize current schema");
 
     // Clear any entity_links rows that init_schema may have produced.
@@ -60,8 +60,8 @@ fn snapshot_at_v50_with_data() -> Connection {
     )
     .unwrap();
 
-    // Stamp user_version back to 50 so init_schema runs v50→v51.
-    conn.pragma_update(None, "user_version", 50i32)
+    // Stamp user_version back to 51 so init_schema runs v51→v52.
+    conn.pragma_update(None, "user_version", 51i32)
         .expect("downgrade user_version to v50 fixture");
 
     conn
@@ -74,7 +74,7 @@ fn count(conn: &Connection, sql: &str) -> i64 {
 /// After v50→v51, parent_of edge count matches tasks with parent_task_id.
 #[test]
 fn test_migration_v51_parent_of_cardinality() {
-    let conn = snapshot_at_v50_with_data();
+    let conn = snapshot_at_v51_with_data();
 
     let expected = count(
         &conn,
@@ -96,7 +96,7 @@ fn test_migration_v51_parent_of_cardinality() {
 /// After v50→v51, blocks edge count matches task_deps rows.
 #[test]
 fn test_migration_v51_blocks_cardinality() {
-    let conn = snapshot_at_v50_with_data();
+    let conn = snapshot_at_v51_with_data();
 
     let expected = count(&conn, "SELECT COUNT(*) FROM task_deps");
 
@@ -115,7 +115,7 @@ fn test_migration_v51_blocks_cardinality() {
 /// After v50→v51, covers-task edge count matches record_links with task_id.
 #[test]
 fn test_migration_v51_covers_task_cardinality() {
-    let conn = snapshot_at_v50_with_data();
+    let conn = snapshot_at_v51_with_data();
 
     let expected = count(
         &conn,
@@ -137,7 +137,7 @@ fn test_migration_v51_covers_task_cardinality() {
 /// After v50→v51, covers-chunk edge count matches record_links with chunk_id.
 #[test]
 fn test_migration_v51_covers_chunk_cardinality() {
-    let conn = snapshot_at_v50_with_data();
+    let conn = snapshot_at_v51_with_data();
 
     let expected = count(
         &conn,
@@ -156,20 +156,20 @@ fn test_migration_v51_covers_chunk_cardinality() {
     );
 }
 
-/// Re-running the migration on a post-v51 DB produces zero new rows (idempotency).
+/// Re-running the migration on a post-v52 DB produces zero new rows (idempotency).
 ///
-/// Strategy: after reaching v51, stamp user_version back to 50 and call
-/// init_schema again. It re-runs v50→v51; INSERT OR IGNORE skips all existing
+/// Strategy: after reaching v52, stamp user_version back to 51 and call
+/// init_schema again. It re-runs v51→v52; INSERT OR IGNORE skips all existing
 /// tuples. Row count must not change.
 #[test]
 fn test_migration_v51_idempotent() {
-    let conn = snapshot_at_v50_with_data();
+    let conn = snapshot_at_v51_with_data();
     init_schema(&conn).unwrap();
 
     let count_before: i64 = count(&conn, "SELECT COUNT(*) FROM entity_links");
 
-    // Stamp back to 50 so init_schema re-executes v50→v51.
-    conn.pragma_update(None, "user_version", 50i32).unwrap();
+    // Stamp back to 51 so init_schema re-executes v51→v52.
+    conn.pragma_update(None, "user_version", 51i32).unwrap();
     init_schema(&conn).unwrap();
 
     let count_after: i64 = count(&conn, "SELECT COUNT(*) FROM entity_links");
@@ -182,22 +182,22 @@ fn test_migration_v51_idempotent() {
 /// PRAGMA user_version returns 51 after migration.
 #[test]
 fn test_migration_v51_user_version_stamped() {
-    let conn = snapshot_at_v50_with_data();
+    let conn = snapshot_at_v51_with_data();
     init_schema(&conn).unwrap();
 
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
     assert_eq!(
-        version, 51,
-        "user_version must be 51 after v50→v51 migration"
+        version, 52,
+        "user_version must be 52 after v51→v52 migration"
     );
 }
 
 /// Backfilled rows have NULL brain_scope (audit carve-out: source tables lack scope).
 #[test]
 fn test_migration_v51_brain_scope_is_null() {
-    let conn = snapshot_at_v50_with_data();
+    let conn = snapshot_at_v51_with_data();
     init_schema(&conn).unwrap();
 
     let non_null_scope: i64 = count(
