@@ -59,8 +59,13 @@ impl FileIdCache for PreSizedFileIdMap {
             .follow_links(true)
             .max_depth(depth)
             .into_iter()
+            .filter_entry(should_descend)
             .filter_map(|e| {
-                let p = e.ok()?.into_path();
+                let entry = e.ok()?;
+                let p = entry.into_path();
+                if !cache_should_track(&p) {
+                    return None;
+                }
                 let id = get_file_id(&p).ok()?;
                 Some((p, id))
             })
@@ -72,6 +77,51 @@ impl FileIdCache for PreSizedFileIdMap {
     fn remove_path(&mut self, path: &Path) {
         self.paths.retain(|p, _| !p.starts_with(path));
     }
+}
+
+/// Directories that never contain authored markdown notes and would dominate
+/// the watcher's startup walk.  Skipping these subtrees during
+/// `notify_debouncer_full`'s recursive cache population reduces stat-storms by
+/// orders of magnitude on code-repo brains (e.g. `node_modules` alone is ~80%
+/// of file count in a JS repo).
+///
+/// Pruning is safe because the FileIdMap is only used for rename correlation
+/// inside the debouncer; OS-level events (FSEvents on macOS) are delivered
+/// independently of cache contents, and brain only emits events for `.md`
+/// files.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+fn should_descend(entry: &walkdir::DirEntry) -> bool {
+    if !entry.file_type().is_dir() {
+        return true;
+    }
+    !matches!(
+        entry.file_name().to_string_lossy().as_ref(),
+        "node_modules"
+            | ".git"
+            | "target"
+            | "build"
+            | "dist"
+            | ".next"
+            | ".turbo"
+            | ".cache"
+            | "vendor"
+            | "_build"
+            | ".direnv"
+            | ".venv"
+            | "__pycache__"
+    )
+}
+
+/// True when the path should be inserted into the FileIdMap.  Directories must
+/// be tracked so the cache can correlate renames within a watched tree, but
+/// non-markdown files are skipped — brain never emits events for them, so
+/// stat'ing them is wasted work.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+fn cache_should_track(path: &Path) -> bool {
+    if path.is_dir() {
+        return true;
+    }
+    is_markdown(path)
 }
 
 /// On Linux/Android/wasm `notify` uses inotify/epoll; file-ID tracking is not
@@ -510,5 +560,130 @@ mod tests {
         assert_eq!(renames.len(), 1);
         assert!(index.is_empty());
         assert!(delete.is_empty());
+    }
+
+    // ─── PreSizedFileIdMap walk-pruning tests (macOS/Windows only) ──
+    //
+    // The cfg gate matches the gate on `PreSizedFileIdMap` itself: on
+    // Linux/Android/wasm the cache is `NoCache` and these helpers do
+    // not exist.
+
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+    mod prune {
+        use super::super::{PreSizedFileIdMap, cache_should_track, should_descend};
+        use notify_debouncer_full::FileIdCache;
+        use notify_debouncer_full::notify::RecursiveMode;
+        use std::fs;
+        use std::path::Path;
+        use tempfile::tempdir;
+
+        #[test]
+        fn cache_should_track_includes_md_files_and_dirs() {
+            let tmp = tempdir().unwrap();
+            let md = tmp.path().join("a.md");
+            fs::write(&md, "# hi").unwrap();
+            assert!(cache_should_track(&md));
+            assert!(cache_should_track(tmp.path()));
+        }
+
+        #[test]
+        fn cache_should_track_excludes_non_md_files() {
+            let tmp = tempdir().unwrap();
+            let js = tmp.path().join("x.js");
+            fs::write(&js, "//").unwrap();
+            assert!(!cache_should_track(&js));
+        }
+
+        #[test]
+        fn should_descend_skips_node_modules() {
+            let tmp = tempdir().unwrap();
+            let nm = tmp.path().join("node_modules");
+            fs::create_dir(&nm).unwrap();
+            // Walk from tmp root and find the node_modules entry to test.
+            let entry = walkdir::WalkDir::new(tmp.path())
+                .min_depth(1)
+                .max_depth(1)
+                .into_iter()
+                .find_map(|r| {
+                    let e = r.ok()?;
+                    (e.file_name() == "node_modules").then_some(e)
+                })
+                .expect("node_modules entry");
+            assert!(!should_descend(&entry));
+        }
+
+        #[test]
+        fn should_descend_allows_regular_dirs() {
+            let tmp = tempdir().unwrap();
+            let sub = tmp.path().join("notes");
+            fs::create_dir(&sub).unwrap();
+            let entry = walkdir::WalkDir::new(tmp.path())
+                .min_depth(1)
+                .max_depth(1)
+                .into_iter()
+                .find_map(|r| {
+                    let e = r.ok()?;
+                    (e.file_name() == "notes").then_some(e)
+                })
+                .expect("notes entry");
+            assert!(should_descend(&entry));
+        }
+
+        #[test]
+        fn add_path_prunes_noise_dirs_and_non_md_files() {
+            // Layout:
+            //   root/a.md            (kept)
+            //   root/sub/b.md        (kept — descends through `sub`)
+            //   root/sub/c.txt       (skipped — not .md)
+            //   root/node_modules/d.md  (skipped — pruned dir)
+            //   root/.git/HEAD       (skipped — pruned dir)
+            //   root/build/e.md      (skipped — pruned dir)
+            let tmp = tempdir().unwrap();
+            let root = tmp.path();
+            fs::write(root.join("a.md"), "a").unwrap();
+
+            let sub = root.join("sub");
+            fs::create_dir(&sub).unwrap();
+            fs::write(sub.join("b.md"), "b").unwrap();
+            fs::write(sub.join("c.txt"), "c").unwrap();
+
+            let nm = root.join("node_modules");
+            fs::create_dir(&nm).unwrap();
+            fs::write(nm.join("d.md"), "d").unwrap();
+
+            let git = root.join(".git");
+            fs::create_dir(&git).unwrap();
+            fs::write(git.join("HEAD"), "ref").unwrap();
+
+            let build = root.join("build");
+            fs::create_dir(&build).unwrap();
+            fs::write(build.join("e.md"), "e").unwrap();
+
+            let mut cache = PreSizedFileIdMap::with_capacity(16);
+            cache.add_path(root, RecursiveMode::Recursive);
+
+            let tracked: Vec<&Path> = cache.paths.keys().map(|p| p.as_path()).collect();
+            let has = |needle: &str| tracked.iter().any(|p| p.ends_with(needle));
+
+            // Kept (md files + traversed dirs)
+            assert!(has("a.md"), "expected a.md in cache: {tracked:?}");
+            assert!(has("sub/b.md"), "expected sub/b.md in cache: {tracked:?}");
+            assert!(has("sub"), "expected sub dir in cache: {tracked:?}");
+
+            // Skipped (non-md regular files)
+            assert!(!has("sub/c.txt"), "c.txt should not be tracked");
+
+            // Skipped (pruned directory subtrees — neither dir nor contents)
+            assert!(
+                !has("node_modules"),
+                "node_modules dir entry should not be inserted (pruned before descent)"
+            );
+            assert!(
+                !has("node_modules/d.md"),
+                "files under node_modules must be pruned"
+            );
+            assert!(!has(".git/HEAD"), "files under .git must be pruned");
+            assert!(!has("build/e.md"), "files under build must be pruned");
+        }
     }
 }
