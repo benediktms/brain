@@ -85,7 +85,7 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue, brains: &[BrainInfo]) -> R
         };
         queue.reconcile_singleton_job_with_delay(&input, 300)?;
 
-        // Embed poll sweep — every 10 seconds
+        // Embed poll sweep — rescheduled every 30 seconds
         let input = EnqueueJobInput {
             payload: JobPayload::EmbedPollSweep {
                 brain_id: brain.brain_id.clone(),

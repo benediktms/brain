@@ -1,10 +1,83 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use notify_debouncer_full::FileIdCache;
+use notify_debouncer_full::file_id::{FileId, get_file_id};
 use notify_debouncer_full::notify::RecursiveMode;
 use notify_debouncer_full::notify::event::EventKind;
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use notify_debouncer_full::{
+    DebounceEventResult, Debouncer, new_debouncer_opt,
+};
 use tracing::{info, warn};
+use walkdir::WalkDir;
+
+/// Expected number of file-ID cache entries per watched directory.
+///
+/// Used to pre-size the `FileIdMap` backing `HashMap` so that bulk registration
+/// does not trigger repeated hashbrown rehash cycles.  The value is intentionally
+/// generous: a brain root may contain thousands of notes and subdirectories.
+/// Over-allocation is cheap (each entry is ~80 bytes); under-allocation causes
+/// O(N) rehashes during startup.
+///
+/// Only relevant on macOS and Windows; Linux/Android/wasm use `NoCache` and
+/// ignore this constant entirely.
+pub const ESTIMATED_PATHS_PER_DIR: usize = 4096;
+
+/// A file-ID cache backed by a pre-sized `HashMap`.
+///
+/// Functionally identical to `notify_debouncer_full::FileIdMap`, but constructed
+/// with `HashMap::with_capacity` so that registering many paths in bulk does not
+/// trigger repeated hashbrown rehash cycles.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+struct PreSizedFileIdMap {
+    paths: HashMap<PathBuf, FileId>,
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+impl PreSizedFileIdMap {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            paths: HashMap::with_capacity(capacity),
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+impl FileIdCache for PreSizedFileIdMap {
+    fn cached_file_id(&self, path: &Path) -> Option<impl AsRef<FileId>> {
+        self.paths.get(path)
+    }
+
+    fn add_path(&mut self, path: &Path, recursive_mode: RecursiveMode) {
+        let is_recursive = recursive_mode == RecursiveMode::Recursive;
+        let depth = if is_recursive { usize::MAX } else { 1 };
+        for (p, id) in WalkDir::new(path)
+            .follow_links(true)
+            .max_depth(depth)
+            .into_iter()
+            .filter_map(|e| {
+                let p = e.ok()?.into_path();
+                let id = get_file_id(&p).ok()?;
+                Some((p, id))
+            })
+        {
+            self.paths.insert(p, id);
+        }
+    }
+
+    fn remove_path(&mut self, path: &Path) {
+        self.paths.retain(|p, _| !p.starts_with(path));
+    }
+}
+
+/// On Linux/Android/wasm `notify` uses inotify/epoll; file-ID tracking is not
+/// required and `NoCache` is the platform recommendation.  We alias the cache
+/// type so the rest of the code compiles uniformly.
+#[cfg(any(target_os = "linux", target_os = "android", target_family = "wasm"))]
+type PlatformCache = notify_debouncer_full::NoCache;
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+type PlatformCache = PreSizedFileIdMap;
 
 /// Events emitted by the file watcher.
 #[derive(Debug)]
@@ -16,8 +89,26 @@ pub enum FileEvent {
 }
 
 /// Watches directories for markdown file changes, debouncing and filtering events.
+///
+/// # Platform behaviour
+///
+/// The underlying file-ID cache differs by platform:
+///
+/// - **macOS / Windows**: uses `PreSizedFileIdMap`, a custom `FileIdCache` backed by a
+///   pre-sized `HashMap<PathBuf, FileId>`.  File IDs (inode + device on macOS, file index
+///   on Windows) enable `notify` to emit a single `Renamed { from, to }` event when a
+///   file is moved within a watched tree.
+///
+/// - **Linux / Android / wasm**: uses `notify_debouncer_full::NoCache`.  The kernel
+///   delivers inotify / epoll events directly; file-ID tracking is unnecessary and
+///   `notify` does not attempt rename correlation.  A file move arrives as two separate
+///   events: `Remove(old_path)` followed by `Create(new_path)`.  The event pipeline
+///   handles this correctly — `coalesce_events` treats a `Created` that follows a
+///   `Deleted` for the same path as a re-index, and paths are routed by longest-prefix
+///   match so both events reach the correct brain's work queue regardless of rename
+///   correlation.  No code path depends on a `Renamed` event being emitted on Linux.
 pub struct BrainWatcher {
-    debouncer: Debouncer<notify_debouncer_full::notify::RecommendedWatcher, RecommendedCache>,
+    debouncer: Debouncer<notify_debouncer_full::notify::RecommendedWatcher, PlatformCache>,
 }
 
 impl BrainWatcher {
@@ -29,7 +120,8 @@ impl BrainWatcher {
         dirs: &[PathBuf],
         tx: tokio::sync::mpsc::Sender<FileEvent>,
     ) -> crate::error::Result<Self> {
-        let mut watcher = Self::new_empty(tx)?;
+        let capacity = dirs.len().saturating_mul(ESTIMATED_PATHS_PER_DIR);
+        let mut watcher = Self::new_empty_with_capacity(capacity, tx)?;
         for dir in dirs {
             watcher.watch_path(dir.as_path())?;
         }
@@ -39,9 +131,24 @@ impl BrainWatcher {
     /// Create a new watcher with no initial directories.
     ///
     /// Directories can be added later via [`watch_path`](Self::watch_path).
-    /// This is useful for multi-brain mode where directories are registered individually.
-    pub fn new_empty(tx: tokio::sync::mpsc::Sender<FileEvent>) -> crate::error::Result<Self> {
-        let debouncer = new_debouncer(
+    ///
+    /// The `capacity` hint is the expected total number of watched file paths across
+    /// all directories that will be registered.  Passing a reasonable estimate avoids
+    /// repeated HashMap rehash cycles when registering many paths in bulk (multi-brain mode).
+    pub fn new_empty_with_capacity(
+        capacity: usize,
+        tx: tokio::sync::mpsc::Sender<FileEvent>,
+    ) -> crate::error::Result<Self> {
+        #[cfg(any(target_os = "linux", target_os = "android", target_family = "wasm"))]
+        let cache = notify_debouncer_full::NoCache::new();
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+        let cache = PreSizedFileIdMap::with_capacity(capacity);
+
+        let debouncer = new_debouncer_opt::<
+            _,
+            notify_debouncer_full::notify::RecommendedWatcher,
+            PlatformCache,
+        >(
             Duration::from_millis(250),
             None,
             move |result: DebounceEventResult| match result {
@@ -62,12 +169,23 @@ impl BrainWatcher {
                     }
                 }
             },
+            cache,
+            notify_debouncer_full::notify::Config::default(),
         )
         .map_err(|e| {
             crate::error::BrainCoreError::Io(std::io::Error::other(format!("watcher init: {e}")))
         })?;
 
         Ok(Self { debouncer })
+    }
+
+    /// Create a new watcher with no initial directories.
+    ///
+    /// Equivalent to [`new_empty_with_capacity`](Self::new_empty_with_capacity) with a zero
+    /// capacity hint.  Prefer `new_empty_with_capacity` when the total number of paths is
+    /// known ahead of registration.
+    pub fn new_empty(tx: tokio::sync::mpsc::Sender<FileEvent>) -> crate::error::Result<Self> {
+        Self::new_empty_with_capacity(0, tx)
     }
 
     /// Start watching a directory recursively.
