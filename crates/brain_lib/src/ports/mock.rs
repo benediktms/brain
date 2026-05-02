@@ -725,6 +725,14 @@ impl EmbeddingResetter for MockEmbeddingResetter {
     fn last_embed_reset_before(&self) -> Result<Option<i64>> {
         Ok(None)
     }
+
+    fn get_consecutive_resets(&self) -> Result<u32> {
+        Ok(0)
+    }
+
+    fn set_consecutive_resets(&self, _count: u32) -> Result<()> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

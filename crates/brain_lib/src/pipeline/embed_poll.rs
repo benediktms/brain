@@ -641,15 +641,27 @@ where
 /// Key used in brain_meta to store the last embedded_at reset timestamp (Unix s).
 pub const META_KEY_EMBED_RESET_AT: &str = "embed_reset_at";
 
-/// Backoff window: skip self-heal reset if one occurred within this many seconds.
-const SELF_HEAL_BACKOFF_SECS: i64 = 3600; // 1 hour — enough to complete a re-embed wave
+/// Compute the self-heal backoff in seconds for a given consecutive reset count.
+///
+/// Returns `min(3600 * 2^consecutive_resets, 86400)`:
+/// - 0 resets → 3600 s (1 h)
+/// - 1 reset  → 7200 s (2 h)
+/// - 2 resets → 14400 s (4 h)
+/// - ...
+/// - 5+ resets → 86400 s (24 h, cap)
+pub fn self_heal_backoff_secs(consecutive_resets: u32) -> i64 {
+    // Shift saturates at u32::MAX, then min clamps to 86400.
+    let shifted = 3600i64.saturating_mul(1i64 << consecutive_resets.min(31));
+    shifted.min(86400)
+}
 
 /// Check if LanceDB is accessible. If not, reset all `embedded_at` columns so
 /// items will be re-embedded on the next poll cycle.
 ///
-/// Uses `brain_meta` to record the reset timestamp. Skips the reset if a prior
-/// reset occurred within the backoff window, to prevent repeated cascade
-/// triggers from causing back-to-back full re-embeds.
+/// Uses `brain_meta` to record the reset timestamp and the count of consecutive
+/// resets. The backoff window grows exponentially with each consecutive reset
+/// (see `self_heal_backoff_secs`). The counter resets to 0 when a successful
+/// schema check is observed.
 pub async fn self_heal_if_lance_missing(
     resetter: &(impl EmbeddingResetter + ?Sized),
     store: &(impl crate::ports::SchemaMeta + ?Sized),
@@ -657,14 +669,28 @@ pub async fn self_heal_if_lance_missing(
     // Use schema() as a lightweight accessibility probe — it sends a trivial
     // request to the underlying table handle.
     if store.current_schema_matches_expected().await {
+        // Schema is healthy. Clear consecutive reset count if it was elevated.
+        match resetter.get_consecutive_resets() {
+            Ok(n) if n > 0 => {
+                if let Err(e) = resetter.set_consecutive_resets(0) {
+                    warn!(error = %e, "self_heal: failed to reset consecutive_resets counter");
+                }
+            }
+            _ => {}
+        }
         return false;
     }
 
-    // Backoff: skip if a reset already happened within the backoff window.
+    // Read current consecutive reset count to determine backoff.
+    let consecutive = resetter.get_consecutive_resets().unwrap_or(0);
+    let backoff = self_heal_backoff_secs(consecutive);
+
+    // Backoff: skip if a reset already happened within the current backoff window.
     match resetter.last_embed_reset_before() {
-        Ok(Some(since)) if since < SELF_HEAL_BACKOFF_SECS => {
+        Ok(Some(since)) if since < backoff => {
             debug!(
-                seconds_remaining = SELF_HEAL_BACKOFF_SECS - since,
+                seconds_remaining = backoff - since,
+                consecutive_resets = consecutive,
                 "self_heal: skipping reset — prior reset within backoff window"
             );
             return false;
@@ -673,7 +699,11 @@ pub async fn self_heal_if_lance_missing(
         _ => {}
     }
 
-    warn!("LanceDB not found — resetting embedded_at for full re-embed");
+    warn!(
+        consecutive_resets = consecutive,
+        backoff_secs = backoff,
+        "LanceDB not found — resetting embedded_at for full re-embed"
+    );
 
     if let Err(e) = resetter.reset_tasks_embedded_at() {
         warn!(error = %e, "embed_poll: failed to reset tasks.embedded_at");
@@ -691,5 +721,188 @@ pub async fn self_heal_if_lance_missing(
         warn!(error = %e, "embed_poll: failed to record embed reset timestamp");
     }
 
+    // Increment the consecutive reset counter.
+    if let Err(e) = resetter.set_consecutive_resets(consecutive.saturating_add(1)) {
+        warn!(error = %e, "embed_poll: failed to increment consecutive_resets counter");
+    }
+
     true
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use crate::error::Result;
+
+    // ── Backoff function unit tests ──────────────────────────────────────
+
+    #[test]
+    fn test_self_heal_backoff_secs_schedule() {
+        assert_eq!(self_heal_backoff_secs(0), 3600);
+        assert_eq!(self_heal_backoff_secs(1), 7200);
+        assert_eq!(self_heal_backoff_secs(2), 14400);
+        assert_eq!(self_heal_backoff_secs(3), 28800);
+        assert_eq!(self_heal_backoff_secs(4), 57600);
+        assert_eq!(self_heal_backoff_secs(5), 86400); // cap
+        assert_eq!(self_heal_backoff_secs(6), 86400); // still capped
+        assert_eq!(self_heal_backoff_secs(31), 86400); // no overflow
+    }
+
+    // ── Mock infrastructure ─────────────────────────────────────────────
+
+    /// Minimal mock for EmbeddingResetter that tracks call counts and stores
+    /// the consecutive reset counter in memory.
+    struct MockResetter {
+        /// Seconds since last reset (None = no prior reset).
+        last_reset_since: Option<i64>,
+        consecutive: AtomicU32,
+        reset_tasks_calls: AtomicU32,
+        reset_chunks_calls: AtomicU32,
+        reset_records_calls: AtomicU32,
+        record_reset_calls: AtomicU32,
+    }
+
+    impl MockResetter {
+        fn new(last_reset_since: Option<i64>, consecutive: u32) -> Self {
+            Self {
+                last_reset_since,
+                consecutive: AtomicU32::new(consecutive),
+                reset_tasks_calls: AtomicU32::new(0),
+                reset_chunks_calls: AtomicU32::new(0),
+                reset_records_calls: AtomicU32::new(0),
+                record_reset_calls: AtomicU32::new(0),
+            }
+        }
+
+        fn total_resets(&self) -> u32 {
+            self.reset_tasks_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl EmbeddingResetter for MockResetter {
+        fn reset_tasks_embedded_at(&self) -> Result<()> {
+            self.reset_tasks_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn reset_chunks_embedded_at(&self) -> Result<()> {
+            self.reset_chunks_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn reset_records_embedded_at(&self) -> Result<()> {
+            self.reset_records_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn record_embed_reset(&self) -> Result<()> {
+            self.record_reset_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn last_embed_reset_before(&self) -> Result<Option<i64>> {
+            Ok(self.last_reset_since)
+        }
+        fn get_consecutive_resets(&self) -> Result<u32> {
+            Ok(self.consecutive.load(Ordering::SeqCst))
+        }
+        fn set_consecutive_resets(&self, count: u32) -> Result<()> {
+            self.consecutive.store(count, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// Minimal mock for SchemaMeta.
+    struct MockStore {
+        schema_ok: bool,
+    }
+
+    impl crate::ports::SchemaMeta for MockStore {
+        async fn current_schema_matches_expected(&self) -> bool {
+            self.schema_ok
+        }
+
+        async fn drop_and_recreate_table(&mut self) -> crate::error::Result<()> {
+            Ok(())
+        }
+
+        async fn get_file_ids_with_chunks(
+            &self,
+            _brain_id: &str,
+        ) -> crate::error::Result<std::collections::HashSet<String>> {
+            Ok(std::collections::HashSet::new())
+        }
+
+        async fn force_optimize(&self) {}
+    }
+
+    // ── Integration tests ────────────────────────────────────────────────
+
+    /// When schema is healthy, self_heal returns false and does not reset.
+    #[tokio::test]
+    async fn test_self_heal_no_reset_when_schema_ok() {
+        let resetter = MockResetter::new(None, 0);
+        let store = MockStore { schema_ok: true };
+        let result = self_heal_if_lance_missing(&resetter, &store).await;
+        assert!(!result);
+        assert_eq!(resetter.total_resets(), 0);
+    }
+
+    /// When schema is healthy and consecutive count > 0, it gets cleared to 0.
+    #[tokio::test]
+    async fn test_self_heal_clears_consecutive_on_schema_ok() {
+        let resetter = MockResetter::new(None, 3);
+        let store = MockStore { schema_ok: true };
+        let result = self_heal_if_lance_missing(&resetter, &store).await;
+        assert!(!result);
+        assert_eq!(resetter.consecutive.load(Ordering::SeqCst), 0);
+    }
+
+    /// When schema is missing and no prior reset: triggers reset, increments counter.
+    #[tokio::test]
+    async fn test_self_heal_triggers_on_first_miss() {
+        let resetter = MockResetter::new(None, 0);
+        let store = MockStore { schema_ok: false };
+        let result = self_heal_if_lance_missing(&resetter, &store).await;
+        assert!(result);
+        assert_eq!(resetter.total_resets(), 1);
+        assert_eq!(resetter.consecutive.load(Ordering::SeqCst), 1);
+    }
+
+    /// After 3 consecutive resets the 4th is gated until 28800s have passed.
+    ///
+    /// With consecutive=3, backoff = 28800s. A reset that happened 28700s ago
+    /// is still within the window, so the 4th reset is skipped.
+    #[tokio::test]
+    async fn test_self_heal_backoff_gates_fourth_reset_at_3_consecutive() {
+        // 28700s since last reset, consecutive=3 → backoff=28800 → still within window
+        let resetter = MockResetter::new(Some(28700), 3);
+        let store = MockStore { schema_ok: false };
+        let result = self_heal_if_lance_missing(&resetter, &store).await;
+        assert!(!result, "expected reset to be gated by backoff");
+        assert_eq!(resetter.total_resets(), 0);
+    }
+
+    /// After 3 consecutive resets and 28800s elapsed, the 4th reset fires.
+    #[tokio::test]
+    async fn test_self_heal_fires_fourth_reset_after_backoff_elapsed() {
+        // 28800s since last reset, consecutive=3 → backoff=28800 → window elapsed
+        let resetter = MockResetter::new(Some(28800), 3);
+        let store = MockStore { schema_ok: false };
+        let result = self_heal_if_lance_missing(&resetter, &store).await;
+        assert!(result, "expected reset to fire after backoff elapsed");
+        assert_eq!(resetter.total_resets(), 1);
+        assert_eq!(resetter.consecutive.load(Ordering::SeqCst), 4);
+    }
+
+    /// Backoff is skipped if the prior reset just barely falls within window (since < backoff).
+    #[tokio::test]
+    async fn test_self_heal_skips_reset_within_default_window() {
+        // 3599s since last reset, consecutive=0 → backoff=3600 → still within
+        let resetter = MockResetter::new(Some(3599), 0);
+        let store = MockStore { schema_ok: false };
+        let result = self_heal_if_lance_missing(&resetter, &store).await;
+        assert!(!result);
+        assert_eq!(resetter.total_resets(), 0);
+    }
 }
