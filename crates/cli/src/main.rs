@@ -289,6 +289,56 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn parse_plugin_install_defaults_to_claude() {
+        let cli = Cli::try_parse_from(["brain", "plugin", "install"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                action: PluginAction::Install {
+                    target: PluginTarget::Claude,
+                    dry_run: false
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_plugin_install_codex_dry_run() {
+        let cli = Cli::try_parse_from([
+            "brain",
+            "plugin",
+            "install",
+            "--target",
+            "codex",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                action: PluginAction::Install {
+                    target: PluginTarget::Codex,
+                    dry_run: true
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_plugin_uninstall_codex() {
+        let cli =
+            Cli::try_parse_from(["brain", "plugin", "uninstall", "--target", "codex"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Plugin {
+                action: PluginAction::Uninstall {
+                    target: PluginTarget::Codex
+                }
+            }
+        ));
+    }
+
     // ── Alias parsing ───────────────────────────────────────────────
 
     #[test]
