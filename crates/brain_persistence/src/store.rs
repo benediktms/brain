@@ -170,7 +170,8 @@ impl OptimizeScheduler {
     pub fn set_db(&self, db: Arc<crate::db::Db>) {
         *self.db.lock().expect("set_db lock") = Some(db);
         // DB swap invalidates any cached threshold observation.
-        self.pagerank_links_threshold_met.store(false, Ordering::Relaxed);
+        self.pagerank_links_threshold_met
+            .store(false, Ordering::Relaxed);
     }
 
     /// Take the current db reference (for preservation across table rebuilds).
@@ -299,10 +300,14 @@ impl OptimizeScheduler {
                     .inspect_err(|e| tracing::warn!(error = %e, "link count query failed; skipping PageRank for this cycle"))
                     .unwrap_or(0);
                 if link_count >= PAGERANK_MIN_LINKS {
-                    self.pagerank_links_threshold_met.store(true, Ordering::Relaxed);
+                    self.pagerank_links_threshold_met
+                        .store(true, Ordering::Relaxed);
                     true
                 } else {
-                    tracing::debug!(link_count, "skipping PageRank recompute: link count below threshold");
+                    tracing::debug!(
+                        link_count,
+                        "skipping PageRank recompute: link count below threshold"
+                    );
                     false
                 }
             };

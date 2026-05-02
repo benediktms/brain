@@ -6,9 +6,7 @@ use notify_debouncer_full::FileIdCache;
 use notify_debouncer_full::file_id::{FileId, get_file_id};
 use notify_debouncer_full::notify::RecursiveMode;
 use notify_debouncer_full::notify::event::EventKind;
-use notify_debouncer_full::{
-    DebounceEventResult, Debouncer, new_debouncer_opt,
-};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, new_debouncer_opt};
 use tracing::{info, warn};
 use walkdir::WalkDir;
 

@@ -532,7 +532,11 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // cycles when registering many directories in bulk (visible under 38+ brains).
     let all_dirs: Vec<(String, PathBuf)> = brains
         .values()
-        .flat_map(|inst| inst.note_dirs.iter().map(move |d| (inst.name.clone(), d.clone())))
+        .flat_map(|inst| {
+            inst.note_dirs
+                .iter()
+                .map(move |d| (inst.name.clone(), d.clone()))
+        })
         .collect();
 
     let capacity = all_dirs.len().saturating_mul(ESTIMATED_PATHS_PER_DIR);

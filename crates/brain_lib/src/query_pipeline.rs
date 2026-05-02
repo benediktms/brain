@@ -397,7 +397,13 @@ where
         // 2. Vector search (top-50)
         let vector_results = self
             .store
-            .query(&query_vec, CANDIDATE_LIMIT, DEFAULT_NPROBES, mode, params.brain_id)
+            .query(
+                &query_vec,
+                CANDIDATE_LIMIT,
+                DEFAULT_NPROBES,
+                mode,
+                params.brain_id,
+            )
             .await?;
         let vector_count = vector_results.len();
 
@@ -1779,8 +1785,10 @@ mod tests {
             _nprobes: usize,
             _mode: VectorSearchMode,
             brain_id: Option<&'a str>,
-        ) -> impl std::future::Future<Output = crate::error::Result<Vec<brain_persistence::store::QueryResult>>> + Send + 'a
-        {
+        ) -> impl std::future::Future<
+            Output = crate::error::Result<Vec<brain_persistence::store::QueryResult>>,
+        > + Send
+        + 'a {
             let captured = brain_id.map(str::to_owned);
             async move {
                 *self.last_brain_id.lock().unwrap() = Some(captured);
@@ -1802,8 +1810,8 @@ mod tests {
         let pipeline = QueryPipeline::new(&db, &spy, &embedder, &metrics);
 
         // Query scoped to "brain-a".
-        let sp = SearchParams::new("test query", "lookup", 0, 0, &[])
-            .with_brain_id(Some("brain-a"));
+        let sp =
+            SearchParams::new("test query", "lookup", 0, 0, &[]).with_brain_id(Some("brain-a"));
         let _ = pipeline.search_ranked_with_diagnostics(&sp).await;
 
         assert_eq!(
@@ -1829,11 +1837,9 @@ mod tests {
     #[test]
     fn with_brain_id_normalizes_empty_string_to_none() {
         let tags: Vec<String> = vec![];
-        let params = SearchParams::new("q", "intent", 100, 10, &tags)
-            .with_brain_id(Some(""));
+        let params = SearchParams::new("q", "intent", 100, 10, &tags).with_brain_id(Some(""));
         assert_eq!(
-            params.brain_id,
-            None,
+            params.brain_id, None,
             "with_brain_id(Some(\"\")) must normalize to None"
         );
     }
