@@ -34,6 +34,23 @@ pub fn get_meta_u32(conn: &Connection, key: &str) -> Result<Option<u32>> {
     }
 }
 
+/// Get a meta value by key, parsed as i64 (Unix seconds timestamp).
+///
+/// Returns `Ok(None)` if the key does not exist or the stored value is not a
+/// valid i64.
+pub fn get_meta_i64(conn: &Connection, key: &str) -> Result<Option<i64>> {
+    match get_meta(conn, key)? {
+        None => Ok(None),
+        Some(s) => match s.parse::<i64>() {
+            Ok(v) => Ok(Some(v)),
+            Err(_) => {
+                warn!(key = key, value = %s, "brain_meta value is not a valid i64, treating as unset");
+                Ok(None)
+            }
+        },
+    }
+}
+
 /// Set a meta value (upsert).
 pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(

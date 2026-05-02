@@ -717,6 +717,14 @@ impl EmbeddingResetter for MockEmbeddingResetter {
         *self.records_reset_count.lock().unwrap() += 1;
         Ok(())
     }
+
+    fn record_embed_reset(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn last_embed_reset_before(&self) -> Result<Option<i64>> {
+        Ok(None)
+    }
 }
 
 // ---------------------------------------------------------------------------

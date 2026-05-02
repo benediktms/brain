@@ -88,7 +88,9 @@ pub async fn run(
     // Embedding is now handled by the EmbedPollSweep recurring job.
 
     // Summarization job poll: reaps stuck jobs, processes ready jobs, GC's old ones.
-    let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
+    // 60s (was 30s); 30s spawned concurrent tokio tasks too aggressively on
+    // low-activity brains. 60s is sufficient for job processing latency.
+    let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(60));
 
     // In-memory lock set: prevents the reaper from resetting jobs that are
     // still actively running in a tokio::spawn task.

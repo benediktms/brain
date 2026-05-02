@@ -96,7 +96,7 @@ pub fn reconcile_recurring_jobs(queue: &dyn JobQueue, brains: &[BrainInfo]) -> R
             metadata: serde_json::json!({}),
             scheduled_at: 0,
         };
-        queue.reconcile_singleton_job_with_delay(&input, 10)?;
+        queue.reconcile_singleton_job_with_delay(&input, 30)?; // was 10s — too aggressive for low-activity brains
     }
 
     Ok(())

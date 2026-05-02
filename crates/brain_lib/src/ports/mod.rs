@@ -706,6 +706,9 @@ impl LinkWriter for Db {
 // SQLite write path — self-heal / embedded_at reset
 // ---------------------------------------------------------------------------
 
+/// Key used in brain_meta to store the last embedded_at reset timestamp (Unix s).
+pub const EMBED_RESET_META_KEY: &str = "embed_reset_at";
+
 /// Reset all `embedded_at` columns so items are re-embedded on the next poll cycle.
 ///
 /// Consumers: `embed_poll::self_heal_if_lance_missing`.
@@ -718,6 +721,12 @@ pub trait EmbeddingResetter: Send + Sync {
 
     /// Reset `embedded_at` to NULL on all records rows in this database.
     fn reset_records_embedded_at(&self) -> Result<()>;
+
+    /// Record the current time as the last embed reset timestamp in brain_meta.
+    fn record_embed_reset(&self) -> Result<()>;
+
+    /// Seconds since the last embed reset, or `None` if no reset has been recorded.
+    fn last_embed_reset_before(&self) -> Result<Option<i64>>;
 }
 
 // -- EmbeddingResetter for Db ----------------------------------------------
@@ -741,6 +750,29 @@ impl EmbeddingResetter for Db {
         self.with_write_conn(|conn| {
             conn.execute_batch("UPDATE records SET embedded_at = NULL;")?;
             Ok(())
+        })
+    }
+
+    fn record_embed_reset(&self) -> Result<()> {
+        use brain_persistence::db::meta;
+        self.with_write_conn(|conn| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            meta::set_meta(conn, EMBED_RESET_META_KEY, &now.to_string())
+        })
+    }
+
+    fn last_embed_reset_before(&self) -> Result<Option<i64>> {
+        use brain_persistence::db::meta;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        self.with_read_conn(|conn| {
+            let last = meta::get_meta_i64(conn, EMBED_RESET_META_KEY)?;
+            Ok(last.map(|t| now.saturating_sub(t)))
         })
     }
 }

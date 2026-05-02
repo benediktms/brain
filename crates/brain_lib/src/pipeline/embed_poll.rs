@@ -638,10 +638,18 @@ where
 
 // ── Self-heal ────────────────────────────────────────────────────────────────
 
+/// Key used in brain_meta to store the last embedded_at reset timestamp (Unix s).
+pub const META_KEY_EMBED_RESET_AT: &str = "embed_reset_at";
+
+/// Backoff window: skip self-heal reset if one occurred within this many seconds.
+const SELF_HEAL_BACKOFF_SECS: i64 = 3600; // 1 hour — enough to complete a re-embed wave
+
 /// Check if LanceDB is accessible. If not, reset all `embedded_at` columns so
 /// items will be re-embedded on the next poll cycle.
 ///
-/// Returns `true` if a reset occurred (LanceDB was missing/inaccessible).
+/// Uses `brain_meta` to record the reset timestamp. Skips the reset if a prior
+/// reset occurred within the backoff window, to prevent repeated cascade
+/// triggers from causing back-to-back full re-embeds.
 pub async fn self_heal_if_lance_missing(
     resetter: &(impl EmbeddingResetter + ?Sized),
     store: &(impl crate::ports::SchemaMeta + ?Sized),
@@ -650,6 +658,19 @@ pub async fn self_heal_if_lance_missing(
     // request to the underlying table handle.
     if store.current_schema_matches_expected().await {
         return false;
+    }
+
+    // Backoff: skip if a reset already happened within the backoff window.
+    match resetter.last_embed_reset_before() {
+        Ok(Some(since)) if since < SELF_HEAL_BACKOFF_SECS => {
+            debug!(
+                seconds_remaining = SELF_HEAL_BACKOFF_SECS - since,
+                "self_heal: skipping reset — prior reset within backoff window"
+            );
+            return false;
+        }
+        // None (no prior reset) or Ok(Some(>= backoff)) or Err — proceed with reset.
+        _ => {}
     }
 
     warn!("LanceDB not found — resetting embedded_at for full re-embed");
@@ -664,6 +685,10 @@ pub async fn self_heal_if_lance_missing(
 
     if let Err(e) = resetter.reset_records_embedded_at() {
         warn!(error = %e, "embed_poll: failed to reset records.embedded_at");
+    }
+
+    if let Err(e) = resetter.record_embed_reset() {
+        warn!(error = %e, "embed_poll: failed to record embed reset timestamp");
     }
 
     true
