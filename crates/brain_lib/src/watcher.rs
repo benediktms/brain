@@ -1,13 +1,21 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
-use notify_debouncer_full::FileIdCache;
-use notify_debouncer_full::file_id::{FileId, get_file_id};
-use notify_debouncer_full::notify::RecursiveMode;
 use notify_debouncer_full::notify::event::EventKind;
 use notify_debouncer_full::{DebounceEventResult, Debouncer, new_debouncer_opt};
 use tracing::{info, warn};
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+use notify_debouncer_full::FileIdCache;
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+use notify_debouncer_full::file_id::{FileId, get_file_id};
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+use notify_debouncer_full::notify::RecursiveMode;
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+use std::collections::HashMap;
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+use std::path::Path;
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
 use walkdir::WalkDir;
 
 /// Expected number of file-ID cache entries per watched directory.
@@ -138,7 +146,10 @@ impl BrainWatcher {
         tx: tokio::sync::mpsc::Sender<FileEvent>,
     ) -> crate::error::Result<Self> {
         #[cfg(any(target_os = "linux", target_os = "android", target_family = "wasm"))]
-        let cache = notify_debouncer_full::NoCache::new();
+        let cache = {
+            let _ = capacity;
+            notify_debouncer_full::NoCache::new()
+        };
         #[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
         let cache = PreSizedFileIdMap::with_capacity(capacity);
 
