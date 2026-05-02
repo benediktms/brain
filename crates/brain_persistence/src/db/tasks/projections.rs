@@ -5,10 +5,10 @@ use crate::db::links::{EdgeKind, EntityRef, LinkCreatedPayload, LinkRemovedPaylo
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    CommentPayload, CommentUpdatedPayload, DependencyPayload, EventType, ExternalBlockerAddedPayload,
-    ExternalBlockerResolvedPayload, ExternalIdPayload, LabelPayload, NoteLinkPayload,
-    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskTransferredPayload,
-    TaskUpdatedPayload,
+    CommentPayload, CommentUpdatedPayload, DependencyPayload, EventType,
+    ExternalBlockerAddedPayload, ExternalBlockerResolvedPayload, ExternalIdPayload, LabelPayload,
+    NoteLinkPayload, ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent,
+    TaskTransferredPayload, TaskUpdatedPayload,
 };
 use super::queries::next_child_seq;
 
@@ -284,8 +284,10 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
         }
 
         EventType::CommentUpdated => {
-            let p: CommentUpdatedPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad CommentUpdated payload: {e}")))?;
+            let p: CommentUpdatedPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("bad CommentUpdated payload: {e}"))
+                })?;
 
             let rows_affected = conn.execute(
                 "UPDATE task_comments SET body = ?1, updated_at = ?2
