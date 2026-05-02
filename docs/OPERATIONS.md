@@ -16,6 +16,9 @@ When brain opens the SQLite database, `init_schema` checks the stored `user_vers
 
 | Version | Change |
 |---------|--------|
+| v51 | Polymorphic link graph backfill: existing `tasks.parent_task_id`, `task_deps`, and `record_links` rows projected into `entity_links` (~2.5k rows on a typical brain) |
+| v50 | Drop dead partial indexes on `entity_links` (planner never selected them) |
+| v49 | Polymorphic `entity_links` edge table introduced (TASK/RECORD/CHUNK ↔ TASK/RECORD/CHUNK with edge_kind discriminant) |
 | v25 | Episodic memory foundation: `brain_id` column added to `summaries` table; `fts_summaries` FTS5 virtual table created; existing episodes backfilled |
 | v24 | Per-brain prefix column on `summaries` |
 
@@ -332,12 +335,53 @@ Brain verifies model integrity at startup using built-in BLAKE3 hashing regardle
 | `BRAIN_MODEL_DIR` | Path to model directory | `./.brain/models/bge-small-en-v1.5` |
 | `BRAIN_HOME` | Brain home directory | `~/.brain` |
 | `BRAIN_GIT_CACHE_CAP` | Maximum entries in the git common-dir LRU cache | `4096` |
+| `BRAIN_COMPARATOR` | When set to `1`, enables the polymorphic-link-graph dual-read comparator. Off in dev; set on the production daemon during the v51→v52 soak window. See [Polymorphic Link Graph Soak Comparator](#polymorphic-link-graph-soak-comparator). | unset (off) |
 
 Example — use a model from a custom location:
 
 ```sh
 BRAIN_MODEL_DIR=/opt/models/bge-small brain memory retrieve "async patterns"
 ```
+
+### Polymorphic Link Graph Soak Comparator
+
+The v48–v51 migration arc collapsed three relationship-storage patterns
+(`tasks.parent_task_id` column, `task_deps` table, `record_links` projection)
+into a single polymorphic `entity_links` edge table. Hot-path readers now query
+`entity_links`; the legacy tables stay populated via dual-write so the cutover
+is reversible. A subsequent migration drops the legacy structures only after a
+soak window in which a dual-read comparator confirms the two sources never
+diverge.
+
+The comparator is **off by default**. To activate it during the soak window,
+export `BRAIN_COMPARATOR=1` on the production daemon process before startup.
+The daemon emits the line
+
+```
+INFO comparator enabled — soak observability active
+```
+
+after `tracing_subscriber.init()` so observability can confirm the gate is
+armed. Each wrapped reader runs both the new `entity_links` query and the
+legacy query, asserts row-set equality (sorted, set-based), and on mismatch
+emits
+
+```
+WARN comparator divergence detected: entity_links vs legacy table results differ
+     reader=<name> new_extra=[...] legacy_extra=[...]
+```
+
+and increments an in-process `comparator_divergence_total` counter. The
+comparator is observation-only — it always returns the new-side result.
+
+**Operator action before the legacy-drop migration ships:**
+
+1. `BRAIN_COMPARATOR=1` exported on the daemon.
+2. Confirm the startup log line is present in production logs.
+3. Watch for `comparator divergence detected` warnings across the soak window
+   (≥4 days of clean operation is the gate).
+4. After the legacy-drop migration ships, the env var and the comparator
+   module are removed in the same commit. The variable becomes a no-op.
 
 ### Integrity Verification
 
