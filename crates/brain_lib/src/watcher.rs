@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use notify_debouncer_full::notify::RecursiveMode;
 use notify_debouncer_full::notify::event::EventKind;
 use notify_debouncer_full::{DebounceEventResult, Debouncer, new_debouncer_opt};
 use tracing::{info, warn};
@@ -10,11 +11,7 @@ use notify_debouncer_full::FileIdCache;
 #[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
 use notify_debouncer_full::file_id::{FileId, get_file_id};
 #[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
-use notify_debouncer_full::notify::RecursiveMode;
-#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
 use std::collections::HashMap;
-#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
-use std::path::Path;
 #[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
 use walkdir::WalkDir;
 
