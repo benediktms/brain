@@ -50,7 +50,7 @@ fn parse_and_validate_event(params: &Params) -> Result<ValidatedEvent, String> {
             "Invalid event_type: '{}'. Must be one of: task_created, \
              task_updated, status_changed, dependency_added, dependency_removed, \
              note_linked, note_unlinked, label_added, label_removed, comment_added, \
-             parent_set, external_id_added, external_id_removed, \
+             comment_updated, parent_set, external_id_added, external_id_removed, \
              external_blocker_added, external_blocker_resolved",
             params.event_type
         )
@@ -121,6 +121,7 @@ fn apply_event_schema() -> Value {
         "label_added",
         "label_removed",
         "comment_added",
+        "comment_updated",
         "parent_set",
         "external_id_added",
         "external_id_removed",
@@ -155,11 +156,22 @@ fn apply_event_schema() -> Value {
                 - dependency_added/dependency_removed: {depends_on_task_id (required)}\n\
                 - note_linked/note_unlinked: {chunk_id (required)}\n\
                 - label_added/label_removed: {label (required)}\n\
-                - comment_added: {body (required)}\n\
+                - comment_added: {body (required, max 64 KB)}\
+                - comment_updated: {comment_id (required), body (required, max 64 KB)}\\n\
                 - parent_set: {parent_task_id (string or null to clear)}\n\
                 - external_id_added/external_id_removed: {source (required), external_id (required), external_url}\n\
                 - external_blocker_added: {source (required), external_id (required), external_url, blocking (default true)}\n\
-                - external_blocker_resolved: {source (required), external_id (required), resolved_at (ISO 8601 string or unix-seconds; default: now)}"
+                - external_blocker_resolved: {source (required), external_id (required), resolved_at (ISO 8601 string or unix-seconds; default: now)}",
+                "properties": {
+                    "body": {
+                        "type": "string",
+                        "maxLength": 65536
+                    },
+                    "comment_id": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
             }
         },
         "required": ["event_type", "payload"]

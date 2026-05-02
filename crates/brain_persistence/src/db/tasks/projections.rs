@@ -5,10 +5,10 @@ use crate::db::links::{EdgeKind, EntityRef, LinkCreatedPayload, LinkRemovedPaylo
 use crate::error::{BrainCoreError, Result};
 
 use super::events::{
-    CommentPayload, DependencyPayload, EventType, ExternalBlockerAddedPayload,
-    ExternalBlockerResolvedPayload, ExternalIdPayload, LabelPayload, NoteLinkPayload,
-    ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskTransferredPayload,
-    TaskUpdatedPayload,
+    CommentPayload, CommentUpdatedPayload, DependencyPayload, EventType,
+    ExternalBlockerAddedPayload, ExternalBlockerResolvedPayload, ExternalIdPayload, LabelPayload,
+    NoteLinkPayload, ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent,
+    TaskTransferredPayload, TaskUpdatedPayload,
 };
 use super::queries::next_child_seq;
 
@@ -281,6 +281,25 @@ fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Re
                     event.timestamp,
                 ],
             )?;
+        }
+
+        EventType::CommentUpdated => {
+            let p: CommentUpdatedPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("bad CommentUpdated payload: {e}"))
+                })?;
+
+            let rows_affected = conn.execute(
+                "UPDATE task_comments SET body = ?1, updated_at = ?2
+                 WHERE comment_id = ?3 AND task_id = ?4",
+                rusqlite::params![p.body, event.timestamp, p.comment_id, event.task_id],
+            )?;
+            if rows_affected == 0 {
+                return Err(BrainCoreError::TaskEvent(format!(
+                    "comment_id '{}' not found for task '{}'",
+                    p.comment_id, event.task_id
+                )));
+            }
         }
 
         EventType::ParentSet => {
@@ -614,6 +633,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
         | EventType::LabelAdded
         | EventType::LabelRemoved
         | EventType::CommentAdded
+        | EventType::CommentUpdated
         | EventType::ExternalIdAdded
         | EventType::ExternalIdRemoved
         | EventType::ExternalBlockerAdded

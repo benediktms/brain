@@ -433,12 +433,13 @@ pub struct TaskComment {
     pub author: String,
     pub body: String,
     pub created_at: i64,
+    pub updated_at: Option<i64>,
 }
 
 /// Get comments for a task, ordered by creation time.
 pub fn get_task_comments(conn: &Connection, task_id: &str) -> Result<Vec<TaskComment>> {
     let mut stmt = conn.prepare(
-        "SELECT comment_id, author, body, created_at
+        "SELECT comment_id, author, body, created_at, updated_at
          FROM task_comments WHERE task_id = ?1 ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map([task_id], |row| {
@@ -447,6 +448,7 @@ pub fn get_task_comments(conn: &Connection, task_id: &str) -> Result<Vec<TaskCom
             author: row.get(1)?,
             body: row.get(2)?,
             created_at: row.get(3)?,
+            updated_at: row.get(4)?,
         })
     })?;
     crate::db::collect_rows(rows)
