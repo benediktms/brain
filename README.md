@@ -126,15 +126,28 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 
 ---
 
-## Claude Code Integration
+## Agent Plugin Integration
 
-brain distributes as a set of Claude Code plugins. The plugin surface is canonical — install via the plugin marketplace or the CLI:
+brain distributes plugins for agent runtimes. The plugin surface is canonical — install via the CLI and restart the target client.
 
 ```sh
-brain plugin install
+brain plugin install                  # Claude Code, default target
+brain plugin install --target claude  # explicit Claude Code install
+brain plugin install --target codex   # Codex install
 ```
 
-This mounts the plugin manifests from `~/.brain/plugins/{brain,tasks,records,mem}/plugin.json` and registers the hooks (`SessionStart`, `UserPromptSubmit`, `PreCompact`) without mutating your project's `.claude/settings.json`.
+Claude Code installs four domain plugins under `~/.claude/plugins/marketplaces/` and registers them with the `claude` CLI when available. This provides `/tasks:*`, `/mem:*`, `/records:*`, and `/brain:*` commands plus the Brain hooks (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `Stop`, `PreToolUse`) without mutating your project's `.claude/settings.json`.
+
+Codex installs one consolidated home-local plugin at `~/.agents/plugins/brain/` and upserts the `brain` entry in `~/.agents/plugins/marketplace.json`. This exposes the bundled Brain skills for tasks, memory, records, and administration through the Codex plugin marketplace. Configure the Brain MCP server in Codex first so the skills can call the Brain MCP tools.
+
+To remove a plugin:
+
+```sh
+brain plugin uninstall                  # Claude Code, default target
+brain plugin uninstall --target codex   # Codex
+```
+
+Restart Claude Code or Codex after installing or uninstalling so the client reloads plugin metadata.
 
 ### Advanced / manual setup
 
@@ -145,7 +158,7 @@ brain hooks install            # mutates .claude/settings.json
 brain hooks install --dry-run  # preview changes without applying
 ```
 
-Prefer `brain plugin install` for all standard setups.
+Prefer `brain plugin install --target claude` for all standard Claude Code setups.
 
 ---
 

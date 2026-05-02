@@ -85,6 +85,38 @@ fn subcommand_help_shows_usage() {
         .stdout(predicate::str::contains("Usage"));
 }
 
+#[test]
+fn plugin_install_claude_dry_run_describes_without_writing() {
+    let home = TempDir::new().unwrap();
+    brain_cmd()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .args(["plugin", "install", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Would write"))
+        .stdout(predicate::str::contains(".claude/plugins/marketplaces"))
+        .stdout(predicate::str::contains("Would register each marketplace"));
+
+    assert!(!home.path().join(".claude").exists());
+}
+
+#[test]
+fn plugin_install_codex_dry_run_describes_without_writing() {
+    let home = TempDir::new().unwrap();
+    brain_cmd()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .args(["plugin", "install", "--target", "codex", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Would write"))
+        .stdout(predicate::str::contains(".agents/plugins/brain"))
+        .stdout(predicate::str::contains("source.path: ./plugins/brain"));
+
+    assert!(!home.path().join(".agents").exists());
+}
+
 /// Verify `brain -v` output is a valid short git SHA (7 hex chars).
 ///
 /// This only applies to local-install builds (`just install`). Crates.io releases

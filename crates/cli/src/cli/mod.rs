@@ -319,7 +319,7 @@ pub(crate) enum Command {
         action: HooksAction,
     },
 
-    /// Manage the brain Claude Code plugin (skills, commands, agents)
+    /// Manage the brain agent plugin (Claude Code or Codex)
     Plugin {
         #[command(subcommand)]
         action: PluginAction,
@@ -599,14 +599,29 @@ pub enum McpTarget {
 
 #[derive(Subcommand)]
 pub enum PluginAction {
-    /// Install the brain Claude Code plugin (skills, commands, agents)
+    /// Install the brain agent plugin (skills, commands, agents)
     Install {
+        /// Target agent runtime to install for
+        #[arg(long, value_enum, default_value = "claude")]
+        target: PluginTarget,
         /// Print what would be written without actually writing
         #[arg(long)]
         dry_run: bool,
     },
-    /// Uninstall the brain Claude Code plugin
-    Uninstall,
+    /// Uninstall the brain agent plugin
+    Uninstall {
+        /// Target agent runtime to uninstall from
+        #[arg(long, value_enum, default_value = "claude")]
+        target: PluginTarget,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PluginTarget {
+    /// Claude Code plugin marketplaces under ~/.claude
+    Claude,
+    /// Codex plugin marketplace under ~/.agents
+    Codex,
 }
 
 #[derive(Subcommand)]
