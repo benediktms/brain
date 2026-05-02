@@ -262,6 +262,7 @@ impl OptimizeScheduler {
         self.maybe_create_index().await;
 
         // Recompute PageRank scores after compaction so link scores stay fresh.
+        #[allow(clippy::collapsible_if)]
         if let Some(ref db) = *self.db.lock().expect("optimize db lock") {
             if let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank) {
                 warn!(error = %e, "PageRank computation failed, will retry on next optimize");
