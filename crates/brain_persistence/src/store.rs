@@ -206,10 +206,14 @@ impl OptimizeScheduler {
         if !self.should_run(pending, &guard) {
             return;
         }
-        self.run_optimize(guard).await;
+        self.run_optimize(guard, false).await;
     }
 
     /// Wait for any in-progress optimize, then run unconditionally.
+    ///
+    /// Bypasses the PageRank link-count gate — `force_optimize` is the API used
+    /// by `brain vacuum`, daemon shutdown, and tests, all of which want PageRank
+    /// to run regardless of graph size.
     pub async fn force_optimize(&self) {
         if self.pending_mutations.load(Ordering::Relaxed) == 0 {
             return;
@@ -218,7 +222,7 @@ impl OptimizeScheduler {
         if self.pending_mutations.load(Ordering::Relaxed) == 0 {
             return;
         }
-        self.run_optimize(guard).await;
+        self.run_optimize(guard, true).await;
     }
 
     /// Run compaction unconditionally — ignores the `pending_mutations` counter.
@@ -255,7 +259,14 @@ impl OptimizeScheduler {
     }
 
     /// Execute optimize. Caller must hold the guard.
-    async fn run_optimize(&self, mut last_optimize: tokio::sync::MutexGuard<'_, Instant>) {
+    ///
+    /// `bypass_pagerank_gate`: when `true`, run PageRank regardless of the
+    /// link-count threshold. Used by `force_optimize`.
+    async fn run_optimize(
+        &self,
+        mut last_optimize: tokio::sync::MutexGuard<'_, Instant>,
+        bypass_pagerank_gate: bool,
+    ) {
         let snapshot = self.pending_mutations.load(Ordering::Relaxed);
         if snapshot == 0 {
             return;
@@ -289,7 +300,9 @@ impl OptimizeScheduler {
         // sets. A monotonic latch avoids a redundant COUNT(*) once the threshold
         // is first observed — see PAGERANK_MIN_LINKS for the rationale.
         if let Some(ref db) = *self.db.lock().expect("optimize db lock") {
-            let above_threshold = if self.pagerank_links_threshold_met.load(Ordering::Relaxed) {
+            let above_threshold = if bypass_pagerank_gate
+                || self.pagerank_links_threshold_met.load(Ordering::Relaxed)
+            {
                 true
             } else {
                 let link_count = db
