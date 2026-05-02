@@ -239,11 +239,11 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             }
         },
         Command::Plugin { action } => match action {
-            PluginAction::Install { dry_run } => {
-                commands::plugin::install(dry_run)?;
+            PluginAction::Install { target, dry_run } => {
+                commands::plugin::install(target, dry_run)?;
             }
-            PluginAction::Uninstall => {
-                commands::plugin::uninstall()?;
+            PluginAction::Uninstall { target } => {
+                commands::plugin::uninstall(target)?;
             }
         },
         Command::Hooks { action } => match action {

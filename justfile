@@ -138,6 +138,11 @@ daemon +args: ensure-binary
 
 alias d := daemon
 
+# Manage agent plugins: install | uninstall [--target claude|codex] [--dry-run]
+[group('app')]
+plugin +args:
+    cargo run --bin brain -- plugin {{args}}
+
 # ── Maintenance ───────────────────────────────────────────────────────────
 
 # Run health checks on the index
