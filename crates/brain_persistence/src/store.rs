@@ -261,11 +261,22 @@ impl OptimizeScheduler {
         // Auto-create IVF-PQ index if enough rows and no index exists yet
         self.maybe_create_index().await;
 
-        // Recompute PageRank scores after compaction so link scores stay fresh
-        if let Some(ref db) = *self.db.lock().expect("optimize db lock")
-            && let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank)
-        {
-            warn!(error = %e, "PageRank computation failed, will retry on next optimize");
+        // Recompute PageRank scores after compaction so link scores stay fresh.
+        // Gate with a row-count threshold: PageRank is O(N) on links table and
+        // becomes the dominant cost in the optimize hot path for large link sets.
+        // Skip if fewer than 1000 links — link scores are not yet meaningful.
+        if let Some(ref db) = *self.db.lock().expect("optimize db lock") {
+            let link_count = db
+                .with_read_conn(|conn| {
+                    conn.query_row("SELECT COUNT(*) FROM links", [], |row| row.get::<_, i64>(0))
+                        .map_err(BrainCoreError::from)
+                })
+                .unwrap_or(0);
+            if link_count >= 1000
+                && let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank)
+            {
+                warn!(error = %e, "PageRank computation failed, will retry on next optimize");
+            }
         }
     }
 
