@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.9] - 2026-05-02
+
+### Bug Fixes
+
+- Close out daemon CPU regression (#115)
+- Reduce daemon CPU usage (#113)
+- Bound git directory cache with LRU eviction (#110)
+
+### Features
+
+- Add Codex plugin target (#114)
+- Support editing existing task comments (brn-e1d) (#112)
+- Polymorphic graph wave 6 — deferred readers + MCP dedup + dual-read comparator (#111)
+- Introduce entity_links polymorphic edge table (Wave 1) (#109)
+- Bounded log rotation + EnvFilter scoping (#108)
+
 ## [0.3.8] - 2026-05-01
 
 ### Bug Fixes
