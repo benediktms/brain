@@ -89,6 +89,7 @@ pub fn comments_to_json(comments: &[TaskComment]) -> Vec<Value> {
                 "author": c.author,
                 "body": c.body,
                 "created_at": ts_to_iso(c.created_at),
+                "updated_at": c.updated_at.map(ts_to_iso),
             })
         })
         .collect()
@@ -293,6 +294,7 @@ mod tests {
             author: author.to_string(),
             body: body.to_string(),
             created_at: ts,
+            updated_at: None,
         }
     }
 

@@ -37,6 +37,8 @@ pub enum EventType {
     LabelAdded,
     LabelRemoved,
     CommentAdded,
+    /// Edit an existing comment's body by comment_id.
+    CommentUpdated,
     ParentSet,
     ExternalIdAdded,
     ExternalIdRemoved,
@@ -227,6 +229,12 @@ pub struct CommentPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentUpdatedPayload {
+    pub comment_id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParentSetPayload {
     pub parent_task_id: Option<String>,
 }
@@ -311,6 +319,12 @@ impl EventPayload for StatusChangedPayload {
 impl EventPayload for CommentPayload {
     fn event_type() -> EventType {
         EventType::CommentAdded
+    }
+}
+
+impl EventPayload for CommentUpdatedPayload {
+    fn event_type() -> EventType {
+        EventType::CommentUpdated
     }
 }
 
