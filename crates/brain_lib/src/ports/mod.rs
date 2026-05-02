@@ -709,6 +709,10 @@ impl LinkWriter for Db {
 /// Key used in brain_meta to store the last embedded_at reset timestamp (Unix s).
 pub const EMBED_RESET_META_KEY: &str = "embed_reset_at";
 
+/// Key used in brain_meta to store the count of consecutive self-heal resets.
+/// Reset to 0 when a successful schema check is observed.
+pub const EMBED_CONSECUTIVE_RESETS_KEY: &str = "embed_consecutive_resets";
+
 /// Reset all `embedded_at` columns so items are re-embedded on the next poll cycle.
 ///
 /// Consumers: `embed_poll::self_heal_if_lance_missing`.
@@ -727,6 +731,13 @@ pub trait EmbeddingResetter: Send + Sync {
 
     /// Seconds since the last embed reset, or `None` if no reset has been recorded.
     fn last_embed_reset_before(&self) -> Result<Option<i64>>;
+
+    /// Number of consecutive self-heal resets that have occurred without a
+    /// successful schema check in between. Returns 0 when no value is stored.
+    fn get_consecutive_resets(&self) -> Result<u32>;
+
+    /// Persist the consecutive reset count to brain_meta.
+    fn set_consecutive_resets(&self, count: u32) -> Result<()>;
 }
 
 // -- EmbeddingResetter for Db ----------------------------------------------
@@ -773,6 +784,20 @@ impl EmbeddingResetter for Db {
         self.with_read_conn(|conn| {
             let last = meta::get_meta_i64(conn, EMBED_RESET_META_KEY)?;
             Ok(last.map(|t| now.saturating_sub(t)))
+        })
+    }
+
+    fn get_consecutive_resets(&self) -> Result<u32> {
+        use brain_persistence::db::meta;
+        self.with_read_conn(|conn| {
+            Ok(meta::get_meta_u32(conn, EMBED_CONSECUTIVE_RESETS_KEY)?.unwrap_or(0))
+        })
+    }
+
+    fn set_consecutive_resets(&self, count: u32) -> Result<()> {
+        use brain_persistence::db::meta;
+        self.with_write_conn(move |conn| {
+            meta::set_meta(conn, EMBED_CONSECUTIVE_RESETS_KEY, &count.to_string())
         })
     }
 }
