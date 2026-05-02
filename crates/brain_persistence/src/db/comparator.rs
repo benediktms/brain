@@ -58,10 +58,17 @@ pub fn reset_counter_for_test() {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    /// Serializes tests that touch `DIVERGENCE_COUNTER` so they don't race
+    /// when cargo runs the test module in parallel.
+    static COUNTER_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_comparator_pass_emits_no_warn() {
+        let _guard = COUNTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         reset_counter_for_test();
         let before = divergence_count();
         // Call compare with equal sets — no divergence should occur.
@@ -82,6 +89,7 @@ mod tests {
 
     #[test]
     fn test_comparator_divergence_increments_counter() {
+        let _guard = COUNTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         reset_counter_for_test();
         let before = divergence_count();
         // Simulate the divergence path directly.

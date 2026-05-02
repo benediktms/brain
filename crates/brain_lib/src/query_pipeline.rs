@@ -144,11 +144,11 @@ pub struct SearchParams<'a> {
     /// Optional brain_id filter for FTS queries. `None` = workspace-global,
     /// `Some(&[id])` = scope to specific brain(s).
     pub brain_ids: Option<&'a [String]>,
-    /// Owning brain for read-time projections that are brain-scoped (e.g. the
-    /// `tag_aliases` lookup consumed in milestone 3 of `brn-83a.7.2.4`).
-    /// `None` = no brain context (rare workspace-wide introspection paths).
-    /// Consumers MUST treat `Some("")` as `None` — the empty string is
-    /// reserved for "caller could not resolve a brain", not "all brains".
+    /// Owning brain for read-time projections that are brain-scoped (e.g.
+    /// the tag-alias lookup). `None` = no brain context (workspace-wide
+    /// introspection paths). Empty-string values are normalized to `None`
+    /// by [`SearchParams::with_brain_id`] — callers do not need to handle
+    /// this case explicitly.
     pub brain_id: Option<&'a str>,
     /// Filter by result kind. Empty = no filter (all kinds).
     pub kinds: &'a [MemoryKind],
@@ -202,9 +202,10 @@ impl<'a> SearchParams<'a> {
     }
 
     /// Set the owning brain for read-time, brain-scoped projections (alias
-    /// lookup, etc.). `Some("")` MUST be treated by consumers as `None`.
+    /// lookup, etc.). `Some("")` is normalized to `None` — callers do not
+    /// need to guard against empty strings.
     pub fn with_brain_id(mut self, brain_id: Option<&'a str>) -> Self {
-        self.brain_id = brain_id;
+        self.brain_id = brain_id.filter(|s| !s.is_empty());
         self
     }
 
@@ -396,7 +397,13 @@ where
         // 2. Vector search (top-50)
         let vector_results = self
             .store
-            .query(&query_vec, CANDIDATE_LIMIT, DEFAULT_NPROBES, mode, None)
+            .query(
+                &query_vec,
+                CANDIDATE_LIMIT,
+                DEFAULT_NPROBES,
+                mode,
+                params.brain_id,
+            )
             .await?;
         let vector_count = vector_results.len();
 
@@ -1732,6 +1739,108 @@ mod tests {
             surviving_real.contains(&chunk_id),
             "fixture sanity: with brain_id=\"brain-a\" the chunk must be retained \
              via alias expansion — otherwise the previous assertion is vacuous"
+        );
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Regression: brain_id passthrough to vector search
+    //
+    // Verifies that `QueryPipeline` forwards `SearchParams::brain_id` to the
+    // underlying `ChunkSearcher::query` call rather than hardcoding `None`.
+    // Without the fix, the spy would record `None` regardless of the param.
+    // ───────────────────────────────────────────────────────────────────────
+
+    use crate::ports::ChunkSearcher;
+    use brain_persistence::store::VectorSearchMode;
+    use std::sync::Mutex;
+
+    /// A `ChunkSearcher` spy that records the `brain_id` argument of every
+    /// `query` call. Returns an empty result set so the pipeline runs to
+    /// completion without requiring real LanceDB data.
+    struct SpyChunkSearcher {
+        /// The `brain_id` passed to the most recent `query` call.
+        /// `None` means `query` has not been called yet.
+        last_brain_id: Mutex<Option<Option<String>>>,
+    }
+
+    impl SpyChunkSearcher {
+        fn new() -> Self {
+            Self {
+                last_brain_id: Mutex::new(None),
+            }
+        }
+
+        /// Return the `brain_id` seen on the last `query` call, or `None`
+        /// if `query` was never called.
+        fn recorded_brain_id(&self) -> Option<Option<String>> {
+            self.last_brain_id.lock().unwrap().clone()
+        }
+    }
+
+    impl ChunkSearcher for SpyChunkSearcher {
+        fn query<'a>(
+            &'a self,
+            _embedding: &'a [f32],
+            _top_k: usize,
+            _nprobes: usize,
+            _mode: VectorSearchMode,
+            brain_id: Option<&'a str>,
+        ) -> impl std::future::Future<
+            Output = crate::error::Result<Vec<brain_persistence::store::QueryResult>>,
+        > + Send
+        + 'a {
+            let captured = brain_id.map(str::to_owned);
+            async move {
+                *self.last_brain_id.lock().unwrap() = Some(captured);
+                Ok(vec![])
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn vector_search_receives_brain_id_from_params() {
+        // Regression test: confirm `params.brain_id` reaches the store.
+        // Seeds a minimal in-memory Db so `search_ranked_with_diagnostics`
+        // can run to completion, then asserts the spy recorded the expected
+        // brain_id value.
+        let (db, _chunk_id) = seed_chunk_with_tags("brain-a", &[]);
+        let spy = SpyChunkSearcher::new();
+        let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
+        let metrics = Arc::new(Metrics::new());
+        let pipeline = QueryPipeline::new(&db, &spy, &embedder, &metrics);
+
+        // Query scoped to "brain-a".
+        let sp =
+            SearchParams::new("test query", "lookup", 0, 0, &[]).with_brain_id(Some("brain-a"));
+        let _ = pipeline.search_ranked_with_diagnostics(&sp).await;
+
+        assert_eq!(
+            spy.recorded_brain_id(),
+            Some(Some("brain-a".to_owned())),
+            "store.query must receive Some(\"brain-a\") — not None — when \
+             params.brain_id is Some(\"brain-a\")"
+        );
+
+        // Also verify that passing no brain_id forwards None to the store.
+        let spy_none = SpyChunkSearcher::new();
+        let pipeline_none = QueryPipeline::new(&db, &spy_none, &embedder, &metrics);
+        let sp_none = SearchParams::new("test query", "lookup", 0, 0, &[]);
+        let _ = pipeline_none.search_ranked_with_diagnostics(&sp_none).await;
+
+        assert_eq!(
+            spy_none.recorded_brain_id(),
+            Some(None),
+            "store.query must receive None when params.brain_id is None"
+        );
+    }
+
+    #[test]
+    fn with_brain_id_normalizes_empty_string_to_none() {
+        let tags: Vec<String> = vec![];
+        let params = SearchParams::new("q", "intent", 100, 10, &tags).with_brain_id(Some(""));
+        assert_eq!(
+            params.brain_id, None,
+            "with_brain_id(Some(\"\")) must normalize to None"
         );
     }
 }

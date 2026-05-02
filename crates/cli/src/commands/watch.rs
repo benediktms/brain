@@ -18,6 +18,7 @@ use brain_lib::pipeline::embed_poll;
 use brain_lib::pipeline::job_worker;
 use brain_lib::pipeline::recurring_jobs;
 use brain_lib::prelude::*;
+use brain_lib::watcher::ESTIMATED_PATHS_PER_DIR;
 use brain_persistence::db::Db;
 use brain_persistence::store::Store;
 use tracing::{debug, info, warn};
@@ -524,13 +525,26 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     // ── 5. Set up single BrainWatcher ────────────────────────────────────
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-    let mut watcher = BrainWatcher::new_empty(tx)?;
 
-    for instance in brains.values() {
-        for dir in &instance.note_dirs {
-            if let Err(e) = watcher.watch_path(dir) {
-                warn!(brain = %instance.name, dir = %dir.display(), error = %e, "failed to watch directory");
-            }
+    // Collect all directories across every brain first so the watcher can be
+    // constructed with a capacity hint that covers the total path space.  This
+    // pre-sizes the internal file-ID cache and avoids repeated HashMap rehash
+    // cycles when registering many directories in bulk (visible under 38+ brains).
+    let all_dirs: Vec<(String, PathBuf)> = brains
+        .values()
+        .flat_map(|inst| {
+            inst.note_dirs
+                .iter()
+                .map(move |d| (inst.name.clone(), d.clone()))
+        })
+        .collect();
+
+    let capacity = all_dirs.len().saturating_mul(ESTIMATED_PATHS_PER_DIR);
+    let mut watcher = BrainWatcher::new_empty_with_capacity(capacity, tx)?;
+
+    for (brain_name, dir) in &all_dirs {
+        if let Err(e) = watcher.watch_path(dir) {
+            warn!(brain = %brain_name, dir = %dir.display(), error = %e, "failed to watch directory");
         }
     }
 
@@ -584,7 +598,7 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     let mut optimize_tick = tokio::time::interval(Duration::from_secs(60));
 
     // Job poll: reconcile recurring jobs, process ready jobs, GC old ones.
-    let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(30));
+    let mut summarize_poll_interval = tokio::time::interval(Duration::from_secs(60));
 
     // In-memory lock set shared across all brains — prevents the reaper from
     // resetting jobs that are still actively running in a tokio::spawn task.

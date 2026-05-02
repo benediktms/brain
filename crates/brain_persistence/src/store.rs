@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -29,6 +29,18 @@ pub const LANCE_SCHEMA_VERSION: u32 = 2;
 /// `brain vacuum` both call `force_optimize()` which bypasses this threshold.
 const DEFAULT_ROW_THRESHOLD: u64 = 5_000;
 const DEFAULT_TIME_THRESHOLD: Duration = Duration::from_secs(600);
+
+/// Minimum link count before PageRank scores become meaningful.
+///
+/// Below this size, PageRank cost dominates and benefit is marginal; the
+/// threshold was chosen empirically — adjust as link-graph density evolves.
+///
+/// A monotonic latch (`pagerank_links_threshold_met` on `OptimizeScheduler`)
+/// short-circuits the per-cycle `COUNT(*)` query once this threshold is first
+/// observed. Link counts only grow during normal operation; the worst-case of
+/// counts shrinking past the threshold yields one extra PageRank cycle, which
+/// is acceptable.
+const PAGERANK_MIN_LINKS: i64 = 1000;
 
 /// Minimum rows required before IVF-PQ index creation is worthwhile.
 ///
@@ -133,6 +145,10 @@ pub struct OptimizeScheduler {
     row_threshold: u64,
     time_threshold: Duration,
     db: std::sync::Mutex<Option<Arc<crate::db::Db>>>,
+    /// Monotonic latch: flips to `true` on first observation of
+    /// `link_count >= PAGERANK_MIN_LINKS`, short-circuiting the per-cycle
+    /// `COUNT(*)` query thereafter. Reset on `set_db` (DB swap = stale latch).
+    pagerank_links_threshold_met: AtomicBool,
 }
 
 impl OptimizeScheduler {
@@ -144,12 +160,18 @@ impl OptimizeScheduler {
             row_threshold,
             time_threshold,
             db: std::sync::Mutex::new(None),
+            pagerank_links_threshold_met: AtomicBool::new(false),
         }
     }
 
     /// Attach a SQLite database pool for post-optimize PageRank computation.
+    ///
+    /// Resets the PageRank threshold latch so the new DB is probed fresh.
     pub fn set_db(&self, db: Arc<crate::db::Db>) {
         *self.db.lock().expect("set_db lock") = Some(db);
+        // DB swap invalidates any cached threshold observation.
+        self.pagerank_links_threshold_met
+            .store(false, Ordering::Relaxed);
     }
 
     /// Take the current db reference (for preservation across table rebuilds).
@@ -184,10 +206,14 @@ impl OptimizeScheduler {
         if !self.should_run(pending, &guard) {
             return;
         }
-        self.run_optimize(guard).await;
+        self.run_optimize(guard, false).await;
     }
 
     /// Wait for any in-progress optimize, then run unconditionally.
+    ///
+    /// Bypasses the PageRank link-count gate — `force_optimize` is the API used
+    /// by `brain vacuum`, daemon shutdown, and tests, all of which want PageRank
+    /// to run regardless of graph size.
     pub async fn force_optimize(&self) {
         if self.pending_mutations.load(Ordering::Relaxed) == 0 {
             return;
@@ -196,7 +222,7 @@ impl OptimizeScheduler {
         if self.pending_mutations.load(Ordering::Relaxed) == 0 {
             return;
         }
-        self.run_optimize(guard).await;
+        self.run_optimize(guard, true).await;
     }
 
     /// Run compaction unconditionally — ignores the `pending_mutations` counter.
@@ -233,7 +259,14 @@ impl OptimizeScheduler {
     }
 
     /// Execute optimize. Caller must hold the guard.
-    async fn run_optimize(&self, mut last_optimize: tokio::sync::MutexGuard<'_, Instant>) {
+    ///
+    /// `bypass_pagerank_gate`: when `true`, run PageRank regardless of the
+    /// link-count threshold. Used by `force_optimize`.
+    async fn run_optimize(
+        &self,
+        mut last_optimize: tokio::sync::MutexGuard<'_, Instant>,
+        bypass_pagerank_gate: bool,
+    ) {
         let snapshot = self.pending_mutations.load(Ordering::Relaxed);
         if snapshot == 0 {
             return;
@@ -262,9 +295,38 @@ impl OptimizeScheduler {
         self.maybe_create_index().await;
 
         // Recompute PageRank scores after compaction so link scores stay fresh.
-        #[allow(clippy::collapsible_if)]
+        // Gate with a link-count threshold: PageRank is O(N) on the links table
+        // and becomes the dominant cost in the optimize hot path for large link
+        // sets. A monotonic latch avoids a redundant COUNT(*) once the threshold
+        // is first observed — see PAGERANK_MIN_LINKS for the rationale.
         if let Some(ref db) = *self.db.lock().expect("optimize db lock") {
-            if let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank) {
+            let above_threshold = if bypass_pagerank_gate
+                || self.pagerank_links_threshold_met.load(Ordering::Relaxed)
+            {
+                true
+            } else {
+                let link_count = db
+                    .with_read_conn(|conn| {
+                        conn.query_row("SELECT COUNT(*) FROM links", [], |row| row.get::<_, i64>(0))
+                            .map_err(BrainCoreError::from)
+                    })
+                    .inspect_err(|e| tracing::warn!(error = %e, "link count query failed; skipping PageRank for this cycle"))
+                    .unwrap_or(0);
+                if link_count >= PAGERANK_MIN_LINKS {
+                    self.pagerank_links_threshold_met
+                        .store(true, Ordering::Relaxed);
+                    true
+                } else {
+                    tracing::debug!(
+                        link_count,
+                        "skipping PageRank recompute: link count below threshold"
+                    );
+                    false
+                }
+            };
+            if above_threshold
+                && let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank)
+            {
                 warn!(error = %e, "PageRank computation failed, will retry on next optimize");
             }
         }
@@ -943,22 +1005,35 @@ fn empty_record_batch(schema: &Schema) -> crate::error::Result<RecordBatch> {
     .map_err(|e| BrainCoreError::VectorDb(format!("failed to build empty record batch: {e}")))
 }
 
-/// Validate that a file_id is safe to interpolate into a LanceDB filter expression.
-///
-/// Accepts both legacy UUID format (hex digits + hyphens) and ULID format
-/// (Crockford Base32: alphanumeric characters), as well as task capsule IDs
-/// (e.g. "task:BRN-01ABC" or "task-outcome:BRN-01ABC") which contain `:`.
-/// The key constraint is preventing SQL injection in filter strings, so we
-/// allow only `[a-zA-Z0-9-:]`.
 /// Validate that a value is safe to interpolate into a LanceDB filter expression.
 ///
-/// Allows empty strings (valid for brain_id in legacy/test scenarios) and
-/// the charset `[a-zA-Z0-9-:]` which covers ULIDs, UUIDs, task capsule IDs,
-/// and brain IDs. Rejects anything that could cause SQL injection.
+/// Accepted character classes and their origins:
+/// - alphanumeric (`A-Z a-z 0-9`): ULID (Crockford Base32) and nanoid SAFE alphabet
+/// - `-`: separator in ULID Crockford encoding and nanoid SAFE alphabet
+/// - `:`: capsule prefix delimiter (e.g. `task:`, `sum:`)
+/// - `_`: nanoid SAFE alphabet
+///
+/// The sequence `--` is explicitly rejected as a SQL comment guard even
+/// though `-` is individually allowed. Empty strings are accepted for
+/// legacy/test scenarios where brain_id may be unset.
+///
+/// # Contract
+///
+/// This validator is sound only for `=` equality predicates and `IN (...)`
+/// lists. Do NOT feed validated values into `LIKE` patterns — `_` becomes a
+/// single-char wildcard there. If a future call site needs `LIKE`, escape `_`
+/// and `%` first, or extend the validator with a parallel `validate_for_like`
+/// variant.
 fn validate_filter_value(value: &str) -> crate::error::Result<&str> {
+    // Reject SQL comment sequence `--` even though `-` is individually allowed.
+    if value.contains("--") {
+        return Err(BrainCoreError::VectorDb(format!(
+            "invalid value for LanceDB filter: {value}"
+        )));
+    }
     if value
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':' || c == '_')
     {
         Ok(value)
     } else {
@@ -1247,5 +1322,98 @@ mod tests {
     #[test]
     fn vector_search_mode_default_is_ann_refined() {
         assert_eq!(VectorSearchMode::default(), VectorSearchMode::AnnRefined);
+    }
+
+    // ─── validate_filter_value tests ─────────────────────────────────────────
+
+    #[test]
+    fn validate_filter_value_accepts_lowercase() {
+        assert!(super::validate_filter_value("abcdef").is_ok());
+    }
+
+    #[test]
+    fn validate_filter_value_accepts_uppercase() {
+        assert!(super::validate_filter_value("ABCDEF").is_ok());
+    }
+
+    #[test]
+    fn validate_filter_value_accepts_digits() {
+        assert!(super::validate_filter_value("0123456789").is_ok());
+    }
+
+    #[test]
+    fn validate_filter_value_accepts_hyphen() {
+        assert!(super::validate_filter_value("BRN-01ABC").is_ok());
+    }
+
+    #[test]
+    fn validate_filter_value_accepts_colon() {
+        assert!(super::validate_filter_value("task:BRN-01ABC").is_ok());
+    }
+
+    #[test]
+    fn validate_filter_value_accepts_underscore() {
+        assert!(super::validate_filter_value("brain_id").is_ok());
+    }
+
+    #[test]
+    fn validate_filter_value_rejects_tilde() {
+        // nanoid 0.4 SAFE alphabet is A-Z a-z 0-9 _ - and never produces `~`.
+        assert!(super::validate_filter_value("brain~id").is_err());
+    }
+
+    #[test]
+    fn validate_filter_value_accepts_mixed_with_underscore() {
+        // Realistic nanoid SAFE-alphabet brain ID containing `_`
+        assert!(super::validate_filter_value("a1_B2Cd").is_ok());
+    }
+
+    #[test]
+    fn validate_filter_value_accepts_empty_string() {
+        assert!(super::validate_filter_value("").is_ok());
+    }
+
+    #[test]
+    fn validate_filter_value_rejects_space() {
+        assert!(super::validate_filter_value("brain id").is_err());
+    }
+
+    #[test]
+    fn validate_filter_value_rejects_single_quote() {
+        assert!(super::validate_filter_value("brain'id").is_err());
+    }
+
+    #[test]
+    fn validate_filter_value_rejects_semicolon() {
+        assert!(super::validate_filter_value("brain;id").is_err());
+    }
+
+    #[test]
+    fn validate_filter_value_rejects_sql_comment() {
+        // `--` is the SQL comment sequence; reject even though `-` is individually allowed.
+        assert!(super::validate_filter_value("--").is_err());
+        assert!(super::validate_filter_value("brain--id").is_err());
+    }
+
+    #[test]
+    fn validate_filter_value_no_only_if_like_usage() {
+        // Regression guard: validate_filter_value is sound only for = and IN
+        // predicates. `_` is a single-char wildcard in SQL LIKE patterns.
+        // Assert no production .only_if(...) call site in this file uses LIKE.
+        let src = include_str!("./store.rs");
+        let only_if_calls: Vec<&str> = src
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim_start();
+                // Skip comment lines — only check production code.
+                !trimmed.starts_with("//") && line.contains(".only_if(")
+            })
+            .collect();
+        for line in &only_if_calls {
+            assert!(
+                !line.to_uppercase().contains("LIKE"),
+                "only_if call site uses LIKE — validate_filter_value is not safe here: {line}"
+            );
+        }
     }
 }
