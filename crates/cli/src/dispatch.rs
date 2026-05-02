@@ -113,6 +113,12 @@ pub(crate) fn init_tracing_for_daemon(
         tracing::warn!("init_tracing_for_daemon called more than once; extra guard dropped");
     }
 
+    // In production deployment, set BRAIN_COMPARATOR=1 to enable the dual-read
+    // comparator for the entity_links cutover soak window (brn-de1.15).
+    if std::env::var("BRAIN_COMPARATOR").is_ok_and(|v| v == "1") {
+        tracing::info!("comparator enabled — soak observability active");
+    }
+
     // Warn when the user explicitly supplied --log-max-size-mb: size-based
     // rotation is reserved for a future tracing-appender version; the current
     // rotation strategy is daily and ignores size thresholds entirely.

@@ -1,4 +1,5 @@
 pub mod chunks;
+pub mod comparator;
 pub mod crypto;
 pub mod files;
 pub mod fts;

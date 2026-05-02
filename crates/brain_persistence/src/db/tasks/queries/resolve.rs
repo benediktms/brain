@@ -430,12 +430,15 @@ pub fn compact_ids(conn: &Connection) -> Result<HashMap<String, String>> {
         }
     }
 
-    // Apply dot notation for all children with parent + child_seq.
+    // Apply dot notation for all children with a parent_of edge + child_seq.
     let mut child_stmt = conn.prepare(
-        "SELECT task_id, parent_task_id, child_seq
-         FROM tasks
-         WHERE parent_task_id IS NOT NULL AND child_seq IS NOT NULL
-         ORDER BY parent_task_id, child_seq",
+        "SELECT t.task_id, el.from_id AS parent_task_id, t.child_seq
+         FROM tasks t
+         JOIN entity_links el
+           ON el.to_type='TASK' AND el.to_id=t.task_id
+          AND el.from_type='TASK' AND el.edge_kind='parent_of'
+         WHERE t.child_seq IS NOT NULL
+         ORDER BY el.from_id, t.child_seq",
     )?;
     let children: Vec<(String, String, i64)> = child_stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?

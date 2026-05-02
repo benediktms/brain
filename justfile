@@ -24,7 +24,10 @@ install:
     BRAIN_FROM_SOURCE=true cargo build --release
     @mkdir -p ~/bin
     @ln -sf "{{justfile_directory()}}/target/release/brain" ~/bin/brain
-    {{bin}} daemon start
+    # BRAIN_COMPARATOR=1 arms the polymorphic-link-graph soak comparator on
+    # the local daemon — your own brain is production for the soak window.
+    # See docs/OPERATIONS.md § Polymorphic Link Graph Soak Comparator.
+    BRAIN_COMPARATOR=1 {{bin}} daemon start
     @echo "==> Started brain daemon and symlinked binary to ~/bin/brain"
 
 # Download all ML models (embedder + summarizer)
@@ -130,7 +133,7 @@ alias w := watch
 # Manage background daemon: start | stop | status | install | uninstall
 [group('app')]
 daemon +args: ensure-binary
-    {{bin}} daemon {{args}}
+    BRAIN_COMPARATOR=1 {{bin}} daemon {{args}}
 
 alias d := daemon
 

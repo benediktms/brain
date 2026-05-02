@@ -1,5 +1,6 @@
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::db::comparator;
 use crate::db::tasks::events::TaskStatus;
 use crate::error::Result;
 
@@ -7,7 +8,7 @@ use super::ANCESTOR_BLOCKED_CTE;
 
 /// Summary of a task's dependency state. The two domains are kept disjoint
 /// so each field has one source of truth:
-/// - `total_deps` / `done_deps` / `blocking_task_ids` cover `task_deps` rows.
+/// - `total_deps` / `done_deps` / `blocking_task_ids` cover `entity_links` blocks edges.
 /// - `external_blocker_unresolved_count` covers `task_external_ids` rows
 ///   with `blocking = 1 AND resolved_at IS NULL`.
 ///
@@ -23,8 +24,8 @@ pub struct DependencySummary {
 
 /// Get the dependency summary for a task.
 ///
-/// `total_deps` / `done_deps` / `blocking_task_ids` count `task_deps` rows
-/// only. The LEFT JOIN keeps orphaned references (target task absent from
+/// `total_deps` / `done_deps` / `blocking_task_ids` count `entity_links` blocks
+/// edges only. The LEFT JOIN keeps orphaned references (target task absent from
 /// the DB — e.g. cross-brain task in an unregistered brain, or a deleted
 /// dep target) blocking rather than silently dropping them.
 ///
@@ -34,10 +35,11 @@ pub struct DependencySummary {
 /// the resolved-history view.
 pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<DependencySummary> {
     let mut stmt = conn.prepare(
-        "SELECT d.depends_on, t.status
-         FROM task_deps d
-         LEFT JOIN tasks t ON t.task_id = d.depends_on
-         WHERE d.task_id = ?1",
+        "SELECT el.to_id, t.status
+         FROM entity_links el
+         LEFT JOIN tasks t ON t.task_id = el.to_id
+         WHERE el.from_type='TASK' AND el.from_id = ?1
+           AND el.to_type='TASK' AND el.edge_kind='blocks'",
     )?;
 
     let mut total_deps = 0;
@@ -150,6 +152,31 @@ pub fn count_by_status(conn: &Connection) -> Result<StatusCounts> {
 /// external-blocker NOT EXISTS clause matches the listing queries so the
 /// counts agree with `list_ready` / `list_blocked` row counts.
 pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<(usize, usize)> {
+    let new_result = count_ready_blocked_via_entity_links(conn, brain_id)?;
+    if comparator::comparator_enabled() {
+        let (legacy_ready, legacy_blocked) = comparator_legacy_count_ready_blocked(conn, brain_id)?;
+        let new_ready_vec = vec![new_result.0.to_string()];
+        let legacy_ready_vec = vec![legacy_ready.to_string()];
+        comparator::compare(
+            "count_ready_blocked/ready",
+            &new_ready_vec,
+            &legacy_ready_vec,
+        );
+        let new_blocked_vec = vec![new_result.1.to_string()];
+        let legacy_blocked_vec = vec![legacy_blocked.to_string()];
+        comparator::compare(
+            "count_ready_blocked/blocked",
+            &new_blocked_vec,
+            &legacy_blocked_vec,
+        );
+    }
+    Ok(new_result)
+}
+
+fn count_ready_blocked_via_entity_links(
+    conn: &Connection,
+    brain_id: Option<&str>,
+) -> Result<(usize, usize)> {
     let (brain_clause, brain_params) = super::listing::brain_id_filter(brain_id);
     let ready_sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
@@ -194,6 +221,108 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
                    WHERE el.from_type = 'TASK' AND el.to_type = 'TASK'
                      AND el.edge_kind = 'blocks'
                      AND el.from_id = t.task_id
+                     AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+               )
+               OR EXISTS (
+                   SELECT 1 FROM task_external_ids x
+                   WHERE x.task_id = t.task_id
+                     AND x.blocking = 1
+                     AND x.resolved_at IS NULL
+               )
+               OR t.task_id IN (SELECT tid FROM has_blocked_ancestor)
+           )
+           {brain_clause}"
+    );
+    let blocked: i64 = conn.query_row(
+        &blocked_sql,
+        rusqlite::params_from_iter(brain_params.iter()),
+        |row| row.get(0),
+    )?;
+
+    Ok((ready as usize, blocked as usize))
+}
+
+// ---------------------------------------------------------------------------
+// Legacy helper (task_deps / parent_task_id) — kept for comparator soak window.
+// Wave 7 deletes this block alongside the comparator wrap.
+// ---------------------------------------------------------------------------
+
+fn comparator_legacy_count_ready_blocked(
+    conn: &Connection,
+    brain_id: Option<&str>,
+) -> Result<(usize, usize)> {
+    const LEGACY_ANCESTOR_BLOCKED_CTE: &str = "\
+WITH RECURSIVE ancestor_chain(tid, ancestor_id) AS (
+    SELECT task_id, parent_task_id FROM tasks WHERE parent_task_id IS NOT NULL
+    UNION ALL
+    SELECT ac.tid, t.parent_task_id
+    FROM ancestor_chain ac
+    JOIN tasks t ON t.task_id = ac.ancestor_id
+    WHERE t.parent_task_id IS NOT NULL
+),
+has_blocked_ancestor(tid) AS (
+    SELECT DISTINCT ac.tid
+    FROM ancestor_chain ac
+    JOIN tasks a ON a.task_id = ac.ancestor_id
+    WHERE a.status NOT IN ('done', 'cancelled')
+      AND (
+          a.blocked_reason IS NOT NULL
+          OR (a.defer_until IS NOT NULL AND a.defer_until > strftime('%s', 'now'))
+          OR EXISTS (
+              SELECT 1 FROM task_deps d
+              LEFT JOIN tasks dep ON dep.task_id = d.depends_on
+              WHERE d.task_id = a.task_id
+                AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+          )
+          OR EXISTS (
+              SELECT 1 FROM task_external_ids x
+              WHERE x.task_id = a.task_id
+                AND x.blocking = 1
+                AND x.resolved_at IS NULL
+          )
+      )
+) ";
+
+    let (brain_clause, brain_params) = super::listing::brain_id_filter(brain_id);
+    let ready_sql = format!(
+        "{LEGACY_ANCESTOR_BLOCKED_CTE}
+         SELECT COUNT(*) FROM tasks t
+         WHERE t.status IN ('open', 'in_progress')
+           AND t.blocked_reason IS NULL
+           AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
+           AND NOT EXISTS (
+               SELECT 1 FROM task_deps d
+               LEFT JOIN tasks dep ON dep.task_id = d.depends_on
+               WHERE d.task_id = t.task_id
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM task_external_ids x
+               WHERE x.task_id = t.task_id
+                 AND x.blocking = 1
+                 AND x.resolved_at IS NULL
+           )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
+           {brain_clause}"
+    );
+    let ready: i64 = conn.query_row(
+        &ready_sql,
+        rusqlite::params_from_iter(brain_params.iter()),
+        |row| row.get(0),
+    )?;
+
+    let (brain_clause, brain_params) = super::listing::brain_id_filter(brain_id);
+    let blocked_sql = format!(
+        "{LEGACY_ANCESTOR_BLOCKED_CTE}
+         SELECT COUNT(*) FROM tasks t
+         WHERE t.status IN ('open', 'in_progress', 'blocked')
+           AND (
+               t.blocked_reason IS NOT NULL
+               OR (t.defer_until IS NOT NULL AND t.defer_until > strftime('%s', 'now'))
+               OR EXISTS (
+                   SELECT 1 FROM task_deps d
+                   LEFT JOIN tasks dep ON dep.task_id = d.depends_on
+                   WHERE d.task_id = t.task_id
                      AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
                )
                OR EXISTS (
@@ -332,7 +461,10 @@ pub struct TaskDep {
 
 /// List all dependency edges (bulk load for export).
 pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
-    let mut stmt = conn.prepare("SELECT task_id, depends_on FROM task_deps")?;
+    let mut stmt = conn.prepare(
+        "SELECT from_id, to_id FROM entity_links
+         WHERE from_type='TASK' AND to_type='TASK' AND edge_kind='blocks'",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok(TaskDep {
             task_id: row.get(0)?,
@@ -344,7 +476,10 @@ pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
 
 /// Get all dependency targets for a task (what it depends on).
 pub fn get_deps_for_task(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT depends_on FROM task_deps WHERE task_id = ?1")?;
+    let mut stmt = conn.prepare(
+        "SELECT to_id FROM entity_links
+         WHERE from_type='TASK' AND from_id=?1 AND to_type='TASK' AND edge_kind='blocks'",
+    )?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
 }

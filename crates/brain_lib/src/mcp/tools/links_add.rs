@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{
-    EntityRef, LinkError, add_link_checked, edge_kind_from_str, entity_type_from_str,
+    EdgeKind, EntityRef, LinkError, add_link_checked, edge_kind_from_str, entity_type_from_str,
     entity_type_str,
 };
 
@@ -36,6 +36,48 @@ fn resolve_entity_ref(input: EntityRefInput) -> Result<EntityRef, String> {
 
 pub(super) struct LinksAdd;
 
+/// Shared add-link logic callable from both the polymorphic surface and the records shim.
+///
+/// Translates resolved `from`/`to` refs and `edge_kind` into a write through
+/// `add_link_checked`, returning the synthesised edge ID on success.
+pub(super) fn add_entity_link(
+    from: EntityRef,
+    to: EntityRef,
+    edge_kind: EdgeKind,
+    edge_kind_wire: &str,
+    ctx: &McpContext,
+) -> ToolCallResult {
+    let from_type = entity_type_str(from.kind);
+    let from_id = from.id.clone();
+    let to_type = entity_type_str(to.kind);
+    let to_id = to.id.clone();
+
+    let mut link_err: Option<LinkError> = None;
+    let result = ctx.stores.inner_db().with_write_conn(|conn| {
+        match add_link_checked(conn, from, to, edge_kind) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                link_err = Some(e);
+                Err(brain_persistence::error::BrainCoreError::Database(msg))
+            }
+        }
+    });
+
+    match result {
+        Ok(()) => {
+            let id = format!("{from_type}:{from_id}->{edge_kind_wire}->{to_type}:{to_id}");
+            json_response(&json!({ "id": id }))
+        }
+        Err(e) => match link_err {
+            Some(LinkError::Cycle(_)) => {
+                ToolCallResult::error(format!("would create a cycle in {edge_kind_wire} graph"))
+            }
+            _ => ToolCallResult::error(format!("Internal error: {e}")),
+        },
+    }
+}
+
 impl LinksAdd {
     fn execute(&self, params: Value, ctx: &McpContext) -> ToolCallResult {
         let params: LinksAddParams = match serde_json::from_value(params) {
@@ -61,35 +103,7 @@ impl LinksAdd {
             }
         };
 
-        let from_type = entity_type_str(from.kind);
-        let from_id = from.id.clone();
-        let to_type = entity_type_str(to.kind);
-        let to_id = to.id.clone();
-
-        let mut link_err: Option<LinkError> = None;
-        let result = ctx.stores.inner_db().with_write_conn(|conn| {
-            match add_link_checked(conn, from, to, edge_kind) {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    let msg = e.to_string();
-                    link_err = Some(e);
-                    Err(brain_persistence::error::BrainCoreError::Database(msg))
-                }
-            }
-        });
-
-        match result {
-            Ok(()) => {
-                let id = format!("{from_type}:{from_id}->{edge_kind_wire}->{to_type}:{to_id}");
-                json_response(&json!({ "id": id }))
-            }
-            Err(e) => match link_err {
-                Some(LinkError::Cycle(_)) => {
-                    ToolCallResult::error(format!("would create a cycle in {edge_kind_wire} graph"))
-                }
-                _ => ToolCallResult::error(format!("Internal error: {e}")),
-            },
-        }
+        add_entity_link(from, to, edge_kind, edge_kind_wire, ctx)
     }
 }
 

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{
-    EntityRef, LinkError, edge_kind_from_str, entity_type_from_str, remove_link,
+    EdgeKind, EntityRef, LinkError, edge_kind_from_str, entity_type_from_str, remove_link,
 };
 
 use crate::mcp::McpContext;
@@ -35,6 +35,26 @@ fn resolve_entity_ref(input: EntityRefInput) -> Result<EntityRef, String> {
 
 pub(super) struct LinksRemove;
 
+/// Shared remove-link logic callable from both the polymorphic surface and the records shim.
+pub(super) fn remove_entity_link(
+    from: EntityRef,
+    to: EntityRef,
+    edge_kind: EdgeKind,
+    ctx: &McpContext,
+) -> ToolCallResult {
+    let result = ctx.stores.inner_db().with_write_conn(|conn| {
+        remove_link(conn, from, to, edge_kind).map_err(|e| match e {
+            LinkError::Database(msg) => brain_persistence::error::BrainCoreError::Database(msg),
+            LinkError::Cycle(_) => unreachable!("remove_link never returns Cycle"),
+        })
+    });
+
+    match result {
+        Ok(removed) => json_response(&json!({ "removed": removed })),
+        Err(e) => ToolCallResult::error(format!("Internal error: {e}")),
+    }
+}
+
 impl LinksRemove {
     fn execute(&self, params: Value, ctx: &McpContext) -> ToolCallResult {
         let params: LinksRemoveParams = match serde_json::from_value(params) {
@@ -59,17 +79,7 @@ impl LinksRemove {
             }
         };
 
-        let result = ctx.stores.inner_db().with_write_conn(|conn| {
-            remove_link(conn, from, to, edge_kind).map_err(|e| match e {
-                LinkError::Database(msg) => brain_persistence::error::BrainCoreError::Database(msg),
-                LinkError::Cycle(_) => unreachable!("remove_link never returns Cycle"),
-            })
-        });
-
-        match result {
-            Ok(removed) => json_response(&json!({ "removed": removed })),
-            Err(e) => ToolCallResult::error(format!("Internal error: {e}")),
-        }
+        remove_entity_link(from, to, edge_kind, ctx)
     }
 }
 
