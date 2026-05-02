@@ -1,6 +1,7 @@
 brain_name := env("BRAIN_NAME", file_name(justfile_directory()))
 brain_home := env("BRAIN_HOME", env("HOME", "") + "/.brain")
 brain_data := brain_home / "brains" / brain_name
+log_dir := brain_home / "logs"
 
 export BRAIN_MODEL_DIR := env("BRAIN_MODEL_DIR", brain_home / "models/bge-small-en-v1.5")
 export BRAIN_DB := env("BRAIN_DB", brain_data / "lancedb")
@@ -160,8 +161,23 @@ reindex-file path: ensure-binary
     {{bin}} reindex --file {{path}}
 
 [group('maintenance')]
-logs:
-    tail -f ~/.brain/brain.log
+log-audit top_n="20":
+    @if ! ls {{log_dir}}/brain.*.log >/dev/null 2>&1; then \
+        echo "No logs found at {{log_dir}}/brain.*.log"; exit 1; \
+    fi
+    @echo "==> Auditing {{log_dir}}/brain.*.log"
+    @head -1 {{log_dir}}/brain.*.log 2>/dev/null | grep -q '^[0-9]' || { \
+        echo "Logs appear non-plain-text (JSON?). Audit only supports the default text format."; exit 1; \
+    }
+    @echo
+    @echo "── Lines per level ─────────────────────────"
+    @awk '/^[0-9]/ { count[$2]++ } END { for (l in count) printf "%-6s %8d\n", l, count[l] }' {{log_dir}}/brain.*.log | sort -k2 -rn
+    @echo
+    @echo "── Top {{top_n}} emitters (level, target) ──"
+    @awk '/^[0-9]/ { sub(/:$/, "", $3); print $2, $3 }' {{log_dir}}/brain.*.log | sort | uniq -c | sort -rn | head -n {{top_n}}
+    @echo
+    @echo "Demotion candidates: INFO/DEBUG targets with high counts."
+    @echo "Update DEFAULT_LOG_FILTER in crates/brain_lib/src/config/mod.rs."
 
 # ── Architecture ──────────────────────────────────────────────────────────
 
