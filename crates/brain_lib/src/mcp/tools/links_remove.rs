@@ -5,32 +5,20 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{
-    EdgeKind, EntityRef, LinkError, edge_kind_from_str, entity_type_from_str, remove_link,
+    EdgeKind, EntityRef, LinkError, edge_kind_from_str, remove_link,
 };
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
 use super::{McpTool, json_response};
+use super::links_add::{EntityRefInput, resolve_entity_ref, entity_ref_schema};
 
 #[derive(Deserialize)]
 struct LinksRemoveParams {
     from: EntityRefInput,
     to: EntityRefInput,
     edge_kind: String,
-}
-
-#[derive(Deserialize)]
-struct EntityRefInput {
-    #[serde(rename = "type")]
-    entity_type: String,
-    id: String,
-}
-
-fn resolve_entity_ref(input: EntityRefInput) -> Result<EntityRef, String> {
-    let kind = entity_type_from_str(&input.entity_type)
-        .ok_or_else(|| format!("unknown entity type: {}", input.entity_type))?;
-    EntityRef::new(kind, input.id).map_err(|e| e.to_string())
 }
 
 pub(super) struct LinksRemove;
@@ -89,21 +77,7 @@ impl McpTool for LinksRemove {
     }
 
     fn definition(&self) -> ToolDefinition {
-        let entity_ref_schema = json!({
-            "type": "object",
-            "properties": {
-                "type": {
-                    "type": "string",
-                    "enum": ["TASK", "RECORD", "EPISODE", "PROCEDURE", "CHUNK", "NOTE"],
-                    "description": "The entity type"
-                },
-                "id": {
-                    "type": "string",
-                    "description": "The entity ID"
-                }
-            },
-            "required": ["type", "id"]
-        });
+        let entity_ref_schema = entity_ref_schema();
 
         ToolDefinition {
             name: self.name().into(),
