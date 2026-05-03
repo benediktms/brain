@@ -91,18 +91,6 @@ pub(super) fn inline_links_schema(description: &str) -> Value {
 /// Requests exceeding this cap are rejected without attempting any link.
 const MAX_INLINE_LINKS: usize = 256;
 
-/// Low-level helper: insert one link using an already-acquired writer connection.
-/// Called by both `try_add_entity_link` (which acquires the writer) and
-/// `apply_inline_links` (which acquires the writer once for the whole batch).
-fn try_add_link_inner(
-    conn: &rusqlite::Connection,
-    from: EntityRef,
-    to: EntityRef,
-    edge_kind: EdgeKind,
-) -> Result<(), LinkError> {
-    add_link_checked(conn, from, to, edge_kind).map_err(LinkError::from)
-}
-
 /// Persist a batch of inline links from a freshly-written entity to many
 /// targets. Returns a `{succeeded, failed, summary}` JSON block in the same
 /// shape as `tasks.deps_batch`. Per-link failures (unknown edge_kind, unknown
@@ -208,7 +196,7 @@ pub(super) fn apply_inline_links(
     // Acquire the writer once for the whole batch.
     let outer_result = ctx.stores.inner_db().with_write_conn(|conn| {
         for r in &resolved {
-            match try_add_link_inner(conn, r.from.clone(), r.to.clone(), r.edge_kind) {
+            match add_link_checked(conn, r.from.clone(), r.to.clone(), r.edge_kind) {
                 Ok(()) => succeeded.push(json!({
                     "to": { "type": r.to_type_wire, "id": r.to_id_wire },
                     "edge_kind": r.edge_kind_wire
@@ -257,43 +245,6 @@ pub(super) fn apply_inline_links(
 }
 
 pub(super) struct LinksAdd;
-
-/// Result-returning core of the polymorphic add-link path. Use this from batch
-/// callers (e.g. `memory.write_episode` with inline `links`) that need to format
-/// per-link success/failure entries themselves; use `add_entity_link` from
-/// single-link callers that want a ready-made `ToolCallResult`.
-///
-/// Acquires the writer mutex internally. For batches, prefer hoisting writer
-/// acquisition outside the loop and calling `try_add_link_inner` directly.
-pub(super) fn try_add_entity_link(
-    from: EntityRef,
-    to: EntityRef,
-    edge_kind: EdgeKind,
-    ctx: &McpContext,
-) -> Result<(), LinkError> {
-    let mut link_err: Option<LinkError> = None;
-    let outer_result = ctx.stores.inner_db().with_write_conn(|conn| {
-        match add_link_checked(conn, from, to, edge_kind) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let msg = e.to_string();
-                link_err = Some(e);
-                Err(brain_persistence::error::BrainCoreError::Database(msg))
-            }
-        }
-    });
-
-    // Three-way dispatch:
-    //   (Ok, _)        — closure ran and succeeded; link_err is None.
-    //   (_, Some(e))   — closure ran and set a typed error; surface it.
-    //   (Err(e), None) — with_write_conn itself failed before the closure ran;
-    //                    convert to LinkError::Database so callers never get Ok.
-    match (outer_result, link_err) {
-        (Ok(()), _) => Ok(()),
-        (_, Some(e)) => Err(e),
-        (Err(e), None) => Err(LinkError::Database(format!("writer unavailable: {e}"))),
-    }
-}
 
 /// Shared add-link logic callable from both the polymorphic surface and the records shim.
 ///
@@ -502,63 +453,12 @@ mod tests {
         );
     }
 
-    // ── Finding 1: swallowed-error path is now closed ─────────────────────────
-    //
-    // Simulating actual mutex poisoning requires spinning up a real DB and
-    // panicking a writer thread — impractical in unit scope. Instead we verify
-    // the three-way match logic at the unit level by testing that a
-    // `LinkError::Database` returned from the closure (the closure-set error
-    // path) is surfaced correctly by `try_add_entity_link`, and that a nominal
-    // success path returns Ok(()). The outer-only failure arm
-    // (Err(outer), None) is covered by the structural change: `let _ = ...`
-    // was replaced with capture + three-case match; any `with_write_conn`
-    // failure before the closure runs now maps to `LinkError::Database` rather
-    // than silently returning Ok(()). See links_add.rs:try_add_entity_link.
-    #[tokio::test]
-    async fn try_add_entity_link_success_returns_ok() {
-        let (_dir, ctx) = create_test_context().await;
-        let from = EntityRef::new(
-            entity_type_from_str("TASK").unwrap(),
-            "t1".to_string(),
-        )
-        .unwrap();
-        let to = EntityRef::new(
-            entity_type_from_str("TASK").unwrap(),
-            "t2".to_string(),
-        )
-        .unwrap();
-        let edge_kind = edge_kind_from_str("relates_to").unwrap();
-        let result = try_add_entity_link(from, to, edge_kind, &ctx);
-        assert!(result.is_ok(), "expected Ok, got: {result:?}");
-    }
-
-    #[tokio::test]
-    async fn try_add_entity_link_cycle_surfaces_error() {
-        let (_dir, ctx) = create_test_context().await;
-        let from_ref = || {
-            EntityRef::new(entity_type_from_str("TASK").unwrap(), "x1".to_string()).unwrap()
-        };
-        let to_ref = || {
-            EntityRef::new(entity_type_from_str("TASK").unwrap(), "x2".to_string()).unwrap()
-        };
-        let ek = || edge_kind_from_str("blocks").unwrap();
-
-        // x1 → x2
-        try_add_entity_link(from_ref(), to_ref(), ek(), &ctx).unwrap();
-        // x2 → x1 should return Err(Cycle)
-        let result = try_add_entity_link(to_ref(), from_ref(), ek(), &ctx);
-        assert!(matches!(result, Err(LinkError::Cycle(_))), "expected Cycle, got: {result:?}");
-    }
-
     // ── Finding 3: oversize batch rejected without attempting any links ────────
     #[tokio::test]
     async fn apply_inline_links_rejects_oversize_batch() {
         let (_dir, ctx) = create_test_context().await;
-        let from = EntityRef::new(
-            entity_type_from_str("TASK").unwrap(),
-            "src".to_string(),
-        )
-        .unwrap();
+        let from =
+            EntityRef::new(entity_type_from_str("TASK").unwrap(), "src".to_string()).unwrap();
 
         // Build a batch of 257 entries — one over the cap.
         let links: Vec<InlineLinkInput> = (0..257)
@@ -576,7 +476,10 @@ mod tests {
         let succeeded = result["summary"]["succeeded"].as_u64().unwrap_or(0);
         let failed = result["summary"]["failed"].as_u64().unwrap_or(0);
         assert_eq!(succeeded, 0, "expected no successes for oversized batch");
-        assert_eq!(failed, 1, "expected exactly one failure entry for oversized batch");
+        assert_eq!(
+            failed, 1,
+            "expected exactly one failure entry for oversized batch"
+        );
 
         let err_msg = result["failed"][0]["error"].as_str().unwrap_or("");
         assert!(

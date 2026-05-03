@@ -12,8 +12,8 @@ use brain_persistence::db::summaries::Episode;
 
 use crate::uri::SynapseUri;
 
-use super::{McpTool, json_response};
 use super::links_add::{InlineLinkInput, apply_inline_links, inline_links_schema};
+use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct Params {

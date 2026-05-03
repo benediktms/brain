@@ -12,8 +12,8 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
 use crate::uri::SynapseUri;
 
-use super::{McpTool, json_response};
 use super::links_add::{InlineLinkInput, apply_inline_links, inline_links_schema};
+use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct Params {
@@ -236,7 +236,10 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(text).expect("checked in test assertions");
         assert_eq!(parsed["status"], "stored");
-        assert!(parsed.get("links").is_none(), "links key must be absent when no links passed");
+        assert!(
+            parsed.get("links").is_none(),
+            "links key must be absent when no links passed"
+        );
     }
 
     #[test]

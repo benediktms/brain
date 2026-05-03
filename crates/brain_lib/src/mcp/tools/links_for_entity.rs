@@ -11,8 +11,8 @@ use brain_persistence::db::links::{
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::links_add::{EntityRefInput, entity_ref_schema, resolve_entity_ref};
 use super::{McpTool, json_response};
-use super::links_add::{EntityRefInput, resolve_entity_ref, entity_ref_schema};
 
 #[derive(Deserialize)]
 struct LinksForEntityParams {
