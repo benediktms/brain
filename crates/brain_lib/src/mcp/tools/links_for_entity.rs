@@ -5,25 +5,19 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{
-    EntityRef, LinkError, edge_kind_str, entity_type_from_str, entity_type_str, for_entity,
+    EntityRef, LinkError, edge_kind_str, entity_type_str, for_entity,
 };
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::links_add::{EntityRefInput, entity_ref_schema, resolve_entity_ref};
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
 struct LinksForEntityParams {
     entity: EntityRefInput,
     direction: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct EntityRefInput {
-    #[serde(rename = "type")]
-    entity_type: String,
-    id: String,
 }
 
 fn entity_ref_to_json(r: &EntityRef) -> Value {
@@ -42,17 +36,7 @@ impl LinksForEntity {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let kind = match entity_type_from_str(&params.entity.entity_type) {
-            Some(k) => k,
-            None => {
-                return ToolCallResult::error(format!(
-                    "unknown entity type: {}",
-                    params.entity.entity_type
-                ));
-            }
-        };
-
-        let entity = match EntityRef::new(kind, params.entity.id) {
+        let entity = match resolve_entity_ref(params.entity) {
             Ok(r) => r,
             Err(e) => return ToolCallResult::error(format!("Invalid entity: {e}")),
         };
@@ -108,21 +92,7 @@ impl McpTool for LinksForEntity {
     }
 
     fn definition(&self) -> ToolDefinition {
-        let entity_ref_schema = json!({
-            "type": "object",
-            "properties": {
-                "type": {
-                    "type": "string",
-                    "enum": ["TASK", "RECORD", "EPISODE", "PROCEDURE", "CHUNK", "NOTE"],
-                    "description": "The entity type"
-                },
-                "id": {
-                    "type": "string",
-                    "description": "The entity ID"
-                }
-            },
-            "required": ["type", "id"]
-        });
+        let entity_ref_schema = entity_ref_schema();
 
         ToolDefinition {
             name: self.name().into(),
