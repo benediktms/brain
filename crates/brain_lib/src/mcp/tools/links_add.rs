@@ -53,7 +53,7 @@ pub(super) fn entity_ref_schema() -> Value {
             "type": {
                 "type": "string",
                 "enum": ["TASK", "RECORD", "EPISODE", "PROCEDURE", "CHUNK", "NOTE"],
-                "description": "The entity type"
+                "description": "The entity type. TASK/RECORD/EPISODE/PROCEDURE are agent-writable; CHUNK and NOTE are read-only entities created by the file-watcher pipeline — only link to them when you have a specific chunk_id or note_id from prior retrieval."
             },
             "id": {
                 "type": "string",
@@ -79,7 +79,7 @@ pub(super) fn inline_links_schema(description: &str) -> Value {
                 "edge_kind": {
                     "type": "string",
                     "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts"],
-                    "description": "Default: relates_to"
+                    "description": "Default: relates_to. Semantics: parent_of (DAG-validated; hierarchical containment), blocks (DAG-validated; dependency), supersedes (DAG-validated; replacement), covers (this entity documents/explains the target), relates_to (default; generic association), see_also (cross-reference), contradicts (conflicts with target). DAG-validated kinds reject cycles per-link without aborting the batch."
                 }
             },
             "required": ["to"]
@@ -141,6 +141,7 @@ pub(super) fn apply_inline_links(
             None => {
                 failed.push(json!({
                     "to": { "type": link.to.entity_type, "id": link.to.id },
+                    "edge_kind": edge_kind_wire,
                     "error": format!("unknown edge_kind: {edge_kind_wire}")
                 }));
                 continue;
@@ -152,6 +153,7 @@ pub(super) fn apply_inline_links(
             None => {
                 failed.push(json!({
                     "to": { "type": link.to.entity_type, "id": link.to.id },
+                    "edge_kind": edge_kind_wire,
                     "error": format!("unknown entity type: {}", link.to.entity_type)
                 }));
                 continue;
@@ -163,6 +165,7 @@ pub(super) fn apply_inline_links(
             Err(e) => {
                 failed.push(json!({
                     "to": { "type": link.to.entity_type, "id": link.to.id },
+                    "edge_kind": edge_kind_wire,
                     "error": e.to_string()
                 }));
                 continue;
@@ -490,5 +493,105 @@ mod tests {
             err_msg.contains("257"),
             "error should include actual count, got: {err_msg}"
         );
+    }
+
+    // ── Finding #4: self-loop with DAG kind is rejected ───────────────────────
+    #[tokio::test]
+    async fn apply_inline_links_self_loop_parent_of_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+        let from = EntityRef::new(
+            entity_type_from_str("TASK").unwrap(),
+            "selfloop".to_string(),
+        )
+        .unwrap();
+        let links = vec![InlineLinkInput {
+            to: EntityRefInput {
+                entity_type: "TASK".to_string(),
+                id: "selfloop".to_string(),
+            },
+            edge_kind: Some("parent_of".to_string()),
+        }];
+        let result = apply_inline_links(from, links, &ctx);
+        assert_eq!(result["summary"]["succeeded"], 0);
+        assert_eq!(result["summary"]["failed"], 1);
+        let err = result["failed"][0]["error"].as_str().unwrap();
+        assert!(err.contains("cycle") || err.contains("self"), "got: {err}");
+    }
+
+    // ── Finding #5: batch of exactly MAX_INLINE_LINKS (256) is accepted ───────
+    #[tokio::test]
+    async fn apply_inline_links_accepts_max_size_batch() {
+        let (_dir, ctx) = create_test_context().await;
+        let from =
+            EntityRef::new(entity_type_from_str("TASK").unwrap(), "src".to_string()).unwrap();
+        let links: Vec<InlineLinkInput> = (0..256)
+            .map(|i| InlineLinkInput {
+                to: EntityRefInput {
+                    entity_type: "TASK".to_string(),
+                    id: format!("t{i}"),
+                },
+                edge_kind: Some("relates_to".to_string()),
+            })
+            .collect();
+        let result = apply_inline_links(from, links, &ctx);
+        assert_eq!(result["summary"]["succeeded"], 256);
+        assert_eq!(result["summary"]["failed"], 0);
+    }
+
+    // ── Finding #6: empty id triggers EntityRef::new error pre-resolution ─────
+    #[tokio::test]
+    async fn apply_inline_links_empty_id_failed_pre_resolution() {
+        let (_dir, ctx) = create_test_context().await;
+        let from =
+            EntityRef::new(entity_type_from_str("TASK").unwrap(), "src".to_string()).unwrap();
+        let links = vec![InlineLinkInput {
+            to: EntityRefInput {
+                entity_type: "TASK".to_string(),
+                id: "".to_string(),
+            },
+            edge_kind: Some("relates_to".to_string()),
+        }];
+        let result = apply_inline_links(from, links, &ctx);
+        assert_eq!(result["summary"]["failed"], 1);
+        assert_eq!(result["summary"]["succeeded"], 0);
+        // After Finding #12: pre-resolution failure entries must include edge_kind.
+        assert_eq!(result["failed"][0]["edge_kind"], "relates_to");
+    }
+
+    // ── Probe #6: unit tests for schema helpers ───────────────────────────────
+    #[test]
+    fn entity_ref_schema_pins_enum_and_required() {
+        let s = entity_ref_schema();
+        let enums = s["properties"]["type"]["enum"].as_array().unwrap();
+        let kinds: Vec<_> = enums.iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(
+            kinds,
+            vec!["TASK", "RECORD", "EPISODE", "PROCEDURE", "CHUNK", "NOTE"]
+        );
+        assert_eq!(s["required"], json!(["type", "id"]));
+    }
+
+    #[test]
+    fn inline_links_schema_with_description_returns_expected_shape() {
+        let s = inline_links_schema("custom-desc");
+        assert_eq!(s["type"], "array");
+        assert_eq!(s["description"], "custom-desc");
+        let edge_kind_enum = s["items"]["properties"]["edge_kind"]["enum"]
+            .as_array()
+            .unwrap();
+        let kinds: Vec<_> = edge_kind_enum.iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "parent_of",
+                "blocks",
+                "covers",
+                "relates_to",
+                "see_also",
+                "supersedes",
+                "contradicts"
+            ]
+        );
+        assert_eq!(s["items"]["required"], json!(["to"]));
     }
 }

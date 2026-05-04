@@ -41,7 +41,7 @@ impl McpTool for MemWriteProcedure {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Record a reusable procedure (title, markdown steps) to memory. Returns `summary_id`. Optionally pass `links` to attach the new procedure to the EPISODE it was distilled from and any TASK/RECORD it applies to in one round-trip — partial failures are reported per-link without aborting the write. Use `links_add` for any links discovered after the write."
+            description: "Record a reusable procedure (title, markdown steps) to memory. Returns `{summary_id, uri, ...}`. Optionally pass `links` to add edges in the entity graph from the new procedure (type PROCEDURE) to the EPISODE it was distilled from and any TASK/RECORD/PROCEDURE/EPISODE/CHUNK/NOTE entities — the procedure persists even if every link fails. When `links` is provided the response carries `links: {succeeded:[{to, edge_kind}], failed:[{to, edge_kind, error}], summary:{succeeded, failed}}`. Use `links_add` for any links discovered after the write."
                 .into(),
             input_schema: json!({
                 "type": "object",
@@ -242,6 +242,22 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_write_procedure_links_null_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+        let params = json!({
+            "title": "x", "steps": "y",
+            "links": null
+        });
+        let result = registry
+            .dispatch("memory.write_procedure", params, &ctx)
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        let text = &result.content[0].text;
+        assert!(text.contains("Invalid parameters"), "got: {text}");
+    }
+
     #[test]
     fn test_write_procedure_schema_stable() {
         let tool = MemWriteProcedure;
@@ -279,7 +295,7 @@ mod tests {
                                     "type": {
                                         "type": "string",
                                         "enum": ["TASK", "RECORD", "EPISODE", "PROCEDURE", "CHUNK", "NOTE"],
-                                        "description": "The entity type"
+                                        "description": "The entity type. TASK/RECORD/EPISODE/PROCEDURE are agent-writable; CHUNK and NOTE are read-only entities created by the file-watcher pipeline — only link to them when you have a specific chunk_id or note_id from prior retrieval."
                                     },
                                     "id": {
                                         "type": "string",
@@ -291,7 +307,7 @@ mod tests {
                             "edge_kind": {
                                 "type": "string",
                                 "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts"],
-                                "description": "Default: relates_to"
+                                "description": "Default: relates_to. Semantics: parent_of (DAG-validated; hierarchical containment), blocks (DAG-validated; dependency), supersedes (DAG-validated; replacement), covers (this entity documents/explains the target), relates_to (default; generic association), see_also (cross-reference), contradicts (conflicts with target). DAG-validated kinds reject cycles per-link without aborting the batch."
                             }
                         },
                         "required": ["to"]
