@@ -375,26 +375,78 @@ pub fn get_summary_metadata(
     Ok(map)
 }
 
+/// Fixed bucket sizes for `get_summaries_by_ids`.
+/// Each distinct bucket produces exactly one compiled statement, cached by rusqlite.
+/// Inputs that exceed the largest bucket fall back to a dynamic (unbucketed) prepare.
+const IN_CLAUSE_BUCKETS: &[usize] = &[1, 4, 16, 64, 256, 1024];
+
+/// Return the smallest bucket size >= `n`, or `None` when `n` exceeds all buckets.
+fn in_clause_bucket(n: usize) -> Option<usize> {
+    IN_CLAUSE_BUCKETS.iter().copied().find(|&b| b >= n)
+}
+
 /// Batch-load summaries by a list of summary IDs.
+///
+/// Uses `prepare_cached` with fixed-arity IN-clause buckets (1, 4, 16, 64, 256, 1024)
+/// so that statement compilation is amortised across calls with varying neighbourhood
+/// sizes. Unused bucket slots are bound as SQL NULL, which never matches any real
+/// `summary_id`. Inputs larger than 1024 IDs fall back to a one-off `prepare` call
+/// with a dynamic-arity IN clause — this avoids a SQLite variable-count limit error
+/// while keeping hot-path callers on the cached path.
+///
 /// Returns rows in unspecified order; caller is responsible for reordering if needed.
 pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<SummaryRow>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
-    let sql = format!(
-        "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
-                brain_id, parent_id, source_hash, confidence, valid_from
-         FROM summaries WHERE summary_id IN ({})",
-        placeholders.join(", ")
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<&dyn rusqlite::types::ToSql> = ids
-        .iter()
-        .map(|s| s as &dyn rusqlite::types::ToSql)
-        .collect();
-    let rows = stmt.query_map(params.as_slice(), map_summary_row)?;
-    super::collect_rows(rows)
+
+    match in_clause_bucket(ids.len()) {
+        Some(bucket) => {
+            // Build a fixed-arity SQL string; it will be reused from the statement cache
+            // whenever the same bucket size is requested again.
+            let placeholders: Vec<String> = (1..=bucket).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                        brain_id, parent_id, source_hash, confidence, valid_from
+                 FROM summaries WHERE summary_id IN ({})",
+                placeholders.join(", ")
+            );
+            let mut stmt = conn.prepare_cached(&sql)?;
+
+            // Bind real IDs, then pad remaining slots with NULL.
+            let none: Option<&str> = None;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(bucket);
+            for id in ids {
+                params.push(Box::new(id.clone()));
+            }
+            for _ in ids.len()..bucket {
+                params.push(Box::new(none));
+            }
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), map_summary_row)?;
+            super::collect_rows(rows)
+        }
+        None => {
+            // Fallback: dynamic-arity prepare for oversized batches (>1024 IDs).
+            // Callers with very large ID sets pay compilation cost once per distinct
+            // size, but avoid hitting SQLite's SQLITE_MAX_VARIABLE_NUMBER limit.
+            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
+                        brain_id, parent_id, source_hash, confidence, valid_from
+                 FROM summaries WHERE summary_id IN ({})",
+                placeholders.join(", ")
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::types::ToSql> = ids
+                .iter()
+                .map(|s| s as &dyn rusqlite::types::ToSql)
+                .collect();
+            let rows = stmt.query_map(params.as_slice(), map_summary_row)?;
+            super::collect_rows(rows)
+        }
+    }
 }
 
 /// List recent episodes.
@@ -1347,5 +1399,73 @@ mod tests {
             )
             .unwrap();
         assert!(embedded_at.is_some());
+    }
+
+    /// Verify that `get_summaries_by_ids` returns correct results for three different
+    /// input lengths that map to distinct buckets (1 → bucket 1, 5 → bucket 16,
+    /// 50 → bucket 64). On the second call with the same bucket size the prepared
+    /// statement is served from the connection cache — this test asserts functional
+    /// correctness across varied arities; cache-hit behaviour is transparent.
+    #[test]
+    fn bucketed_lookup_handles_varied_arity() {
+        let conn = setup();
+
+        // Store 50 episodes so we can request 1, 5, and 50 of them.
+        let mut all_ids: Vec<String> = Vec::with_capacity(50);
+        for i in 0..50 {
+            let id = store_episode(
+                &conn,
+                &Episode {
+                    brain_id: "brain-bucket".into(),
+                    goal: format!("Bucketed goal {i}"),
+                    actions: "actions".into(),
+                    outcome: "outcome".into(),
+                    tags: vec![],
+                    importance: 1.0,
+                },
+            )
+            .unwrap();
+            all_ids.push(id);
+        }
+
+        // --- request 1 ID (bucket 1) ---
+        let ids_1 = all_ids[..1].to_vec();
+        let rows_1 = get_summaries_by_ids(&conn, &ids_1).unwrap();
+        assert_eq!(rows_1.len(), 1, "expected 1 row for 1-ID lookup");
+        assert_eq!(rows_1[0].summary_id, ids_1[0]);
+
+        // --- request 5 IDs (bucket 8 — next power of 2 >= 5 is 8, but our
+        //     table uses 16 as the bucket after 4; verify correctness regardless) ---
+        let ids_5 = all_ids[..5].to_vec();
+        let rows_5 = get_summaries_by_ids(&conn, &ids_5).unwrap();
+        assert_eq!(rows_5.len(), 5, "expected 5 rows for 5-ID lookup");
+        let returned_ids_5: std::collections::HashSet<&str> =
+            rows_5.iter().map(|r| r.summary_id.as_str()).collect();
+        for id in &ids_5 {
+            assert!(
+                returned_ids_5.contains(id.as_str()),
+                "id {id} missing from 5-ID result"
+            );
+        }
+
+        // --- request 50 IDs (bucket 64) ---
+        let ids_50 = all_ids.clone();
+        let rows_50 = get_summaries_by_ids(&conn, &ids_50).unwrap();
+        assert_eq!(rows_50.len(), 50, "expected 50 rows for 50-ID lookup");
+        let returned_ids_50: std::collections::HashSet<&str> =
+            rows_50.iter().map(|r| r.summary_id.as_str()).collect();
+        for id in &ids_50 {
+            assert!(
+                returned_ids_50.contains(id.as_str()),
+                "id {id} missing from 50-ID result"
+            );
+        }
+
+        // Confirm no phantom rows: total returned equals total requested.
+        assert_eq!(
+            returned_ids_50.len(),
+            50,
+            "no phantom rows from NULL-padded bucket slots"
+        );
     }
 }

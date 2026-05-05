@@ -3,7 +3,7 @@
 //! The three entry points are:
 //! - [`add_link_checked`] — insert an edge, enforcing DAG constraint where required.
 //! - [`remove_link`] — delete an edge, emitting a `LinkRemoved` event.
-//! - [`for_entity`] — query all edges (outgoing + incoming) for an entity.
+//! - [`for_entity`] — query edges (outgoing + incoming) for an entity, with optional SQL-side kind filter.
 
 use rusqlite::Connection;
 use thiserror::Error;
@@ -35,6 +35,21 @@ impl From<rusqlite::Error> for LinkError {
 impl From<crate::error::BrainCoreError> for LinkError {
     fn from(e: crate::error::BrainCoreError) -> Self {
         LinkError::Database(e.to_string())
+    }
+}
+
+impl From<LinkError> for crate::error::BrainCoreError {
+    /// Map a [`LinkError`] into a [`crate::error::BrainCoreError`].
+    ///
+    /// The `Database` variant is unwrapped directly to avoid the doubled
+    /// `"database error: database error: ..."` prefix produced by a naive
+    /// `to_string()` round-trip — both error types format `Database(s)` as
+    /// `"database error: {s}"`.
+    fn from(e: LinkError) -> Self {
+        match e {
+            LinkError::Database(msg) => crate::error::BrainCoreError::Database(msg),
+            other => crate::error::BrainCoreError::Database(other.to_string()),
+        }
     }
 }
 
@@ -166,27 +181,77 @@ pub fn remove_link(
     Ok(removed)
 }
 
-/// Return all edges where `entity` is either the source or the target.
+/// Return edges where `entity` is either the source or the target.
 ///
 /// Both outgoing (`from = entity`) and incoming (`to = entity`) edges are
 /// included. Results are ordered by `created_at` ascending.
 ///
+/// When `kinds` is `Some(&slice)`, only edges whose `edge_kind` is in the slice
+/// are returned — the filter is pushed into SQL via `WHERE edge_kind IN (...)`.
+/// When `kinds` is `None`, all edge kinds are returned (original behaviour).
+///
 /// Rows whose `entity_type` or `edge_kind` columns contain unrecognised strings
 /// are silently skipped with a `warn!` log entry. This guards against schema
 /// additions that predate a running binary without surfacing an error to callers.
-pub fn for_entity(conn: &Connection, entity: EntityRef) -> Result<Vec<EntityLink>, LinkError> {
+pub fn for_entity(
+    conn: &Connection,
+    entity: &EntityRef,
+    kinds: Option<&[EdgeKind]>,
+) -> Result<Vec<EntityLink>, LinkError> {
     let entity_type = entity_type_str(entity.kind);
 
-    let mut stmt = conn.prepare_cached(
-        "SELECT from_type, from_id, to_type, to_id, edge_kind
-         FROM entity_links
-         WHERE (from_type = ?1 AND from_id = ?2)
-            OR (to_type   = ?1 AND to_id   = ?2)
-         ORDER BY created_at ASC",
-    )?;
+    let rows: Vec<EntityLink> = if let Some(ks) = kinds {
+        // Build a query with an IN clause for the requested edge kinds.
+        // We cannot use prepare_cached here because the placeholder count varies
+        // with the slice length. The slice is always small (bounded by the number
+        // of EdgeKind variants), so dynamic SQL construction is safe and cheap.
+        let kind_strs: Vec<&str> = ks.iter().map(|k| edge_kind_str(*k)).collect();
+        let placeholders: String = (1..=kind_strs.len())
+            .map(|i| format!("?{}", i + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
 
-    let rows: Vec<EntityLink> = stmt
-        .query_map(rusqlite::params![entity_type, entity.id], |row| {
+        let sql = format!(
+            "SELECT from_type, from_id, to_type, to_id, edge_kind
+             FROM entity_links
+             WHERE ((from_type = ?1 AND from_id = ?2)
+                 OR (to_type   = ?1 AND to_id   = ?2))
+               AND edge_kind IN ({placeholders})
+             ORDER BY created_at ASC"
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(2 + kind_strs.len());
+        params.push(Box::new(entity_type.to_owned()));
+        params.push(Box::new(entity.id.clone()));
+        for k in &kind_strs {
+            params.push(Box::new(k.to_string()));
+        }
+
+        stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |row| {
+                let from_type_str: String = row.get(0)?;
+                let from_id: String = row.get(1)?;
+                let to_type_str: String = row.get(2)?;
+                let to_id: String = row.get(3)?;
+                let edge_kind_s: String = row.get(4)?;
+                Ok((from_type_str, from_id, to_type_str, to_id, edge_kind_s))
+            },
+        )?
+        .filter_map(|r| r.ok())
+        .filter_map(|(ft, fi, tt, ti, ek)| decode_link_row(ft, fi, tt, ti, ek))
+        .collect()
+    } else {
+        let mut stmt = conn.prepare_cached(
+            "SELECT from_type, from_id, to_type, to_id, edge_kind
+             FROM entity_links
+             WHERE (from_type = ?1 AND from_id = ?2)
+                OR (to_type   = ?1 AND to_id   = ?2)
+             ORDER BY created_at ASC",
+        )?;
+
+        stmt.query_map(rusqlite::params![entity_type, entity.id], |row| {
             let from_type_str: String = row.get(0)?;
             let from_id: String = row.get(1)?;
             let to_type_str: String = row.get(2)?;
@@ -195,30 +260,41 @@ pub fn for_entity(conn: &Connection, entity: EntityRef) -> Result<Vec<EntityLink
             Ok((from_type_str, from_id, to_type_str, to_id, edge_kind_s))
         })?
         .filter_map(|r| r.ok())
-        .filter_map(|(ft, fi, tt, ti, ek)| {
-            let from_kind = entity_type_from_str(&ft);
-            let to_kind = entity_type_from_str(&tt);
-            let edge_kind = edge_kind_from_str(&ek);
-            match (from_kind, to_kind, edge_kind) {
-                (Some(fk), Some(tk), Some(ek)) => Some(EntityLink {
-                    from: EntityRef { kind: fk, id: fi },
-                    to: EntityRef { kind: tk, id: ti },
-                    edge_kind: ek,
-                }),
-                _ => {
-                    warn!(
-                        from_type = %ft,
-                        to_type = %tt,
-                        edge_kind = %ek,
-                        "for_entity: skipping row with unrecognised entity_type or edge_kind"
-                    );
-                    None
-                }
-            }
-        })
-        .collect();
+        .filter_map(|(ft, fi, tt, ti, ek)| decode_link_row(ft, fi, tt, ti, ek))
+        .collect()
+    };
 
     Ok(rows)
+}
+
+/// Decode a raw row tuple into an [`EntityLink`], returning `None` and emitting
+/// a `warn!` for rows that contain unrecognised entity-type or edge-kind strings.
+fn decode_link_row(
+    ft: String,
+    fi: String,
+    tt: String,
+    ti: String,
+    ek: String,
+) -> Option<EntityLink> {
+    let from_kind = entity_type_from_str(&ft);
+    let to_kind = entity_type_from_str(&tt);
+    let edge_kind = edge_kind_from_str(&ek);
+    match (from_kind, to_kind, edge_kind) {
+        (Some(fk), Some(tk), Some(ek)) => Some(EntityLink {
+            from: EntityRef { kind: fk, id: fi },
+            to: EntityRef { kind: tk, id: ti },
+            edge_kind: ek,
+        }),
+        _ => {
+            warn!(
+                from_type = %ft,
+                to_type = %tt,
+                edge_kind = %ek,
+                "for_entity: skipping row with unrecognised entity_type or edge_kind"
+            );
+            None
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -398,7 +474,7 @@ mod tests {
         add_link_checked(&conn, task("B"), task("A"), EdgeKind::Blocks).unwrap();
         add_link_checked(&conn, task("A"), task("C"), EdgeKind::RelatesTo).unwrap();
 
-        let links = for_entity(&conn, task("A")).unwrap();
+        let links = for_entity(&conn, &task("A"), None).unwrap();
         assert_eq!(links.len(), 2);
 
         let has_incoming = links.iter().any(|l| l.from.id == "B" && l.to.id == "A");
@@ -411,7 +487,7 @@ mod tests {
     fn for_entity_empty_when_no_edges() {
         let conn = open_db();
 
-        let links = for_entity(&conn, task("orphan")).unwrap();
+        let links = for_entity(&conn, &task("orphan"), None).unwrap();
         assert!(links.is_empty());
     }
 
@@ -422,7 +498,7 @@ mod tests {
         add_link_checked(&conn, task("X"), task("Y"), EdgeKind::Blocks).unwrap();
         add_link_checked(&conn, task("P"), task("Q"), EdgeKind::RelatesTo).unwrap();
 
-        let links = for_entity(&conn, task("X")).unwrap();
+        let links = for_entity(&conn, &task("X"), None).unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].from.id, "X");
         assert_eq!(links[0].to.id, "Y");
@@ -528,7 +604,7 @@ mod tests {
         add_link_checked(&conn, task("A"), task("C"), EdgeKind::RelatesTo).unwrap();
         add_link_checked(&conn, task("A"), task("D"), EdgeKind::SeeAlso).unwrap();
 
-        let links = for_entity(&conn, task("A")).unwrap();
+        let links = for_entity(&conn, &task("A"), None).unwrap();
         assert_eq!(links.len(), 3);
         // All three share the same `from`, so verify to IDs are in insertion order.
         let to_ids: Vec<&str> = links.iter().map(|l| l.to.id.as_str()).collect();
