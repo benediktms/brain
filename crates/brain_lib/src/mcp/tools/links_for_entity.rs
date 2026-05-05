@@ -49,7 +49,7 @@ impl LinksForEntity {
         }
 
         let links = ctx.stores.inner_db().with_read_conn(|conn| {
-            for_entity(conn, entity.clone()).map_err(|e| match e {
+            for_entity(conn, &entity, None).map_err(|e| match e {
                 LinkError::Database(msg) => brain_persistence::error::BrainCoreError::Database(msg),
                 LinkError::Cycle(_) => unreachable!("for_entity never returns Cycle"),
             })

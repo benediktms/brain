@@ -522,10 +522,11 @@ mod tests {
             .with_read_conn(|conn| {
                 brain_persistence::db::links::for_entity(
                     conn,
-                    brain_persistence::db::links::EntityRef {
+                    &brain_persistence::db::links::EntityRef {
                         kind: brain_persistence::db::links::EntityType::Record,
                         id: record_id.clone(),
                     },
+                    None,
                 )
                 .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
             })
@@ -603,10 +604,11 @@ mod tests {
             .with_read_conn(|conn| {
                 brain_persistence::db::links::for_entity(
                     conn,
-                    brain_persistence::db::links::EntityRef {
+                    &brain_persistence::db::links::EntityRef {
                         kind: brain_persistence::db::links::EntityType::Record,
                         id: record_id_1.clone(),
                     },
+                    None,
                 )
                 .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
             })
@@ -618,10 +620,11 @@ mod tests {
             .with_read_conn(|conn| {
                 brain_persistence::db::links::for_entity(
                     conn,
-                    brain_persistence::db::links::EntityRef {
+                    &brain_persistence::db::links::EntityRef {
                         kind: brain_persistence::db::links::EntityType::Record,
                         id: record_id_2.clone(),
                     },
+                    None,
                 )
                 .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
             })

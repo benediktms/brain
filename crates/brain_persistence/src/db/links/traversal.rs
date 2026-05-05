@@ -27,7 +27,7 @@ const TRAVERSAL_EDGE_KINDS: [EdgeKind; 2] = [EdgeKind::RelatesTo, EdgeKind::SeeA
 /// caller invokes via the write connection AND prevents `get_summaries_by_ids`
 /// from exceeding `SQLITE_MAX_VARIABLE_NUMBER` (32766 on modern bundled
 /// SQLite, 999 on legacy builds — 1024 stays safely below either).
-const MAX_VISITED: usize = 1024;
+pub(crate) const MAX_VISITED: usize = 1024;
 
 /// BFS over `entity_links` from a seed episode, returning all reachable
 /// episode IDs (including the seed) in deterministic order.
@@ -84,7 +84,7 @@ pub fn collect_linked_episode_set(
             id: current.clone(),
         };
 
-        let edges = for_entity(conn, entity)?;
+        let edges = for_entity(conn, &entity, Some(&TRAVERSAL_EDGE_KINDS))?;
 
         for link in edges {
             extend_with_neighbour(&link, &current, depth, &mut visited, &mut queue);
@@ -125,11 +125,13 @@ pub fn collect_linked_episode_set(
 /// Inspect an edge incident to `current` and, if it qualifies as a traversal
 /// step, enqueue the other end at `depth + 1`.
 ///
-/// An edge qualifies when its kind is in [`TRAVERSAL_EDGE_KINDS`] and both
-/// endpoints are episode-typed. The "other end" is the endpoint that is not
-/// `current`; rows that fail to identify a current-side endpoint are skipped
-/// defensively (they should not occur given `for_entity`'s SQL filter, but a
-/// direct SQL writer could create them).
+/// The edge-kind filter is applied in SQL by [`for_entity`], so only
+/// `TRAVERSAL_EDGE_KINDS` edges reach this function. The endpoint-type check
+/// (both sides must be Episode-typed) is retained defensively — a direct SQL
+/// writer could insert cross-type edges that bypass the API.
+///
+/// The "other end" is the endpoint that is not `current`; rows that fail to
+/// identify a current-side endpoint are skipped defensively.
 fn extend_with_neighbour(
     link: &EntityLink,
     current: &str,
@@ -137,10 +139,6 @@ fn extend_with_neighbour(
     visited: &mut HashSet<String>,
     queue: &mut VecDeque<(String, u32)>,
 ) {
-    if !TRAVERSAL_EDGE_KINDS.contains(&link.edge_kind) {
-        return;
-    }
-
     let other = if link.from.id == current && link.from.kind == EntityType::Episode {
         &link.to
     } else if link.to.id == current && link.to.kind == EntityType::Episode {
@@ -479,6 +477,166 @@ mod tests {
             assert!(
                 result.is_empty(),
                 "missing seed must produce empty result, got {result:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // ── Self-loop equivalent: visited-set blocks re-enqueue of the seed ─────
+
+    /// The schema forbids DB-level self-loops (CHECK constraint). We instead
+    /// verify the visited-set blocks re-enqueue via a 2-cycle A→B→A, where A
+    /// is the seed. After depth-1 expansion B is visited; B's neighbour A is
+    /// already in visited and must not be re-enqueued. Result: exactly [A, B].
+    #[test]
+    fn self_loop_a_relates_to_a_terminates() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            let a = insert_episode_at(conn, "A", 100);
+            let b = insert_episode_at(conn, "B", 200);
+
+            link(conn, &a, &b, EdgeKind::RelatesTo);
+            link(conn, &b, &a, EdgeKind::RelatesTo);
+
+            let result = collect_linked_episode_set(conn, &a, 10).unwrap();
+            // Visited-set must block re-enqueue of A from B; no duplicates.
+            assert_eq!(
+                result.len(),
+                2,
+                "visited-set must block re-enqueue; got {result:?}"
+            );
+            assert!(result.contains(&a), "seed must be present");
+            assert!(result.contains(&b), "neighbour must be present");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // ── max_depth = 0 with a cycle in the graph ──────────────────────────────
+
+    #[test]
+    fn max_depth_zero_with_cycle() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            let a = insert_episode_at(conn, "A", 100);
+            let b = insert_episode_at(conn, "B", 200);
+
+            link(conn, &a, &b, EdgeKind::RelatesTo);
+            link(conn, &b, &a, EdgeKind::RelatesTo);
+
+            let result = collect_linked_episode_set(conn, &a, 0).unwrap();
+            assert_eq!(result, vec![a.clone()], "depth 0 must return seed only");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // ── max_depth = u32::MAX terminates without overflow ─────────────────────
+
+    #[test]
+    fn max_depth_u32_max_terminates() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            // Small cycle: A → B → A. BFS terminates via visited-set, not depth.
+            let a = insert_episode_at(conn, "A", 100);
+            let b = insert_episode_at(conn, "B", 200);
+
+            link(conn, &a, &b, EdgeKind::RelatesTo);
+            link(conn, &b, &a, EdgeKind::RelatesTo);
+
+            // Must not panic or overflow regardless of the high depth limit.
+            let result = collect_linked_episode_set(conn, &a, u32::MAX).unwrap();
+            let mut expected = vec![a.clone(), b.clone()];
+            expected.sort();
+            let mut got = result.clone();
+            got.sort();
+            assert_eq!(got, expected, "all reachable episodes must be returned");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // ── Empty seed string returns empty Vec ──────────────────────────────────
+
+    #[test]
+    fn empty_seed_returns_empty() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            // No summaries row for ""; BFS finds no edges; result is empty.
+            let result = collect_linked_episode_set(conn, "", 5).unwrap();
+            assert!(
+                result.is_empty(),
+                "empty seed must produce empty result, got {result:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // ── Non-episode seed: Task ID passed as seed returns empty ───────────────
+
+    #[test]
+    fn non_episode_seed_returns_empty() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            let a = insert_episode_at(conn, "A", 100);
+
+            // Insert a Task→Episode link so "task-x" exists in entity_links.
+            // The traversal seeds with Episode kind, so it queries for
+            // (from_type='episode' AND from_id='task-x') — no match.
+            // The summaries table has no row for "task-x", so result is empty.
+            add_link_checked(
+                conn,
+                EntityRef {
+                    kind: EntityType::Task,
+                    id: "task-x".into(),
+                },
+                ep(&a),
+                EdgeKind::RelatesTo,
+            )
+            .expect("add task→episode link");
+
+            let result = collect_linked_episode_set(conn, "task-x", 5).unwrap();
+            assert!(
+                result.is_empty(),
+                "non-episode seed must produce empty result, got {result:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // ── Visited cap halts BFS early ──────────────────────────────────────────
+
+    /// Constructs a chain longer than `MAX_VISITED` and verifies BFS halts at
+    /// the cap. Gated behind `#[ignore]` because inserting >1024 episodes is slow.
+    ///
+    /// Run explicitly with: `cargo test -p brain-persistence -- --ignored visited_cap`
+    #[test]
+    #[ignore]
+    fn visited_cap_terminates_bfs_early() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            // Build a linear chain of MAX_VISITED + 5 episodes.
+            let chain_len = MAX_VISITED + 5;
+            let mut ids: Vec<String> = Vec::with_capacity(chain_len);
+            for i in 0..chain_len {
+                let id = insert_episode_at(conn, &format!("ep-{i:04}"), i as i64 * 10);
+                ids.push(id);
+            }
+            for window in ids.windows(2) {
+                link(conn, &window[0], &window[1], EdgeKind::RelatesTo);
+            }
+
+            // Traverse from the first node with a depth large enough to reach all.
+            let result = collect_linked_episode_set(conn, &ids[0], chain_len as u32 + 10).unwrap();
+
+            assert_eq!(
+                result.len(),
+                MAX_VISITED,
+                "BFS must halt at MAX_VISITED cap; got {} episodes",
+                result.len()
             );
             Ok(())
         })
