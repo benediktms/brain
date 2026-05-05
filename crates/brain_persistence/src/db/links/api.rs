@@ -38,6 +38,21 @@ impl From<crate::error::BrainCoreError> for LinkError {
     }
 }
 
+impl From<LinkError> for crate::error::BrainCoreError {
+    /// Map a [`LinkError`] into a [`crate::error::BrainCoreError`].
+    ///
+    /// The `Database` variant is unwrapped directly to avoid the doubled
+    /// `"database error: database error: ..."` prefix produced by a naive
+    /// `to_string()` round-trip — both error types format `Database(s)` as
+    /// `"database error: {s}"`.
+    fn from(e: LinkError) -> Self {
+        match e {
+            LinkError::Database(msg) => crate::error::BrainCoreError::Database(msg),
+            other => crate::error::BrainCoreError::Database(other.to_string()),
+        }
+    }
+}
+
 // ── Output types ──────────────────────────────────────────────────────────────
 
 /// A single edge as returned by [`for_entity`].
