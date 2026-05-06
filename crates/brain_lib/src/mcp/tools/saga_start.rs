@@ -96,11 +96,17 @@ mod tests {
     use super::{McpTool, SagaStart};
     use crate::mcp::tools::saga_create::SagaCreate;
 
-    async fn call_start(params: Value, ctx: &crate::mcp::McpContext) -> crate::mcp::protocol::ToolCallResult {
+    async fn call_start(
+        params: Value,
+        ctx: &crate::mcp::McpContext,
+    ) -> crate::mcp::protocol::ToolCallResult {
         SagaStart.call(params, ctx).await
     }
 
-    async fn call_create(params: Value, ctx: &crate::mcp::McpContext) -> crate::mcp::protocol::ToolCallResult {
+    async fn call_create(
+        params: Value,
+        ctx: &crate::mcp::McpContext,
+    ) -> crate::mcp::protocol::ToolCallResult {
         SagaCreate.call(params, ctx).await
     }
 
@@ -117,7 +123,11 @@ mod tests {
         let saga_id = create_saga(&ctx, "Startable").await;
 
         let result = call_start(json!({ "saga_id": saga_id }), &ctx).await;
-        assert!(result.is_error.is_none(), "start should succeed: {:?}", result.content);
+        assert!(
+            result.is_error.is_none(),
+            "start should succeed: {:?}",
+            result.content
+        );
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["saga"]["status"], "open");
@@ -132,7 +142,10 @@ mod tests {
         call_start(json!({ "saga_id": saga_id }), &ctx).await;
         let result = call_start(json!({ "saga_id": saga_id }), &ctx).await;
         assert_eq!(result.is_error, Some(true));
-        assert!(result.content[0].text.contains("transition") || result.content[0].text.contains("Failed"));
+        assert!(
+            result.content[0].text.contains("transition")
+                || result.content[0].text.contains("Failed")
+        );
     }
 
     #[tokio::test]

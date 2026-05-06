@@ -951,13 +951,18 @@ mod tests {
         let created = store.create("Double Start", None, "test").unwrap();
         store.start(&created.saga_id, "test").unwrap();
         let err = store.start(&created.saga_id, "test").unwrap_err();
-        assert!(err.to_string().contains("invalid saga lifecycle transition"));
+        assert!(
+            err.to_string()
+                .contains("invalid saga lifecycle transition")
+        );
     }
 
     #[test]
     fn start_nonexistent_saga_fails() {
         let store = in_memory_store();
-        let err = store.start("01NONEXISTENT000000000000", "test").unwrap_err();
+        let err = store
+            .start("01NONEXISTENT000000000000", "test")
+            .unwrap_err();
         assert!(err.to_string().contains("not found"));
     }
 }
