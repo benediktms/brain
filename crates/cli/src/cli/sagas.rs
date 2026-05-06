@@ -55,4 +55,14 @@ pub(crate) enum SagasAction {
         #[arg(long)]
         clear_description: bool,
     },
+
+    /// Add one or more tasks to a saga (atomic batch)
+    Add {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+
+        /// Task IDs to add (full IDs or short hashes, cross-brain aware)
+        #[arg(required = true)]
+        task_ids: Vec<String>,
+    },
 }

@@ -5,4 +5,6 @@ pub use events::{
     SagaCancelledPayload, SagaClosedPayload, SagaEvent, SagaEventType, SagaTaskPayload,
     SagaUpdatedPayload, new_saga_event_id, new_saga_id,
 };
-pub use queries::{SagaEventInsert, SagaListFilter, SagaRow};
+pub use queries::{
+    SagaEventInsert, SagaListFilter, SagaRow, insert_saga_tasks, list_saga_task_ids, saga_has_task,
+};

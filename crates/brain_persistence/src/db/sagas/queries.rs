@@ -175,3 +175,41 @@ pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {
         .optional()?;
     Ok(row)
 }
+
+/// Insert a batch of (saga_id, task_id) rows into `saga_tasks`.
+///
+/// Caller is responsible for transaction boundaries and pre-validation.
+/// Returns the number of rows inserted.
+pub fn insert_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> Result<usize> {
+    let ts = now_ts();
+    let mut count = 0usize;
+    for task_id in task_ids {
+        conn.execute(
+            "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, ?3)",
+            params![saga_id, task_id, ts],
+        )?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Check whether a task is already a member of a saga.
+pub fn saga_has_task(conn: &Connection, saga_id: &str, task_id: &str) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1 AND task_id = ?2",
+        params![saga_id, task_id],
+        |row| row.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// List all task_ids belonging to a saga.
+pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY added_at",
+    )?;
+    let ids = stmt
+        .query_map([saga_id], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(ids)
+}
