@@ -1,4 +1,6 @@
+pub mod lifecycle;
 pub mod status;
+pub use lifecycle::validate_transition;
 pub use status::SagaStatus;
 
 use brain_persistence::db::Db;
@@ -129,6 +131,52 @@ impl SagaStore {
     pub fn list(&self, filter: SagaListFilter) -> Result<Vec<SagaRow>> {
         self.db
             .with_read_conn(move |conn| queries::list_sagas(conn, &filter))
+    }
+
+    /// Transition a saga from `planning` to `open`. Emits `SagaStarted`.
+    pub fn start(&self, saga_id: &str, actor: &str) -> Result<SagaRow> {
+        self.db.with_write_conn(|conn| {
+            let row = queries::get_saga(conn, saga_id)?
+                .ok_or_else(|| BrainCoreError::Parse(format!("saga not found: {saga_id}")))?;
+
+            let from: SagaStatus = row.status.parse().map_err(|_| {
+                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
+            })?;
+
+            validate_transition(from, SagaStatus::Open)?;
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            #[allow(clippy::disallowed_macros)]
+            conn.execute(
+                "UPDATE sagas SET status = 'open', updated_at = ?1 WHERE saga_id = ?2",
+                rusqlite::params![now, saga_id],
+            )?;
+
+            let event = SagaEvent::new(
+                saga_id,
+                actor,
+                SagaEventType::SagaStarted,
+                &serde_json::json!({}),
+            );
+            queries::insert_saga_event(
+                conn,
+                &SagaEventInsert {
+                    event_id: &event.event_id,
+                    saga_id: &event.saga_id,
+                    event_type: &serde_json::to_string(&event.event_type)
+                        .expect("SagaEventType serialization is infallible"),
+                    timestamp: event.timestamp,
+                    actor: &event.actor,
+                    payload: &event.payload.to_string(),
+                },
+            )?;
+
+            queries::get_saga(conn, saga_id)?
+                .ok_or_else(|| BrainCoreError::Parse("saga disappeared after start".into()))
+        })
     }
 
     #[cfg(test)]
@@ -882,5 +930,39 @@ mod tests {
         let saga = store.create("Noop Saga", None, "test").unwrap();
         let count = store.add_tasks(&saga.saga_id, &[], "test").unwrap();
         assert_eq!(count, 0);
+    }
+
+    // ── start tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn start_planning_saga_succeeds() {
+        let store = in_memory_store();
+        let created = store.create("To Start", None, "test").unwrap();
+        assert_eq!(created.status, "planning");
+
+        let started = store.start(&created.saga_id, "test").unwrap();
+        assert_eq!(started.status, "open");
+        assert_eq!(started.saga_id, created.saga_id);
+    }
+
+    #[test]
+    fn start_already_open_fails() {
+        let store = in_memory_store();
+        let created = store.create("Double Start", None, "test").unwrap();
+        store.start(&created.saga_id, "test").unwrap();
+        let err = store.start(&created.saga_id, "test").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid saga lifecycle transition")
+        );
+    }
+
+    #[test]
+    fn start_nonexistent_saga_fails() {
+        let store = in_memory_store();
+        let err = store
+            .start("01NONEXISTENT000000000000", "test")
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 }

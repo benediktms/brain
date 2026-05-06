@@ -65,4 +65,10 @@ pub(crate) enum SagasAction {
         #[arg(required = true)]
         task_ids: Vec<String>,
     },
+
+    /// Start a saga (planning → open)
+    Start {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+    },
 }

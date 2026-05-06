@@ -139,6 +139,28 @@ pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String]) -> Result<()
     Ok(())
 }
 
+pub fn start(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
+    let row = ctx.store.start(saga_id, "cli")?;
+    if ctx.json {
+        let out = json!({
+            "saga_id": row.saga_id,
+            "saga": {
+                "saga_id": row.saga_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "closed_at": row.closed_at,
+            }
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Started saga {} (status: {})", row.saga_id, row.status);
+    }
+    Ok(())
+}
+
 pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx
         .store
