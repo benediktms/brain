@@ -238,7 +238,16 @@ mod tests {
         let saga_b = p_b["saga_id"].as_str().unwrap().to_string();
 
         // Wire tasks into brains via direct DB inserts.
+        // tasks.brain_id has a FK to brains, so insert brain rows first.
         ctx.stores.sagas.db().with_write_conn(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES ('brain-x', 'brain-x', 1000)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES ('brain-y', 'brain-y', 1000)",
+                [],
+            )?;
             conn.execute(
                 "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
                  VALUES ('t-brain-x', 'brain-x', 'task', 'open', 4, 'task', 1000, 1000)",

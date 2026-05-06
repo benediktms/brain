@@ -314,15 +314,23 @@ mod tests {
     }
 
     // Helper: insert a minimal task row with a given task_id and brain_id.
+    // Ensures the brain row exists first (tasks.brain_id has a FK to brains).
     fn insert_task(store: &SagaStore, task_id: &str, brain_id: &str) {
-        store.db.with_write_conn(|conn| {
-            conn.execute(
-                "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
-                 VALUES (?1, ?2, 'task', 'open', 4, 'task', 1000, 1000)",
-                [task_id, brain_id],
-            )?;
-            Ok(())
-        }).unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES (?1, ?1, 1000)",
+                    [brain_id],
+                )?;
+                conn.execute(
+                    "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
+                     VALUES (?1, ?2, 'task', 'open', 4, 'task', 1000, 1000)",
+                    [task_id, brain_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
     }
 
     // Helper: link a task to a saga.
