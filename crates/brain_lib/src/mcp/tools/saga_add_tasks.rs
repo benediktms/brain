@@ -31,7 +31,7 @@ impl SagaAddTasks {
         };
 
         if params.task_ids.is_empty() {
-            return ToolCallResult::error("task_ids must not be empty".to_string());
+            return ToolCallResult::error("task_ids must not be empty");
         }
 
         match ctx
@@ -129,12 +129,12 @@ mod tests {
         let saga_id = make_saga(&ctx, "S1").await;
         let task_id = make_task(&ctx, "T1").await;
 
-        let result = call_add(json!({ "saga_id": saga_id, "task_ids": [task_id] }), &ctx).await;
-        assert!(
-            result.is_error.is_none(),
-            "should succeed: {:?}",
-            result.content
-        );
+        let result = call_add(
+            json!({ "saga_id": saga_id, "task_ids": [task_id] }),
+            &ctx,
+        )
+        .await;
+        assert!(result.is_error.is_none(), "should succeed: {:?}", result.content);
         let v: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(v["added"], 1);
         assert_eq!(v["saga_id"], saga_id);
@@ -147,7 +147,11 @@ mod tests {
         let t1 = make_task(&ctx, "T1").await;
         let t2 = make_task(&ctx, "T2").await;
 
-        let result = call_add(json!({ "saga_id": saga_id, "task_ids": [t1, t2] }), &ctx).await;
+        let result = call_add(
+            json!({ "saga_id": saga_id, "task_ids": [t1, t2] }),
+            &ctx,
+        )
+        .await;
         assert!(result.is_error.is_none());
         let v: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(v["added"], 2);
@@ -159,13 +163,13 @@ mod tests {
         let saga_id = make_saga(&ctx, "S3").await;
         let task_id = make_task(&ctx, "T1").await;
 
-        call_add(
-            json!({ "saga_id": saga_id, "task_ids": [task_id.clone()] }),
+        call_add(json!({ "saga_id": saga_id, "task_ids": [task_id.clone()] }), &ctx).await;
+
+        let result = call_add(
+            json!({ "saga_id": saga_id, "task_ids": [task_id] }),
             &ctx,
         )
         .await;
-
-        let result = call_add(json!({ "saga_id": saga_id, "task_ids": [task_id] }), &ctx).await;
         assert_eq!(result.is_error, Some(true), "duplicate should fail");
     }
 
