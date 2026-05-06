@@ -113,13 +113,10 @@ mod tests {
     }
 
     async fn add_tasks(ctx: &crate::mcp::McpContext, saga_id: &str, task_ids: &[&str]) {
+        let owned: Vec<String> = task_ids.iter().map(|s| s.to_string()).collect();
         ctx.stores
             .sagas
-            .add_tasks(
-                saga_id,
-                task_ids.iter().map(|s| s.to_string()).collect::<Vec<String>>(),
-                "test",
-            )
+            .add_tasks(saga_id, &owned, "test")
             .unwrap();
     }
 
