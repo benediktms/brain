@@ -46,8 +46,8 @@ pub fn insert_saga(
 ) -> Result<SagaRow> {
     let ts = now_ts();
     conn.execute(
-        "INSERT INTO sagas (saga_id, title, description, status, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'planning', ?4, ?4)",
+        "INSERT INTO sagas (saga_id, title, description, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?4)",
         params![saga_id, title, description, ts],
     )?;
     get_saga(conn, saga_id)?.ok_or_else(|| {
