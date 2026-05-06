@@ -95,7 +95,7 @@ pub fn list_sagas(conn: &Connection, filter: &SagaListFilter) -> Result<Vec<Saga
         where_clauses.push(
             "EXISTS (SELECT 1 FROM saga_tasks st \
              JOIN tasks t ON t.task_id = st.task_id \
-             WHERE st.saga_id = s.saga_id AND t.brain_id = ?1)",
+             WHERE st.saga_id = s.saga_id AND t.brain_id = :brain_id)",
         );
     }
 
@@ -115,17 +115,16 @@ pub fn list_sagas(conn: &Connection, filter: &SagaListFilter) -> Result<Vec<Saga
 
     let mut stmt = conn.prepare(&sql)?;
 
-    let rows = if let Some(brain_id) = &filter.containing_brain {
-        stmt.query_map([brain_id.as_str()], map_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    } else {
-        stmt.query_map([], map_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?
+    let params: Vec<(&str, &dyn rusqlite::ToSql)> = match &filter.containing_brain {
+        Some(b) => vec![(":brain_id", b)],
+        None => vec![],
     };
+    let rows = stmt
+        .query_map(params.as_slice(), map_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(rows)
 }
-
 
 /// Fetch a saga row by ID.
 pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {
