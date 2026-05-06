@@ -146,7 +146,11 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(result.is_error.is_none(), "should succeed: {:?}", result.content);
+        assert!(
+            result.is_error.is_none(),
+            "should succeed: {:?}",
+            result.content
+        );
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["saga"]["title"], "Updated Title");
     }
@@ -215,11 +219,7 @@ mod tests {
         // Small delay to ensure timestamp advances
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        let result = call_update(
-            json!({ "saga_id": saga_id, "title": "Updated" }),
-            &ctx,
-        )
-        .await;
+        let result = call_update(json!({ "saga_id": saga_id, "title": "Updated" }), &ctx).await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let updated_at = parsed["saga"]["updated_at"].as_i64().unwrap();
         assert!(updated_at >= created_at, "updated_at must be >= created_at");

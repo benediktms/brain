@@ -370,7 +370,12 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         containing_brain,
                     )?;
                 }
-                SagasAction::Update { saga_id, title, description, clear_description } => {
+                SagasAction::Update {
+                    saga_id,
+                    title,
+                    description,
+                    clear_description,
+                } => {
                     // Map CLI flags to the store's Option<Option<&str>> description convention:
                     //   --clear-description  => Some(None)   (set NULL)
                     //   --description "x"   => Some(Some("x"))
