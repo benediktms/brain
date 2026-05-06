@@ -17,4 +17,4 @@ pub use api::{EntityLink, LinkError, add_link_checked, for_entity, remove_link};
 pub use entity_graph::*;
 pub use file_links::*;
 pub use projections::{LinkEvent, apply_link_event, apply_link_remove};
-pub use traversal::collect_linked_episode_set;
+pub use traversal::{collect_linked_episode_set, collect_thread_episodes};
