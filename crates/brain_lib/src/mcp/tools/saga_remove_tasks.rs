@@ -98,6 +98,7 @@ mod tests {
     use super::super::tests::create_test_context;
     use super::{McpTool, SagaRemoveTasks};
     use crate::mcp::tools::saga_create::SagaCreate;
+    use crate::mcp::tools::task_create::TaskCreate;
 
     async fn call_remove(
         params: Value,
@@ -112,6 +113,14 @@ mod tests {
         parsed["saga_id"].as_str().unwrap().to_string()
     }
 
+    async fn make_task(ctx: &crate::mcp::McpContext, title: &str) -> String {
+        let r = TaskCreate
+            .call(json!({ "title": title, "task_type": "feature" }), ctx)
+            .await;
+        let v: Value = serde_json::from_str(&r.content[0].text).unwrap();
+        v["task_id"].as_str().unwrap().to_string()
+    }
+
     async fn add_tasks(ctx: &crate::mcp::McpContext, saga_id: &str, task_ids: &[&str]) {
         let owned: Vec<String> = task_ids.iter().map(|s| s.to_string()).collect();
         ctx.stores.sagas.add_tasks(saga_id, &owned, "test").unwrap();
@@ -121,13 +130,12 @@ mod tests {
     async fn test_remove_existing_tasks() {
         let (_dir, ctx) = create_test_context().await;
         let saga_id = create_saga(&ctx, "Remove Test").await;
-        add_tasks(&ctx, &saga_id, &["T-001", "T-002", "T-003"]).await;
+        let t1 = make_task(&ctx, "T1").await;
+        let t2 = make_task(&ctx, "T2").await;
+        let t3 = make_task(&ctx, "T3").await;
+        add_tasks(&ctx, &saga_id, &[&t1, &t2, &t3]).await;
 
-        let result = call_remove(
-            json!({ "saga_id": saga_id, "task_ids": ["T-001", "T-002"] }),
-            &ctx,
-        )
-        .await;
+        let result = call_remove(json!({ "saga_id": saga_id, "task_ids": [t1, t2] }), &ctx).await;
         assert!(
             result.is_error.is_none(),
             "should succeed: {:?}",
@@ -160,10 +168,13 @@ mod tests {
     async fn test_remove_mixed_batch() {
         let (_dir, ctx) = create_test_context().await;
         let saga_id = create_saga(&ctx, "Mixed Test").await;
-        add_tasks(&ctx, &saga_id, &["T-001", "T-003"]).await;
+        let t1 = make_task(&ctx, "T1").await;
+        let t2 = make_task(&ctx, "T2").await;
+        let t3 = make_task(&ctx, "T3").await;
+        add_tasks(&ctx, &saga_id, &[&t1, &t3]).await;
 
         let result = call_remove(
-            json!({ "saga_id": saga_id, "task_ids": ["T-001", "T-002", "T-003"] }),
+            json!({ "saga_id": saga_id, "task_ids": [t1, t2, t3] }),
             &ctx,
         )
         .await;
