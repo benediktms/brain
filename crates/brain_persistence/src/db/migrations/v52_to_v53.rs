@@ -41,7 +41,7 @@ pub fn migrate_v52_to_v53(conn: &Connection) -> Result<()> {
         ",
     )?;
 
-    conn.pragma_update(None, "user_version", 53i32)?;
+    tx.pragma_update(None, "user_version", 53i32)?;
     tx.commit()?;
     Ok(())
 }
