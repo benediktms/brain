@@ -5,7 +5,7 @@ use serde_json::json;
 
 use brain_lib::sagas::SagaStore;
 use brain_lib::stores::BrainStores;
-use brain_persistence::db::sagas::queries::SagaListFilter;
+use brain_persistence::db::sagas::SagaListFilter;
 
 pub struct SagaCtx {
     pub(crate) store: SagaStore,
@@ -79,7 +79,10 @@ pub fn list(
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&json!({ "sagas": sagas, "total": sagas.len() }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "sagas": sagas, "total": sagas.len() }))?
+        );
     } else if rows.is_empty() {
         println!("No sagas found.");
     } else {

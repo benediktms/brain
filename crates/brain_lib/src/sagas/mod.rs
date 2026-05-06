@@ -2,10 +2,9 @@ pub mod status;
 pub use status::SagaStatus;
 
 use brain_persistence::db::Db;
+use brain_persistence::db::sagas::SagaListFilter;
 use brain_persistence::db::sagas::events::{SagaEvent, SagaEventType, new_saga_id};
-use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaListFilter, SagaRow};
-
-pub use brain_persistence::db::sagas::queries::SagaListFilter as ListFilter;
+use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaRow};
 
 use crate::error::Result;
 
@@ -195,13 +194,16 @@ mod tests {
         let _b = store.create("Beta", None, "test").unwrap();
 
         // Manually force-close saga a by direct DB write.
-        store.db.with_write_conn(|conn| {
-            conn.execute(
-                "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                [&a.saga_id],
-            )?;
-            Ok(())
-        }).unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                    [&a.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
 
         let rows = store.list(SagaListFilter::default()).unwrap();
         assert_eq!(rows.len(), 1);
@@ -213,15 +215,23 @@ mod tests {
         let store = in_memory_store();
         let a = store.create("Alpha", None, "test").unwrap();
         store.create("Beta", None, "test").unwrap();
-        store.db.with_write_conn(|conn| {
-            conn.execute(
-                "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                [&a.saga_id],
-            )?;
-            Ok(())
-        }).unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                    [&a.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
 
-        let rows = store.list(SagaListFilter { include_closed: true, ..Default::default() }).unwrap();
+        let rows = store
+            .list(SagaListFilter {
+                include_closed: true,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(rows.len(), 2);
     }
 
@@ -230,13 +240,212 @@ mod tests {
         let store = in_memory_store();
         let a = store.create("Alpha", None, "test").unwrap();
         let b = store.create("Beta", None, "test").unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                    [&a.saga_id],
+                )?;
+                conn.execute(
+                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
+                    [&b.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let rows = store
+            .list(SagaListFilter {
+                include_closed: true,
+                include_cancelled: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    // N4: default filter also excludes cancelled (not just closed)
+    #[test]
+    fn list_default_excludes_cancelled() {
+        let store = in_memory_store();
+        let a = store.create("Alpha", None, "test").unwrap();
+        store.create("Beta", None, "test").unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
+                    [&a.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let rows = store.list(SagaListFilter::default()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Beta");
+    }
+
+    // T4: include_cancelled alone (without --all)
+    #[test]
+    fn list_include_cancelled_only() {
+        let store = in_memory_store();
+        let a = store.create("Alpha", None, "test").unwrap();
+        store.create("Beta", None, "test").unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
+                    [&a.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let rows = store
+            .list(SagaListFilter {
+                include_cancelled: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    // Helper: insert a minimal task row with a given task_id and brain_id.
+    fn insert_task(store: &SagaStore, task_id: &str, brain_id: &str) {
         store.db.with_write_conn(|conn| {
-            conn.execute("UPDATE sagas SET status = 'closed' WHERE saga_id = ?1", [&a.saga_id])?;
-            conn.execute("UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1", [&b.saga_id])?;
+            conn.execute(
+                "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
+                 VALUES (?1, ?2, 'task', 'open', 4, 'task', 1000, 1000)",
+                [task_id, brain_id],
+            )?;
             Ok(())
         }).unwrap();
+    }
 
-        let rows = store.list(SagaListFilter { include_closed: true, include_cancelled: true, ..Default::default() }).unwrap();
-        assert_eq!(rows.len(), 2);
+    // Helper: link a task to a saga.
+    fn link_task(store: &SagaStore, saga_id: &str, task_id: &str) {
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, 1000)",
+                    [saga_id, task_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    // T1: containing_brain happy path — only returns sagas with a member-task in that brain.
+    #[test]
+    fn containing_brain_returns_only_matching_saga() {
+        let store = in_memory_store();
+        let a = store.create("Saga A", None, "test").unwrap();
+        let b = store.create("Saga B", None, "test").unwrap();
+
+        insert_task(&store, "task-x-brain", "brain-x");
+        insert_task(&store, "task-y-brain", "brain-y");
+        link_task(&store, &a.saga_id, "task-x-brain");
+        link_task(&store, &b.saga_id, "task-y-brain");
+
+        let rows = store
+            .list(SagaListFilter {
+                containing_brain: Some("brain-x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].saga_id, a.saga_id);
+    }
+
+    // T2: cross-brain saga appears in both containing_brain queries.
+    #[test]
+    fn containing_brain_cross_brain_saga_appears_for_both() {
+        let store = in_memory_store();
+        let saga = store.create("Cross-Brain Saga", None, "test").unwrap();
+
+        insert_task(&store, "task-in-x", "brain-x");
+        insert_task(&store, "task-in-y", "brain-y");
+        link_task(&store, &saga.saga_id, "task-in-x");
+        link_task(&store, &saga.saga_id, "task-in-y");
+
+        let rows_x = store
+            .list(SagaListFilter {
+                containing_brain: Some("brain-x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let rows_y = store
+            .list(SagaListFilter {
+                containing_brain: Some("brain-y".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows_x.len(), 1, "should find saga via brain-x");
+        assert_eq!(rows_y.len(), 1, "should find saga via brain-y");
+        assert_eq!(rows_x[0].saga_id, saga.saga_id);
+        assert_eq!(rows_y[0].saga_id, saga.saga_id);
+    }
+
+    // T3: containing_brain for non-existent brain returns empty list.
+    #[test]
+    fn containing_brain_nonexistent_brain_returns_empty() {
+        let store = in_memory_store();
+        store.create("Saga A", None, "test").unwrap();
+
+        let rows = store
+            .list(SagaListFilter {
+                containing_brain: Some("no-such-brain".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(rows.is_empty());
+    }
+
+    // T5: combined filters — include_closed=true + containing_brain.
+    #[test]
+    fn containing_brain_combined_with_include_closed() {
+        let store = in_memory_store();
+        let a = store.create("Open Saga", None, "test").unwrap();
+        let b = store.create("Closed Saga", None, "test").unwrap();
+
+        insert_task(&store, "task-open", "brain-x");
+        insert_task(&store, "task-closed", "brain-x");
+        link_task(&store, &a.saga_id, "task-open");
+        link_task(&store, &b.saga_id, "task-closed");
+
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                    [&b.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        // Without include_closed: only open saga returned.
+        let rows = store
+            .list(SagaListFilter {
+                containing_brain: Some("brain-x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].saga_id, a.saga_id);
+
+        // With include_closed: both returned.
+        let rows_all = store
+            .list(SagaListFilter {
+                include_closed: true,
+                containing_brain: Some("brain-x".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows_all.len(), 2);
     }
 }

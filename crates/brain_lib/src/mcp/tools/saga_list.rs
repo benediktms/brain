@@ -4,7 +4,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use brain_persistence::db::sagas::queries::SagaListFilter;
+use brain_persistence::db::sagas::SagaListFilter;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -32,10 +32,17 @@ impl SagaList {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
+        // Treat empty string as None to avoid querying for brain_id = '' (legacy default).
+        let containing_brain = params
+            .containing_brain
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
         let filter = SagaListFilter {
             include_closed: params.include_closed || params.all,
             include_cancelled: params.include_cancelled || params.all,
-            containing_brain: params.containing_brain,
+            containing_brain,
         };
 
         let rows = match ctx.stores.sagas.list(filter) {
@@ -90,7 +97,7 @@ impl McpTool for SagaList {
                     },
                     "all": {
                         "type": "boolean",
-                        "description": "Include all sagas regardless of status. Overrides include_closed/include_cancelled.",
+                        "description": "If true, includes closed AND cancelled sagas regardless of other flags.",
                         "default": false
                     },
                     "containing_brain": {
@@ -118,7 +125,10 @@ mod tests {
     use super::super::tests::create_test_context;
     use super::{McpTool, SagaList};
 
-    async fn call(params: Value, ctx: &crate::mcp::McpContext) -> crate::mcp::protocol::ToolCallResult {
+    async fn call(
+        params: Value,
+        ctx: &crate::mcp::McpContext,
+    ) -> crate::mcp::protocol::ToolCallResult {
         SagaList.call(params, ctx).await
     }
 
@@ -126,7 +136,11 @@ mod tests {
     async fn test_list_empty() {
         let (_dir, ctx) = create_test_context().await;
         let result = call(json!({}), &ctx).await;
-        assert!(result.is_error.is_none(), "should succeed: {:?}", result.content);
+        assert!(
+            result.is_error.is_none(),
+            "should succeed: {:?}",
+            result.content
+        );
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["total"], 0);
         assert!(parsed["sagas"].as_array().unwrap().is_empty());
@@ -143,10 +157,17 @@ mod tests {
         let parsed: Value = serde_json::from_str(&closed_result.content[0].text).unwrap();
         let saga_id = parsed["saga_id"].as_str().unwrap().to_string();
 
-        ctx.stores.sagas.db().with_write_conn(|conn| {
-            conn.execute("UPDATE sagas SET status = 'closed' WHERE saga_id = ?1", [&saga_id])?;
-            Ok(())
-        }).unwrap();
+        ctx.stores
+            .sagas
+            .db()
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                    [&saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
 
         let result = call(json!({}), &ctx).await;
         let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -161,12 +182,109 @@ mod tests {
         let r = create.call(json!({ "title": "One" }), &ctx).await;
         let p: Value = serde_json::from_str(&r.content[0].text).unwrap();
         let sid = p["saga_id"].as_str().unwrap().to_string();
+        ctx.stores
+            .sagas
+            .db()
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
+                    [&sid],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let result = call(json!({ "all": true }), &ctx).await;
+        let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(listed["total"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_default_excludes_cancelled() {
+        let (_dir, ctx) = create_test_context().await;
+        let create = super::super::saga_create::SagaCreate;
+        let r = create.call(json!({ "title": "Active" }), &ctx).await;
+        let p: Value = serde_json::from_str(&r.content[0].text).unwrap();
+        let sid = p["saga_id"].as_str().unwrap().to_string();
+        ctx.stores
+            .sagas
+            .db()
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
+                    [&sid],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        create.call(json!({ "title": "Open" }), &ctx).await;
+
+        let result = call(json!({}), &ctx).await;
+        let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(listed["total"], 1);
+        assert_eq!(listed["sagas"][0]["title"], "Open");
+    }
+
+    #[tokio::test]
+    async fn test_containing_brain_filters_correctly() {
+        let (_dir, ctx) = create_test_context().await;
+        let create = super::super::saga_create::SagaCreate;
+        let r_a = create.call(json!({ "title": "Saga A" }), &ctx).await;
+        let p_a: Value = serde_json::from_str(&r_a.content[0].text).unwrap();
+        let saga_a = p_a["saga_id"].as_str().unwrap().to_string();
+
+        let r_b = create.call(json!({ "title": "Saga B" }), &ctx).await;
+        let p_b: Value = serde_json::from_str(&r_b.content[0].text).unwrap();
+        let saga_b = p_b["saga_id"].as_str().unwrap().to_string();
+
+        // Wire tasks into brains via direct DB inserts.
         ctx.stores.sagas.db().with_write_conn(|conn| {
-            conn.execute("UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1", [&sid])?;
+            conn.execute(
+                "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
+                 VALUES ('t-brain-x', 'brain-x', 'task', 'open', 4, 'task', 1000, 1000)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
+                 VALUES ('t-brain-y', 'brain-y', 'task', 'open', 4, 'task', 1000, 1000)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 't-brain-x', 1000)",
+                [&saga_a],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 't-brain-y', 1000)",
+                [&saga_b],
+            )?;
             Ok(())
         }).unwrap();
 
-        let result = call(json!({ "all": true }), &ctx).await;
+        let result = call(json!({ "containing_brain": "brain-x" }), &ctx).await;
+        let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(listed["total"], 1);
+        assert_eq!(listed["sagas"][0]["title"], "Saga A");
+    }
+
+    #[tokio::test]
+    async fn test_containing_brain_nonexistent_returns_empty() {
+        let (_dir, ctx) = create_test_context().await;
+        let create = super::super::saga_create::SagaCreate;
+        create.call(json!({ "title": "Some Saga" }), &ctx).await;
+
+        let result = call(json!({ "containing_brain": "no-such-brain" }), &ctx).await;
+        let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(listed["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_empty_containing_brain_ignored() {
+        let (_dir, ctx) = create_test_context().await;
+        let create = super::super::saga_create::SagaCreate;
+        create.call(json!({ "title": "Saga" }), &ctx).await;
+
+        // Empty string should be treated as None — returns all active sagas.
+        let result = call(json!({ "containing_brain": "" }), &ctx).await;
         let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(listed["total"], 1);
     }
