@@ -19,6 +19,11 @@ impl SagaStore {
 
     /// Create a new saga in `planning` status. Returns the resulting row.
     pub fn create(&self, title: &str, description: Option<&str>, actor: &str) -> Result<SagaRow> {
+        if title.trim().is_empty() {
+            return Err(brain_persistence::error::BrainCoreError::Parse(
+                "saga title must not be empty".into(),
+            ));
+        }
         let saga_id = new_saga_id();
         let row = self.db.with_write_conn(|conn| {
             let row = queries::insert_saga(conn, &saga_id, title, description)?;
@@ -34,10 +39,11 @@ impl SagaStore {
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
-                    event_type: &serde_json::to_string(&event.event_type).unwrap_or_default(),
+                    event_type: &serde_json::to_string(&event.event_type)
+                        .expect("SagaEventType serialization is infallible"),
                     timestamp: event.timestamp,
                     actor: &event.actor,
-                    payload: &event.payload.to_string(),
+                    payload: &serde_json::to_string(&event.payload)?,
                 },
             )?;
 
@@ -105,5 +111,67 @@ mod tests {
         assert!(row.created_at > 0);
         assert!(row.updated_at > 0);
         assert_eq!(row.created_at, row.updated_at);
+    }
+
+    // T1: SagaCreated event row is written on create
+    #[test]
+    fn create_writes_saga_created_event() {
+        let store = in_memory_store();
+        let row = store.create("X", None, "actor").unwrap();
+        let (event_type, actor): (String, String) = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT event_type, actor FROM saga_events WHERE saga_id = ?1",
+                    [&row.saga_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert!(event_type.contains("saga_created"), "got: {event_type}");
+        assert_eq!(actor, "actor");
+    }
+
+    // T2: empty title is rejected
+    #[test]
+    fn create_rejects_empty_title() {
+        let store = in_memory_store();
+        assert!(store.create("", None, "actor").is_err());
+        assert!(store.create("   ", None, "actor").is_err());
+    }
+
+    // T3: saga_tasks allows cross-brain task_id (no FK on task_id)
+    #[test]
+    fn saga_tasks_allows_cross_brain_task_id() {
+        let store = in_memory_store();
+        let row = store.create("Cross-brain saga", None, "test").unwrap();
+        // Insert a saga_tasks row with a task_id from a different brain —
+        // saga_tasks has no FK on task_id by design so cross-brain links are allowed.
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, ?3)",
+                    [row.saga_id.as_str(), "OTHER-BRAIN-TASK-01JXYZ", "1000000"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let count: i64 = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1",
+                    [&row.saga_id],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "cross-brain task_id should be stored without error"
+        );
     }
 }
