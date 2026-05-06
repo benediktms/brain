@@ -17,7 +17,7 @@ just check        # cargo check
 just install      # Build release binary and symlink to ~/bin/brain
 ```
 
-<!-- brain:start:0d01c794 -->
+<!-- brain:start:fe15f340 -->
 ## Build & Test
 
 ```bash
@@ -187,7 +187,7 @@ When the user asks what to work on next (e.g., "what's next?", "what should I wo
 ### Workflow
 
 When working on tasks:
-1. **Before starting**: Mark the task `in_progress` via `tasks_apply_event` (status_changed)
+1. **Before starting**: Mark the task `in_progress` via `tasks_apply_event` (status_changed). Always set the current git user as the assignee.
 2. **While working**: Add comments via `tasks_apply_event` (comment_added) for significant decisions or blockers
 3. **On completion**: Close the task via `tasks_close` (or `tasks_apply_event` with status_changed to `done`)
 
