@@ -48,7 +48,11 @@ pub(crate) enum SagasAction {
         title: Option<String>,
 
         /// New description
-        #[arg(long)]
+        #[arg(long, conflicts_with = "clear_description")]
         description: Option<String>,
+
+        /// Clear the description (set it to null)
+        #[arg(long)]
+        clear_description: bool,
     },
 }
