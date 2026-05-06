@@ -213,15 +213,38 @@ pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String
     Ok(ids)
 }
 
+/// Insert a saga event row. All fields are required.
+pub struct SagaEventInsert<'a> {
+    pub event_id: &'a str,
+    pub saga_id: &'a str,
+    pub event_type: &'a str,
+    pub timestamp: i64,
+    pub actor: &'a str,
+    pub payload: &'a str,
+}
+
+/// Insert a single row into `saga_events`.
+pub fn insert_saga_event(conn: &Connection, ev: &SagaEventInsert<'_>) -> Result<()> {
+    conn.execute(
+        "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            ev.event_id,
+            ev.saga_id,
+            ev.event_type,
+            ev.timestamp,
+            ev.actor,
+            ev.payload
+        ],
+    )?;
+    Ok(())
+}
+
 /// Remove tasks from a saga. Returns the number of rows actually deleted.
 ///
 /// Missing memberships are silently skipped (idempotent). Runs inside the
 /// caller's transaction — does NOT commit.
-pub fn remove_saga_tasks(
-    conn: &Connection,
-    saga_id: &str,
-    task_ids: &[String],
-) -> Result<usize> {
+pub fn remove_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> Result<usize> {
     if task_ids.is_empty() {
         return Ok(0);
     }
@@ -231,9 +254,7 @@ pub fn remove_saga_tasks(
         .map(|(i, _)| format!("?{}", i + 2))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!(
-        "DELETE FROM saga_tasks WHERE saga_id = ?1 AND task_id IN ({placeholders})"
-    );
+    let sql = format!("DELETE FROM saga_tasks WHERE saga_id = ?1 AND task_id IN ({placeholders})");
     let mut stmt = conn.prepare(&sql)?;
     let mut params: Vec<&dyn rusqlite::ToSql> = vec![&saga_id as &dyn rusqlite::ToSql];
     for tid in task_ids {

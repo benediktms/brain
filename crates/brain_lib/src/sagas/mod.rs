@@ -264,12 +264,7 @@ impl SagaStore {
     /// Remove tasks from a saga. Idempotent: missing memberships are no-ops.
     /// Returns the number of tasks actually removed. Emits one `SagaTaskRemoved`
     /// event per actual removal. Single transaction.
-    pub fn remove_tasks(
-        &self,
-        saga_id: &str,
-        task_ids: Vec<String>,
-        actor: &str,
-    ) -> Result<usize> {
+    pub fn remove_tasks(&self, saga_id: &str, task_ids: Vec<String>, actor: &str) -> Result<usize> {
         if task_ids.is_empty() {
             return Ok(0);
         }

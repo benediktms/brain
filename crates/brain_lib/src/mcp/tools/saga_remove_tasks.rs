@@ -115,7 +115,11 @@ mod tests {
     async fn add_tasks(ctx: &crate::mcp::McpContext, saga_id: &str, task_ids: &[&str]) {
         ctx.stores
             .sagas
-            .add_tasks(saga_id, task_ids.iter().map(|s| s.to_string()).collect(), "test")
+            .add_tasks(
+                saga_id,
+                task_ids.iter().map(|s| s.to_string()).collect(),
+                "test",
+            )
             .unwrap();
     }
 
@@ -130,7 +134,11 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(result.is_error.is_none(), "should succeed: {:?}", result.content);
+        assert!(
+            result.is_error.is_none(),
+            "should succeed: {:?}",
+            result.content
+        );
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["removed"], 2);
     }
@@ -145,7 +153,11 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(result.is_error.is_none(), "should succeed: {:?}", result.content);
+        assert!(
+            result.is_error.is_none(),
+            "should succeed: {:?}",
+            result.content
+        );
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["removed"], 0);
     }
