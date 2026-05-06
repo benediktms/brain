@@ -163,7 +163,6 @@ pub fn update_saga(
         .ok_or_else(|| crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()))
 }
 
-
 /// Fetch a saga row by ID.
 pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {
     let row = conn
