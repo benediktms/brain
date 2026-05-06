@@ -113,11 +113,17 @@ pub async fn run(
 
     // Event loop: batch-drain, coalesce, and dispatch
     let shutdown_reason = loop {
-        // Update queue depth + lancedb pending rows at top of each iteration
+        // Update queue depth + lancedb pending rows + compaction failure
+        // counter at top of each iteration. Polling the failure counter
+        // (incremented inside run_optimize on Err) surfaces silent compaction
+        // failures via `brain status` rather than only in warn-level logs.
         pipeline.metrics().set_queue_depth(rx.len() as u64);
         pipeline
             .metrics()
             .set_lancedb_unoptimized_rows(pipeline.store().optimizer().pending_count());
+        pipeline.metrics().set_lancedb_optimize_failures(
+            pipeline.store().optimizer().optimize_failure_count(),
+        );
 
         tokio::select! {
             event = rx.recv() => {

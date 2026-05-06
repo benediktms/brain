@@ -68,6 +68,12 @@ pub struct Metrics {
     pub query_errors: AtomicU64,
     pub queue_depth: AtomicU64,
     pub lancedb_unoptimized_rows: AtomicU64,
+    /// Cumulative count of failed `OptimizeAction::All` invocations on the
+    /// scheduler. Updated by polling `OptimizeScheduler::optimize_failure_count`
+    /// at each watch-loop iteration. Surfaces silent compaction failures —
+    /// scheduled-cycle, boot-time, or shutdown — that would otherwise live
+    /// only in warn-level logs.
+    pub lancedb_optimize_failures: AtomicU64,
     started_at: Instant,
 }
 
@@ -81,6 +87,7 @@ impl Metrics {
             query_errors: AtomicU64::new(0),
             queue_depth: AtomicU64::new(0),
             lancedb_unoptimized_rows: AtomicU64::new(0),
+            lancedb_optimize_failures: AtomicU64::new(0),
             started_at: Instant::now(),
         }
     }
@@ -105,6 +112,10 @@ impl Metrics {
         self.lancedb_unoptimized_rows.store(n, Ordering::Relaxed);
     }
 
+    pub fn set_lancedb_optimize_failures(&self, n: u64) {
+        self.lancedb_optimize_failures.store(n, Ordering::Relaxed);
+    }
+
     /// Produce a serializable snapshot of current metrics.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let (idx_p50, idx_p95) = self.indexing_latency.percentiles();
@@ -127,6 +138,7 @@ impl Metrics {
             query_errors: self.query_errors.load(Ordering::Relaxed),
             queue_depth: self.queue_depth.load(Ordering::Relaxed),
             lancedb_unoptimized_rows: self.lancedb_unoptimized_rows.load(Ordering::Relaxed),
+            lancedb_optimize_failures: self.lancedb_optimize_failures.load(Ordering::Relaxed),
             dual_store_stuck_files: 0, // filled by caller from SQLite
         }
     }
@@ -148,6 +160,7 @@ pub struct MetricsSnapshot {
     pub query_errors: u64,
     pub queue_depth: u64,
     pub lancedb_unoptimized_rows: u64,
+    pub lancedb_optimize_failures: u64,
     pub dual_store_stuck_files: u64,
 }
 
@@ -219,6 +232,7 @@ mod tests {
         m.record_stale_hash_prevented();
         m.set_queue_depth(5);
         m.set_lancedb_unoptimized_rows(42);
+        m.set_lancedb_optimize_failures(7);
 
         let snap = m.snapshot();
         assert!(snap.uptime_seconds < 5);
@@ -226,6 +240,7 @@ mod tests {
         assert_eq!(snap.stale_hashes_prevented, 2);
         assert_eq!(snap.queue_depth, 5);
         assert_eq!(snap.lancedb_unoptimized_rows, 42);
+        assert_eq!(snap.lancedb_optimize_failures, 7);
         assert_eq!(snap.dual_store_stuck_files, 0);
     }
 }

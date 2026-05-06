@@ -149,6 +149,11 @@ pub struct OptimizeScheduler {
     /// `link_count >= PAGERANK_MIN_LINKS`, short-circuiting the per-cycle
     /// `COUNT(*)` query thereafter. Reset on `set_db` (DB swap = stale latch).
     pagerank_links_threshold_met: AtomicBool,
+    /// Cumulative count of `OptimizeAction::All` failures. Polled by the
+    /// metrics layer so `brain status` surfaces silent boot-time or
+    /// scheduled-cycle compaction failures (which otherwise only emit a
+    /// warn-level log).
+    optimize_failures: AtomicU64,
 }
 
 impl OptimizeScheduler {
@@ -161,6 +166,7 @@ impl OptimizeScheduler {
             time_threshold,
             db: std::sync::Mutex::new(None),
             pagerank_links_threshold_met: AtomicBool::new(false),
+            optimize_failures: AtomicU64::new(0),
         }
     }
 
@@ -196,6 +202,14 @@ impl OptimizeScheduler {
     #[cfg(test)]
     pub async fn last_optimize_at(&self) -> Instant {
         *self.guard.lock().await
+    }
+
+    /// Cumulative count of failed `OptimizeAction::All` invocations since this
+    /// scheduler was constructed. Polled by the metrics layer so silent
+    /// compaction failures surface in `brain status` rather than only in
+    /// warn-level logs.
+    pub fn optimize_failure_count(&self) -> u64 {
+        self.optimize_failures.load(Ordering::Relaxed)
     }
 
     /// Check triggers and run optimize if thresholds met. Skips if already running.
@@ -256,18 +270,21 @@ impl OptimizeScheduler {
 
     /// Execute optimize. Caller must hold the guard.
     ///
-    /// `bypass_pagerank_gate`: when `true`, run PageRank regardless of the
-    /// link-count threshold. Used by `force_optimize`.
+    /// `forced`: when `true`, run PageRank regardless of the link-count
+    /// threshold. Set by `force_optimize` callers (vacuum, daemon shutdown,
+    /// startup compaction) which have explicitly accepted the O(N) cost;
+    /// `maybe_optimize` passes `false` to keep the scheduled hot path cheap.
     async fn run_optimize(
         &self,
         mut last_optimize: tokio::sync::MutexGuard<'_, Instant>,
-        bypass_pagerank_gate: bool,
+        forced: bool,
     ) {
         // The pending_mutations counter resets on process restart, so a
         // freshly-opened scheduler with on-disk fragment debt sees snapshot=0.
         // Run unconditionally — `fetch_sub(0)` is a no-op and `OptimizeAction::All`
-        // is cheap when there's nothing to compact. Maybe_optimize callers
-        // pre-check for `pending == 0` before reaching here.
+        // is cheap when there's nothing to compact. `maybe_optimize` pre-checks
+        // pending == 0 before reaching here; `force_optimize` deliberately
+        // does not, so this path must tolerate snapshot=0.
         let snapshot = self.pending_mutations.load(Ordering::Relaxed);
 
         match self.table.optimize(OptimizeAction::All).await {
@@ -284,6 +301,7 @@ impl OptimizeScheduler {
             }
             Err(e) => {
                 // Don't subtract — mutations still pending for next trigger
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, "LanceDB optimize failed, will retry on next trigger");
                 return;
             }
@@ -298,7 +316,7 @@ impl OptimizeScheduler {
         // sets. A monotonic latch avoids a redundant COUNT(*) once the threshold
         // is first observed — see PAGERANK_MIN_LINKS for the rationale.
         if let Some(ref db) = *self.db.lock().expect("optimize db lock") {
-            let above_threshold = if bypass_pagerank_gate
+            let above_threshold = if forced
                 || self.pagerank_links_threshold_met.load(Ordering::Relaxed)
             {
                 true

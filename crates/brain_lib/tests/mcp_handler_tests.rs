@@ -398,6 +398,7 @@ async fn mcp_handler_status_returns_expected_json_fields() {
     assert!(parsed["stale_hashes_prevented"].is_u64());
     assert!(parsed["queue_depth"].is_u64());
     assert!(parsed["lancedb_unoptimized_rows"].is_u64());
+    assert!(parsed["lancedb_optimize_failures"].is_u64());
     assert!(parsed["dual_store_stuck_files"].is_u64());
     // indexing_errors and query_errors added in brn-83a.8 status refactor
     assert!(parsed["indexing_errors"].is_u64());
