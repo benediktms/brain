@@ -117,7 +117,7 @@ mod tests {
             .sagas
             .add_tasks(
                 saga_id,
-                task_ids.iter().map(|s| s.to_string()).collect(),
+                task_ids.iter().map(|s| s.to_string()).collect::<Vec<String>>(),
                 "test",
             )
             .unwrap();
