@@ -40,14 +40,13 @@ impl MemThread {
 
         let max_depth = params.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
 
-        let thread_ids = match ctx
-            .stores
-            .inner_db()
-            .with_read_conn(|conn| collect_thread_episodes(conn, &params.seed_memory_id, max_depth))
-        {
-            Ok(ids) => ids,
-            Err(e) => return ToolCallResult::error(format!("Failed to walk thread: {e}")),
-        };
+        let thread_ids =
+            match ctx.stores.inner_db().with_read_conn(|conn| {
+                collect_thread_episodes(conn, &params.seed_memory_id, max_depth)
+            }) {
+                Ok(ids) => ids,
+                Err(e) => return ToolCallResult::error(format!("Failed to walk thread: {e}")),
+            };
 
         // The helper returns IDs only; hydrate to full episode rows so the
         // agent does not have to round-trip through `memory.retrieve`.
@@ -133,7 +132,7 @@ mod tests {
 
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
-    use super::{MemThread, McpTool};
+    use super::{McpTool, MemThread};
 
     /// Build a thread of three episodes and return their summary_ids in chronological order.
     async fn seed_thread(ctx: &crate::mcp::McpContext) -> (String, String, String) {
@@ -150,11 +149,11 @@ mod tests {
                 ctx,
             )
             .await;
-        let head_id = serde_json::from_str::<serde_json::Value>(&head.content[0].text).unwrap()
-            ["summary_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let head_id =
+            serde_json::from_str::<serde_json::Value>(&head.content[0].text).unwrap()["summary_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
 
         let mid = registry
             .dispatch(
@@ -168,11 +167,11 @@ mod tests {
                 ctx,
             )
             .await;
-        let mid_id = serde_json::from_str::<serde_json::Value>(&mid.content[0].text).unwrap()
-            ["summary_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let mid_id =
+            serde_json::from_str::<serde_json::Value>(&mid.content[0].text).unwrap()["summary_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
 
         let tail = registry
             .dispatch(
@@ -186,11 +185,11 @@ mod tests {
                 ctx,
             )
             .await;
-        let tail_id = serde_json::from_str::<serde_json::Value>(&tail.content[0].text).unwrap()
-            ["summary_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let tail_id =
+            serde_json::from_str::<serde_json::Value>(&tail.content[0].text).unwrap()["summary_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
 
         (head_id, mid_id, tail_id)
     }
@@ -200,12 +199,10 @@ mod tests {
         let (_dir, ctx) = create_test_context().await;
         let (head_id, mid_id, tail_id) = seed_thread(&ctx).await;
 
-        let result =
-            MemThread.execute(json!({ "seed_memory_id": &mid_id }), &ctx);
+        let result = MemThread.execute(json!({ "seed_memory_id": &mid_id }), &ctx);
         assert_ne!(result.is_error, Some(true), "got: {:?}", result);
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 3);
         assert_eq!(parsed["seed_memory_id"], mid_id);
 
@@ -227,30 +224,22 @@ mod tests {
         let (head_id, _mid_id, tail_id) = seed_thread(&ctx).await;
 
         // From head — full thread reachable forward.
-        let from_head =
-            MemThread.execute(json!({ "seed_memory_id": &head_id }), &ctx);
-        let parsed: serde_json::Value =
-            serde_json::from_str(&from_head.content[0].text).unwrap();
+        let from_head = MemThread.execute(json!({ "seed_memory_id": &head_id }), &ctx);
+        let parsed: serde_json::Value = serde_json::from_str(&from_head.content[0].text).unwrap();
         assert_eq!(parsed["count"], 3);
 
         // From tail — full thread reachable backward.
-        let from_tail =
-            MemThread.execute(json!({ "seed_memory_id": &tail_id }), &ctx);
-        let parsed: serde_json::Value =
-            serde_json::from_str(&from_tail.content[0].text).unwrap();
+        let from_tail = MemThread.execute(json!({ "seed_memory_id": &tail_id }), &ctx);
+        let parsed: serde_json::Value = serde_json::from_str(&from_tail.content[0].text).unwrap();
         assert_eq!(parsed["count"], 3);
     }
 
     #[tokio::test]
     async fn test_thread_missing_seed_returns_empty() {
         let (_dir, ctx) = create_test_context().await;
-        let result = MemThread.execute(
-            json!({ "seed_memory_id": "01KQNONEXISTENTSEED000" }),
-            &ctx,
-        );
+        let result = MemThread.execute(json!({ "seed_memory_id": "01KQNONEXISTENTSEED000" }), &ctx);
         assert_ne!(result.is_error, Some(true));
-        let parsed: serde_json::Value =
-            serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 0);
         assert_eq!(parsed["thread"].as_array().unwrap().len(), 0);
     }
@@ -288,8 +277,7 @@ mod tests {
             .to_string();
 
         let result = MemThread.execute(json!({ "seed_memory_id": &id }), &ctx);
-        let parsed: serde_json::Value =
-            serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["thread"][0]["summary_id"], id);
     }

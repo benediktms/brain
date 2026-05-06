@@ -430,7 +430,11 @@ mod tests {
             link(conn, &c, &d, EdgeKind::SeeAlso);
 
             let thread = collect_thread_episodes(conn, &b, 5).unwrap();
-            assert_eq!(thread, vec![a, b, c], "thread must include only Continues neighbours");
+            assert_eq!(
+                thread,
+                vec![a, b, c],
+                "thread must include only Continues neighbours"
+            );
             Ok(())
         })
         .unwrap();
