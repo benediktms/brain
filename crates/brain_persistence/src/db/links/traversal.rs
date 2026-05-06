@@ -1,9 +1,9 @@
 //! Link-graph traversal for episode neighbourhoods.
 //!
 //! BFS over the polymorphic `entity_links` graph, restricted to
-//! episode-to-episode edges with kinds that imply semantic relatedness
-//! (`relates_to`, `see_also`). Used by link-aware consolidation and (later)
-//! by retrieve-time graph expansion.
+//! episode-to-episode edges that imply same-cohort membership for
+//! consolidation: `relates_to`, `see_also`, and `continues`. Used by
+//! link-aware consolidation and (later) by retrieve-time graph expansion.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -16,12 +16,19 @@ use crate::error::Result;
 
 /// Edge kinds traversed by [`collect_linked_episode_set`].
 ///
-/// Only non-DAG semantic-relatedness edges are followed. DAG kinds
-/// (`parent_of`, `blocks`, `supersedes`) and `contradicts` carry different
-/// intent and are excluded — consolidating across "A supersedes B" or "A
-/// contradicts B" would silently merge episodes whose authors signalled
-/// distinction.
-const TRAVERSAL_EDGE_KINDS: [EdgeKind; 2] = [EdgeKind::RelatesTo, EdgeKind::SeeAlso];
+/// Followed:
+/// - `relates_to`, `see_also` — symmetric semantic-relatedness edges.
+/// - `continues` — agent-declared thread continuation. Even though `continues`
+///   is a DAG kind, it represents the consolidation cohort by construction —
+///   a thread IS what we want to summarize together.
+///
+/// Excluded:
+/// - `parent_of`, `blocks`, `supersedes` — DAG kinds with hierarchical or
+///   ordering semantics that do not imply same-cohort membership.
+/// - `contradicts` — consolidating episodes whose authors signalled
+///   distinction would silently merge contradictory content.
+const TRAVERSAL_EDGE_KINDS: [EdgeKind; 3] =
+    [EdgeKind::RelatesTo, EdgeKind::SeeAlso, EdgeKind::Continues];
 
 /// Upper bound on visited-set size. Caps both writer-mutex hold time when the
 /// caller invokes via the write connection AND prevents `get_summaries_by_ids`
@@ -39,7 +46,8 @@ pub(crate) const MAX_VISITED: usize = 1024;
 /// duration of the call.
 ///
 /// # Behaviour
-/// - Traverses only Episode↔Episode edges of kind `RelatesTo` or `SeeAlso`.
+/// - Traverses only Episode↔Episode edges of kind `RelatesTo`, `SeeAlso`, or
+///   `Continues`.
 /// - Both edge directions (incoming and outgoing) are followed.
 /// - Cycle-safe: a `HashSet` tracks visited IDs.
 /// - `max_depth` bounds expansion. Depth `0` returns only the seed; depth `1`
@@ -360,6 +368,31 @@ mod tests {
 
             let result = collect_linked_episode_set(conn, &a, 5).unwrap();
             assert_eq!(result, vec![a]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // ── Continues edges are followed (thread traversal) ─────────────────────
+
+    #[test]
+    fn continues_edges_form_traversable_thread() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            let a = insert_episode_at(conn, "A", 100);
+            let b = insert_episode_at(conn, "B", 200);
+            let c = insert_episode_at(conn, "C", 300);
+
+            // B continues A; C continues B. Thread: A → B → C.
+            link(conn, &b, &a, EdgeKind::Continues);
+            link(conn, &c, &b, EdgeKind::Continues);
+
+            // From any node in the thread we recover the whole thread.
+            let from_head = collect_linked_episode_set(conn, &a, 5).unwrap();
+            assert_eq!(from_head, vec![a.clone(), b.clone(), c.clone()]);
+
+            let from_tail = collect_linked_episode_set(conn, &c, 5).unwrap();
+            assert_eq!(from_tail, vec![a, b, c]);
             Ok(())
         })
         .unwrap();

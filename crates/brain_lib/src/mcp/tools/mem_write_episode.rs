@@ -7,12 +7,14 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use brain_persistence::db::links::{EntityRef, EntityType};
+use brain_persistence::db::links::{
+    EdgeKind, EntityRef, EntityType, edge_kind_str, entity_type_str,
+};
 use brain_persistence::db::summaries::Episode;
 
 use crate::uri::SynapseUri;
 
-use super::links_add::{InlineLinkInput, apply_inline_links, inline_links_schema};
+use super::links_add::{EntityRefInput, InlineLinkInput, apply_inline_links, inline_links_schema};
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -26,6 +28,8 @@ struct Params {
     importance: f64,
     #[serde(default)]
     links: Vec<InlineLinkInput>,
+    #[serde(default)]
+    continues: Option<String>,
 }
 
 fn default_importance() -> f64 {
@@ -42,7 +46,7 @@ impl McpTool for MemWriteEpisode {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Record an episode (goal, actions, outcome) to memory. Returns `{summary_id, uri, ...}`. Optionally pass `links` to add edges in the entity graph from the new episode (type EPISODE) to existing TASK/RECORD/PROCEDURE/EPISODE/CHUNK/NOTE entities in one round-trip — the episode persists even if every link fails. When `links` is provided the response carries `links: {succeeded:[{to, edge_kind}], failed:[{to, edge_kind, error}], summary:{succeeded, failed}}`. Use `links_add` for any links discovered after the write.".into(),
+            description: "Record an episode (goal, actions, outcome) to memory. Returns `{summary_id, uri, ...}`. Optionally pass `continues` (a prior episode's `summary_id`) to extend a thread — equivalent to a `links` entry of `{to: {type: EPISODE, id: <prev>}, edge_kind: continues}`, but ergonomic for the common case. Pass `links` to add edges from the new episode (type EPISODE) to existing TASK/RECORD/PROCEDURE/EPISODE/CHUNK/NOTE entities in one round-trip — the episode persists even if every link fails. When either `continues` or `links` is provided the response carries `links: {succeeded:[{to, edge_kind}], failed:[{to, edge_kind, error}], summary:{succeeded, failed}}` (the `continues` entry appears first). Use `links_add` for any links discovered after the write.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -67,6 +71,10 @@ impl McpTool for MemWriteEpisode {
                         "type": "number",
                         "description": "Importance score (0.0 to 1.0). Default: 1.0",
                         "default": 1.0
+                    },
+                    "continues": {
+                        "type": "string",
+                        "description": "Optional. The `summary_id` of a prior episode this episode continues. Internally lowered to a `links` entry of edge_kind `continues` (DAG-validated). The synthesized entry is reported in the response's `links` block, prepended before any explicit entries from `links`."
                     },
                     "links": inline_links_schema("Optional. After the episode is stored, create polymorphic edges from it (as EPISODE) to the listed entities. Partial failures are reported per-link without aborting the write.")
                 },
@@ -113,10 +121,30 @@ impl McpTool for MemWriteEpisode {
                 "importance": params.importance
             });
 
-            if !params.links.is_empty() {
+            // Lower the typed `continues` shortcut to a generic inline link
+            // entry. The synthesized entry is prepended so it appears first
+            // in the response — agents looking for "did the thread extension
+            // succeed?" find it without scanning. Passing both `continues`
+            // and a redundant entry in `links` is the agent's choice; we
+            // do not de-duplicate.
+            let mut effective_links = params.links.clone();
+            if let Some(prev_id) = &params.continues {
+                effective_links.insert(
+                    0,
+                    InlineLinkInput {
+                        to: EntityRefInput {
+                            entity_type: entity_type_str(EntityType::Episode).to_string(),
+                            id: prev_id.clone(),
+                        },
+                        edge_kind: Some(edge_kind_str(EdgeKind::Continues).to_string()),
+                    },
+                );
+            }
+
+            if !effective_links.is_empty() {
                 let from_ref = EntityRef::new(EntityType::Episode, summary_id.clone())
                     .expect("summary_id is non-empty");
-                let links_block = apply_inline_links(from_ref, params.links.clone(), ctx);
+                let links_block = apply_inline_links(from_ref, effective_links, ctx);
                 response["links"] = links_block;
             }
 
@@ -260,6 +288,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_episode_continues_extends_thread() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // Seed the head of the thread.
+        let head = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Start the thread",
+                    "actions": "First episode",
+                    "outcome": "Thread head stored"
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(head.is_error.is_none());
+        let head_parsed: serde_json::Value =
+            serde_json::from_str(&head.content[0].text).unwrap();
+        let head_id = head_parsed["summary_id"].as_str().unwrap().to_string();
+
+        // Extend the thread via `continues`.
+        let next = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Extend the thread",
+                    "actions": "Second episode continues the first",
+                    "outcome": "Continues edge persisted",
+                    "continues": head_id,
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(next.is_error.is_none());
+
+        let next_parsed: serde_json::Value =
+            serde_json::from_str(&next.content[0].text).unwrap();
+        assert_eq!(next_parsed["status"], "stored");
+        assert_eq!(next_parsed["links"]["summary"]["succeeded"], 1);
+        assert_eq!(next_parsed["links"]["summary"]["failed"], 0);
+        let succeeded = next_parsed["links"]["succeeded"].as_array().unwrap();
+        assert_eq!(succeeded.len(), 1);
+        assert_eq!(succeeded[0]["edge_kind"], "continues");
+        assert_eq!(succeeded[0]["to"]["type"], "EPISODE");
+    }
+
+    #[tokio::test]
+    async fn test_write_episode_continues_round_trips_via_links_for_entity() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let head = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Round-trip head",
+                    "actions": "Write head",
+                    "outcome": "Head stored"
+                }),
+                &ctx,
+            )
+            .await;
+        let head_parsed: serde_json::Value =
+            serde_json::from_str(&head.content[0].text).unwrap();
+        let head_id = head_parsed["summary_id"].as_str().unwrap().to_string();
+
+        let next = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Round-trip continuation",
+                    "actions": "Write continuation",
+                    "outcome": "Continuation stored",
+                    "continues": &head_id,
+                }),
+                &ctx,
+            )
+            .await;
+        let next_parsed: serde_json::Value =
+            serde_json::from_str(&next.content[0].text).unwrap();
+        let next_id = next_parsed["summary_id"].as_str().unwrap().to_string();
+
+        // From the head, an incoming edge of kind `continues` from the next episode must be visible.
+        let lookup = registry
+            .dispatch(
+                "links.for_entity",
+                json!({
+                    "entity": { "type": "EPISODE", "id": head_id },
+                    "direction": "in"
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(lookup.is_error.is_none(), "lookup failed: {:?}", lookup);
+        let lookup_parsed: serde_json::Value =
+            serde_json::from_str(&lookup.content[0].text).unwrap();
+        let incoming = lookup_parsed["incoming"]
+            .as_array()
+            .expect("incoming array");
+        assert_eq!(incoming.len(), 1, "expected one incoming continues edge");
+        assert_eq!(incoming[0]["edge_kind"], "continues");
+        assert_eq!(incoming[0]["from"]["type"], "EPISODE");
+        assert_eq!(incoming[0]["from"]["id"], next_id);
+    }
+
+    #[tokio::test]
+    async fn test_write_episode_continues_alongside_explicit_links() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        // Seed head episode.
+        let head = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Combined head",
+                    "actions": "Seed",
+                    "outcome": "Stored"
+                }),
+                &ctx,
+            )
+            .await;
+        let head_parsed: serde_json::Value =
+            serde_json::from_str(&head.content[0].text).unwrap();
+        let head_id = head_parsed["summary_id"].as_str().unwrap().to_string();
+
+        // Combine `continues` (synthesized first) with an explicit `links` entry to a TASK.
+        let result = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Combined write",
+                    "actions": "continues + explicit link",
+                    "outcome": "Both edges land",
+                    "continues": &head_id,
+                    "links": [
+                        { "to": { "type": "TASK", "id": "TST-01COMBINEDTASK0001" } }
+                    ]
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(result.is_error.is_none());
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["links"]["summary"]["succeeded"], 2);
+        assert_eq!(parsed["links"]["summary"]["failed"], 0);
+
+        // Continues entry must appear first (prepended) — agents looking for thread-extension status find it without scanning.
+        let succeeded = parsed["links"]["succeeded"].as_array().unwrap();
+        assert_eq!(succeeded.len(), 2);
+        assert_eq!(succeeded[0]["edge_kind"], "continues");
+        assert_eq!(succeeded[0]["to"]["type"], "EPISODE");
+        assert_eq!(succeeded[1]["to"]["type"], "TASK");
+    }
+
+    #[tokio::test]
     async fn test_write_episode_inline_link_round_trips_via_links_for_entity() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
@@ -327,6 +514,10 @@ mod tests {
                     "description": "Importance score (0.0 to 1.0). Default: 1.0",
                     "default": 1.0
                 },
+                "continues": {
+                    "type": "string",
+                    "description": "Optional. The `summary_id` of a prior episode this episode continues. Internally lowered to a `links` entry of edge_kind `continues` (DAG-validated). The synthesized entry is reported in the response's `links` block, prepended before any explicit entries from `links`."
+                },
                 "links": {
                     "type": "array",
                     "description": "Optional. After the episode is stored, create polymorphic edges from it (as EPISODE) to the listed entities. Partial failures are reported per-link without aborting the write.",
@@ -350,8 +541,8 @@ mod tests {
                             },
                             "edge_kind": {
                                 "type": "string",
-                                "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts"],
-                                "description": "Default: relates_to. Semantics: parent_of (DAG-validated; hierarchical containment), blocks (DAG-validated; dependency), supersedes (DAG-validated; replacement), covers (this entity documents/explains the target), relates_to (default; generic association), see_also (cross-reference), contradicts (conflicts with target). DAG-validated kinds reject cycles per-link without aborting the batch."
+                                "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts", "continues"],
+                                "description": "Default: relates_to. Semantics: parent_of (DAG-validated; hierarchical containment), blocks (DAG-validated; dependency), supersedes (DAG-validated; replacement), covers (this entity documents/explains the target), relates_to (default; generic association), see_also (cross-reference), contradicts (conflicts with target), continues (DAG-validated; episode-thread continuation — new episode continues the named predecessor). DAG-validated kinds reject cycles per-link without aborting the batch."
                             }
                         },
                         "required": ["to"]
