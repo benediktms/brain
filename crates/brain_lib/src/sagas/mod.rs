@@ -67,17 +67,27 @@ impl SagaStore {
         actor: &str,
     ) -> Result<SagaRow> {
         if title.is_none() && description.is_none() {
-            return Err(crate::error::BrainCoreError::Internal(
+            return Err(crate::error::BrainCoreError::Parse(
                 "update: at least one of title or description must be provided".into(),
             ));
         }
-        if let Some(t) = title {
-            if t.trim().is_empty() {
-                return Err(crate::error::BrainCoreError::Internal(
-                    "update: title must not be empty".into(),
-                ));
+        let title = match title {
+            Some(t) => {
+                let trimmed = t.trim();
+                if trimmed.is_empty() {
+                    return Err(crate::error::BrainCoreError::Parse(
+                        "update: title must not be empty".into(),
+                    ));
+                }
+                Some(trimmed)
             }
-        }
+            None => None,
+        };
+        // Canonicalize empty description to NULL so the store is consistent.
+        let description = description.map(|d| match d {
+            Some(s) if s.is_empty() => None,
+            other => other,
+        });
 
         let row = self.db.with_write_conn(|conn| {
             let row = queries::update_saga(conn, saga_id, title, description)?;

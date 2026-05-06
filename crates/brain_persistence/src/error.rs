@@ -32,6 +32,9 @@ pub enum BrainCoreError {
     #[error("task not found: {0}")]
     TaskNotFound(String),
 
+    #[error("saga not found: {0}")]
+    SagaNotFound(String),
+
     #[error("task transfer CAS failed — retry: {0}")]
     TaskTransferCasFailed(String),
 
