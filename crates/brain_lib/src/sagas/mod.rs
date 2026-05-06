@@ -14,6 +14,9 @@ use brain_persistence::error::BrainCoreError;
 
 use crate::error::Result;
 
+pub mod lifecycle;
+pub use lifecycle::{SagaStatus, validate_transition};
+
 /// Store for saga lifecycle operations. Registry-level: not scoped to any brain.
 pub struct SagaStore {
     db: Db,
@@ -178,7 +181,6 @@ impl SagaStore {
                 .ok_or_else(|| BrainCoreError::Parse("saga disappeared after start".into()))
         })
     }
-
 
     #[cfg(test)]
     pub(crate) fn db(&self) -> &Db {
