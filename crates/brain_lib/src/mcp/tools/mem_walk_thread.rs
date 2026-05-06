@@ -54,7 +54,7 @@ impl MemWalkThread {
         // `continues` parameter on `memory.write_episode` rejects cross-brain
         // predecessors. Direct DB writes or future writers could produce
         // edges crossing brain boundaries; we never surface them here.
-        let current_brain_id = ctx.brain_id().to_string();
+        let current_brain_id = ctx.brain_id();
         let total_before_filter = result.rows.len();
         let rows: Vec<_> = result
             .rows

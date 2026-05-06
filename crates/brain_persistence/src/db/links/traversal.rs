@@ -444,7 +444,7 @@ mod tests {
         .unwrap();
     }
 
-    // ── collect_thread_episodes: follows ONLY Continues edges ───────────────
+    // ── collect_thread_episode_rows: follows ONLY Continues edges ───────────
 
     #[test]
     fn thread_traversal_ignores_relates_to_and_see_also() {
