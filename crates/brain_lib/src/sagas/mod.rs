@@ -3,7 +3,7 @@ pub use status::SagaStatus;
 
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::SagaListFilter;
-use brain_persistence::db::sagas::events::{SagaEvent, SagaEventType, new_saga_id};
+use brain_persistence::db::sagas::events::{SagaEvent, SagaEventType, SagaUpdatedPayload, new_saga_id};
 use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaRow};
 
 use crate::error::Result;
@@ -45,6 +45,63 @@ impl SagaStore {
                     timestamp: event.timestamp,
                     actor: &event.actor,
                     payload: &serde_json::to_string(&event.payload)?,
+                },
+            )?;
+
+            Ok(row)
+        })?;
+        Ok(row)
+    }
+
+    /// Update title and/or description. At least one field required. Allowed in any status.
+    ///
+    /// `description` uses `Option<Option<&str>>`:
+    /// - `None` = don't touch description
+    /// - `Some(None)` = set description to NULL
+    /// - `Some(Some("text"))` = set description to "text"
+    pub fn update(
+        &self,
+        saga_id: &str,
+        title: Option<&str>,
+        description: Option<Option<&str>>,
+        actor: &str,
+    ) -> Result<SagaRow> {
+        if title.is_none() && description.is_none() {
+            return Err(crate::error::BrainCoreError::Internal(
+                "update: at least one of title or description must be provided".into(),
+            ));
+        }
+        if let Some(t) = title {
+            if t.trim().is_empty() {
+                return Err(crate::error::BrainCoreError::Internal(
+                    "update: title must not be empty".into(),
+                ));
+            }
+        }
+
+        let row = self.db.with_write_conn(|conn| {
+            let row = queries::update_saga(conn, saga_id, title, description)?;
+
+            let payload = SagaUpdatedPayload {
+                title: title.map(|t| t.to_string()),
+                description: description.map(|d| d.map(|s| s.to_string())),
+            };
+            let event = SagaEvent::new(
+                saga_id,
+                actor,
+                SagaEventType::SagaUpdated,
+                &payload,
+            );
+            queries::insert_saga_event(
+                conn,
+                &SagaEventInsert {
+                    event_id: &event.event_id,
+                    saga_id: &event.saga_id,
+                    event_type: &serde_json::to_string(&event.event_type)
+                        .expect("SagaEventType serialization is infallible"),
+                    timestamp: event.timestamp,
+                    actor: &event.actor,
+                    payload: &event.payload.to_string(),
                 },
             )?;
 

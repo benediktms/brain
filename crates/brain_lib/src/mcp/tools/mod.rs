@@ -26,6 +26,7 @@ mod record_tag;
 mod saga_create;
 mod saga_get;
 mod saga_list;
+mod saga_update;
 mod scope;
 mod status;
 mod tags_aliases_list;
@@ -142,6 +143,7 @@ impl ToolRegistry {
                 Box::new(saga_create::SagaCreate),
                 Box::new(saga_get::SagaGet),
                 Box::new(saga_list::SagaList),
+                Box::new(saga_update::SagaUpdate),
             ],
         }
     }

@@ -26,6 +26,15 @@ pub enum SagaEventType {
     SagaTaskRemoved,
 }
 
+/// Payload for `SagaUpdated` — carries the fields that changed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SagaUpdatedPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Option<String>>,
+}
+
 /// Payload for `SagaClosed` and `SagaCancelled` — carries the cascade flag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SagaClosedPayload {
