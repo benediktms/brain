@@ -629,6 +629,30 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     // ── 7. Event loop ─────────────────────────────────────────────────────
     let shutdown_reason = loop {
+        // Mirror the single-brain metrics-polling block: update queue depth,
+        // lancedb pending rows, and compaction failure counter at the top of
+        // each iteration. In multi-brain mode the optimizer state is shared
+        // across all brains (owned by shared_store), so we read once and write
+        // the same values into every per-brain Metrics object. This ensures
+        // `brain status` for any brain reflects the correct compaction health
+        // picture regardless of which brain is queried.
+        {
+            let pending = shared_store.optimizer().pending_count();
+            let failures = shared_store.optimizer().optimize_failure_count();
+            let depth = rx.len() as u64;
+            for instance in brains.values() {
+                instance.pipeline.metrics().set_queue_depth(depth);
+                instance
+                    .pipeline
+                    .metrics()
+                    .set_lancedb_unoptimized_rows(pending);
+                instance
+                    .pipeline
+                    .metrics()
+                    .set_lancedb_optimize_failures(failures);
+            }
+        }
+
         tokio::select! {
             event = rx.recv() => {
                 match event {

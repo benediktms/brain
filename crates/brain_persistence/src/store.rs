@@ -149,10 +149,11 @@ pub struct OptimizeScheduler {
     /// `link_count >= PAGERANK_MIN_LINKS`, short-circuiting the per-cycle
     /// `COUNT(*)` query thereafter. Reset on `set_db` (DB swap = stale latch).
     pagerank_links_threshold_met: AtomicBool,
-    /// Cumulative count of `OptimizeAction::All` failures. Polled by the
-    /// metrics layer so `brain status` surfaces silent boot-time or
-    /// scheduled-cycle compaction failures (which otherwise only emit a
-    /// warn-level log).
+    /// Cumulative count of silent-failure events across the entire optimize
+    /// cycle — compaction (`OptimizeAction::All`), index creation
+    /// (`list_indices`, `count_rows`, `create_index`), link-count query, and
+    /// PageRank computation. Polled by the metrics layer so `brain status`
+    /// surfaces optimize-cycle health without requiring a tracing subscriber.
     optimize_failures: AtomicU64,
 }
 
@@ -204,10 +205,11 @@ impl OptimizeScheduler {
         *self.guard.lock().await
     }
 
-    /// Cumulative count of failed `OptimizeAction::All` invocations since this
-    /// scheduler was constructed. Polled by the metrics layer so silent
-    /// compaction failures surface in `brain status` rather than only in
-    /// warn-level logs.
+    /// Cumulative count of silent-failure events in the optimize cycle since
+    /// this scheduler was constructed. Every silent-failure path in the
+    /// optimize cycle — compaction, index creation, link count, PageRank —
+    /// increments this counter. Polled by the metrics layer so optimize-cycle
+    /// health surfaces in `brain status` rather than only in warn-level logs.
     pub fn optimize_failure_count(&self) -> u64 {
         self.optimize_failures.load(Ordering::Relaxed)
     }
@@ -256,7 +258,9 @@ impl OptimizeScheduler {
     /// `force_optimize`, so a daemon that's been down long enough to grow
     /// fragment debt picks up index and link-score freshness in the same pass.
     pub async fn startup_compact(&self) {
-        info!("running startup compaction");
+        info!(
+            "running startup compaction — may take several minutes on a busy boot (index rebuild, PageRank recompute)"
+        );
         self.force_optimize().await;
     }
 
@@ -316,34 +320,44 @@ impl OptimizeScheduler {
         // sets. A monotonic latch avoids a redundant COUNT(*) once the threshold
         // is first observed — see PAGERANK_MIN_LINKS for the rationale.
         if let Some(ref db) = *self.db.lock().expect("optimize db lock") {
-            let above_threshold = if forced
+            let (above_threshold, link_count) = if forced
                 || self.pagerank_links_threshold_met.load(Ordering::Relaxed)
             {
-                true
+                (true, 0i64)
             } else {
-                let link_count = db
-                    .with_read_conn(|conn| {
-                        conn.query_row("SELECT COUNT(*) FROM links", [], |row| row.get::<_, i64>(0))
-                            .map_err(BrainCoreError::from)
-                    })
-                    .inspect_err(|e| tracing::warn!(error = %e, "link count query failed; skipping PageRank for this cycle"))
-                    .unwrap_or(0);
-                if link_count >= PAGERANK_MIN_LINKS {
-                    self.pagerank_links_threshold_met
-                        .store(true, Ordering::Relaxed);
-                    true
-                } else {
-                    tracing::debug!(
-                        link_count,
-                        "skipping PageRank recompute: link count below threshold"
-                    );
-                    false
+                match db.with_read_conn(|conn| {
+                    conn.query_row("SELECT COUNT(*) FROM links", [], |row| row.get::<_, i64>(0))
+                        .map_err(BrainCoreError::from)
+                }) {
+                    Ok(count) => {
+                        if count >= PAGERANK_MIN_LINKS {
+                            self.pagerank_links_threshold_met
+                                .store(true, Ordering::Relaxed);
+                            (true, count)
+                        } else {
+                            tracing::debug!(
+                                link_count = count,
+                                "skipping PageRank recompute: link count below threshold"
+                            );
+                            (false, count)
+                        }
+                    }
+                    Err(e) => {
+                        self.optimize_failures.fetch_add(1, Ordering::Relaxed);
+                        tracing::warn!(error = %e, "link count query failed; skipping PageRank for this cycle");
+                        (false, 0i64)
+                    }
                 }
             };
-            if above_threshold
-                && let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank)
-            {
-                warn!(error = %e, "PageRank computation failed, will retry on next optimize");
+            if above_threshold {
+                info!(
+                    link_count,
+                    "recomputing PageRank — may take several minutes on large link graphs"
+                );
+                if let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank) {
+                    self.optimize_failures.fetch_add(1, Ordering::Relaxed);
+                    warn!(error = %e, "PageRank computation failed, will retry on next optimize");
+                }
             }
         }
     }
@@ -353,6 +367,7 @@ impl OptimizeScheduler {
         let indices = match self.table.list_indices().await {
             Ok(i) => i,
             Err(e) => {
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, "failed to list indices, skipping auto-index");
                 return;
             }
@@ -369,6 +384,7 @@ impl OptimizeScheduler {
         let count = match self.table.count_rows(None).await {
             Ok(c) => c as u64,
             Err(e) => {
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, "failed to count rows for auto-index");
                 return;
             }
@@ -389,6 +405,11 @@ impl OptimizeScheduler {
             builder = builder.num_partitions(np);
         }
 
+        info!(
+            rows = count,
+            num_partitions = ?config.num_partitions,
+            "creating IVF-PQ index — may take several minutes on large tables"
+        );
         match self
             .table
             .create_index(&["embedding"], Index::IvfPq(builder))
@@ -404,6 +425,7 @@ impl OptimizeScheduler {
                 );
             }
             Err(e) => {
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, "auto index creation failed, will retry on next optimize");
             }
         }
