@@ -189,6 +189,15 @@ impl OptimizeScheduler {
         self.pending_mutations.load(Ordering::Relaxed)
     }
 
+    /// Test-only accessor: snapshot the `last_optimize` Instant. Used by the
+    /// regression test for `force_optimize` to confirm `OptimizeAction::All`
+    /// actually executed (the timestamp updates only on a successful
+    /// `table.optimize` call inside `run_optimize`).
+    #[cfg(test)]
+    pub async fn last_optimize_at(&self) -> Instant {
+        *self.guard.lock().await
+    }
+
     /// Check triggers and run optimize if thresholds met. Skips if already running.
     pub async fn maybe_optimize(&self) {
         if self.pending_mutations.load(Ordering::Relaxed) == 0 {
@@ -223,29 +232,18 @@ impl OptimizeScheduler {
         self.run_optimize(guard, true).await;
     }
 
-    /// Run compaction unconditionally — ignores the `pending_mutations` counter.
+    /// Boot-time entry point — delegates to `force_optimize` after a tracing
+    /// marker so operators can correlate startup compaction in logs.
     ///
-    /// Use at daemon startup to compact historical fragment debt from previous
-    /// runs. The pending counter starts at 0 on restart, so `force_optimize`
-    /// and `maybe_optimize` would never trigger for pre-existing fragments.
+    /// Wired into the daemon's boot sequence to merge historical fragment debt
+    /// accumulated across prior runs. Boot-time compaction also rebuilds the
+    /// IVF-PQ index if the row threshold has been crossed and recomputes
+    /// PageRank if a SQLite DB is attached — same post-conditions as
+    /// `force_optimize`, so a daemon that's been down long enough to grow
+    /// fragment debt picks up index and link-score freshness in the same pass.
     pub async fn startup_compact(&self) {
-        let mut last_optimize = self.guard.lock().await;
         info!("running startup compaction");
-        match self.table.optimize(OptimizeAction::All).await {
-            Ok(stats) => {
-                // Reset pending counter — startup compact subsumes any early mutations.
-                self.pending_mutations.store(0, Ordering::Relaxed);
-                *last_optimize = Instant::now();
-                info!(
-                    compaction = ?stats.compaction.as_ref().map(|c| c.fragments_removed),
-                    pruned = ?stats.prune.as_ref().map(|p| p.bytes_removed),
-                    "startup compaction complete"
-                );
-            }
-            Err(e) => {
-                warn!(error = %e, "startup compaction failed, will retry via normal optimize");
-            }
-        }
+        self.force_optimize().await;
     }
 
     /// Check whether either trigger threshold has been reached.
@@ -1188,16 +1186,30 @@ mod tests {
         // which always runs as a fresh CLI invocation) starts with pending=0
         // — gating compaction on the counter was a real bug that allowed
         // historical fragment debt to accumulate to tens of GB.
+        //
+        // Asserting on `pending_count` alone would be tautological — `fetch_sub(0)`
+        // cannot move the counter, so both buggy and fixed code produce
+        // `pending_count == 0` before and after. We instead assert that
+        // `last_optimize` has advanced: the timestamp updates only on a
+        // successful `table.optimize` call (see `run_optimize`), so an early
+        // return in either `force_optimize` or `run_optimize` would leave it
+        // unchanged and fail this assertion.
         let (sched, _tmp) = test_scheduler(10, Duration::from_secs(300)).await;
         assert_eq!(sched.pending_count(), 0);
 
-        // Should reach `table.optimize` and complete cleanly. Pre-fix this
-        // was an early-return; post-fix the call exercises the LanceDB
-        // optimize path.
+        let before = sched.last_optimize_at().await;
+        // Sleep is required because `Instant::now()` resolution can collapse
+        // two calls within the same monotonic tick on some platforms.
+        tokio::time::sleep(Duration::from_millis(2)).await;
+
         sched.force_optimize().await;
 
-        // Counter is unchanged on a zero-pending scheduler — `fetch_sub(0)`
-        // is a no-op. The compaction itself is the side-effect we care about.
+        let after = sched.last_optimize_at().await;
+        assert!(
+            after > before,
+            "force_optimize must advance last_optimize even when pending=0; \
+             before={before:?}, after={after:?}"
+        );
         assert_eq!(sched.pending_count(), 0);
     }
 
