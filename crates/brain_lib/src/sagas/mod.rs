@@ -87,7 +87,7 @@ impl SagaStore {
         };
         // Canonicalize empty description to NULL so the store is consistent.
         let description = description.map(|d| match d {
-            Some(s) if s.is_empty() => None,
+            Some("") => None,
             other => other,
         });
 
