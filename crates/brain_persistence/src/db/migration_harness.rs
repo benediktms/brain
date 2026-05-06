@@ -25,7 +25,7 @@ use super::migrations::{
     migrate_v38_to_v39, migrate_v39_to_v40, migrate_v40_to_v41, migrate_v41_to_v42,
     migrate_v42_to_v43, migrate_v43_to_v44, migrate_v44_to_v45, migrate_v45_to_v46,
     migrate_v46_to_v47, migrate_v47_to_v48, migrate_v48_to_v49, migrate_v49_to_v50,
-    migrate_v50_to_v51, migrate_v51_to_v52,
+    migrate_v50_to_v51, migrate_v51_to_v52, migrate_v52_to_v53,
 };
 use super::schema::{SCHEMA_VERSION, init_schema};
 
@@ -94,6 +94,7 @@ fn snapshot_at_version(version: i32) -> Connection {
             49 => migrate_v49_to_v50(&conn).unwrap(),
             50 => migrate_v50_to_v51(&conn).unwrap(),
             51 => migrate_v51_to_v52(&conn).unwrap(),
+            52 => migrate_v52_to_v53(&conn).unwrap(),
             _ => panic!("no snapshot migration for version {v}"),
         }
     }
@@ -205,6 +206,9 @@ const EXPECTED_TABLES: &[&str] = &[
     "tag_cluster_runs",
     "tag_aliases",
     "injection_audit",
+    "sagas",
+    "saga_tasks",
+    "saga_events",
 ];
 
 /// All named indexes that must exist at the current schema version.
@@ -234,6 +238,9 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_lod_chunks_exp",
     "idx_tag_aliases_canonical",
     "idx_tag_aliases_cluster",
+    "idx_sagas_status",
+    "idx_saga_tasks_task_id",
+    "idx_saga_events_saga_id",
 ];
 
 /// FTS5 triggers that must exist.
