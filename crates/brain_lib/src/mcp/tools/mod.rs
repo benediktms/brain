@@ -29,6 +29,7 @@ mod saga_create;
 mod saga_get;
 mod saga_list;
 mod saga_remove_tasks;
+mod saga_reopen;
 mod saga_start;
 mod saga_update;
 mod scope;
@@ -152,6 +153,7 @@ impl ToolRegistry {
                 Box::new(saga_update::SagaUpdate),
                 Box::new(saga_add_tasks::SagaAddTasks),
                 Box::new(saga_remove_tasks::SagaRemoveTasks),
+                Box::new(saga_reopen::SagaReopen),
             ],
         }
     }
@@ -183,7 +185,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 47); // see assertions below for canonical name list
+        assert_eq!(defs.len(), 48); // see assertions below for canonical name list
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.retrieve"));

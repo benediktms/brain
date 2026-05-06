@@ -6,12 +6,12 @@ use brain_persistence::db::sagas::events::{
 use brain_persistence::db::sagas::queries::{
     self, SagaEventInsert, SagaRow, close_saga, list_saga_member_task_ids,
 };
+use brain_persistence::db::sagas::reopen_saga;
 use brain_persistence::db::tasks::queries::resolve_task_id_scoped;
-use brain_persistence::error::BrainCoreError;
 
 pub use brain_persistence::db::sagas::queries::BrainSummary;
 
-use crate::error::Result;
+use crate::error::{BrainCoreError, Result};
 
 pub mod lifecycle;
 pub mod status;
@@ -384,6 +384,74 @@ impl SagaStore {
             }
 
             Ok(present.len())
+        })
+    }
+
+    /// Reopen a closed or cancelled saga, setting status back to `open`.
+    /// Clears `closed_at`. Emits `SagaReopened`. Rejected from `planning` or `open`.
+    pub fn reopen(&self, saga_id: &str, actor: &str) -> Result<SagaRow> {
+        let actor = actor.to_string();
+        let saga_id = saga_id.to_string();
+        self.db.with_write_conn(move |conn| {
+            let row = queries::get_saga(conn, &saga_id)?
+                .ok_or_else(|| BrainCoreError::Parse(format!("saga not found: {saga_id}")))?;
+
+            let from: SagaStatus = row.status.parse().map_err(|_| {
+                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
+            })?;
+
+            // Reopen is only valid from terminal states; planning→open is `start`, not `reopen`.
+            match from {
+                SagaStatus::Closed | SagaStatus::Cancelled => {}
+                other => {
+                    return Err(BrainCoreError::Parse(format!(
+                        "cannot reopen saga in '{other}' status; allowed: closed, cancelled"
+                    )));
+                }
+            }
+
+            let updated = reopen_saga(conn, &saga_id)?;
+
+            let event = SagaEvent::new(
+                &saga_id,
+                &actor,
+                SagaEventType::SagaReopened,
+                &serde_json::json!({}),
+            );
+            #[allow(clippy::disallowed_macros)]
+            queries::insert_saga_event(
+                conn,
+                &SagaEventInsert {
+                    event_id: &event.event_id,
+                    saga_id: &event.saga_id,
+                    event_type: &serde_json::to_string(&event.event_type)
+                        .expect("SagaEventType serialization is infallible"),
+                    timestamp: event.timestamp,
+                    actor: &event.actor,
+                    payload: &event.payload.to_string(),
+                },
+            )?;
+
+            Ok(updated)
+        })
+    }
+
+    /// Force a saga's status directly (test-only).
+    #[cfg(test)]
+    pub fn force_status_for_test(&self, saga_id: &str, status: &str) -> Result<()> {
+        let saga_id = saga_id.to_string();
+        let status = status.to_string();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        self.db.with_write_conn(move |conn| {
+            #[allow(clippy::disallowed_macros)]
+            conn.execute(
+                "UPDATE sagas SET status = ?1, updated_at = ?2 WHERE saga_id = ?3",
+                rusqlite::params![status, ts, saga_id],
+            )?;
+            Ok(())
         })
     }
 }

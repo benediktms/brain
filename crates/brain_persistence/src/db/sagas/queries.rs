@@ -302,3 +302,18 @@ pub fn remove_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) 
     let changed = stmt.execute(params.as_slice())?;
     Ok(changed)
 }
+
+/// Reopen a saga: set status = 'open', closed_at = NULL, updated_at = now.
+/// Returns the updated row. Caller is responsible for validating the prior
+/// status before calling this.
+pub fn reopen_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
+    let ts = now_ts();
+    conn.execute(
+        "UPDATE sagas SET status = 'open', closed_at = NULL, updated_at = ?1
+         WHERE saga_id = ?2",
+        params![ts, saga_id],
+    )?;
+    get_saga(conn, saga_id)?.ok_or_else(|| {
+        crate::error::BrainCoreError::Database("saga disappeared after reopen".into())
+    })
+}

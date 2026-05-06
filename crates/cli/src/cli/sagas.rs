@@ -91,4 +91,10 @@ pub(crate) enum SagasAction {
         #[arg(required = true)]
         task_ids: Vec<String>,
     },
+
+    /// Reopen a closed or cancelled saga (status → open)
+    Reopen {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+    },
 }

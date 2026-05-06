@@ -229,6 +229,30 @@ pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>) -> Result<()>
     Ok(())
 }
 
+pub fn reopen(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
+    let row = ctx.stores.sagas.reopen(saga_id, "cli")?;
+    if ctx.json {
+        let out = json!({
+            "saga_id": row.saga_id,
+            "saga": {
+                "saga_id": row.saga_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "closed_at": row.closed_at,
+                "members": [],
+            }
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Reopened saga {}", row.saga_id);
+        println!("  Status: {}", row.status);
+    }
+    Ok(())
+}
+
 pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx
         .stores

@@ -8,5 +8,5 @@ pub use events::{
 pub use queries::{
     BrainSummary, SagaEventInsert, SagaListFilter, SagaRow, brains_for_saga, close_saga,
     insert_saga_tasks, list_saga_member_task_ids, list_saga_task_ids, remove_saga_tasks,
-    saga_has_task,
+    reopen_saga, saga_has_task,
 };
