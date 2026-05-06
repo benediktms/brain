@@ -4,9 +4,11 @@ pub use status::SagaStatus;
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::SagaListFilter;
 use brain_persistence::db::sagas::events::{
-    SagaEvent, SagaEventType, SagaUpdatedPayload, new_saga_id,
+    SagaEvent, SagaEventType, SagaTaskPayload, SagaUpdatedPayload, new_saga_id,
 };
 use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaRow};
+use brain_persistence::db::tasks::queries::resolve_task_id_scoped;
+use brain_persistence::error::BrainCoreError;
 
 use crate::error::Result;
 
@@ -132,6 +134,83 @@ impl SagaStore {
     #[cfg(test)]
     pub(crate) fn db(&self) -> &Db {
         &self.db
+    }
+
+    /// Atomically add one or more tasks to a saga.
+    ///
+    /// All task IDs are resolved via `resolve_task_id_scoped` (cross-brain
+    /// aware). The entire batch is all-or-nothing: if any task ID fails to
+    /// resolve, is already a member, or the saga is closed/cancelled, the
+    /// transaction is rolled back and an error is returned.
+    ///
+    /// Returns the number of tasks successfully added.
+    pub fn add_tasks(&self, saga_id: &str, task_ids: &[String], actor: &str) -> Result<usize> {
+        if task_ids.is_empty() {
+            return Ok(0);
+        }
+
+        self.db.with_write_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+
+            // Verify the saga exists and is not in a terminal state.
+            let row = queries::get_saga(&tx, saga_id)?
+                .ok_or_else(|| BrainCoreError::TaskEvent(format!("saga not found: {saga_id}")))?;
+            let status: SagaStatus = row.status.parse().map_err(|_| {
+                BrainCoreError::TaskEvent(format!("saga '{saga_id}' has unrecognised status"))
+            })?;
+            match status {
+                SagaStatus::Closed | SagaStatus::Cancelled => {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "saga '{saga_id}' is {status}; reopen it before adding tasks"
+                    )));
+                }
+                _ => {}
+            }
+
+            // Resolve all task IDs first — fail fast before any writes.
+            let mut resolved: Vec<String> = Vec::with_capacity(task_ids.len());
+            for raw_id in task_ids {
+                let full_id = resolve_task_id_scoped(&tx, raw_id, None).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("task '{raw_id}' could not be resolved: {e}"))
+                })?;
+                // Reject duplicates.
+                if queries::saga_has_task(&tx, saga_id, &full_id)? {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "task '{full_id}' is already a member of saga '{saga_id}'"
+                    )));
+                }
+                resolved.push(full_id);
+            }
+
+            queries::insert_saga_tasks(&tx, saga_id, &resolved)?;
+
+            // Emit one SagaTaskAdded event per task.
+            for task_id in &resolved {
+                let event = SagaEvent::new(
+                    saga_id,
+                    actor,
+                    SagaEventType::SagaTaskAdded,
+                    &SagaTaskPayload {
+                        task_id: task_id.clone(),
+                    },
+                );
+                queries::insert_saga_event(
+                    &tx,
+                    &SagaEventInsert {
+                        event_id: &event.event_id,
+                        saga_id: &event.saga_id,
+                        event_type: &serde_json::to_string(&event.event_type)
+                            .expect("SagaEventType serialization is infallible"),
+                        timestamp: event.timestamp,
+                        actor: &event.actor,
+                        payload: &event.payload.to_string(),
+                    },
+                )?;
+            }
+
+            tx.commit()?;
+            Ok(resolved.len())
+        })
     }
 }
 
@@ -629,5 +708,179 @@ mod tests {
             updated.updated_at,
             created_at
         );
+    }
+
+    // ── add_tasks tests ────────────────────────────────────────────────────
+
+    // T1: mid-batch atomicity — [good_id, bad_id] must leave good_id NOT a member.
+    #[test]
+    fn add_tasks_atomicity_bad_id_rolls_back_good_id() {
+        let store = in_memory_store();
+        let saga = store.create("Atomic Saga", None, "test").unwrap();
+        insert_task(&store, "good-brain-task01", "brain-x");
+
+        let result = store.add_tasks(
+            &saga.saga_id,
+            &[
+                "good-brain-task01".to_string(),
+                "NONEXISTENT-TASK-ID".to_string(),
+            ],
+            "test",
+        );
+        assert!(result.is_err(), "batch with bad ID should fail");
+
+        // good-brain-task01 must NOT be a member because the transaction rolled back.
+        let count: i64 = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1 AND task_id = ?2",
+                    [saga.saga_id.as_str(), "good-brain-task01"],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "rolled-back task must not appear in saga_tasks");
+    }
+
+    // T2: closed saga is rejected with a message mentioning "reopen".
+    #[test]
+    fn add_tasks_closed_saga_rejected() {
+        let store = in_memory_store();
+        let saga = store.create("Closed Saga", None, "test").unwrap();
+        insert_task(&store, "brain-z-task01", "brain-z");
+
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                    [&saga.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let err = store
+            .add_tasks(&saga.saga_id, &["brain-z-task01".to_string()], "test")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("reopen"),
+            "error should mention 'reopen', got: {msg}"
+        );
+    }
+
+    // T3: cancelled saga is rejected.
+    #[test]
+    fn add_tasks_cancelled_saga_rejected() {
+        let store = in_memory_store();
+        let saga = store.create("Cancelled Saga", None, "test").unwrap();
+        insert_task(&store, "brain-w-task01", "brain-w");
+
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
+                    [&saga.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let err = store
+            .add_tasks(&saga.saga_id, &["brain-w-task01".to_string()], "test")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("reopen"),
+            "error should mention 'reopen', got: {msg}"
+        );
+    }
+
+    // T4: cross-brain mixed batch — tasks from two different brains added to one saga.
+    #[test]
+    fn add_tasks_cross_brain_mixed_batch() {
+        let store = in_memory_store();
+        let saga = store.create("Cross-Brain Saga", None, "test").unwrap();
+        insert_task(&store, "brain-a-task01", "brain-a");
+        insert_task(&store, "brain-b-task01", "brain-b");
+
+        let count = store
+            .add_tasks(
+                &saga.saga_id,
+                &["brain-a-task01".to_string(), "brain-b-task01".to_string()],
+                "test",
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let ids: Vec<String> = store
+            .db
+            .with_read_conn(|c| {
+                let mut stmt = c
+                    .prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY task_id")
+                    .unwrap();
+                let ids = stmt
+                    .query_map([saga.saga_id.as_str()], |r| r.get(0))
+                    .unwrap()
+                    .collect::<std::result::Result<Vec<String>, _>>()
+                    .unwrap();
+                Ok(ids)
+            })
+            .unwrap();
+        assert!(ids.contains(&"brain-a-task01".to_string()));
+        assert!(ids.contains(&"brain-b-task01".to_string()));
+    }
+
+    // T5: after multi-add, saga_events has SagaTaskAdded count == tasks added.
+    #[test]
+    fn add_tasks_emits_one_event_per_task() {
+        let store = in_memory_store();
+        let saga = store.create("Event Saga", None, "test").unwrap();
+        insert_task(&store, "ev-brain-task01", "brain-ev");
+        insert_task(&store, "ev-brain-task02", "brain-ev");
+        insert_task(&store, "ev-brain-task03", "brain-ev");
+
+        let count = store
+            .add_tasks(
+                &saga.saga_id,
+                &[
+                    "ev-brain-task01".to_string(),
+                    "ev-brain-task02".to_string(),
+                    "ev-brain-task03".to_string(),
+                ],
+                "test",
+            )
+            .unwrap();
+        assert_eq!(count, 3);
+
+        let event_count: i64 = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM saga_events \
+                     WHERE saga_id = ?1 AND event_type = '\"saga_task_added\"'",
+                    [saga.saga_id.as_str()],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(
+            event_count, 3,
+            "expected 3 SagaTaskAdded events, got {event_count}"
+        );
+    }
+
+    // M7: empty batch returns Ok(0) immediately.
+    #[test]
+    fn add_tasks_empty_batch_is_noop() {
+        let store = in_memory_store();
+        let saga = store.create("Noop Saga", None, "test").unwrap();
+        let count = store.add_tasks(&saga.saga_id, &[], "test").unwrap();
+        assert_eq!(count, 0);
     }
 }

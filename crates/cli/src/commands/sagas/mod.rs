@@ -125,6 +125,20 @@ pub fn update(
     Ok(())
 }
 
+pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String]) -> Result<()> {
+    let count = ctx.store.add_tasks(saga_id, task_ids, "cli")?;
+    if ctx.json {
+        let out = serde_json::json!({
+            "saga_id": saga_id,
+            "added": count,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Added {count} task(s) to saga {saga_id}");
+    }
+    Ok(())
+}
+
 pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx
         .store
