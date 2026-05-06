@@ -5,6 +5,7 @@ use serde_json::json;
 
 use brain_lib::sagas::SagaStore;
 use brain_lib::stores::BrainStores;
+use brain_persistence::db::sagas::SagaListFilter;
 
 pub struct SagaCtx {
     pub(crate) store: SagaStore,
@@ -44,6 +45,49 @@ pub fn create(ctx: &SagaCtx, title: &str, description: Option<&str>) -> Result<(
         println!("  Status: {}", row.status);
         if let Some(desc) = &row.description {
             println!("  Desc:   {desc}");
+        }
+    }
+    Ok(())
+}
+
+pub fn list(
+    ctx: &SagaCtx,
+    include_closed: bool,
+    include_cancelled: bool,
+    all: bool,
+    containing_brain: Option<String>,
+) -> Result<()> {
+    let filter = SagaListFilter {
+        include_closed: include_closed || all,
+        include_cancelled: include_cancelled || all,
+        containing_brain,
+    };
+    let rows = ctx.store.list(filter)?;
+
+    if ctx.json {
+        let sagas: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                json!({
+                    "saga_id": r.saga_id,
+                    "title": r.title,
+                    "description": r.description,
+                    "status": r.status,
+                    "created_at": r.created_at,
+                    "updated_at": r.updated_at,
+                    "closed_at": r.closed_at,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "sagas": sagas, "total": sagas.len() }))?
+        );
+    } else if rows.is_empty() {
+        println!("No sagas found.");
+    } else {
+        for r in &rows {
+            println!("[{}] {} ({})", r.saga_id, r.title, r.status);
         }
     }
     Ok(())
