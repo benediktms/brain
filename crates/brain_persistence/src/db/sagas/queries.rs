@@ -205,9 +205,8 @@ pub fn saga_has_task(conn: &Connection, saga_id: &str, task_id: &str) -> Result<
 
 /// List all task_ids belonging to a saga.
 pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare(
-        "SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY added_at",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY added_at")?;
     let ids = stmt
         .query_map([saga_id], |row| row.get(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;

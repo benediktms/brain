@@ -689,7 +689,7 @@ mod tests {
         let tools = parsed["result"]["tools"]
             .as_array()
             .expect("checked in test assertions");
-        assert_eq!(tools.len(), 43); // see assertions below for canonical name list
+        assert_eq!(tools.len(), 44); // see assertions below for canonical name list
 
         let names: Vec<&str> = tools
             .iter()
@@ -709,6 +709,7 @@ mod tests {
         assert!(names.contains(&"sagas.create"));
         assert!(names.contains(&"sagas.get"));
         assert!(names.contains(&"sagas.update"));
+        assert!(names.contains(&"sagas.add_tasks"));
     }
 
     #[tokio::test]
