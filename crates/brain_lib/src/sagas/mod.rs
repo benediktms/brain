@@ -260,6 +260,78 @@ impl SagaStore {
             Ok(resolved.len())
         })
     }
+
+    /// Remove tasks from a saga. Idempotent: missing memberships are no-ops.
+    /// Returns the number of tasks actually removed. Emits one `SagaTaskRemoved`
+    /// event per actual removal. Single transaction.
+    pub fn remove_tasks(
+        &self,
+        saga_id: &str,
+        task_ids: Vec<String>,
+        actor: &str,
+    ) -> Result<usize> {
+        if task_ids.is_empty() {
+            return Ok(0);
+        }
+        let actor = actor.to_string();
+        let saga_id = saga_id.to_string();
+        self.db.with_write_conn(move |conn| {
+            // Identify which task_ids are currently members before deleting,
+            // so we know exactly which ones to emit events for.
+            let placeholders = task_ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let select_sql = format!(
+                "SELECT task_id FROM saga_tasks WHERE saga_id = ?1 AND task_id IN ({placeholders})"
+            );
+            let mut stmt = conn.prepare(&select_sql)?;
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(saga_id.clone()) as Box<dyn rusqlite::ToSql>];
+            for tid in &task_ids {
+                params.push(Box::new(tid.clone()));
+            }
+            let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+            let present: Vec<String> = stmt
+                .query_map(params_ref.as_slice(), |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            if present.is_empty() {
+                return Ok(0);
+            }
+
+            queries::remove_saga_tasks(conn, &saga_id, &task_ids)?;
+
+            for task_id in &present {
+                let payload = SagaTaskPayload {
+                    task_id: task_id.clone(),
+                };
+                let event = SagaEvent::new(
+                    &saga_id,
+                    &actor,
+                    SagaEventType::SagaTaskRemoved,
+                    &payload,
+                );
+                queries::insert_saga_event(
+                    conn,
+                    &SagaEventInsert {
+                        event_id: &event.event_id,
+                        saga_id: &event.saga_id,
+                        event_type: &serde_json::to_string(&event.event_type)
+                            .expect("SagaEventType serialization is infallible"),
+                        timestamp: event.timestamp,
+                        actor: &event.actor,
+                        payload: &event.payload.to_string(),
+                    },
+                )?;
+            }
+
+            Ok(present.len())
+        })
+    }
 }
 
 #[cfg(test)]

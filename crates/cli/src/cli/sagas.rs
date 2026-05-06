@@ -19,6 +19,7 @@ pub(crate) enum SagasAction {
         saga_id: String,
     },
 
+
     /// List sagas (default: planning and open only)
     List {
         /// Include closed sagas
@@ -70,5 +71,15 @@ pub(crate) enum SagasAction {
     Start {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
+    },
+
+    /// Remove tasks from a saga (idempotent)
+    Remove {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+
+        /// One or more task IDs to remove
+        #[arg(required = true)]
+        task_ids: Vec<String>,
     },
 }

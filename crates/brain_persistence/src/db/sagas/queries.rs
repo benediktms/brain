@@ -212,3 +212,33 @@ pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(ids)
 }
+
+/// Remove tasks from a saga. Returns the number of rows actually deleted.
+///
+/// Missing memberships are silently skipped (idempotent). Runs inside the
+/// caller's transaction — does NOT commit.
+pub fn remove_saga_tasks(
+    conn: &Connection,
+    saga_id: &str,
+    task_ids: &[String],
+) -> Result<usize> {
+    if task_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = task_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 2))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "DELETE FROM saga_tasks WHERE saga_id = ?1 AND task_id IN ({placeholders})"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&saga_id as &dyn rusqlite::ToSql];
+    for tid in task_ids {
+        params.push(tid);
+    }
+    let changed = stmt.execute(params.as_slice())?;
+    Ok(changed)
+}

@@ -393,6 +393,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 SagasAction::Start { saga_id } => {
                     commands::sagas::start(&ctx, &saga_id)?;
                 }
+                SagasAction::Remove { saga_id, task_ids } => {
+                    commands::sagas::remove(&ctx, &saga_id, task_ids)?;
+                }
             }
         }
         Command::Tasks {
