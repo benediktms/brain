@@ -213,33 +213,6 @@ pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String
     Ok(ids)
 }
 
-/// Insert a saga event row. All fields are required.
-pub struct SagaEventInsert<'a> {
-    pub event_id: &'a str,
-    pub saga_id: &'a str,
-    pub event_type: &'a str,
-    pub timestamp: i64,
-    pub actor: &'a str,
-    pub payload: &'a str,
-}
-
-/// Insert a single row into `saga_events`.
-pub fn insert_saga_event(conn: &Connection, ev: &SagaEventInsert<'_>) -> Result<()> {
-    conn.execute(
-        "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            ev.event_id,
-            ev.saga_id,
-            ev.event_type,
-            ev.timestamp,
-            ev.actor,
-            ev.payload
-        ],
-    )?;
-    Ok(())
-}
-
 /// Remove tasks from a saga. Returns the number of rows actually deleted.
 ///
 /// Missing memberships are silently skipped (idempotent). Runs inside the
