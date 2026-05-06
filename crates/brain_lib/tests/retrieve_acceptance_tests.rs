@@ -473,6 +473,11 @@ async fn tied_scores_are_lexicographically_ordered() {
                 let mut o = item.clone();
                 if let Some(obj) = o.as_object_mut() {
                     obj.remove("generated_at");
+                    // Score is an f64 computed from floating-point arithmetic and
+                    // may differ by a few ULPs between runs. Strip it from the
+                    // byte-stable comparison; the lex ordering check below uses a
+                    // 1e-10 tolerance instead.
+                    obj.remove("score");
                 }
                 o
             })
