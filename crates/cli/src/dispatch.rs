@@ -370,8 +370,17 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         containing_brain,
                     )?;
                 }
-                SagasAction::Update { saga_id, title, description } => {
-                    commands::sagas::update(&ctx, &saga_id, title.as_deref(), description.as_deref())?;
+                SagasAction::Update { saga_id, title, description, clear_description } => {
+                    // Map CLI flags to the store's Option<Option<&str>> description convention:
+                    //   --clear-description  => Some(None)   (set NULL)
+                    //   --description "x"   => Some(Some("x"))
+                    //   (neither)           => None           (leave unchanged)
+                    let desc_arg = if clear_description {
+                        Some(None)
+                    } else {
+                        description.as_deref().map(Some)
+                    };
+                    commands::sagas::update(&ctx, &saga_id, title.as_deref(), desc_arg)?;
                 }
             }
         }

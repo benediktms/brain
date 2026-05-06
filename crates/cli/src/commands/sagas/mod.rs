@@ -93,10 +93,13 @@ pub fn list(
     Ok(())
 }
 
-pub fn update(ctx: &SagaCtx, saga_id: &str, title: Option<&str>, description: Option<&str>) -> Result<()> {
-    let row = ctx
-        .store
-        .update(saga_id, title, description.map(Some), "cli")?;
+pub fn update(
+    ctx: &SagaCtx,
+    saga_id: &str,
+    title: Option<&str>,
+    description: Option<Option<&str>>,
+) -> Result<()> {
+    let row = ctx.store.update(saga_id, title, description, "cli")?;
     if ctx.json {
         let out = json!({
             "saga_id": row.saga_id,
@@ -108,7 +111,6 @@ pub fn update(ctx: &SagaCtx, saga_id: &str, title: Option<&str>, description: Op
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                "members": [],
             }
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
