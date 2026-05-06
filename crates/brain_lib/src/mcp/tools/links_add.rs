@@ -333,7 +333,7 @@ impl McpTool for LinksAdd {
 
         ToolDefinition {
             name: self.name().into(),
-            description: "Add a directed polymorphic edge between two entities. Defaults to 'relates_to' when edge_kind is omitted. DAG kinds (parent_of, blocks, supersedes) are cycle-checked. Idempotent: re-adding an existing edge returns the same synthesised id without inserting a new row. The returned id is a deterministic compound key (FROM_TYPE:from_id->edge->TO_TYPE:to_id), not a durable ULID.".into(),
+            description: "Add a directed polymorphic edge between two entities. Defaults to 'relates_to' when edge_kind is omitted. DAG kinds (parent_of, blocks, supersedes, continues) are cycle-checked. Idempotent: re-adding an existing edge returns the same synthesised id without inserting a new row. The returned id is a deterministic compound key (FROM_TYPE:from_id->edge->TO_TYPE:to_id), not a durable ULID.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -341,8 +341,8 @@ impl McpTool for LinksAdd {
                     "to": entity_ref_schema,
                     "edge_kind": {
                         "type": "string",
-                        "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts"],
-                        "description": "Edge kind (default: relates_to)"
+                        "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts", "continues"],
+                        "description": "Edge kind (default: relates_to). Use 'continues' to attach episode-thread continuation edges to existing episodes (DAG-validated)."
                     }
                 },
                 "required": ["from", "to"]

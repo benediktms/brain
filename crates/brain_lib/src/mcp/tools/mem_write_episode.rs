@@ -76,7 +76,7 @@ impl McpTool for MemWriteEpisode {
                         "type": "string",
                         "description": "Optional. The `summary_id` of a prior episode this episode continues. Internally lowered to a `links` entry of edge_kind `continues` (DAG-validated). The synthesized entry is reported in the response's `links` block, prepended before any explicit entries from `links`."
                     },
-                    "links": inline_links_schema("Optional. After the episode is stored, create polymorphic edges from it (as EPISODE) to the listed entities. Partial failures are reported per-link without aborting the write.")
+                    "links": inline_links_schema("Optional. After the episode is stored, create polymorphic edges from it (as EPISODE) to the listed entities. Partial failures are reported per-link without aborting the write. Prefer the top-level `continues` parameter for thread-extension edges; use `links` for non-thread relationships (covers, relates_to, see_also, etc.).")
                 },
                 "required": ["goal", "actions", "outcome"]
             }),
@@ -93,6 +93,44 @@ impl McpTool for MemWriteEpisode {
                 Ok(p) => p,
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
+
+            // Validate `continues` predecessor before the episode is stored.
+            // Thread extension is atomic — either the new episode lands AND is
+            // linked, or nothing happens. The typed parameter exists to be
+            // stricter than a generic `links` entry.
+            if let Some(prev_id) = &params.continues {
+                if prev_id.is_empty() {
+                    return ToolCallResult::error(
+                        "continues: predecessor summary_id must not be empty",
+                    );
+                }
+                match ctx.stores.get_summary_by_id(prev_id) {
+                    Ok(None) => {
+                        return ToolCallResult::error(format!(
+                            "continues: predecessor episode not found: {prev_id}"
+                        ));
+                    }
+                    Ok(Some(row)) => {
+                        if row.brain_id != ctx.brain_id() {
+                            return ToolCallResult::error(
+                                "continues: cross-brain references are not yet supported (predecessor is in a different brain)",
+                            );
+                        }
+                        if row.kind != "episode" {
+                            return ToolCallResult::error(format!(
+                                "continues: predecessor must be an episode (got kind: {})",
+                                row.kind
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        error!(error = %e, prev_id = %prev_id, "failed to validate continues predecessor");
+                        return ToolCallResult::error(format!(
+                            "continues: failed to validate predecessor: {e}"
+                        ));
+                    }
+                }
+            }
 
             let episode = Episode {
                 brain_id: ctx.brain_id().to_string(),
@@ -305,8 +343,7 @@ mod tests {
             )
             .await;
         assert!(head.is_error.is_none());
-        let head_parsed: serde_json::Value =
-            serde_json::from_str(&head.content[0].text).unwrap();
+        let head_parsed: serde_json::Value = serde_json::from_str(&head.content[0].text).unwrap();
         let head_id = head_parsed["summary_id"].as_str().unwrap().to_string();
 
         // Extend the thread via `continues`.
@@ -324,8 +361,7 @@ mod tests {
             .await;
         assert!(next.is_error.is_none());
 
-        let next_parsed: serde_json::Value =
-            serde_json::from_str(&next.content[0].text).unwrap();
+        let next_parsed: serde_json::Value = serde_json::from_str(&next.content[0].text).unwrap();
         assert_eq!(next_parsed["status"], "stored");
         assert_eq!(next_parsed["links"]["summary"]["succeeded"], 1);
         assert_eq!(next_parsed["links"]["summary"]["failed"], 0);
@@ -351,8 +387,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        let head_parsed: serde_json::Value =
-            serde_json::from_str(&head.content[0].text).unwrap();
+        let head_parsed: serde_json::Value = serde_json::from_str(&head.content[0].text).unwrap();
         let head_id = head_parsed["summary_id"].as_str().unwrap().to_string();
 
         let next = registry
@@ -367,8 +402,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        let next_parsed: serde_json::Value =
-            serde_json::from_str(&next.content[0].text).unwrap();
+        let next_parsed: serde_json::Value = serde_json::from_str(&next.content[0].text).unwrap();
         let next_id = next_parsed["summary_id"].as_str().unwrap().to_string();
 
         // From the head, an incoming edge of kind `continues` from the next episode must be visible.
@@ -395,6 +429,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_episode_continues_missing_predecessor_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let result = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Reject missing predecessor",
+                    "actions": "Pass a non-existent continues id",
+                    "outcome": "Should error",
+                    "continues": "01KQNONEXISTENTEPISODE0000",
+                }),
+                &ctx,
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        let text = &result.content[0].text;
+        assert!(
+            text.contains("predecessor episode not found"),
+            "got: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_episode_continues_empty_string_rejected() {
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let result = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Reject empty continues",
+                    "actions": "Pass empty string",
+                    "outcome": "Should error",
+                    "continues": "",
+                }),
+                &ctx,
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        let text = &result.content[0].text;
+        assert!(text.contains("must not be empty"), "got: {text}");
+    }
+
+    #[tokio::test]
+    async fn test_write_episode_continues_non_episode_rejected() {
+        // A reflection (kind != "episode") cannot be a thread predecessor.
+        // We seed a reflection summary directly, then attempt to continue it.
+        let (_dir, ctx) = create_test_context().await;
+        let registry = ToolRegistry::new();
+
+        let reflection_id = ctx
+            .stores
+            .store_reflection(
+                "title",
+                "content",
+                &[],
+                &[],
+                1.0,
+                ctx.brain_id(),
+            )
+            .expect("seed reflection");
+
+        let result = registry
+            .dispatch(
+                "memory.write_episode",
+                json!({
+                    "goal": "Reject non-episode predecessor",
+                    "actions": "Pass a reflection id",
+                    "outcome": "Should error",
+                    "continues": &reflection_id,
+                }),
+                &ctx,
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        let text = &result.content[0].text;
+        assert!(
+            text.contains("must be an episode"),
+            "got: {text}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_write_episode_continues_alongside_explicit_links() {
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
@@ -411,8 +531,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        let head_parsed: serde_json::Value =
-            serde_json::from_str(&head.content[0].text).unwrap();
+        let head_parsed: serde_json::Value = serde_json::from_str(&head.content[0].text).unwrap();
         let head_id = head_parsed["summary_id"].as_str().unwrap().to_string();
 
         // Combine `continues` (synthesized first) with an explicit `links` entry to a TASK.
@@ -433,8 +552,7 @@ mod tests {
             .await;
         assert!(result.is_error.is_none());
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&result.content[0].text).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["links"]["summary"]["succeeded"], 2);
         assert_eq!(parsed["links"]["summary"]["failed"], 0);
 
@@ -520,7 +638,7 @@ mod tests {
                 },
                 "links": {
                     "type": "array",
-                    "description": "Optional. After the episode is stored, create polymorphic edges from it (as EPISODE) to the listed entities. Partial failures are reported per-link without aborting the write.",
+                    "description": "Optional. After the episode is stored, create polymorphic edges from it (as EPISODE) to the listed entities. Partial failures are reported per-link without aborting the write. Prefer the top-level `continues` parameter for thread-extension edges; use `links` for non-thread relationships (covers, relates_to, see_also, etc.).",
                     "items": {
                         "type": "object",
                         "properties": {
