@@ -317,3 +317,85 @@ pub fn reopen_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
         crate::error::BrainCoreError::Database("saga disappeared after reopen".into())
     })
 }
+
+/// Stats for a saga's member tasks.
+#[derive(Debug, Clone)]
+pub struct SagaStatsRow {
+    pub total: i64,
+    pub open: i64,
+    pub in_progress: i64,
+    pub blocked: i64,
+    pub done: i64,
+    pub cancelled: i64,
+    /// done / (total - cancelled); None if denominator is 0
+    pub completion_pct: Option<f64>,
+}
+
+/// Compute aggregate stats for a saga in a single SQL query.
+pub fn saga_stats(conn: &Connection, saga_id: &str) -> Result<SagaStatsRow> {
+    conn.query_row(
+        "SELECT
+             COUNT(*) AS total,
+             COUNT(CASE WHEN t.status = 'open'        THEN 1 END) AS open,
+             COUNT(CASE WHEN t.status = 'in_progress' THEN 1 END) AS in_progress,
+             COUNT(CASE WHEN t.status = 'blocked'     THEN 1 END) AS blocked,
+             COUNT(CASE WHEN t.status = 'done'        THEN 1 END) AS done,
+             COUNT(CASE WHEN t.status = 'cancelled'   THEN 1 END) AS cancelled
+         FROM saga_tasks st
+         JOIN tasks t ON t.task_id = st.task_id
+         WHERE st.saga_id = ?1",
+        [saga_id],
+        |row| {
+            let total: i64 = row.get(0)?;
+            let open: i64 = row.get(1)?;
+            let in_progress: i64 = row.get(2)?;
+            let blocked: i64 = row.get(3)?;
+            let done: i64 = row.get(4)?;
+            let cancelled: i64 = row.get(5)?;
+            let denominator = total - cancelled;
+            let completion_pct = if denominator > 0 {
+                Some(done as f64 / denominator as f64 * 100.0)
+            } else {
+                None
+            };
+            Ok(SagaStatsRow {
+                total,
+                open,
+                in_progress,
+                blocked,
+                done,
+                cancelled,
+                completion_pct,
+            })
+        },
+    )
+    .map_err(Into::into)
+}
+
+/// A label with its occurrence count across saga member tasks.
+#[derive(Debug, Clone)]
+pub struct LabelCount {
+    pub label: String,
+    pub count: i64,
+}
+
+/// Compute label histogram across all member tasks of a saga.
+pub fn saga_label_histogram(conn: &Connection, saga_id: &str) -> Result<Vec<LabelCount>> {
+    let mut stmt = conn.prepare(
+        "SELECT tl.label, COUNT(*) AS cnt
+         FROM saga_tasks st
+         JOIN task_labels tl ON tl.task_id = st.task_id
+         WHERE st.saga_id = ?1
+         GROUP BY tl.label
+         ORDER BY cnt DESC, tl.label ASC",
+    )?;
+    let rows = stmt
+        .query_map([saga_id], |row| {
+            Ok(LabelCount {
+                label: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}

@@ -142,6 +142,102 @@ pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String]) -> Result<()
     Ok(())
 }
 
+pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
+    let f = ctx.stores.sagas.frontier(saga_id)?;
+    if ctx.json {
+        let tasks: Vec<serde_json::Value> = f
+            .tasks
+            .iter()
+            .map(|t| {
+                json!({
+                    "task_id": t.task_id,
+                    "title": t.title,
+                    "status": t.status,
+                    "priority": t.priority,
+                })
+            })
+            .collect();
+        let brains: Vec<serde_json::Value> = f
+            .brains
+            .iter()
+            .map(|b| json!({ "brain_id": b.brain_id, "name": b.name, "prefix": b.prefix }))
+            .collect();
+        let total = tasks.len();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "saga_id": saga_id,
+                "tasks": tasks,
+                "brains": brains,
+                "total": total,
+            }))?
+        );
+    } else if f.tasks.is_empty() {
+        println!("No ready tasks in saga {saga_id}.");
+    } else {
+        println!("Ready tasks in saga {saga_id}:");
+        for t in &f.tasks {
+            println!("  [{}] {} ({})", t.task_id, t.title, t.status);
+        }
+    }
+    Ok(())
+}
+
+pub fn stats(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
+    let s = ctx.stores.sagas.stats(saga_id)?;
+    if ctx.json {
+        let label_histogram: Vec<serde_json::Value> = s
+            .label_histogram
+            .iter()
+            .map(|l| json!({ "label": l.label, "count": l.count }))
+            .collect();
+        let brains: Vec<serde_json::Value> = s
+            .brains
+            .iter()
+            .map(|b| json!({ "brain_id": b.brain_id, "name": b.name, "prefix": b.prefix }))
+            .collect();
+        let c = &s.counts;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "saga_id": saga_id,
+                "stats": {
+                    "total": c.total,
+                    "open": c.open,
+                    "in_progress": c.in_progress,
+                    "blocked": c.blocked,
+                    "done": c.done,
+                    "cancelled": c.cancelled,
+                    "completion_pct": c.completion_pct,
+                },
+                "label_histogram": label_histogram,
+                "brains": brains,
+            }))?
+        );
+    } else {
+        let c = &s.counts;
+        println!("Saga {saga_id} stats:");
+        println!("  Total:       {}", c.total);
+        println!("  Open:        {}", c.open);
+        println!("  In progress: {}", c.in_progress);
+        println!("  Blocked:     {}", c.blocked);
+        println!("  Done:        {}", c.done);
+        println!("  Cancelled:   {}", c.cancelled);
+        if let Some(pct) = c.completion_pct {
+            println!("  Completion:  {:.1}%", pct * 100.0);
+        } else {
+            println!("  Completion:  n/a");
+        }
+        if !s.label_histogram.is_empty() {
+            println!("  Labels:");
+            for l in &s.label_histogram {
+                println!("    {}: {}", l.label, l.count);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn start(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx.stores.sagas.start(saga_id, "cli")?;
     if ctx.json {

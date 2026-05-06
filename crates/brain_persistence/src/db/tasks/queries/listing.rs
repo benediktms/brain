@@ -332,6 +332,58 @@ fn list_ready_actionable_via_entity_links(
     crate::db::collect_rows(rows)
 }
 
+/// Like `list_ready_actionable` but restricted to a specific set of task IDs.
+///
+/// Used by the saga frontier — returns only tasks that are both in the given
+/// `task_ids` set and satisfy all readiness conditions. Reuses the same
+/// `ANCESTOR_BLOCKED_CTE` recursive CTE; no logic duplication.
+///
+/// An empty `task_ids` slice returns an empty result immediately.
+pub fn list_ready_actionable_for_tasks(
+    conn: &Connection,
+    task_ids: &[String],
+) -> Result<Vec<TaskRow>> {
+    if task_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let placeholders = task_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "{ANCESTOR_BLOCKED_CTE}
+         SELECT {TASK_COLUMNS}
+         FROM tasks t
+         WHERE t.task_id IN ({placeholders})
+           AND t.status IN ('open', 'in_progress')
+           AND t.blocked_reason IS NULL
+           AND t.task_type != 'epic'
+           AND (t.defer_until IS NULL OR t.defer_until <= strftime('%s', 'now'))
+           AND NOT EXISTS (
+               SELECT 1 FROM entity_links el
+               LEFT JOIN tasks dep ON dep.task_id = el.to_id
+               WHERE el.from_type='TASK' AND el.to_type='TASK' AND el.edge_kind='blocks'
+                 AND el.from_id = t.task_id
+                 AND (dep.task_id IS NULL OR dep.status NOT IN ('done', 'cancelled'))
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM task_external_ids x
+               WHERE x.task_id = t.task_id
+                 AND x.blocking = 1
+                 AND x.resolved_at IS NULL
+           )
+           AND t.task_id NOT IN (SELECT tid FROM has_blocked_ancestor)
+         ORDER BY CASE WHEN t.status = 'in_progress' THEN 0 ELSE 1 END ASC,
+                  t.priority ASC,
+                  t.due_ts ASC NULLS LAST, t.updated_at DESC, t.task_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(task_ids.iter()), row_to_task)?;
+    crate::db::collect_rows(rows)
+}
+
 /// List tasks that are blocked: have unresolved deps, an unresolved external
 /// blocker, an explicit blocked_reason, a future defer_until, or a blocked
 /// ancestor.

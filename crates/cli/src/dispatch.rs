@@ -402,6 +402,12 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 SagasAction::Reopen { saga_id } => {
                     commands::sagas::reopen(&ctx, &saga_id)?;
                 }
+                SagasAction::Frontier { saga_id } => {
+                    commands::sagas::frontier(&ctx, &saga_id)?;
+                }
+                SagasAction::Stats { saga_id } => {
+                    commands::sagas::stats(&ctx, &saga_id)?;
+                }
             }
         }
         Command::Tasks {
