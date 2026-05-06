@@ -35,12 +35,13 @@ impl SagaGet {
                         "created_at": row.created_at,
                         "updated_at": row.updated_at,
                         "closed_at": row.closed_at,
-                        "members": [],
+                        // members is always empty until saga_tasks rows exist
+                    "members": [],
                     }
                 });
                 json_response(&response)
             }
-            Ok(None) => ToolCallResult::error(format!("Saga not found: {}", params.saga_id)),
+            Ok(None) => json_response(&json!({ "saga": null })),
             Err(e) => ToolCallResult::error(format!("Failed to fetch saga: {e}")),
         }
     }
@@ -129,10 +130,14 @@ mod tests {
     async fn test_get_nonexistent_saga() {
         let (_dir, ctx) = create_test_context().await;
         let result = call_get(json!({ "saga_id": "01NONEXISTENT000000000000" }), &ctx).await;
-        assert_eq!(result.is_error, Some(true));
+        // Returns Ok with {"saga": null} rather than an error, matching the read-side convention.
         assert!(
-            result.content[0].text.contains("not found") || result.content[0].text.contains("Saga")
+            result.is_error.is_none(),
+            "should not be an error: {:?}",
+            result.content
         );
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert!(parsed["saga"].is_null());
     }
 
     #[tokio::test]

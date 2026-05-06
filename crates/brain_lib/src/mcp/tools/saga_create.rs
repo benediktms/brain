@@ -49,6 +49,7 @@ impl SagaCreate {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
+                // members is always empty at creation time; populated once saga_tasks rows exist
                 "members": [],
             }
         });
