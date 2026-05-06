@@ -118,12 +118,12 @@ mod tests {
         let p = SagaClosedPayload { cascade: true };
         let json = serde_json::to_string(&p).unwrap();
         let back: SagaClosedPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.cascade, true);
+        assert!(back.cascade);
 
         let p2 = SagaClosedPayload { cascade: false };
         let json2 = serde_json::to_string(&p2).unwrap();
         let back2: SagaClosedPayload = serde_json::from_str(&json2).unwrap();
-        assert_eq!(back2.cascade, false);
+        assert!(!back2.cascade);
     }
 
     #[test]
@@ -131,7 +131,7 @@ mod tests {
         let p = SagaCancelledPayload { cascade: true };
         let json = serde_json::to_string(&p).unwrap();
         let back: SagaCancelledPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.cascade, true);
+        assert!(back.cascade);
     }
 
     #[test]
@@ -169,6 +169,6 @@ mod tests {
 
         let recovered: SagaClosedPayload =
             serde_json::from_value(ev.payload).expect("payload round-trip");
-        assert_eq!(recovered.cascade, false);
+        assert!(!recovered.cascade);
     }
 }
