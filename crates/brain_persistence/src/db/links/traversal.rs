@@ -11,10 +11,10 @@ use rusqlite::Connection;
 use tracing::warn;
 
 use crate::db::links::{EdgeKind, EntityLink, EntityRef, EntityType, for_entity};
-use crate::db::summaries::get_summaries_by_ids;
+use crate::db::summaries::{SummaryRow, get_summaries_by_ids};
 use crate::error::Result;
 
-/// Edge kinds traversed by [`collect_linked_episode_set`].
+/// Edge kinds traversed by [`collect_linked_episode_set`] (consolidation cohort).
 ///
 /// Followed:
 /// - `relates_to`, `see_also` — symmetric semantic-relatedness edges.
@@ -27,8 +27,36 @@ use crate::error::Result;
 ///   ordering semantics that do not imply same-cohort membership.
 /// - `contradicts` — consolidating episodes whose authors signalled
 ///   distinction would silently merge contradictory content.
+///
+/// This constant is the interim source of truth for the consolidation
+/// cohort. When a per-variant `EdgeKind::is_consolidation_cohort()`
+/// method is introduced, this list should be derived from it (or removed
+/// entirely in favour of a filter closure at the call site) so that the
+/// inclusion criterion lives next to the variant definition rather than
+/// in this file.
 const TRAVERSAL_EDGE_KINDS: [EdgeKind; 3] =
     [EdgeKind::RelatesTo, EdgeKind::SeeAlso, EdgeKind::Continues];
+
+/// Edge kinds traversed by [`collect_thread_episode_rows`] (thread enumeration).
+///
+/// A thread is the chain of episodes connected via agent-declared
+/// `continues` edges. This narrower set is what `memory.walk_thread`
+/// walks — related episodes (via `relates_to`/`see_also`) are not part
+/// of the thread proper, even though consolidation considers them in
+/// the same cohort.
+const THREAD_EDGE_KINDS: [EdgeKind; 1] = [EdgeKind::Continues];
+
+/// Result of a thread enumeration walk.
+///
+/// `truncated == true` means the BFS halted at [`MAX_VISITED`] before
+/// exhausting the neighbourhood. Callers should surface this signal to
+/// agents so they know the returned set is incomplete; today the only
+/// other indicator is a server-side `warn!` log the agent cannot see.
+#[derive(Debug, Clone)]
+pub struct ThreadResult {
+    pub rows: Vec<SummaryRow>,
+    pub truncated: bool,
+}
 
 /// Upper bound on visited-set size. Caps both writer-mutex hold time when the
 /// caller invokes via the write connection AND prevents `get_summaries_by_ids`
@@ -76,8 +104,48 @@ pub fn collect_linked_episode_set(
     seed_episode_id: &str,
     max_depth: u32,
 ) -> Result<Vec<String>> {
+    let (rows, _truncated) =
+        collect_episode_set_inner(conn, seed_episode_id, max_depth, &TRAVERSAL_EDGE_KINDS)?;
+    Ok(rows.into_iter().map(|r| r.summary_id).collect())
+}
+
+/// BFS from a seed episode along **only** `continues` edges, returning the
+/// thread as full [`SummaryRow`]s plus a `truncated` flag indicating
+/// whether the BFS halted at [`MAX_VISITED`] before exhausting reachable
+/// nodes. Used by `memory.walk_thread`.
+///
+/// Same invocation contract, sort order, and bounds as
+/// [`collect_linked_episode_set`] — only the edge-kind filter differs.
+/// Bidirectional: walks both `B → A` (predecessors of B) and `C → B`
+/// (successors of B) for any node B.
+pub fn collect_thread_episode_rows(
+    conn: &Connection,
+    seed_episode_id: &str,
+    max_depth: u32,
+) -> Result<ThreadResult> {
+    let (rows, truncated) =
+        collect_episode_set_inner(conn, seed_episode_id, max_depth, &THREAD_EDGE_KINDS)?;
+    Ok(ThreadResult { rows, truncated })
+}
+
+/// Shared BFS logic. Caller chooses which edge kinds qualify as traversal
+/// steps. The endpoint-type check ensures only Episode↔Episode edges drive
+/// expansion regardless of which kinds are passed.
+///
+/// Returns `(rows, truncated)` where `rows` is sorted by
+/// `(created_at ASC, summary_id ASC)` and `truncated` is `true` iff the
+/// BFS halted at [`MAX_VISITED`] before exhausting reachable nodes. The
+/// sort is retained so that *any* caller — ID-returning or row-returning
+/// — observes a deterministic order without re-sorting.
+fn collect_episode_set_inner(
+    conn: &Connection,
+    seed_episode_id: &str,
+    max_depth: u32,
+    edge_kinds: &[EdgeKind],
+) -> Result<(Vec<SummaryRow>, bool)> {
     let mut visited: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
+    let mut truncated = false;
 
     visited.insert(seed_episode_id.to_string());
     queue.push_back((seed_episode_id.to_string(), 0));
@@ -92,7 +160,7 @@ pub fn collect_linked_episode_set(
             id: current.clone(),
         };
 
-        let edges = for_entity(conn, &entity, Some(&TRAVERSAL_EDGE_KINDS))?;
+        let edges = for_entity(conn, &entity, Some(edge_kinds))?;
 
         for link in edges {
             extend_with_neighbour(&link, &current, depth, &mut visited, &mut queue);
@@ -100,8 +168,9 @@ pub fn collect_linked_episode_set(
                 warn!(
                     seed = %seed_episode_id,
                     cap = MAX_VISITED,
-                    "collect_linked_episode_set: visited cap reached; halting BFS early"
+                    "collect_episode_set_inner: visited cap reached; halting BFS early"
                 );
+                truncated = true;
                 break 'bfs;
             }
         }
@@ -117,7 +186,7 @@ pub fn collect_linked_episode_set(
             seed = %seed_episode_id,
             traversed = ids.len(),
             resolved = rows.len(),
-            "collect_linked_episode_set: dropped IDs without matching episode rows"
+            "collect_episode_set_inner: dropped IDs without matching episode rows"
         );
     }
 
@@ -127,16 +196,18 @@ pub fn collect_linked_episode_set(
             .then_with(|| a.summary_id.cmp(&b.summary_id))
     });
 
-    Ok(rows.into_iter().map(|r| r.summary_id).collect())
+    Ok((rows, truncated))
 }
 
 /// Inspect an edge incident to `current` and, if it qualifies as a traversal
 /// step, enqueue the other end at `depth + 1`.
 ///
-/// The edge-kind filter is applied in SQL by [`for_entity`], so only
-/// `TRAVERSAL_EDGE_KINDS` edges reach this function. The endpoint-type check
-/// (both sides must be Episode-typed) is retained defensively — a direct SQL
-/// writer could insert cross-type edges that bypass the API.
+/// The edge-kind filter is applied in SQL by [`for_entity`] using the
+/// caller-supplied `edge_kinds` slice (see [`collect_episode_set_inner`]),
+/// so only edges of the configured kinds reach this function. The
+/// endpoint-type check (both sides must be Episode-typed) is retained
+/// defensively — a direct SQL writer could insert cross-type edges that
+/// bypass the API.
 ///
 /// The "other end" is the endpoint that is not `current`; rows that fail to
 /// identify a current-side endpoint are skipped defensively.
@@ -368,6 +439,73 @@ mod tests {
 
             let result = collect_linked_episode_set(conn, &a, 5).unwrap();
             assert_eq!(result, vec![a]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    // ── collect_thread_episode_rows: follows ONLY Continues edges ───────────
+
+    #[test]
+    fn thread_traversal_ignores_relates_to_and_see_also() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            let a = insert_episode_at(conn, "A", 100);
+            let b = insert_episode_at(conn, "B", 200);
+            let c = insert_episode_at(conn, "C", 300);
+            let d = insert_episode_at(conn, "D", 400);
+
+            // Thread: B continues A; C continues B.
+            link(conn, &b, &a, EdgeKind::Continues);
+            link(conn, &c, &b, EdgeKind::Continues);
+
+            // Off-thread relations — must NOT be followed by collect_thread_episode_rows.
+            link(conn, &b, &d, EdgeKind::RelatesTo);
+            link(conn, &c, &d, EdgeKind::SeeAlso);
+
+            let result = collect_thread_episode_rows(conn, &b, 5).unwrap();
+            let thread: Vec<String> = result.rows.iter().map(|r| r.summary_id.clone()).collect();
+            assert_eq!(
+                thread,
+                vec![a, b, c],
+                "thread must include only Continues neighbours"
+            );
+            assert!(!result.truncated, "small thread should not truncate");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn thread_traversal_handles_fork_predecessors() {
+        // Fork shape: two separate threads converging — sibling B and C both
+        // continue A. From B's perspective the thread reaches A but not C.
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            let a = insert_episode_at(conn, "A", 100);
+            let b = insert_episode_at(conn, "B", 200);
+            let c = insert_episode_at(conn, "C", 300);
+
+            link(conn, &b, &a, EdgeKind::Continues);
+            link(conn, &c, &a, EdgeKind::Continues);
+
+            let from_a = collect_thread_episode_rows(conn, &a, 5).unwrap();
+            let thread_from_a: Vec<String> =
+                from_a.rows.iter().map(|r| r.summary_id.clone()).collect();
+            assert_eq!(
+                thread_from_a,
+                vec![a.clone(), b.clone(), c.clone()],
+                "from A both successors are reachable"
+            );
+
+            let from_b = collect_thread_episode_rows(conn, &b, 1).unwrap();
+            let thread_from_b: Vec<String> =
+                from_b.rows.iter().map(|r| r.summary_id.clone()).collect();
+            assert_eq!(
+                thread_from_b,
+                vec![a.clone(), b.clone()],
+                "from B at depth 1 only A is reachable, not sibling C"
+            );
             Ok(())
         })
         .unwrap();

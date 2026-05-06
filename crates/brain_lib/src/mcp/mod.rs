@@ -689,13 +689,14 @@ mod tests {
         let tools = parsed["result"]["tools"]
             .as_array()
             .expect("checked in test assertions");
-        assert_eq!(tools.len(), 38); // +1 tasks.transfer, +3 links.*
+        assert_eq!(tools.len(), 39); // see assertions below for canonical name list
 
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["name"].as_str().expect("checked in test assertions"))
             .collect();
         assert!(names.contains(&"memory.retrieve"));
+        assert!(names.contains(&"memory.walk_thread"));
         assert!(names.contains(&"tasks.apply_event"));
         assert!(names.contains(&"tasks.create"));
         assert!(names.contains(&"tasks.labels_batch"));
