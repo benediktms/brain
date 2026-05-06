@@ -4,9 +4,11 @@ pub use status::SagaStatus;
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::SagaListFilter;
 use brain_persistence::db::sagas::events::{
-    SagaEvent, SagaEventType, SagaUpdatedPayload, new_saga_id,
+    SagaEvent, SagaEventType, SagaTaskPayload, SagaUpdatedPayload, new_saga_id,
 };
 use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaRow};
+use brain_persistence::db::tasks::queries::resolve_task_id_scoped;
+use brain_persistence::error::BrainCoreError;
 
 use crate::error::Result;
 
@@ -123,6 +125,7 @@ impl SagaStore {
             .with_read_conn(move |conn| queries::get_saga(conn, saga_id))
     }
 
+
     /// List sagas with optional filters.
     pub fn list(&self, filter: SagaListFilter) -> Result<Vec<SagaRow>> {
         self.db
@@ -132,6 +135,73 @@ impl SagaStore {
     #[cfg(test)]
     pub(crate) fn db(&self) -> &Db {
         &self.db
+    }
+
+    /// Atomically add one or more tasks to a saga.
+    ///
+    /// All task IDs are resolved via `resolve_task_id_scoped` (cross-brain
+    /// aware). The entire batch is all-or-nothing: if any task ID fails to
+    /// resolve, is already a member, or the saga is closed/cancelled, the
+    /// transaction is rolled back and an error is returned.
+    ///
+    /// Returns the number of tasks successfully added.
+    pub fn add_tasks(&self, saga_id: &str, task_ids: &[String], actor: &str) -> Result<usize> {
+        self.db.with_write_conn(|conn| {
+            // Verify the saga exists and is not in a terminal state.
+            let row = queries::get_saga(conn, saga_id)?.ok_or_else(|| {
+                BrainCoreError::TaskEvent(format!("saga not found: {saga_id}"))
+            })?;
+            if row.status == "closed" || row.status == "cancelled" {
+                return Err(BrainCoreError::TaskEvent(format!(
+                    "saga '{saga_id}' is {status}; reopen it before adding tasks",
+                    status = row.status
+                )));
+            }
+
+            // Resolve all task IDs first — fail fast before any writes.
+            let mut resolved: Vec<String> = Vec::with_capacity(task_ids.len());
+            for raw_id in task_ids {
+                let full_id = resolve_task_id_scoped(conn, raw_id, None).map_err(|e| {
+                    BrainCoreError::TaskEvent(format!("task '{raw_id}' not found: {e}"))
+                })?;
+                // Reject duplicates.
+                if queries::saga_has_task(conn, saga_id, &full_id)? {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "task '{full_id}' is already a member of saga '{saga_id}'"
+                    )));
+                }
+                resolved.push(full_id);
+            }
+
+            let tx = conn.unchecked_transaction()?;
+
+            queries::insert_saga_tasks(conn, saga_id, &resolved)?;
+
+            // Emit one SagaTaskAdded event per task.
+            for task_id in &resolved {
+                let event = SagaEvent::new(
+                    saga_id,
+                    actor,
+                    SagaEventType::SagaTaskAdded,
+                    &SagaTaskPayload { task_id: task_id.clone() },
+                );
+                conn.execute(
+                    "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        event.event_id,
+                        event.saga_id,
+                        serde_json::to_string(&event.event_type).unwrap_or_default(),
+                        event.timestamp,
+                        event.actor,
+                        event.payload.to_string(),
+                    ],
+                )?;
+            }
+
+            tx.commit()?;
+            Ok(resolved.len())
+        })
     }
 }
 
