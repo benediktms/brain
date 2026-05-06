@@ -834,6 +834,8 @@ mod tests {
         }
 
         async fn force_optimize(&self) {}
+
+        async fn prune_versions(&self, _older_than: std::time::Duration) {}
     }
 
     // ── Integration tests ────────────────────────────────────────────────

@@ -105,6 +105,17 @@ pub trait SchemaMeta: Send + Sync {
     ///
     /// Used by `IndexPipeline::vacuum`.
     fn force_optimize(&self) -> impl std::future::Future<Output = ()> + Send + '_;
+
+    /// Aggressively prune LanceDB version manifests older than `older_than`.
+    ///
+    /// `force_optimize` uses LanceDB's default version retention; this method
+    /// lets `IndexPipeline::vacuum` honour the user-supplied `--older-than`
+    /// flag (including `--older-than 0` for immediate disk reclamation) on
+    /// the LanceDB side as well as the SQLite soft-delete side.
+    fn prune_versions(
+        &self,
+        older_than: std::time::Duration,
+    ) -> impl std::future::Future<Output = ()> + Send + '_;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +309,13 @@ impl SchemaMeta for Store {
 
     fn force_optimize(&self) -> impl std::future::Future<Output = ()> + Send + '_ {
         self.optimizer().force_optimize()
+    }
+
+    fn prune_versions(
+        &self,
+        older_than: std::time::Duration,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+        self.optimizer().prune_versions(older_than)
     }
 }
 

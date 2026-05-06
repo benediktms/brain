@@ -381,6 +381,13 @@ impl SchemaMeta for MockSchemaMeta {
             *self.optimize_count.lock().unwrap() += 1;
         }
     }
+
+    fn prune_versions(
+        &self,
+        _older_than: std::time::Duration,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+        async move {}
+    }
 }
 
 // We also need MockSchemaMeta + MockChunkIndexWriter combined into a single
@@ -470,6 +477,13 @@ impl SchemaMeta for MockStore {
     }
 
     fn force_optimize(&self) -> impl std::future::Future<Output = ()> + Send + '_ {
+        async move {}
+    }
+
+    fn prune_versions(
+        &self,
+        _older_than: std::time::Duration,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
         async move {}
     }
 }

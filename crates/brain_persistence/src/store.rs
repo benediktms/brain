@@ -264,6 +264,52 @@ impl OptimizeScheduler {
         self.force_optimize().await;
     }
 
+    /// Aggressively prune LanceDB version manifests older than `older_than`.
+    ///
+    /// `OptimizeAction::All` (called from `force_optimize` and the daemon's
+    /// scheduled cycles) uses LanceDB's default version retention (~7 days),
+    /// which keeps merged-out fragments on disk until that window passes.
+    /// This method calls `OptimizeAction::Prune` with the caller-supplied
+    /// `older_than` so `brain vacuum --older-than 0` can reclaim disk space
+    /// immediately after compaction.
+    ///
+    /// Safety: `delete_unverified` defaults to `false`, so the active manifest
+    /// and any in-progress writes are protected even when `older_than` is
+    /// `Duration::ZERO`. Only verified, superseded versions are deleted.
+    ///
+    /// Failures increment `optimize_failures` and warn-log, mirroring the
+    /// observability path used by the rest of the optimize cycle so silent
+    /// prune failures surface in `brain status`.
+    pub async fn prune_versions(&self, older_than: Duration) {
+        let _guard = self.guard.lock().await;
+        info!(?older_than, "pruning old LanceDB version manifests");
+        // LanceDB's `OptimizeAction::Prune` takes a `chrono::TimeDelta` rather
+        // than `std::time::Duration`. Conversion is infallible for any
+        // realistic retention window — the chrono representation is i64 ms.
+        let chrono_older_than =
+            chrono::Duration::from_std(older_than).unwrap_or_else(|_| chrono::Duration::zero());
+        match self
+            .table
+            .optimize(OptimizeAction::Prune {
+                older_than: Some(chrono_older_than),
+                delete_unverified: None,
+                error_if_tagged_old_versions: None,
+            })
+            .await
+        {
+            Ok(stats) => {
+                info!(
+                    bytes_removed = ?stats.prune.as_ref().map(|p| p.bytes_removed),
+                    "version pruning complete"
+                );
+            }
+            Err(e) => {
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
+                warn!(error = %e, "version pruning failed");
+            }
+        }
+    }
+
     /// Check whether either trigger threshold has been reached.
     fn should_run(&self, pending: u64, last_optimize: &Instant) -> bool {
         if pending == 0 {
@@ -1251,6 +1297,45 @@ mod tests {
              before={before:?}, after={after:?}"
         );
         assert_eq!(sched.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_prune_versions_succeeds_on_empty_table() {
+        // Aggressive prune on a freshly-created table is a no-op from a
+        // bytes-removed perspective but must complete without error and
+        // must not increment the failure counter.
+        let (sched, _tmp) = test_scheduler(10, Duration::from_secs(300)).await;
+        assert_eq!(sched.optimize_failure_count(), 0);
+
+        sched.prune_versions(Duration::ZERO).await;
+
+        assert_eq!(
+            sched.optimize_failure_count(),
+            0,
+            "prune_versions on empty table must not increment optimize_failures"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prune_versions_after_optimize_succeeds() {
+        // After running an optimize that creates a new version manifest,
+        // prune_versions(Duration::ZERO) should clean up superseded versions
+        // without incrementing the failure counter. This exercises the
+        // post-PR-119 vacuum path that the user's `--older-than 0` invocation
+        // will hit on the live workstation.
+        let (sched, _tmp) = test_scheduler(10, Duration::from_secs(300)).await;
+
+        sched.record_mutation(5);
+        sched.force_optimize().await;
+        let failures_before = sched.optimize_failure_count();
+
+        sched.prune_versions(Duration::ZERO).await;
+
+        assert_eq!(
+            sched.optimize_failure_count(),
+            failures_before,
+            "prune_versions after force_optimize must not increment optimize_failures"
+        );
     }
 
     #[tokio::test]
