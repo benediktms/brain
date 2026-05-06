@@ -52,6 +52,9 @@ pub enum BrainCoreError {
 
     #[error("internal error: {0}")]
     Internal(String),
+
+    #[error("invalid operation: {0}")]
+    InvalidOperation(String),
 }
 
 impl From<rusqlite::Error> for BrainCoreError {
