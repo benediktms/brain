@@ -3,6 +3,6 @@ pub mod queries;
 
 pub use events::{
     SagaCancelledPayload, SagaClosedPayload, SagaEvent, SagaEventType, SagaTaskPayload,
-    new_saga_event_id, new_saga_id,
+    SagaUpdatedPayload, new_saga_event_id, new_saga_id,
 };
 pub use queries::{SagaEventInsert, SagaListFilter, SagaRow};
