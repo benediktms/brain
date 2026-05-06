@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tracing::warn;
 
 use crate::db::links::{EdgeKind, EntityLink, EntityRef, EntityType, for_entity};
-use crate::db::summaries::get_summaries_by_ids;
+use crate::db::summaries::{SummaryRow, get_summaries_by_ids};
 use crate::error::Result;
 
 /// Edge kinds traversed by [`collect_linked_episode_set`] (consolidation cohort).
@@ -33,10 +33,10 @@ const TRAVERSAL_EDGE_KINDS: [EdgeKind; 3] =
 /// Edge kinds traversed by [`collect_thread_episodes`] (thread enumeration).
 ///
 /// A thread is the chain of episodes connected via agent-declared
-/// `continues` edges. This narrower set is what `memory.thread` walks —
-/// related episodes (via `relates_to`/`see_also`) are not part of the
-/// thread proper, even though consolidation considers them in the same
-/// cohort.
+/// `continues` edges. This narrower set is what `memory.walk_thread`
+/// walks — related episodes (via `relates_to`/`see_also`) are not part
+/// of the thread proper, even though consolidation considers them in
+/// the same cohort.
 const THREAD_EDGE_KINDS: [EdgeKind; 1] = [EdgeKind::Continues];
 
 /// Upper bound on visited-set size. Caps both writer-mutex hold time when the
@@ -86,11 +86,12 @@ pub fn collect_linked_episode_set(
     max_depth: u32,
 ) -> Result<Vec<String>> {
     collect_episode_set_inner(conn, seed_episode_id, max_depth, &TRAVERSAL_EDGE_KINDS)
+        .map(|rows| rows.into_iter().map(|r| r.summary_id).collect())
 }
 
 /// BFS from a seed episode along **only** `continues` edges, returning the
 /// thread of episodes connected via agent-declared continuation. Companion
-/// to [`collect_linked_episode_set`] for thread enumeration (`memory.thread`).
+/// to [`collect_linked_episode_set`] for thread enumeration (`memory.walk_thread`).
 ///
 /// Same invocation contract, sort order, and bounds as
 /// [`collect_linked_episode_set`] — only the edge-kind filter differs.
@@ -101,18 +102,38 @@ pub fn collect_thread_episodes(
     seed_episode_id: &str,
     max_depth: u32,
 ) -> Result<Vec<String>> {
+    collect_thread_episode_rows(conn, seed_episode_id, max_depth)
+        .map(|rows| rows.into_iter().map(|r| r.summary_id).collect())
+}
+
+/// Same as [`collect_thread_episodes`] but returns full [`SummaryRow`]s
+/// directly, avoiding a second `get_summaries_by_ids` round-trip when the
+/// caller needs episode metadata (e.g. `memory.walk_thread` MCP tool).
+///
+/// The inner BFS already hydrates rows to filter by kind; this variant
+/// exposes them rather than discarding to IDs and forcing the caller to
+/// re-query.
+pub fn collect_thread_episode_rows(
+    conn: &Connection,
+    seed_episode_id: &str,
+    max_depth: u32,
+) -> Result<Vec<SummaryRow>> {
     collect_episode_set_inner(conn, seed_episode_id, max_depth, &THREAD_EDGE_KINDS)
 }
 
 /// Shared BFS logic. Caller chooses which edge kinds qualify as traversal
 /// steps. The endpoint-type check ensures only Episode↔Episode edges drive
 /// expansion regardless of which kinds are passed.
+///
+/// Returns rows sorted by `(created_at ASC, summary_id ASC)`. The sort is
+/// retained so that *any* caller — ID-returning or row-returning — observes
+/// a deterministic order without re-sorting.
 fn collect_episode_set_inner(
     conn: &Connection,
     seed_episode_id: &str,
     max_depth: u32,
     edge_kinds: &[EdgeKind],
-) -> Result<Vec<String>> {
+) -> Result<Vec<SummaryRow>> {
     let mut visited: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
 
@@ -164,16 +185,18 @@ fn collect_episode_set_inner(
             .then_with(|| a.summary_id.cmp(&b.summary_id))
     });
 
-    Ok(rows.into_iter().map(|r| r.summary_id).collect())
+    Ok(rows)
 }
 
 /// Inspect an edge incident to `current` and, if it qualifies as a traversal
 /// step, enqueue the other end at `depth + 1`.
 ///
-/// The edge-kind filter is applied in SQL by [`for_entity`], so only
-/// `TRAVERSAL_EDGE_KINDS` edges reach this function. The endpoint-type check
-/// (both sides must be Episode-typed) is retained defensively — a direct SQL
-/// writer could insert cross-type edges that bypass the API.
+/// The edge-kind filter is applied in SQL by [`for_entity`] using the
+/// caller-supplied `edge_kinds` slice (see [`collect_episode_set_inner`]),
+/// so only edges of the configured kinds reach this function. The
+/// endpoint-type check (both sides must be Episode-typed) is retained
+/// defensively — a direct SQL writer could insert cross-type edges that
+/// bypass the API.
 ///
 /// The "other end" is the endpoint that is not `current`; rows that fail to
 /// identify a current-side endpoint are skipped defensively.

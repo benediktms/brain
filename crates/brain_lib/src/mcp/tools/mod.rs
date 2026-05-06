@@ -9,7 +9,7 @@ mod mem_consolidate;
 mod mem_reflect;
 mod mem_retrieve;
 mod mem_summarize_scope;
-mod mem_thread;
+mod mem_walk_thread;
 mod mem_write_episode;
 mod mem_write_procedure;
 mod record_archive;
@@ -103,7 +103,7 @@ impl ToolRegistry {
                 Box::new(mem_reflect::MemReflect),
                 Box::new(mem_consolidate::MemConsolidate),
                 Box::new(mem_summarize_scope::MemSummarizeScope),
-                Box::new(mem_thread::MemThread),
+                Box::new(mem_walk_thread::MemWalkThread),
                 Box::new(task_apply_event::TaskApplyEvent),
                 Box::new(task_close::TaskClose),
                 Box::new(task_create::TaskCreate),
@@ -167,13 +167,13 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 39); // +1 tasks.transfer, +3 links.*, +1 memory.thread
+        assert_eq!(defs.len(), 39); // see assertions below for canonical name list
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.retrieve"));
         assert!(names.contains(&"memory.write_episode"));
         assert!(names.contains(&"memory.reflect"));
-        assert!(names.contains(&"memory.thread"));
+        assert!(names.contains(&"memory.walk_thread"));
         assert!(names.contains(&"tasks.apply_event"));
         assert!(names.contains(&"tasks.create"));
         assert!(names.contains(&"tasks.get"));

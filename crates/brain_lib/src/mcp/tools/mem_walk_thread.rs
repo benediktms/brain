@@ -4,7 +4,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use brain_persistence::db::links::collect_thread_episodes;
+use brain_persistence::db::links::collect_thread_episode_rows;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -25,9 +25,9 @@ struct Params {
     max_depth: Option<u32>,
 }
 
-pub(super) struct MemThread;
+pub(super) struct MemWalkThread;
 
-impl MemThread {
+impl MemWalkThread {
     fn execute(&self, params: Value, ctx: &McpContext) -> ToolCallResult {
         let params: Params = match serde_json::from_value(params) {
             Ok(p) => p,
@@ -40,30 +40,14 @@ impl MemThread {
 
         let max_depth = params.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
 
-        let thread_ids =
-            match ctx.stores.inner_db().with_read_conn(|conn| {
-                collect_thread_episodes(conn, &params.seed_memory_id, max_depth)
-            }) {
-                Ok(ids) => ids,
-                Err(e) => return ToolCallResult::error(format!("Failed to walk thread: {e}")),
-            };
-
-        // The helper returns IDs only; hydrate to full episode rows so the
-        // agent does not have to round-trip through `memory.retrieve`.
-        let rows = match ctx.stores.get_summaries_by_ids(&thread_ids) {
+        // Single hydration: the helper returns sorted rows directly. No
+        // re-query, no re-sort.
+        let rows = match ctx.stores.inner_db().with_read_conn(|conn| {
+            collect_thread_episode_rows(conn, &params.seed_memory_id, max_depth)
+        }) {
             Ok(rows) => rows,
-            Err(e) => return ToolCallResult::error(format!("Failed to hydrate thread: {e}")),
+            Err(e) => return ToolCallResult::error(format!("Failed to walk thread: {e}")),
         };
-
-        // Re-sort after hydration to preserve the helper's contract
-        // (created_at ASC, ID ASC for ties). `get_summaries_by_ids` does
-        // not promise any particular order.
-        let mut rows = rows;
-        rows.sort_by(|a, b| {
-            a.created_at
-                .cmp(&b.created_at)
-                .then_with(|| a.summary_id.cmp(&b.summary_id))
-        });
 
         let episodes: Vec<Value> = rows
             .into_iter()
@@ -90,9 +74,9 @@ impl MemThread {
     }
 }
 
-impl McpTool for MemThread {
+impl McpTool for MemWalkThread {
     fn name(&self) -> &'static str {
-        "memory.thread"
+        "memory.walk_thread"
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -109,7 +93,7 @@ impl McpTool for MemThread {
                     "max_depth": {
                         "type": "integer",
                         "minimum": 0,
-                        "description": "BFS depth bound. Default: 32. Clamped internally to MAX_VISITED (1024)."
+                        "description": "BFS depth bound. Default: 32. The visited set is also capped at MAX_VISITED (1024) episodes; pathological neighbourhoods truncate silently with a warn log."
                     }
                 },
                 "required": ["seed_memory_id"]
@@ -132,7 +116,7 @@ mod tests {
 
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
-    use super::{McpTool, MemThread};
+    use super::{McpTool, MemWalkThread};
 
     /// Build a thread of three episodes and return their summary_ids in chronological order.
     async fn seed_thread(ctx: &crate::mcp::McpContext) -> (String, String, String) {
@@ -195,11 +179,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_thread_returns_full_chain_in_order() {
+    async fn test_walk_thread_returns_full_chain_in_order() {
         let (_dir, ctx) = create_test_context().await;
         let (head_id, mid_id, tail_id) = seed_thread(&ctx).await;
 
-        let result = MemThread.execute(json!({ "seed_memory_id": &mid_id }), &ctx);
+        let result = MemWalkThread.execute(json!({ "seed_memory_id": &mid_id }), &ctx);
         assert_ne!(result.is_error, Some(true), "got: {:?}", result);
 
         let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -219,25 +203,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_thread_walks_from_any_member() {
+    async fn test_walk_thread_walks_from_any_member() {
         let (_dir, ctx) = create_test_context().await;
         let (head_id, _mid_id, tail_id) = seed_thread(&ctx).await;
 
         // From head — full thread reachable forward.
-        let from_head = MemThread.execute(json!({ "seed_memory_id": &head_id }), &ctx);
+        let from_head = MemWalkThread.execute(json!({ "seed_memory_id": &head_id }), &ctx);
         let parsed: serde_json::Value = serde_json::from_str(&from_head.content[0].text).unwrap();
         assert_eq!(parsed["count"], 3);
 
         // From tail — full thread reachable backward.
-        let from_tail = MemThread.execute(json!({ "seed_memory_id": &tail_id }), &ctx);
+        let from_tail = MemWalkThread.execute(json!({ "seed_memory_id": &tail_id }), &ctx);
         let parsed: serde_json::Value = serde_json::from_str(&from_tail.content[0].text).unwrap();
         assert_eq!(parsed["count"], 3);
     }
 
     #[tokio::test]
-    async fn test_thread_missing_seed_returns_empty() {
+    async fn test_walk_thread_missing_seed_returns_empty() {
         let (_dir, ctx) = create_test_context().await;
-        let result = MemThread.execute(json!({ "seed_memory_id": "01KQNONEXISTENTSEED000" }), &ctx);
+        let result =
+            MemWalkThread.execute(json!({ "seed_memory_id": "01KQNONEXISTENTSEED000" }), &ctx);
         assert_ne!(result.is_error, Some(true));
         let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 0);
@@ -245,16 +230,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_thread_empty_seed_rejected() {
+    async fn test_walk_thread_empty_seed_rejected() {
         let (_dir, ctx) = create_test_context().await;
-        let result = MemThread.execute(json!({ "seed_memory_id": "" }), &ctx);
+        let result = MemWalkThread.execute(json!({ "seed_memory_id": "" }), &ctx);
         assert_eq!(result.is_error, Some(true));
         let text = &result.content[0].text;
         assert!(text.contains("must not be empty"), "got: {text}");
     }
 
     #[tokio::test]
-    async fn test_thread_isolated_episode_returns_self_only() {
+    async fn test_walk_thread_isolated_episode_returns_self_only() {
         // An episode written with no `continues` parameter is its own thread.
         let (_dir, ctx) = create_test_context().await;
         let registry = ToolRegistry::new();
@@ -276,15 +261,27 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let result = MemThread.execute(json!({ "seed_memory_id": &id }), &ctx);
+        let result = MemWalkThread.execute(json!({ "seed_memory_id": &id }), &ctx);
         let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["thread"][0]["summary_id"], id);
     }
 
+    #[tokio::test]
+    async fn test_walk_thread_max_depth_zero_returns_seed_only() {
+        let (_dir, ctx) = create_test_context().await;
+        let (_head_id, mid_id, _tail_id) = seed_thread(&ctx).await;
+
+        let result =
+            MemWalkThread.execute(json!({ "seed_memory_id": &mid_id, "max_depth": 0 }), &ctx);
+        let parsed: serde_json::Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["count"], 1, "max_depth=0 must return only the seed");
+        assert_eq!(parsed["thread"][0]["summary_id"], mid_id);
+    }
+
     #[test]
-    fn test_thread_schema_stable() {
-        let tool = MemThread;
+    fn test_walk_thread_schema_stable() {
+        let tool = MemWalkThread;
         let schema = tool.definition().input_schema;
         let expected = json!({
             "type": "object",
@@ -296,14 +293,14 @@ mod tests {
                 "max_depth": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "BFS depth bound. Default: 32. Clamped internally to MAX_VISITED (1024)."
+                    "description": "BFS depth bound. Default: 32. The visited set is also capped at MAX_VISITED (1024) episodes; pathological neighbourhoods truncate silently with a warn log."
                 }
             },
             "required": ["seed_memory_id"]
         });
         assert_eq!(
             schema, expected,
-            "memory.thread schema changed — update golden or revert"
+            "memory.walk_thread schema changed — update golden or revert"
         );
     }
 }
