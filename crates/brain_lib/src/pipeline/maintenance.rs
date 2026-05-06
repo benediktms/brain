@@ -71,9 +71,20 @@ where
         self.db.vacuum_db()?;
         info!("SQLite VACUUM complete");
 
-        // 4. LanceDB optimize
+        // 4. LanceDB optimize (compaction + index + PageRank)
         self.store.force_optimize().await;
         info!("LanceDB optimize complete");
+
+        // 5. LanceDB version prune — honour `--older-than` on the LanceDB
+        //    side so the user's deliberate retention window is applied to
+        //    version manifests, not just SQLite soft-deletes. Passing
+        //    `Duration::ZERO` (when `older_than_days == 0`) reclaims disk
+        //    immediately by deleting all superseded version manifests; the
+        //    active manifest and any in-progress writes are protected by
+        //    LanceDB's `delete_unverified: false` default.
+        let retention = std::time::Duration::from_secs(older_than_days as u64 * 86400);
+        self.store.prune_versions(retention).await;
+        info!(?retention, "LanceDB version prune complete");
 
         Ok(VacuumStats {
             purged_files: purged_count,
