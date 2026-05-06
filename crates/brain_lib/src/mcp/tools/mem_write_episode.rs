@@ -95,9 +95,13 @@ impl McpTool for MemWriteEpisode {
             };
 
             // Validate `continues` predecessor before the episode is stored.
-            // Thread extension is atomic — either the new episode lands AND is
-            // linked, or nothing happens. The typed parameter exists to be
-            // stricter than a generic `links` entry.
+            // The common failure modes (bad ID, missing row, cross-brain,
+            // wrong kind) are caught pre-write so the typical request never
+            // produces an episode without its thread edge. The handler is
+            // best-effort atomic — `store_episode` and `apply_inline_links`
+            // are not wrapped in a single transaction, so a transient writer
+            // failure between them can still leave the episode without its
+            // continues edge; the per-link `failed` array surfaces it.
             if let Some(prev_id) = &params.continues {
                 if prev_id.is_empty() {
                     return ToolCallResult::error(
