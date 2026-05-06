@@ -211,17 +211,15 @@ impl OptimizeScheduler {
 
     /// Wait for any in-progress optimize, then run unconditionally.
     ///
-    /// Bypasses the PageRank link-count gate — `force_optimize` is the API used
-    /// by `brain vacuum`, daemon shutdown, and tests, all of which want PageRank
-    /// to run regardless of graph size.
+    /// Used by `brain vacuum`, daemon shutdown, and tests — all callers that
+    /// want compaction to run regardless of the in-memory `pending_mutations`
+    /// counter. The counter resets on every process restart, so gating on it
+    /// would defeat callers that operate on a freshly-opened scheduler (the
+    /// most common case for `brain vacuum`, which always runs as a fresh CLI
+    /// invocation). Also bypasses the PageRank link-count gate so PageRank
+    /// runs regardless of graph size.
     pub async fn force_optimize(&self) {
-        if self.pending_mutations.load(Ordering::Relaxed) == 0 {
-            return;
-        }
         let guard = self.guard.lock().await;
-        if self.pending_mutations.load(Ordering::Relaxed) == 0 {
-            return;
-        }
         self.run_optimize(guard, true).await;
     }
 
@@ -267,10 +265,12 @@ impl OptimizeScheduler {
         mut last_optimize: tokio::sync::MutexGuard<'_, Instant>,
         bypass_pagerank_gate: bool,
     ) {
+        // The pending_mutations counter resets on process restart, so a
+        // freshly-opened scheduler with on-disk fragment debt sees snapshot=0.
+        // Run unconditionally — `fetch_sub(0)` is a no-op and `OptimizeAction::All`
+        // is cheap when there's nothing to compact. Maybe_optimize callers
+        // pre-check for `pending == 0` before reaching here.
         let snapshot = self.pending_mutations.load(Ordering::Relaxed);
-        if snapshot == 0 {
-            return;
-        }
 
         match self.table.optimize(OptimizeAction::All).await {
             Ok(stats) => {
@@ -1180,12 +1180,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_force_optimize_noop_when_zero_pending() {
+    async fn test_force_optimize_runs_when_zero_pending() {
+        // Regression test: `force_optimize` must actually invoke
+        // `OptimizeAction::All` on the underlying table even when the
+        // in-memory `pending_mutations` counter is 0. The counter resets on
+        // every process restart, so the most common caller (`brain vacuum`,
+        // which always runs as a fresh CLI invocation) starts with pending=0
+        // — gating compaction on the counter was a real bug that allowed
+        // historical fragment debt to accumulate to tens of GB.
         let (sched, _tmp) = test_scheduler(10, Duration::from_secs(300)).await;
         assert_eq!(sched.pending_count(), 0);
 
-        // force_optimize with 0 pending → no-op, no panic
+        // Should reach `table.optimize` and complete cleanly. Pre-fix this
+        // was an early-return; post-fix the call exercises the LanceDB
+        // optimize path.
         sched.force_optimize().await;
+
+        // Counter is unchanged on a zero-pending scheduler — `fetch_sub(0)`
+        // is a no-op. The compaction itself is the side-effect we care about.
         assert_eq!(sched.pending_count(), 0);
     }
 

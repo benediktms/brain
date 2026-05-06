@@ -72,6 +72,12 @@ pub async fn run(
     // tasks and chunks will be re-embedded on the next EmbedPollSweep job.
     embed_poll::self_heal_if_lance_missing(pipeline.embedding_resetter(), pipeline.store()).await;
 
+    // Startup compaction: merge any historical LanceDB fragments left over
+    // from prior runs. The in-memory pending_mutations counter resets on
+    // restart, so without this call `maybe_optimize` would never trigger
+    // for pre-existing fragment debt — fragments would accumulate forever.
+    pipeline.store().optimizer().startup_compact().await;
+
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let _watcher = brain_lib::watcher::BrainWatcher::new(&note_dirs, tx)?;
@@ -395,6 +401,13 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // Uses `&shared_db` directly because per-brain `IndexPipeline`s aren't
     // constructed yet (step 3 below).
     embed_poll::self_heal_if_lance_missing(&shared_db, &shared_store).await;
+
+    // Startup compaction: merge historical fragments accumulated from prior
+    // daemon runs. Multi-brain mode shares one Store, so a single call covers
+    // every brain. Without this call the pending_mutations counter (which
+    // resets on restart) would never reach the threshold for pre-existing
+    // on-disk fragment debt.
+    shared_store.optimizer().startup_compact().await;
 
     // ── 3. Initialise per-brain pipelines ────────────────────────────────
     let mut brains: HashMap<String, BrainInstance> = HashMap::new();
