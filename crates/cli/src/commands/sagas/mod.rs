@@ -236,7 +236,13 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         .get(saga_id)?
         .ok_or_else(|| anyhow!("saga not found: {saga_id}"))?;
 
+    let brains = ctx.stores.sagas.brains_for_saga(saga_id)?;
+
     if ctx.json {
+        let brains_json: Vec<serde_json::Value> = brains
+            .iter()
+            .map(|b| json!({ "brain_id": b.brain_id, "name": b.name, "prefix": b.prefix }))
+            .collect();
         let out = json!({
             "saga_id": row.saga_id,
             "saga": {
@@ -248,6 +254,7 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
                 "members": [],
+                "brains": brains_json,
             }
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
@@ -260,6 +267,10 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         }
         if let Some(ts) = row.closed_at {
             println!("  Closed: {ts}");
+        }
+        if !brains.is_empty() {
+            let brain_names: Vec<&str> = brains.iter().map(|b| b.name.as_str()).collect();
+            println!("  Brains: {}", brain_names.join(", "));
         }
     }
     Ok(())

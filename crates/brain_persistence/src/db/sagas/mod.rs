@@ -6,6 +6,7 @@ pub use events::{
     SagaUpdatedPayload, new_saga_event_id, new_saga_id,
 };
 pub use queries::{
-    SagaEventInsert, SagaListFilter, SagaRow, close_saga, insert_saga_tasks,
-    list_saga_member_task_ids, list_saga_task_ids, remove_saga_tasks, saga_has_task,
+    BrainSummary, SagaEventInsert, SagaListFilter, SagaRow, brains_for_saga, close_saga,
+    insert_saga_tasks, list_saga_member_task_ids, list_saga_task_ids, remove_saga_tasks,
+    saga_has_task,
 };
