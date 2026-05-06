@@ -18,4 +18,23 @@ pub(crate) enum SagasAction {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
     },
+
+    /// List sagas (default: planning and open only)
+    List {
+        /// Include closed sagas
+        #[arg(long)]
+        include_closed: bool,
+
+        /// Include cancelled sagas
+        #[arg(long)]
+        include_cancelled: bool,
+
+        /// Include all sagas regardless of status
+        #[arg(long)]
+        all: bool,
+
+        /// Only show sagas containing a task in this brain (brain_id)
+        #[arg(long)]
+        containing_brain: Option<String>,
+    },
 }

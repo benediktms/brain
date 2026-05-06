@@ -13,6 +13,7 @@ mod mem_walk_thread;
 mod mem_write_episode;
 mod mem_write_procedure;
 mod record_archive;
+mod saga_list;
 mod record_create_analysis;
 mod record_create_document;
 mod record_create_plan;
@@ -140,6 +141,7 @@ impl ToolRegistry {
                 Box::new(tags_aliases_status::TagsAliasesStatus),
                 Box::new(saga_create::SagaCreate),
                 Box::new(saga_get::SagaGet),
+                Box::new(saga_list::SagaList),
             ],
         }
     }
@@ -171,7 +173,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 41); // see assertions below for canonical name list
+        assert_eq!(defs.len(), 42); // see assertions below for canonical name list
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.retrieve"));

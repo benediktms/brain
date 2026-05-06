@@ -356,6 +356,20 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 SagasAction::Show { saga_id } => {
                     commands::sagas::show(&ctx, &saga_id)?;
                 }
+                SagasAction::List {
+                    include_closed,
+                    include_cancelled,
+                    all,
+                    containing_brain,
+                } => {
+                    commands::sagas::list(
+                        &ctx,
+                        include_closed,
+                        include_cancelled,
+                        all,
+                        containing_brain,
+                    )?;
+                }
             }
         }
         Command::Tasks {

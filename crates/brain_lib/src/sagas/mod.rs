@@ -3,7 +3,9 @@ pub use status::SagaStatus;
 
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::events::{SagaEvent, SagaEventType, new_saga_id};
-use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaRow};
+use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaListFilter, SagaRow};
+
+pub use brain_persistence::db::sagas::queries::SagaListFilter as ListFilter;
 
 use crate::error::Result;
 
@@ -56,6 +58,17 @@ impl SagaStore {
     pub fn get(&self, saga_id: &str) -> Result<Option<SagaRow>> {
         self.db
             .with_read_conn(move |conn| queries::get_saga(conn, saga_id))
+    }
+
+    /// List sagas with optional filters.
+    pub fn list(&self, filter: SagaListFilter) -> Result<Vec<SagaRow>> {
+        self.db
+            .with_read_conn(move |conn| queries::list_sagas(conn, &filter))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn db(&self) -> &Db {
+        &self.db
     }
 }
 
@@ -173,5 +186,57 @@ mod tests {
             count, 1,
             "cross-brain task_id should be stored without error"
         );
+    }
+
+    #[test]
+    fn list_default_excludes_closed_and_cancelled() {
+        let store = in_memory_store();
+        let a = store.create("Alpha", None, "test").unwrap();
+        let _b = store.create("Beta", None, "test").unwrap();
+
+        // Manually force-close saga a by direct DB write.
+        store.db.with_write_conn(|conn| {
+            conn.execute(
+                "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                [&a.saga_id],
+            )?;
+            Ok(())
+        }).unwrap();
+
+        let rows = store.list(SagaListFilter::default()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Beta");
+    }
+
+    #[test]
+    fn list_include_closed() {
+        let store = in_memory_store();
+        let a = store.create("Alpha", None, "test").unwrap();
+        store.create("Beta", None, "test").unwrap();
+        store.db.with_write_conn(|conn| {
+            conn.execute(
+                "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                [&a.saga_id],
+            )?;
+            Ok(())
+        }).unwrap();
+
+        let rows = store.list(SagaListFilter { include_closed: true, ..Default::default() }).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn list_all_includes_closed_and_cancelled() {
+        let store = in_memory_store();
+        let a = store.create("Alpha", None, "test").unwrap();
+        let b = store.create("Beta", None, "test").unwrap();
+        store.db.with_write_conn(|conn| {
+            conn.execute("UPDATE sagas SET status = 'closed' WHERE saga_id = ?1", [&a.saga_id])?;
+            conn.execute("UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1", [&b.saga_id])?;
+            Ok(())
+        }).unwrap();
+
+        let rows = store.list(SagaListFilter { include_closed: true, include_cancelled: true, ..Default::default() }).unwrap();
+        assert_eq!(rows.len(), 2);
     }
 }
