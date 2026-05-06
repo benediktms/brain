@@ -158,11 +158,9 @@ mod tests {
         .unwrap();
 
         let status: String = conn
-            .query_row(
-                "SELECT status FROM sagas WHERE saga_id = 's1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT status FROM sagas WHERE saga_id = 's1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(status, "planning");
     }

@@ -40,9 +40,7 @@ impl SagaGet {
                 });
                 json_response(&response)
             }
-            Ok(None) => {
-                ToolCallResult::error(format!("Saga not found: {}", params.saga_id))
-            }
+            Ok(None) => ToolCallResult::error(format!("Saga not found: {}", params.saga_id)),
             Err(e) => ToolCallResult::error(format!("Failed to fetch saga: {e}")),
         }
     }
@@ -89,11 +87,17 @@ mod tests {
     use super::{McpTool, SagaGet};
     use crate::mcp::tools::saga_create::SagaCreate;
 
-    async fn call_get(params: Value, ctx: &crate::mcp::McpContext) -> crate::mcp::protocol::ToolCallResult {
+    async fn call_get(
+        params: Value,
+        ctx: &crate::mcp::McpContext,
+    ) -> crate::mcp::protocol::ToolCallResult {
         SagaGet.call(params, ctx).await
     }
 
-    async fn call_create(params: Value, ctx: &crate::mcp::McpContext) -> crate::mcp::protocol::ToolCallResult {
+    async fn call_create(
+        params: Value,
+        ctx: &crate::mcp::McpContext,
+    ) -> crate::mcp::protocol::ToolCallResult {
         SagaCreate.call(params, ctx).await
     }
 
@@ -109,7 +113,11 @@ mod tests {
 
         // Now fetch it
         let get_result = call_get(json!({ "saga_id": saga_id }), &ctx).await;
-        assert!(get_result.is_error.is_none(), "get should succeed: {:?}", get_result.content);
+        assert!(
+            get_result.is_error.is_none(),
+            "get should succeed: {:?}",
+            get_result.content
+        );
 
         let fetched: Value = serde_json::from_str(&get_result.content[0].text).unwrap();
         assert_eq!(fetched["saga"]["title"], "Fetch Me");
@@ -122,7 +130,9 @@ mod tests {
         let (_dir, ctx) = create_test_context().await;
         let result = call_get(json!({ "saga_id": "01NONEXISTENT000000000000" }), &ctx).await;
         assert_eq!(result.is_error, Some(true));
-        assert!(result.content[0].text.contains("not found") || result.content[0].text.contains("Saga"));
+        assert!(
+            result.content[0].text.contains("not found") || result.content[0].text.contains("Saga")
+        );
     }
 
     #[tokio::test]

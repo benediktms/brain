@@ -30,11 +30,11 @@ impl SagaCreate {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let row = match ctx
-            .stores
-            .sagas
-            .create(&params.title, params.description.as_deref(), &params.actor)
-        {
+        let row = match ctx.stores.sagas.create(
+            &params.title,
+            params.description.as_deref(),
+            &params.actor,
+        ) {
             Ok(r) => r,
             Err(e) => return ToolCallResult::error(format!("Failed to create saga: {e}")),
         };
@@ -101,7 +101,10 @@ mod tests {
     use super::super::tests::create_test_context;
     use super::{McpTool, SagaCreate};
 
-    async fn call(params: Value, ctx: &crate::mcp::McpContext) -> crate::mcp::protocol::ToolCallResult {
+    async fn call(
+        params: Value,
+        ctx: &crate::mcp::McpContext,
+    ) -> crate::mcp::protocol::ToolCallResult {
         SagaCreate.call(params, ctx).await
     }
 
@@ -109,7 +112,11 @@ mod tests {
     async fn test_create_basic() {
         let (_dir, ctx) = create_test_context().await;
         let result = call(json!({ "title": "My Saga" }), &ctx).await;
-        assert!(result.is_error.is_none(), "should succeed: {:?}", result.content);
+        assert!(
+            result.is_error.is_none(),
+            "should succeed: {:?}",
+            result.content
+        );
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let saga_id = parsed["saga_id"].as_str().unwrap();
@@ -123,7 +130,11 @@ mod tests {
     #[tokio::test]
     async fn test_create_with_description() {
         let (_dir, ctx) = create_test_context().await;
-        let result = call(json!({ "title": "Described", "description": "A longer desc" }), &ctx).await;
+        let result = call(
+            json!({ "title": "Described", "description": "A longer desc" }),
+            &ctx,
+        )
+        .await;
         assert!(result.is_error.is_none());
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["saga"]["description"], "A longer desc");
