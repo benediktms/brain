@@ -85,6 +85,7 @@ mod tests {
         assert!(parsed.get("stale_hashes_prevented").is_some());
         assert!(parsed.get("queue_depth").is_some());
         assert!(parsed.get("lancedb_unoptimized_rows").is_some());
+        assert!(parsed.get("lancedb_optimize_failures").is_some());
         assert!(parsed.get("dual_store_stuck_files").is_some());
 
         // Nested latency fields

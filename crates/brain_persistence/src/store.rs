@@ -149,6 +149,12 @@ pub struct OptimizeScheduler {
     /// `link_count >= PAGERANK_MIN_LINKS`, short-circuiting the per-cycle
     /// `COUNT(*)` query thereafter. Reset on `set_db` (DB swap = stale latch).
     pagerank_links_threshold_met: AtomicBool,
+    /// Cumulative count of silent-failure events across the entire optimize
+    /// cycle — compaction (`OptimizeAction::All`), index creation
+    /// (`list_indices`, `count_rows`, `create_index`), link-count query, and
+    /// PageRank computation. Polled by the metrics layer so `brain status`
+    /// surfaces optimize-cycle health without requiring a tracing subscriber.
+    optimize_failures: AtomicU64,
 }
 
 impl OptimizeScheduler {
@@ -161,6 +167,7 @@ impl OptimizeScheduler {
             time_threshold,
             db: std::sync::Mutex::new(None),
             pagerank_links_threshold_met: AtomicBool::new(false),
+            optimize_failures: AtomicU64::new(0),
         }
     }
 
@@ -189,6 +196,24 @@ impl OptimizeScheduler {
         self.pending_mutations.load(Ordering::Relaxed)
     }
 
+    /// Test-only accessor: snapshot the `last_optimize` Instant. Used by the
+    /// regression test for `force_optimize` to confirm `OptimizeAction::All`
+    /// actually executed (the timestamp updates only on a successful
+    /// `table.optimize` call inside `run_optimize`).
+    #[cfg(test)]
+    pub async fn last_optimize_at(&self) -> Instant {
+        *self.guard.lock().await
+    }
+
+    /// Cumulative count of silent-failure events in the optimize cycle since
+    /// this scheduler was constructed. Every silent-failure path in the
+    /// optimize cycle — compaction, index creation, link count, PageRank —
+    /// increments this counter. Polled by the metrics layer so optimize-cycle
+    /// health surfaces in `brain status` rather than only in warn-level logs.
+    pub fn optimize_failure_count(&self) -> u64 {
+        self.optimize_failures.load(Ordering::Relaxed)
+    }
+
     /// Check triggers and run optimize if thresholds met. Skips if already running.
     pub async fn maybe_optimize(&self) {
         if self.pending_mutations.load(Ordering::Relaxed) == 0 {
@@ -211,43 +236,32 @@ impl OptimizeScheduler {
 
     /// Wait for any in-progress optimize, then run unconditionally.
     ///
-    /// Bypasses the PageRank link-count gate — `force_optimize` is the API used
-    /// by `brain vacuum`, daemon shutdown, and tests, all of which want PageRank
-    /// to run regardless of graph size.
+    /// Used by `brain vacuum`, daemon shutdown, and tests — all callers that
+    /// want compaction to run regardless of the in-memory `pending_mutations`
+    /// counter. The counter resets on every process restart, so gating on it
+    /// would defeat callers that operate on a freshly-opened scheduler (the
+    /// most common case for `brain vacuum`, which always runs as a fresh CLI
+    /// invocation). Also bypasses the PageRank link-count gate so PageRank
+    /// runs regardless of graph size.
     pub async fn force_optimize(&self) {
-        if self.pending_mutations.load(Ordering::Relaxed) == 0 {
-            return;
-        }
         let guard = self.guard.lock().await;
-        if self.pending_mutations.load(Ordering::Relaxed) == 0 {
-            return;
-        }
         self.run_optimize(guard, true).await;
     }
 
-    /// Run compaction unconditionally — ignores the `pending_mutations` counter.
+    /// Boot-time entry point — delegates to `force_optimize` after a tracing
+    /// marker so operators can correlate startup compaction in logs.
     ///
-    /// Use at daemon startup to compact historical fragment debt from previous
-    /// runs. The pending counter starts at 0 on restart, so `force_optimize`
-    /// and `maybe_optimize` would never trigger for pre-existing fragments.
+    /// Wired into the daemon's boot sequence to merge historical fragment debt
+    /// accumulated across prior runs. Boot-time compaction also rebuilds the
+    /// IVF-PQ index if the row threshold has been crossed and recomputes
+    /// PageRank if a SQLite DB is attached — same post-conditions as
+    /// `force_optimize`, so a daemon that's been down long enough to grow
+    /// fragment debt picks up index and link-score freshness in the same pass.
     pub async fn startup_compact(&self) {
-        let mut last_optimize = self.guard.lock().await;
-        info!("running startup compaction");
-        match self.table.optimize(OptimizeAction::All).await {
-            Ok(stats) => {
-                // Reset pending counter — startup compact subsumes any early mutations.
-                self.pending_mutations.store(0, Ordering::Relaxed);
-                *last_optimize = Instant::now();
-                info!(
-                    compaction = ?stats.compaction.as_ref().map(|c| c.fragments_removed),
-                    pruned = ?stats.prune.as_ref().map(|p| p.bytes_removed),
-                    "startup compaction complete"
-                );
-            }
-            Err(e) => {
-                warn!(error = %e, "startup compaction failed, will retry via normal optimize");
-            }
-        }
+        info!(
+            "running startup compaction — may take several minutes on a busy boot (index rebuild, PageRank recompute)"
+        );
+        self.force_optimize().await;
     }
 
     /// Check whether either trigger threshold has been reached.
@@ -260,17 +274,22 @@ impl OptimizeScheduler {
 
     /// Execute optimize. Caller must hold the guard.
     ///
-    /// `bypass_pagerank_gate`: when `true`, run PageRank regardless of the
-    /// link-count threshold. Used by `force_optimize`.
+    /// `forced`: when `true`, run PageRank regardless of the link-count
+    /// threshold. Set by `force_optimize` callers (vacuum, daemon shutdown,
+    /// startup compaction) which have explicitly accepted the O(N) cost;
+    /// `maybe_optimize` passes `false` to keep the scheduled hot path cheap.
     async fn run_optimize(
         &self,
         mut last_optimize: tokio::sync::MutexGuard<'_, Instant>,
-        bypass_pagerank_gate: bool,
+        forced: bool,
     ) {
+        // The pending_mutations counter resets on process restart, so a
+        // freshly-opened scheduler with on-disk fragment debt sees snapshot=0.
+        // Run unconditionally — `fetch_sub(0)` is a no-op and `OptimizeAction::All`
+        // is cheap when there's nothing to compact. `maybe_optimize` pre-checks
+        // pending == 0 before reaching here; `force_optimize` deliberately
+        // does not, so this path must tolerate snapshot=0.
         let snapshot = self.pending_mutations.load(Ordering::Relaxed);
-        if snapshot == 0 {
-            return;
-        }
 
         match self.table.optimize(OptimizeAction::All).await {
             Ok(stats) => {
@@ -286,6 +305,7 @@ impl OptimizeScheduler {
             }
             Err(e) => {
                 // Don't subtract — mutations still pending for next trigger
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, "LanceDB optimize failed, will retry on next trigger");
                 return;
             }
@@ -300,34 +320,44 @@ impl OptimizeScheduler {
         // sets. A monotonic latch avoids a redundant COUNT(*) once the threshold
         // is first observed — see PAGERANK_MIN_LINKS for the rationale.
         if let Some(ref db) = *self.db.lock().expect("optimize db lock") {
-            let above_threshold = if bypass_pagerank_gate
+            let (above_threshold, link_count) = if forced
                 || self.pagerank_links_threshold_met.load(Ordering::Relaxed)
             {
-                true
+                (true, 0i64)
             } else {
-                let link_count = db
-                    .with_read_conn(|conn| {
-                        conn.query_row("SELECT COUNT(*) FROM links", [], |row| row.get::<_, i64>(0))
-                            .map_err(BrainCoreError::from)
-                    })
-                    .inspect_err(|e| tracing::warn!(error = %e, "link count query failed; skipping PageRank for this cycle"))
-                    .unwrap_or(0);
-                if link_count >= PAGERANK_MIN_LINKS {
-                    self.pagerank_links_threshold_met
-                        .store(true, Ordering::Relaxed);
-                    true
-                } else {
-                    tracing::debug!(
-                        link_count,
-                        "skipping PageRank recompute: link count below threshold"
-                    );
-                    false
+                match db.with_read_conn(|conn| {
+                    conn.query_row("SELECT COUNT(*) FROM links", [], |row| row.get::<_, i64>(0))
+                        .map_err(BrainCoreError::from)
+                }) {
+                    Ok(count) => {
+                        if count >= PAGERANK_MIN_LINKS {
+                            self.pagerank_links_threshold_met
+                                .store(true, Ordering::Relaxed);
+                            (true, count)
+                        } else {
+                            tracing::debug!(
+                                link_count = count,
+                                "skipping PageRank recompute: link count below threshold"
+                            );
+                            (false, count)
+                        }
+                    }
+                    Err(e) => {
+                        self.optimize_failures.fetch_add(1, Ordering::Relaxed);
+                        tracing::warn!(error = %e, "link count query failed; skipping PageRank for this cycle");
+                        (false, 0i64)
+                    }
                 }
             };
-            if above_threshold
-                && let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank)
-            {
-                warn!(error = %e, "PageRank computation failed, will retry on next optimize");
+            if above_threshold {
+                info!(
+                    link_count,
+                    "recomputing PageRank — may take several minutes on large link graphs"
+                );
+                if let Err(e) = db.with_write_conn(crate::pagerank::compute_and_store_pagerank) {
+                    self.optimize_failures.fetch_add(1, Ordering::Relaxed);
+                    warn!(error = %e, "PageRank computation failed, will retry on next optimize");
+                }
             }
         }
     }
@@ -337,6 +367,7 @@ impl OptimizeScheduler {
         let indices = match self.table.list_indices().await {
             Ok(i) => i,
             Err(e) => {
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, "failed to list indices, skipping auto-index");
                 return;
             }
@@ -353,6 +384,7 @@ impl OptimizeScheduler {
         let count = match self.table.count_rows(None).await {
             Ok(c) => c as u64,
             Err(e) => {
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, "failed to count rows for auto-index");
                 return;
             }
@@ -373,6 +405,11 @@ impl OptimizeScheduler {
             builder = builder.num_partitions(np);
         }
 
+        info!(
+            rows = count,
+            num_partitions = ?config.num_partitions,
+            "creating IVF-PQ index — may take several minutes on large tables"
+        );
         match self
             .table
             .create_index(&["embedding"], Index::IvfPq(builder))
@@ -388,6 +425,7 @@ impl OptimizeScheduler {
                 );
             }
             Err(e) => {
+                self.optimize_failures.fetch_add(1, Ordering::Relaxed);
                 warn!(error = %e, "auto index creation failed, will retry on next optimize");
             }
         }
@@ -1180,12 +1218,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_force_optimize_noop_when_zero_pending() {
+    async fn test_force_optimize_runs_when_zero_pending() {
+        // Regression test: `force_optimize` must actually invoke
+        // `OptimizeAction::All` on the underlying table even when the
+        // in-memory `pending_mutations` counter is 0. The counter resets on
+        // every process restart, so the most common caller (`brain vacuum`,
+        // which always runs as a fresh CLI invocation) starts with pending=0
+        // — gating compaction on the counter was a real bug that allowed
+        // historical fragment debt to accumulate to tens of GB.
+        //
+        // Asserting on `pending_count` alone would be tautological — `fetch_sub(0)`
+        // cannot move the counter, so both buggy and fixed code produce
+        // `pending_count == 0` before and after. We instead assert that
+        // `last_optimize` has advanced: the timestamp updates only on a
+        // successful `table.optimize` call (see `run_optimize`), so an early
+        // return in either `force_optimize` or `run_optimize` would leave it
+        // unchanged and fail this assertion.
         let (sched, _tmp) = test_scheduler(10, Duration::from_secs(300)).await;
         assert_eq!(sched.pending_count(), 0);
 
-        // force_optimize with 0 pending → no-op, no panic
+        let before = sched.last_optimize_at().await;
+        // Sleep is required because `Instant::now()` resolution can collapse
+        // two calls within the same monotonic tick on some platforms.
+        tokio::time::sleep(Duration::from_millis(2)).await;
+
         sched.force_optimize().await;
+
+        let after = sched.last_optimize_at().await;
+        assert!(
+            after > before,
+            "force_optimize must advance last_optimize even when pending=0; \
+             before={before:?}, after={after:?}"
+        );
         assert_eq!(sched.pending_count(), 0);
     }
 

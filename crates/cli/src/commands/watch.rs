@@ -72,6 +72,12 @@ pub async fn run(
     // tasks and chunks will be re-embedded on the next EmbedPollSweep job.
     embed_poll::self_heal_if_lance_missing(pipeline.embedding_resetter(), pipeline.store()).await;
 
+    // Startup compaction: merge any historical LanceDB fragments left over
+    // from prior runs. The in-memory pending_mutations counter resets on
+    // restart, so without this call `maybe_optimize` would never trigger
+    // for pre-existing fragment debt — fragments would accumulate forever.
+    pipeline.store().optimizer().startup_compact().await;
+
     // Set up file watcher
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     let _watcher = brain_lib::watcher::BrainWatcher::new(&note_dirs, tx)?;
@@ -107,11 +113,17 @@ pub async fn run(
 
     // Event loop: batch-drain, coalesce, and dispatch
     let shutdown_reason = loop {
-        // Update queue depth + lancedb pending rows at top of each iteration
+        // Update queue depth + lancedb pending rows + compaction failure
+        // counter at top of each iteration. Polling the failure counter
+        // (incremented inside run_optimize on Err) surfaces silent compaction
+        // failures via `brain status` rather than only in warn-level logs.
         pipeline.metrics().set_queue_depth(rx.len() as u64);
         pipeline
             .metrics()
             .set_lancedb_unoptimized_rows(pipeline.store().optimizer().pending_count());
+        pipeline
+            .metrics()
+            .set_lancedb_optimize_failures(pipeline.store().optimizer().optimize_failure_count());
 
         tokio::select! {
             event = rx.recv() => {
@@ -396,6 +408,13 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
     // constructed yet (step 3 below).
     embed_poll::self_heal_if_lance_missing(&shared_db, &shared_store).await;
 
+    // Startup compaction: merge historical fragments accumulated from prior
+    // daemon runs. Multi-brain mode shares one Store, so a single call covers
+    // every brain. Without this call the pending_mutations counter (which
+    // resets on restart) would never reach the threshold for pre-existing
+    // on-disk fragment debt.
+    shared_store.optimizer().startup_compact().await;
+
     // ── 3. Initialise per-brain pipelines ────────────────────────────────
     let mut brains: HashMap<String, BrainInstance> = HashMap::new();
 
@@ -610,6 +629,30 @@ pub async fn run_multi() -> Result<ShutdownOutcome> {
 
     // ── 7. Event loop ─────────────────────────────────────────────────────
     let shutdown_reason = loop {
+        // Mirror the single-brain metrics-polling block: update queue depth,
+        // lancedb pending rows, and compaction failure counter at the top of
+        // each iteration. In multi-brain mode the optimizer state is shared
+        // across all brains (owned by shared_store), so we read once and write
+        // the same values into every per-brain Metrics object. This ensures
+        // `brain status` for any brain reflects the correct compaction health
+        // picture regardless of which brain is queried.
+        {
+            let pending = shared_store.optimizer().pending_count();
+            let failures = shared_store.optimizer().optimize_failure_count();
+            let depth = rx.len() as u64;
+            for instance in brains.values() {
+                instance.pipeline.metrics().set_queue_depth(depth);
+                instance
+                    .pipeline
+                    .metrics()
+                    .set_lancedb_unoptimized_rows(pending);
+                instance
+                    .pipeline
+                    .metrics()
+                    .set_lancedb_optimize_failures(failures);
+            }
+        }
+
         tokio::select! {
             event = rx.recv() => {
                 match event {
