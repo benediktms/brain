@@ -408,6 +408,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 SagasAction::Stats { saga_id } => {
                     commands::sagas::stats(&ctx, &saga_id)?;
                 }
+                SagasAction::Cancel { saga_id, cascade } => {
+                    commands::sagas::cancel(&ctx, &saga_id, cascade)?;
+                }
             }
         }
         Command::Tasks {

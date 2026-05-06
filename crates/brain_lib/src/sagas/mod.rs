@@ -1,3 +1,7 @@
+use brain_persistence::db::sagas::events::SagaCancelledPayload;
+use brain_persistence::db::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
+use brain_persistence::db::tasks::projections::apply_event;
+
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::SagaListFilter;
 use brain_persistence::db::sagas::events::{
@@ -283,6 +287,91 @@ impl SagaStore {
                 counts,
                 label_histogram,
                 brains,
+            })
+        })
+    }
+
+    /// Cancel a saga, optionally cascade-cancelling non-terminal member tasks.
+    ///
+    /// Emits `SagaCancelled`. With `cascade = true`, any member task not in
+    /// `done` or `cancelled` is transitioned via the task event path.
+    pub fn cancel(&self, saga_id: &str, cascade: bool, actor: &str) -> Result<SagaRow> {
+        self.db.with_write_conn(|conn| {
+            let row = queries::get_saga(conn, saga_id)?.ok_or_else(|| {
+                crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}"))
+            })?;
+
+            let from: SagaStatus = row.status.parse().map_err(|_| {
+                crate::error::BrainCoreError::Database(format!(
+                    "unknown saga status: {}",
+                    row.status
+                ))
+            })?;
+            if matches!(from, SagaStatus::Cancelled) {
+                return Err(crate::error::BrainCoreError::Parse(format!(
+                    "saga '{saga_id}' is already cancelled"
+                )));
+            }
+            validate_transition(from, SagaStatus::Cancelled)?;
+
+            let tx = conn.unchecked_transaction()?;
+
+            queries::cancel_saga(conn, saga_id)?;
+
+            let event = SagaEvent::new(
+                saga_id,
+                actor,
+                SagaEventType::SagaCancelled,
+                &SagaCancelledPayload { cascade },
+            );
+            queries::insert_saga_event(
+                conn,
+                &SagaEventInsert {
+                    event_id: &event.event_id,
+                    saga_id: &event.saga_id,
+                    event_type: &serde_json::to_string(&event.event_type)
+                        .expect("SagaEventType serialization is infallible"),
+                    timestamp: event.timestamp,
+                    actor: &event.actor,
+                    payload: &event.payload.to_string(),
+                },
+            )?;
+
+            if cascade {
+                let task_ids = queries::list_saga_task_ids(conn, saga_id)?;
+                for task_id in task_ids {
+                    let task_status: Option<String> = conn
+                        .query_row(
+                            "SELECT status FROM tasks WHERE task_id = ?1",
+                            [&task_id],
+                            |row| row.get(0),
+                        )
+                        .ok();
+                    let status = task_status.as_deref().unwrap_or("");
+                    if status == "done" || status == "cancelled" {
+                        continue;
+                    }
+                    let brain_id: String = conn
+                        .query_row(
+                            "SELECT COALESCE(brain_id, '') FROM tasks WHERE task_id = ?1",
+                            [&task_id],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or_default();
+                    let ev = TaskEvent::from_payload(
+                        &task_id,
+                        actor,
+                        StatusChangedPayload {
+                            new_status: TaskStatus::Cancelled,
+                        },
+                    );
+                    apply_event(conn, &ev, &brain_id)?;
+                }
+            }
+
+            tx.commit()?;
+            queries::get_saga(conn, saga_id)?.ok_or_else(|| {
+                crate::error::BrainCoreError::Database("saga disappeared after cancel".into())
             })
         })
     }

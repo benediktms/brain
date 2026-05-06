@@ -109,4 +109,14 @@ pub(crate) enum SagasAction {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
     },
+
+    /// Cancel a saga (optionally cascade-cancels member tasks)
+    Cancel {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+
+        /// Also cancel non-terminal member tasks
+        #[arg(long)]
+        cascade: bool,
+    },
 }

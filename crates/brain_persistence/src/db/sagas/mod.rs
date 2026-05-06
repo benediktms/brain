@@ -7,6 +7,7 @@ pub use events::{
 };
 pub use queries::{
     BrainSummary, LabelCount, SagaEventInsert, SagaListFilter, SagaRow, SagaStatsRow,
-    brains_for_saga, close_saga, insert_saga_tasks, list_saga_member_task_ids, list_saga_task_ids,
-    remove_saga_tasks, reopen_saga, saga_has_task, saga_label_histogram, saga_stats,
+    brains_for_saga, cancel_saga, close_saga, insert_saga_tasks, list_saga_member_task_ids,
+    list_saga_task_ids, remove_saga_tasks, reopen_saga, saga_has_task, saga_label_histogram,
+    saga_stats,
 };
