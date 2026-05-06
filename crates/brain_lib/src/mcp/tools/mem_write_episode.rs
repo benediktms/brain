@@ -488,14 +488,7 @@ mod tests {
 
         let reflection_id = ctx
             .stores
-            .store_reflection(
-                "title",
-                "content",
-                &[],
-                &[],
-                1.0,
-                ctx.brain_id(),
-            )
+            .store_reflection("title", "content", &[], &[], 1.0, ctx.brain_id())
             .expect("seed reflection");
 
         let result = registry
@@ -512,10 +505,7 @@ mod tests {
             .await;
         assert_eq!(result.is_error, Some(true));
         let text = &result.content[0].text;
-        assert!(
-            text.contains("must be an episode"),
-            "got: {text}"
-        );
+        assert!(text.contains("must be an episode"), "got: {text}");
     }
 
     #[tokio::test]
