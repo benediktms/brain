@@ -26,6 +26,7 @@ pub mod plugin;
 pub mod provider;
 pub mod records;
 pub mod registry;
+pub mod sagas;
 pub mod reindex;
 pub mod snapshots;
 pub mod status;

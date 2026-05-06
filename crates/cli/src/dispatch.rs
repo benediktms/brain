@@ -347,6 +347,17 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 },
             }
         }
+        Command::Sagas { json, action } => {
+            let ctx = commands::sagas::SagaCtx::new(&cli.sqlite_db, json)?;
+            match action {
+                SagasAction::Create { title, description } => {
+                    commands::sagas::create(&ctx, &title, description.as_deref())?;
+                }
+                SagasAction::Show { saga_id } => {
+                    commands::sagas::show(&ctx, &saga_id)?;
+                }
+            }
+        }
         Command::Tasks {
             output: output_arg,
             json,

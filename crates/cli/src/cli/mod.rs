@@ -6,6 +6,7 @@ mod memory;
 mod plans;
 mod record_common;
 mod records;
+mod sagas;
 mod snapshots;
 mod tags;
 mod tasks;
@@ -22,6 +23,7 @@ pub(crate) use memory::*;
 pub(crate) use plans::*;
 pub(crate) use record_common::*;
 pub(crate) use records::*;
+pub(crate) use sagas::*;
 pub(crate) use snapshots::*;
 pub(crate) use tags::*;
 pub(crate) use tasks::*;
@@ -323,6 +325,17 @@ pub(crate) enum Command {
     Plugin {
         #[command(subcommand)]
         action: PluginAction,
+    },
+
+    /// Manage sagas (cross-brain task groupings)
+    #[command(visible_alias = "saga")]
+    Sagas {
+        /// Output as JSON
+        #[arg(long, global = true)]
+        json: bool,
+
+        #[command(subcommand)]
+        action: SagasAction,
     },
 
     /// Manage brain tasks
