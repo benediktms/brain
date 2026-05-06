@@ -99,6 +99,45 @@ pub fn list_sagas(conn: &Connection, filter: &SagaListFilter) -> Result<Vec<Saga
     Ok(rows)
 }
 
+/// Update a saga's title and/or description. At least one field must be Some.
+/// Always bumps `updated_at`.
+pub fn update_saga(
+    conn: &Connection,
+    saga_id: &str,
+    title: Option<&str>,
+    description: Option<&str>,
+) -> Result<SagaRow> {
+    let ts = now_ts();
+    match (title, description) {
+        (Some(t), Some(d)) => {
+            conn.execute(
+                "UPDATE sagas SET title = ?1, description = ?2, updated_at = ?3 WHERE saga_id = ?4",
+                params![t, d, ts, saga_id],
+            )?;
+        }
+        (Some(t), None) => {
+            conn.execute(
+                "UPDATE sagas SET title = ?1, updated_at = ?2 WHERE saga_id = ?3",
+                params![t, ts, saga_id],
+            )?;
+        }
+        (None, Some(d)) => {
+            conn.execute(
+                "UPDATE sagas SET description = ?1, updated_at = ?2 WHERE saga_id = ?3",
+                params![d, ts, saga_id],
+            )?;
+        }
+        (None, None) => {
+            return Err(crate::error::BrainCoreError::Database(
+                "update_saga requires at least one of title or description".into(),
+            ));
+        }
+    }
+    get_saga(conn, saga_id)?.ok_or_else(|| {
+        crate::error::BrainCoreError::Database("saga not found after update".into())
+    })
+}
+
 /// Fetch a saga row by ID.
 pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {
     let row = conn

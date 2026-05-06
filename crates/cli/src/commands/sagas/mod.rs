@@ -90,6 +90,43 @@ pub fn list(
     Ok(())
 }
 
+pub fn update(
+    ctx: &SagaCtx,
+    saga_id: &str,
+    title: Option<String>,
+    description: Option<String>,
+) -> Result<()> {
+    if title.is_none() && description.is_none() {
+        anyhow::bail!("at least one of --title or --description is required");
+    }
+    let row = ctx
+        .store
+        .update(saga_id, title.as_deref(), description.as_deref(), "cli")?;
+    if ctx.json {
+        let out = json!({
+            "saga_id": row.saga_id,
+            "saga": {
+                "saga_id": row.saga_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "closed_at": row.closed_at,
+            }
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Updated saga {}", row.saga_id);
+        println!("  Title:  {}", row.title);
+        println!("  Status: {}", row.status);
+        if let Some(desc) = &row.description {
+            println!("  Desc:   {desc}");
+        }
+    }
+    Ok(())
+}
+
 pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx
         .store

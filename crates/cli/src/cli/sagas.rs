@@ -37,4 +37,18 @@ pub(crate) enum SagasAction {
         #[arg(long)]
         containing_brain: Option<String>,
     },
+
+    /// Update a saga's title and/or description
+    Update {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+
+        /// New title (non-empty)
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
+    },
 }

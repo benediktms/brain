@@ -370,6 +370,13 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         containing_brain,
                     )?;
                 }
+                SagasAction::Update {
+                    saga_id,
+                    title,
+                    description,
+                } => {
+                    commands::sagas::update(&ctx, &saga_id, title, description)?;
+                }
             }
         }
         Command::Tasks {

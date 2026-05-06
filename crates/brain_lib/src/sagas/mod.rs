@@ -58,6 +58,55 @@ impl SagaStore {
             .with_read_conn(move |conn| queries::list_sagas(conn, &filter))
     }
 
+    /// Update a saga's title and/or description. At least one must be provided.
+    /// Allowed in any status. Emits SagaUpdated event.
+    pub fn update(
+        &self,
+        saga_id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        actor: &str,
+    ) -> Result<SagaRow> {
+        if title.is_none() && description.is_none() {
+            return Err(crate::error::BrainCoreError::Database(
+                "update requires at least one of title or description".into(),
+            ));
+        }
+        if let Some(t) = title {
+            if t.trim().is_empty() {
+                return Err(crate::error::BrainCoreError::Database(
+                    "title must not be empty".into(),
+                ));
+            }
+        }
+        let row = self.db.with_write_conn(|conn| {
+            let row = queries::update_saga(conn, saga_id, title, description)?;
+
+            let payload = serde_json::json!({ "title": title, "description": description });
+            let event = SagaEvent::new(
+                saga_id,
+                actor,
+                SagaEventType::SagaUpdated,
+                &payload,
+            );
+            conn.execute(
+                "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    event.event_id,
+                    event.saga_id,
+                    serde_json::to_string(&event.event_type).unwrap_or_default(),
+                    event.timestamp,
+                    event.actor,
+                    event.payload.to_string(),
+                ],
+            )?;
+
+            Ok(row)
+        })?;
+        Ok(row)
+    }
+
     #[cfg(test)]
     pub(crate) fn db(&self) -> &Db {
         &self.db
@@ -153,6 +202,51 @@ mod tests {
 
         let rows = store.list(SagaListFilter { include_closed: true, ..Default::default() }).unwrap();
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn update_title_only() {
+        let store = in_memory_store();
+        let created = store.create("Original", None, "test").unwrap();
+        let updated = store.update(&created.saga_id, Some("Renamed"), None, "test").unwrap();
+        assert_eq!(updated.title, "Renamed");
+        assert!(updated.updated_at >= created.updated_at);
+    }
+
+    #[test]
+    fn update_description_only() {
+        let store = in_memory_store();
+        let created = store.create("Title", None, "test").unwrap();
+        let updated = store.update(&created.saga_id, None, Some("new desc"), "test").unwrap();
+        assert_eq!(updated.description.as_deref(), Some("new desc"));
+        assert_eq!(updated.title, "Title");
+    }
+
+    #[test]
+    fn update_both_fields() {
+        let store = in_memory_store();
+        let created = store.create("Old", Some("old desc"), "test").unwrap();
+        let updated = store
+            .update(&created.saga_id, Some("New"), Some("new desc"), "test")
+            .unwrap();
+        assert_eq!(updated.title, "New");
+        assert_eq!(updated.description.as_deref(), Some("new desc"));
+    }
+
+    #[test]
+    fn update_no_fields_errors() {
+        let store = in_memory_store();
+        let created = store.create("Saga", None, "test").unwrap();
+        let result = store.update(&created.saga_id, None, None, "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn update_empty_title_errors() {
+        let store = in_memory_store();
+        let created = store.create("Saga", None, "test").unwrap();
+        let result = store.update(&created.saga_id, Some("  "), None, "test");
+        assert!(result.is_err());
     }
 
     #[test]
