@@ -3,6 +3,16 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::error::Result;
 use crate::utils::now_ts;
 
+/// A saga event row for insertion.
+pub struct SagaEventInsert<'a> {
+    pub event_id: &'a str,
+    pub saga_id: &'a str,
+    pub event_type: &'a str,
+    pub timestamp: i64,
+    pub actor: &'a str,
+    pub payload: &'a str,
+}
+
 /// A fully-projected saga row from the `sagas` table.
 #[derive(Debug, Clone)]
 pub struct SagaRow {
@@ -43,6 +53,23 @@ pub fn insert_saga(
     get_saga(conn, saga_id)?.ok_or_else(|| {
         crate::error::BrainCoreError::Database("saga disappeared after insert".into())
     })
+}
+
+/// Insert a saga event row into `saga_events`.
+pub fn insert_saga_event(conn: &Connection, ev: &SagaEventInsert<'_>) -> Result<()> {
+    conn.execute(
+        "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            ev.event_id,
+            ev.saga_id,
+            ev.event_type,
+            ev.timestamp,
+            ev.actor,
+            ev.payload
+        ],
+    )?;
+    Ok(())
 }
 
 /// Fetch a saga row by ID.

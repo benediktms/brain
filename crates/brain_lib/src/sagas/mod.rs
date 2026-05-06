@@ -1,6 +1,9 @@
+pub mod status;
+pub use status::SagaStatus;
+
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::events::{SagaEvent, SagaEventType, new_saga_id};
-use brain_persistence::db::sagas::queries::{self, SagaRow};
+use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaRow};
 
 use crate::error::Result;
 
@@ -26,17 +29,16 @@ impl SagaStore {
                 SagaEventType::SagaCreated,
                 &serde_json::json!({ "title": title, "description": description }),
             );
-            conn.execute(
-                "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    event.event_id,
-                    event.saga_id,
-                    serde_json::to_string(&event.event_type).unwrap_or_default(),
-                    event.timestamp,
-                    event.actor,
-                    event.payload.to_string(),
-                ],
+            queries::insert_saga_event(
+                conn,
+                &SagaEventInsert {
+                    event_id: &event.event_id,
+                    saga_id: &event.saga_id,
+                    event_type: &serde_json::to_string(&event.event_type).unwrap_or_default(),
+                    timestamp: event.timestamp,
+                    actor: &event.actor,
+                    payload: &event.payload.to_string(),
+                },
             )?;
 
             Ok(row)
