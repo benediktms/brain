@@ -121,9 +121,9 @@ pub async fn run(
         pipeline
             .metrics()
             .set_lancedb_unoptimized_rows(pipeline.store().optimizer().pending_count());
-        pipeline.metrics().set_lancedb_optimize_failures(
-            pipeline.store().optimizer().optimize_failure_count(),
-        );
+        pipeline
+            .metrics()
+            .set_lancedb_optimize_failures(pipeline.store().optimizer().optimize_failure_count());
 
         tokio::select! {
             event = rx.recv() => {
