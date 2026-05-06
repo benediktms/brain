@@ -117,6 +117,7 @@ impl SagaStore {
         Ok(row)
     }
 
+
     /// Fetch a saga by ID. Returns None if not found.
     pub fn get(&self, saga_id: &str) -> Result<Option<SagaRow>> {
         self.db
