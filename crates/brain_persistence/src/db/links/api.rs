@@ -520,7 +520,12 @@ mod tests {
 
     #[test]
     fn all_dag_kinds_enforce_cycle_check() {
-        for dag_kind in [EdgeKind::ParentOf, EdgeKind::Blocks, EdgeKind::Supersedes] {
+        for dag_kind in [
+            EdgeKind::ParentOf,
+            EdgeKind::Blocks,
+            EdgeKind::Supersedes,
+            EdgeKind::Continues,
+        ] {
             let conn = open_db();
             add_link_checked(&conn, task("A"), task("B"), dag_kind).unwrap();
             let result = add_link_checked(&conn, task("B"), task("A"), dag_kind);

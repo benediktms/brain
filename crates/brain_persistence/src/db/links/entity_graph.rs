@@ -90,6 +90,7 @@ pub enum EdgeKind {
     SeeAlso,
     Supersedes,
     Contradicts,
+    Continues,
 }
 
 impl EdgeKind {
@@ -103,8 +104,14 @@ impl EdgeKind {
     /// - `Blocks` — circular blocking is a deadlock by definition.
     /// - `Supersedes` — A→B→A means "A supersedes B supersedes A", which is semantically
     ///   incoherent; cycles must be rejected.
+    /// - `Continues` — episodes are write-once and time-ordered; B continues A
+    ///   means A was written before B. A cycle would imply an episode continues
+    ///   one written after itself, which is incoherent.
     pub fn requires_dag(&self) -> bool {
-        matches!(self, Self::ParentOf | Self::Blocks | Self::Supersedes)
+        matches!(
+            self,
+            Self::ParentOf | Self::Blocks | Self::Supersedes | Self::Continues
+        )
     }
 }
 
@@ -148,6 +155,7 @@ pub fn edge_kind_str(k: EdgeKind) -> &'static str {
         EdgeKind::SeeAlso => "see_also",
         EdgeKind::Supersedes => "supersedes",
         EdgeKind::Contradicts => "contradicts",
+        EdgeKind::Continues => "continues",
     }
 }
 
@@ -174,6 +182,7 @@ pub fn edge_kind_from_str(s: &str) -> Option<EdgeKind> {
         "see_also" => Some(EdgeKind::SeeAlso),
         "supersedes" => Some(EdgeKind::Supersedes),
         "contradicts" => Some(EdgeKind::Contradicts),
+        "continues" => Some(EdgeKind::Continues),
         _ => None,
     }
 }
@@ -212,6 +221,7 @@ mod tests {
             (EdgeKind::SeeAlso, "\"see_also\""),
             (EdgeKind::Supersedes, "\"supersedes\""),
             (EdgeKind::Contradicts, "\"contradicts\""),
+            (EdgeKind::Continues, "\"continues\""),
         ];
         for (variant, expected_json) in cases {
             let serialized = serde_json::to_string(&variant).unwrap();
@@ -228,6 +238,10 @@ mod tests {
         assert!(
             EdgeKind::Supersedes.requires_dag(),
             "Supersedes must be DAG — A→B→A is semantically incoherent"
+        );
+        assert!(
+            EdgeKind::Continues.requires_dag(),
+            "Continues must be DAG — episodes are write-once and time-ordered"
         );
         assert!(!EdgeKind::Covers.requires_dag(), "Covers is not DAG");
         assert!(!EdgeKind::RelatesTo.requires_dag(), "RelatesTo is not DAG");
