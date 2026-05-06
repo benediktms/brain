@@ -705,6 +705,9 @@ mod tests {
         assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));
         assert!(names.contains(&"jobs.status"));
+        assert!(names.contains(&"sagas.create"));
+        assert!(names.contains(&"sagas.get"));
+        assert!(names.contains(&"sagas.remove_tasks"));
         assert!(!names.contains(&"tasks.create_remote"));
         assert!(names.contains(&"sagas.create"));
         assert!(names.contains(&"sagas.get"));
