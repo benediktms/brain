@@ -154,13 +154,13 @@ pub fn update_saga(
             )?;
         }
         (None, None) => {
-            return Err(crate::error::BrainCoreError::Database(
+            return Err(crate::error::BrainCoreError::Parse(
                 "update_saga: at least one field must be provided".into(),
             ));
         }
     }
     get_saga(conn, saga_id)?.ok_or_else(|| {
-        crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}"))
+        crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())
     })
 }
 
