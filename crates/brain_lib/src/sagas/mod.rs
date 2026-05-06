@@ -3,7 +3,9 @@ pub use status::SagaStatus;
 
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::SagaListFilter;
-use brain_persistence::db::sagas::events::{SagaEvent, SagaEventType, new_saga_id};
+use brain_persistence::db::sagas::events::{
+    SagaEvent, SagaEventType, SagaUpdatedPayload, new_saga_id,
+};
 use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaRow};
 
 use crate::error::Result;
@@ -45,6 +47,68 @@ impl SagaStore {
                     timestamp: event.timestamp,
                     actor: &event.actor,
                     payload: &serde_json::to_string(&event.payload)?,
+                },
+            )?;
+
+            Ok(row)
+        })?;
+        Ok(row)
+    }
+
+    /// Update title and/or description. At least one field required. Allowed in any status.
+    ///
+    /// `description` uses `Option<Option<&str>>`:
+    /// - `None` = don't touch description
+    /// - `Some(None)` = set description to NULL
+    /// - `Some(Some("text"))` = set description to "text"
+    pub fn update(
+        &self,
+        saga_id: &str,
+        title: Option<&str>,
+        description: Option<Option<&str>>,
+        actor: &str,
+    ) -> Result<SagaRow> {
+        if title.is_none() && description.is_none() {
+            return Err(crate::error::BrainCoreError::Parse(
+                "update: at least one of title or description must be provided".into(),
+            ));
+        }
+        let title = match title {
+            Some(t) => {
+                let trimmed = t.trim();
+                if trimmed.is_empty() {
+                    return Err(crate::error::BrainCoreError::Parse(
+                        "update: title must not be empty".into(),
+                    ));
+                }
+                Some(trimmed)
+            }
+            None => None,
+        };
+        // Canonicalize empty description to NULL so the store is consistent.
+        let description = description.map(|d| match d {
+            Some("") => None,
+            other => other,
+        });
+
+        let row = self.db.with_write_conn(|conn| {
+            let row = queries::update_saga(conn, saga_id, title, description)?;
+
+            let payload = SagaUpdatedPayload {
+                title: title.map(|t| t.to_string()),
+                description: description.map(|d| d.map(|s| s.to_string())),
+            };
+            let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaUpdated, &payload);
+            queries::insert_saga_event(
+                conn,
+                &SagaEventInsert {
+                    event_id: &event.event_id,
+                    saga_id: &event.saga_id,
+                    event_type: &serde_json::to_string(&event.event_type)
+                        .expect("SagaEventType serialization is infallible"),
+                    timestamp: event.timestamp,
+                    actor: &event.actor,
+                    payload: &event.payload.to_string(),
                 },
             )?;
 
@@ -455,5 +519,115 @@ mod tests {
             })
             .unwrap();
         assert_eq!(rows_all.len(), 2);
+    }
+
+    // T1: update on non-existent saga returns error containing "not found"
+    #[test]
+    fn update_nonexistent_saga_returns_not_found() {
+        let store = in_memory_store();
+        let err = store
+            .update("01NONEXISTENTSAGA0000000", None, Some(Some("x")), "actor")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not found"), "expected 'not found' in: {msg}");
+    }
+
+    // T2: update on closed/cancelled saga succeeds (metadata edit is lifecycle-independent)
+    #[test]
+    fn update_on_closed_saga_succeeds() {
+        let store = in_memory_store();
+        let row = store.create("Active", None, "test").unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
+                    [&row.saga_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let updated = store
+            .update(&row.saga_id, Some("Closed but renamed"), None, "actor")
+            .unwrap();
+        assert_eq!(updated.title, "Closed but renamed");
+        assert_eq!(updated.status, "closed");
+    }
+
+    // T3: clear-description test — create with desc, update with Some(None), assert NULL
+    #[test]
+    fn update_clears_description_when_some_none() {
+        let store = in_memory_store();
+        let row = store.create("Has Desc", Some("original"), "test").unwrap();
+        assert!(row.description.is_some());
+        let updated = store
+            .update(&row.saga_id, None, Some(None), "actor")
+            .unwrap();
+        assert!(
+            updated.description.is_none(),
+            "description should be NULL after clear"
+        );
+    }
+
+    // T4: after update, saga_events has one row with event_type saga_updated and new title
+    #[test]
+    fn update_writes_saga_updated_event() {
+        let store = in_memory_store();
+        let row = store.create("Before", None, "test").unwrap();
+        store
+            .update(&row.saga_id, Some("After"), None, "actor")
+            .unwrap();
+        let (event_type, payload): (String, String) = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT event_type, payload FROM saga_events WHERE saga_id = ?1 AND event_type LIKE '%updated%'",
+                    [&row.saga_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert!(event_type.contains("saga_updated"), "got: {event_type}");
+        assert!(
+            payload.contains("After"),
+            "payload should contain new title, got: {payload}"
+        );
+    }
+
+    // T5: whitespace-only title is rejected
+    #[test]
+    fn update_rejects_whitespace_only_title() {
+        let store = in_memory_store();
+        let row = store.create("Valid", None, "test").unwrap();
+        assert!(
+            store
+                .update(&row.saga_id, Some("   "), None, "actor")
+                .is_err()
+        );
+        assert!(
+            store
+                .update(&row.saga_id, Some("\t\n"), None, "actor")
+                .is_err()
+        );
+    }
+
+    // T6: updated_at is strictly greater than created_at after update.
+    // now_ts() has second granularity, so we sleep 1100 ms to guarantee the next second.
+    #[test]
+    fn update_bumps_updated_at_strictly() {
+        let store = in_memory_store();
+        let row = store.create("Timing", None, "test").unwrap();
+        let created_at = row.created_at;
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let updated = store
+            .update(&row.saga_id, Some("Timing Updated"), None, "actor")
+            .unwrap();
+        assert!(
+            updated.updated_at > created_at,
+            "updated_at ({}) must be strictly greater than created_at ({})",
+            updated.updated_at,
+            created_at
+        );
     }
 }
