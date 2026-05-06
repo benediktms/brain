@@ -163,6 +163,38 @@ pub fn update_saga(
         .ok_or_else(|| crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()))
 }
 
+/// Close a saga: set status = 'closed', closed_at = now, bump updated_at.
+/// Returns an error if the saga is not in 'open' status.
+pub fn close_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
+    let ts = now_ts();
+    let rows_changed = conn.execute(
+        "UPDATE sagas SET status = 'closed', closed_at = ?1, updated_at = ?1
+         WHERE saga_id = ?2 AND status = 'open'",
+        rusqlite::params![ts, saga_id],
+    )?;
+    if rows_changed == 0 {
+        let existing = get_saga(conn, saga_id)?;
+        return Err(match existing {
+            None => crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}")),
+            Some(row) => crate::error::BrainCoreError::Database(format!(
+                "saga cannot be closed from status '{}'; only 'open' sagas can be closed",
+                row.status
+            )),
+        });
+    }
+    get_saga(conn, saga_id)?
+        .ok_or_else(|| crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}")))
+}
+
+/// List all member task IDs for a saga.
+pub fn list_saga_member_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY added_at ASC")?;
+    let ids = stmt
+        .query_map([saga_id], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<String>, _>>()?;
+    Ok(ids)
+}
 
 /// Fetch a saga row by ID.
 pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {

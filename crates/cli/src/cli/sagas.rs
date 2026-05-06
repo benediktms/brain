@@ -72,6 +72,16 @@ pub(crate) enum SagasAction {
         saga_id: String,
     },
 
+    /// Close a saga (must be in 'open' status)
+    Close {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+
+        /// Also close all member tasks
+        #[arg(long)]
+        cascade: bool,
+    },
+
     /// Remove tasks from a saga (idempotent)
     Remove {
         /// Saga ID (bare 26-char ULID)

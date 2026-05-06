@@ -1,21 +1,20 @@
-pub mod lifecycle;
-pub mod status;
-pub use lifecycle::validate_transition;
-pub use status::SagaStatus;
-
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::SagaListFilter;
 use brain_persistence::db::sagas::events::{
-    SagaEvent, SagaEventType, SagaTaskPayload, SagaUpdatedPayload, new_saga_id,
+    SagaClosedPayload, SagaEvent, SagaEventType, SagaTaskPayload, SagaUpdatedPayload, new_saga_id,
 };
-use brain_persistence::db::sagas::queries::{self, SagaEventInsert, SagaRow};
+use brain_persistence::db::sagas::queries::{
+    self, SagaEventInsert, SagaRow, close_saga, list_saga_member_task_ids,
+};
 use brain_persistence::db::tasks::queries::resolve_task_id_scoped;
 use brain_persistence::error::BrainCoreError;
 
 use crate::error::Result;
 
 pub mod lifecycle;
-pub use lifecycle::{SagaStatus, validate_transition};
+pub mod status;
+pub use lifecycle::validate_transition;
+pub use status::SagaStatus;
 
 /// Store for saga lifecycle operations. Registry-level: not scoped to any brain.
 pub struct SagaStore {
@@ -122,6 +121,57 @@ impl SagaStore {
             Ok(row)
         })?;
         Ok(row)
+    }
+
+    /// Close a saga. Only `open` sagas can be closed.
+    ///
+    /// Returns `(row, member_task_ids)`. The caller is responsible for
+    /// cascade-closing member tasks when `cascade = true`.
+    pub fn close(
+        &self,
+        saga_id: &str,
+        cascade: bool,
+        actor: &str,
+    ) -> Result<(SagaRow, Vec<String>)> {
+        let (row, member_ids) = self.db.with_write_conn(|conn| {
+            let current = queries::get_saga(conn, saga_id)?.ok_or_else(|| {
+                crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}"))
+            })?;
+
+            let from: SagaStatus = current.status.parse().map_err(|_| {
+                crate::error::BrainCoreError::Database(format!(
+                    "unknown saga status: {}",
+                    current.status
+                ))
+            })?;
+
+            validate_transition(from, SagaStatus::Closed)?;
+
+            let member_ids = list_saga_member_task_ids(conn, saga_id)?;
+            let row = close_saga(conn, saga_id)?;
+
+            let event = SagaEvent::new(
+                saga_id,
+                actor,
+                SagaEventType::SagaClosed,
+                &SagaClosedPayload { cascade },
+            );
+            queries::insert_saga_event(
+                conn,
+                &SagaEventInsert {
+                    event_id: &event.event_id,
+                    saga_id: &event.saga_id,
+                    event_type: &serde_json::to_string(&event.event_type)
+                        .expect("SagaEventType serialization is infallible"),
+                    timestamp: event.timestamp,
+                    actor: &event.actor,
+                    payload: &event.payload.to_string(),
+                },
+            )?;
+
+            Ok((row, member_ids))
+        })?;
+        Ok((row, member_ids))
     }
 
     /// Fetch a saga by ID. Returns None if not found.
@@ -496,7 +546,9 @@ mod tests {
     fn update_title_only() {
         let store = in_memory_store();
         let created = store.create("Original", None, "test").unwrap();
-        let updated = store.update(&created.saga_id, Some("Renamed"), None, "test").unwrap();
+        let updated = store
+            .update(&created.saga_id, Some("Renamed"), None, "test")
+            .unwrap();
         assert_eq!(updated.title, "Renamed");
         assert!(updated.updated_at >= created.updated_at);
     }
@@ -505,7 +557,9 @@ mod tests {
     fn update_description_only() {
         let store = in_memory_store();
         let created = store.create("Title", None, "test").unwrap();
-        let updated = store.update(&created.saga_id, None, Some("new desc"), "test").unwrap();
+        let updated = store
+            .update(&created.saga_id, None, Some(Some("new desc")), "test")
+            .unwrap();
         assert_eq!(updated.description.as_deref(), Some("new desc"));
         assert_eq!(updated.title, "Title");
     }
@@ -515,7 +569,12 @@ mod tests {
         let store = in_memory_store();
         let created = store.create("Old", Some("old desc"), "test").unwrap();
         let updated = store
-            .update(&created.saga_id, Some("New"), Some("new desc"), "test")
+            .update(
+                &created.saga_id,
+                Some("New"),
+                Some(Some("new desc")),
+                "test",
+            )
             .unwrap();
         assert_eq!(updated.title, "New");
         assert_eq!(updated.description.as_deref(), Some("new desc"));
