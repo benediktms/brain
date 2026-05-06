@@ -27,6 +27,13 @@ use crate::error::Result;
 ///   ordering semantics that do not imply same-cohort membership.
 /// - `contradicts` — consolidating episodes whose authors signalled
 ///   distinction would silently merge contradictory content.
+///
+/// This constant is the interim source of truth for the consolidation
+/// cohort. When a per-variant `EdgeKind::is_consolidation_cohort()`
+/// method is introduced, this list should be derived from it (or removed
+/// entirely in favour of a filter closure at the call site) so that the
+/// inclusion criterion lives next to the variant definition rather than
+/// in this file.
 const TRAVERSAL_EDGE_KINDS: [EdgeKind; 3] =
     [EdgeKind::RelatesTo, EdgeKind::SeeAlso, EdgeKind::Continues];
 
