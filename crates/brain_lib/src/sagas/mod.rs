@@ -304,12 +304,8 @@ impl SagaStore {
                 let payload = SagaTaskPayload {
                     task_id: task_id.clone(),
                 };
-                let event = SagaEvent::new(
-                    &saga_id,
-                    &actor,
-                    SagaEventType::SagaTaskRemoved,
-                    &payload,
-                );
+                let event =
+                    SagaEvent::new(&saga_id, &actor, SagaEventType::SagaTaskRemoved, &payload);
                 queries::insert_saga_event(
                     conn,
                     &SagaEventInsert {

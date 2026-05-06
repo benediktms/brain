@@ -19,7 +19,6 @@ pub(crate) enum SagasAction {
         saga_id: String,
     },
 
-
     /// List sagas (default: planning and open only)
     List {
         /// Include closed sagas
