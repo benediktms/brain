@@ -119,7 +119,13 @@ impl SagaStore {
         });
 
         let row = self.db.with_write_conn(|conn| {
-            let row = queries::update_saga(conn, saga_id, title, description)?;
+            // H1: wrap projection write + event insert in one SQLite tx so a
+            // failure between the two cannot leave the projection mutated
+            // without a corresponding saga_events row. `with_write_conn` only
+            // locks the writer mutex; it does NOT open a transaction.
+            let tx = conn.unchecked_transaction()?;
+
+            let row = queries::update_saga(&tx, saga_id, title, description)?;
 
             let payload = SagaUpdatedPayload {
                 title: title.map(|t| t.to_string()),
@@ -127,7 +133,7 @@ impl SagaStore {
             };
             let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaUpdated, &payload);
             queries::insert_saga_event(
-                conn,
+                &tx,
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
@@ -138,6 +144,7 @@ impl SagaStore {
                 },
             )?;
 
+            tx.commit()?;
             Ok(row)
         })?;
         Ok(row)
@@ -155,7 +162,7 @@ impl SagaStore {
     ) -> Result<(SagaRow, Vec<String>)> {
         let (row, member_ids) = self.db.with_write_conn(|conn| {
             let current = queries::get_saga(conn, saga_id)?.ok_or_else(|| {
-                crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}"))
+                crate::error::BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
             })?;
 
             let from: SagaStatus = current.status.parse().map_err(|_| {
@@ -208,8 +215,11 @@ impl SagaStore {
     /// Transition a saga from `planning` to `open`. Emits `SagaStarted`.
     pub fn start(&self, saga_id: &str, actor: &str) -> Result<SagaRow> {
         self.db.with_write_conn(|conn| {
-            let row = queries::get_saga(conn, saga_id)?
-                .ok_or_else(|| BrainCoreError::Parse(format!("saga not found: {saga_id}")))?;
+            let tx = conn.unchecked_transaction()?;
+
+            let row = queries::get_saga(&tx, saga_id)?.ok_or_else(|| {
+                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+            })?;
 
             let from: SagaStatus = row.status.parse().map_err(|_| {
                 BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
@@ -217,12 +227,12 @@ impl SagaStore {
 
             validate_transition(from, SagaStatus::Open)?;
 
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+            // L4: use the canonical now_ts() helper instead of an inline
+            // SystemTime::now().unwrap_or(0) which would silently write
+            // epoch-zero on a clock anomaly.
+            let now = crate::utils::now_ts();
             #[allow(clippy::disallowed_macros)]
-            conn.execute(
+            tx.execute(
                 "UPDATE sagas SET status = 'open', updated_at = ?1 WHERE saga_id = ?2",
                 rusqlite::params![now, saga_id],
             )?;
@@ -234,7 +244,7 @@ impl SagaStore {
                 &serde_json::json!({}),
             );
             queries::insert_saga_event(
-                conn,
+                &tx,
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
@@ -245,8 +255,10 @@ impl SagaStore {
                 },
             )?;
 
-            queries::get_saga(conn, saga_id)?
-                .ok_or_else(|| BrainCoreError::Parse("saga disappeared after start".into()))
+            let result = queries::get_saga(&tx, saga_id)?
+                .ok_or_else(|| BrainCoreError::Parse("saga disappeared after start".into()))?;
+            tx.commit()?;
+            Ok(result)
         })
     }
 
@@ -329,7 +341,7 @@ impl SagaStore {
     pub fn cancel(&self, saga_id: &str, cascade: bool, actor: &str) -> Result<SagaRow> {
         self.db.with_write_conn(|conn| {
             let row = queries::get_saga(conn, saga_id)?.ok_or_else(|| {
-                crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}"))
+                crate::error::BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
             })?;
 
             let from: SagaStatus = row.status.parse().map_err(|_| {
@@ -436,8 +448,9 @@ impl SagaStore {
             let tx = conn.unchecked_transaction()?;
 
             // Verify the saga exists and is not in a terminal state.
-            let row = queries::get_saga(&tx, saga_id)?
-                .ok_or_else(|| BrainCoreError::TaskEvent(format!("saga not found: {saga_id}")))?;
+            let row = queries::get_saga(&tx, saga_id)?.ok_or_else(|| {
+                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+            })?;
             let status: SagaStatus = row.status.parse().map_err(|_| {
                 BrainCoreError::TaskEvent(format!("saga '{saga_id}' has unrecognised status"))
             })?;
@@ -505,6 +518,11 @@ impl SagaStore {
         let actor = actor.to_string();
         let saga_id = saga_id.to_string();
         self.db.with_write_conn(move |conn| {
+            // H1: SELECT-DELETE-INSERT must be atomic so a concurrent insert
+            // between the SELECT and DELETE cannot create a member that is
+            // then deleted without a SagaTaskRemoved event being emitted.
+            let tx = conn.unchecked_transaction()?;
+
             // Identify which task_ids are currently members before deleting,
             // so we know exactly which ones to emit events for.
             let placeholders = task_ids
@@ -516,7 +534,7 @@ impl SagaStore {
             let select_sql = format!(
                 "SELECT task_id FROM saga_tasks WHERE saga_id = ?1 AND task_id IN ({placeholders})"
             );
-            let mut stmt = conn.prepare(&select_sql)?;
+            let mut stmt = tx.prepare(&select_sql)?;
             let mut params: Vec<Box<dyn rusqlite::ToSql>> =
                 vec![Box::new(saga_id.clone()) as Box<dyn rusqlite::ToSql>];
             for tid in &task_ids {
@@ -527,12 +545,16 @@ impl SagaStore {
                 .query_map(params_ref.as_slice(), |row| row.get(0))?
                 .filter_map(|r| r.ok())
                 .collect();
+            drop(stmt);
 
             if present.is_empty() {
+                tx.commit()?;
                 return Ok(0);
             }
 
-            queries::remove_saga_tasks(conn, &saga_id, &task_ids)?;
+            // Only delete the rows that were actually members; this also
+            // makes the `present.len() == removed_count` invariant explicit.
+            queries::remove_saga_tasks(&tx, &saga_id, &present)?;
 
             for task_id in &present {
                 let payload = SagaTaskPayload {
@@ -541,7 +563,7 @@ impl SagaStore {
                 let event =
                     SagaEvent::new(&saga_id, &actor, SagaEventType::SagaTaskRemoved, &payload);
                 queries::insert_saga_event(
-                    conn,
+                    &tx,
                     &SagaEventInsert {
                         event_id: &event.event_id,
                         saga_id: &event.saga_id,
@@ -553,6 +575,7 @@ impl SagaStore {
                 )?;
             }
 
+            tx.commit()?;
             Ok(present.len())
         })
     }
@@ -563,8 +586,11 @@ impl SagaStore {
         let actor = actor.to_string();
         let saga_id = saga_id.to_string();
         self.db.with_write_conn(move |conn| {
-            let row = queries::get_saga(conn, &saga_id)?
-                .ok_or_else(|| BrainCoreError::Parse(format!("saga not found: {saga_id}")))?;
+            let tx = conn.unchecked_transaction()?;
+
+            let row = queries::get_saga(&tx, &saga_id)?.ok_or_else(|| {
+                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+            })?;
 
             let from: SagaStatus = row.status.parse().map_err(|_| {
                 BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
@@ -580,7 +606,7 @@ impl SagaStore {
                 }
             }
 
-            let updated = reopen_saga(conn, &saga_id)?;
+            let updated = reopen_saga(&tx, &saga_id)?;
 
             let event = SagaEvent::new(
                 &saga_id,
@@ -588,9 +614,8 @@ impl SagaStore {
                 SagaEventType::SagaReopened,
                 &serde_json::json!({}),
             );
-            #[allow(clippy::disallowed_macros)]
             queries::insert_saga_event(
-                conn,
+                &tx,
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
@@ -601,6 +626,7 @@ impl SagaStore {
                 },
             )?;
 
+            tx.commit()?;
             Ok(updated)
         })
     }
