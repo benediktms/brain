@@ -4,10 +4,12 @@ use brain_persistence::db::sagas::events::{
     SagaClosedPayload, SagaEvent, SagaEventType, SagaTaskPayload, SagaUpdatedPayload, new_saga_id,
 };
 use brain_persistence::db::sagas::queries::{
-    self, SagaEventInsert, SagaRow, close_saga, list_saga_member_task_ids,
+    self, LabelCount, SagaEventInsert, SagaRow, SagaStatsRow, close_saga, list_saga_member_task_ids,
 };
 use brain_persistence::db::sagas::reopen_saga;
-use brain_persistence::db::tasks::queries::resolve_task_id_scoped;
+use brain_persistence::db::tasks::queries::{
+    TaskRow, list_ready_actionable_for_tasks, resolve_task_id_scoped,
+};
 
 pub use brain_persistence::db::sagas::queries::BrainSummary;
 
@@ -17,6 +19,19 @@ pub mod lifecycle;
 pub mod status;
 pub use lifecycle::validate_transition;
 pub use status::SagaStatus;
+
+/// The ready tasks in a saga plus the set of brains those tasks belong to.
+pub struct SagaFrontier {
+    pub tasks: Vec<TaskRow>,
+    pub brains: Vec<BrainSummary>,
+}
+
+/// Aggregated statistics for a saga's member tasks.
+pub struct SagaStats {
+    pub counts: SagaStatsRow,
+    pub label_histogram: Vec<LabelCount>,
+    pub brains: Vec<BrainSummary>,
+}
 
 /// Store for saga lifecycle operations. Registry-level: not scoped to any brain.
 pub struct SagaStore {
@@ -240,6 +255,36 @@ impl SagaStore {
     pub fn brains_for_saga(&self, saga_id: &str) -> Result<Vec<BrainSummary>> {
         self.db
             .with_read_conn(move |conn| queries::brains_for_saga(conn, saga_id))
+    }
+
+    /// Return ready-actionable member tasks (same rules as `tasks next`) plus
+    /// the brains those tasks belong to. Empty for planning/closed/cancelled sagas.
+    pub fn frontier(&self, saga_id: &str) -> Result<SagaFrontier> {
+        self.db.with_read_conn(move |conn| {
+            // Fetch member task IDs (cross-brain).
+            let mut stmt = conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1")?;
+            let task_ids: Vec<String> = stmt
+                .query_map([saga_id], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let tasks = list_ready_actionable_for_tasks(conn, &task_ids)?;
+            let brains = queries::brains_for_saga(conn, saga_id)?;
+            Ok(SagaFrontier { tasks, brains })
+        })
+    }
+
+    /// Aggregate counts, completion %, label histogram, and brains for a saga.
+    pub fn stats(&self, saga_id: &str) -> Result<SagaStats> {
+        self.db.with_read_conn(move |conn| {
+            let counts = queries::saga_stats(conn, saga_id)?;
+            let label_histogram = queries::saga_label_histogram(conn, saga_id)?;
+            let brains = queries::brains_for_saga(conn, saga_id)?;
+            Ok(SagaStats {
+                counts,
+                label_histogram,
+                brains,
+            })
+        })
     }
 
     #[cfg(test)]

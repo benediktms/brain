@@ -26,11 +26,13 @@ mod record_tag;
 mod saga_add_tasks;
 mod saga_close;
 mod saga_create;
+mod saga_frontier;
 mod saga_get;
 mod saga_list;
 mod saga_remove_tasks;
 mod saga_reopen;
 mod saga_start;
+mod saga_stats;
 mod saga_update;
 mod scope;
 mod status;
@@ -147,9 +149,11 @@ impl ToolRegistry {
                 Box::new(tags_aliases_status::TagsAliasesStatus),
                 Box::new(saga_close::SagaClose),
                 Box::new(saga_create::SagaCreate),
+                Box::new(saga_frontier::SagaFrontier),
                 Box::new(saga_get::SagaGet),
                 Box::new(saga_list::SagaList),
                 Box::new(saga_start::SagaStart),
+                Box::new(saga_stats::SagaStats),
                 Box::new(saga_update::SagaUpdate),
                 Box::new(saga_add_tasks::SagaAddTasks),
                 Box::new(saga_remove_tasks::SagaRemoveTasks),
@@ -185,7 +189,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 48); // see assertions below for canonical name list
+        assert_eq!(defs.len(), 50); // see assertions below for canonical name list
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.retrieve"));

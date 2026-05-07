@@ -97,4 +97,16 @@ pub(crate) enum SagasAction {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
     },
+
+    /// Show ready-actionable tasks in a saga (same rules as tasks next)
+    Frontier {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+    },
+
+    /// Aggregate statistics for a saga's member tasks
+    Stats {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+    },
 }
