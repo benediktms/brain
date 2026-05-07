@@ -39,9 +39,9 @@ impl SagaRemoveTasks {
         if let Err(msg) = validate_actor(&params.actor) {
             return ToolCallResult::error(format!("Invalid actor: {msg}"));
         }
-        if params.task_ids.is_empty() {
-            return ToolCallResult::error("task_ids must not be empty");
-        }
+        // Empty `task_ids` is intentionally a no-op (returns removed: 0) per
+        // the idempotent semantics of remove_tasks — distinct from add_tasks
+        // which rejects empty as a degenerate batch.
         if params.task_ids.len() > MAX_TASKS_PER_BATCH {
             return ToolCallResult::error(format!(
                 "task_ids exceeds maximum batch size of {MAX_TASKS_PER_BATCH}"
@@ -93,8 +93,7 @@ impl McpTool for SagaRemoveTasks {
                     "task_ids": {
                         "type": "array",
                         "items": { "type": "string", "minLength": 1, "maxLength": 128 },
-                        "description": "Task IDs to remove from the saga",
-                        "minItems": 1,
+                        "description": "Task IDs to remove from the saga (empty array is a valid no-op)",
                         "maxItems": 500
                     },
                     "actor": {

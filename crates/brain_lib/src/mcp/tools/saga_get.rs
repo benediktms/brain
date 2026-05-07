@@ -168,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_nonexistent_saga() {
         let (_dir, ctx) = create_test_context().await;
-        let result = call_get(json!({ "saga_id": "01NONEXISTENT000000000000" }), &ctx).await;
+        let result = call_get(json!({ "saga_id": "01HXXNONEXISTENT0000000000" }), &ctx).await;
         // Returns Ok with {"saga": null} rather than an error, matching the read-side convention.
         assert!(
             result.is_error.is_none(),

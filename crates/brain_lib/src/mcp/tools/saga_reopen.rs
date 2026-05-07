@@ -184,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn test_reopen_nonexistent_fails() {
         let (_dir, ctx) = create_test_context().await;
-        let result = call_reopen(json!({ "saga_id": "01NONEXISTENT000000000000" }), &ctx).await;
+        let result = call_reopen(json!({ "saga_id": "01HXXNONEXISTENT0000000000" }), &ctx).await;
         assert_eq!(result.is_error, Some(true));
     }
 

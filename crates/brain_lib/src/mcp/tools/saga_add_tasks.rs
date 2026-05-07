@@ -200,7 +200,7 @@ mod tests {
         let task_id = make_task(&ctx, "T1").await;
 
         let result = call_add(
-            json!({ "saga_id": "01NONEXISTENT000000000000", "task_ids": [task_id] }),
+            json!({ "saga_id": "01HXXNONEXISTENT0000000000", "task_ids": [task_id] }),
             &ctx,
         )
         .await;
