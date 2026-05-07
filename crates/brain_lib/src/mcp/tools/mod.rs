@@ -35,6 +35,7 @@ mod saga_reopen;
 mod saga_start;
 mod saga_stats;
 mod saga_update;
+mod saga_validation;
 mod scope;
 mod status;
 mod tags_aliases_list;
@@ -213,6 +214,12 @@ pub(crate) mod tests {
         assert!(names.contains(&"sagas.update"));
         assert!(names.contains(&"sagas.add_tasks"));
         assert!(names.contains(&"sagas.remove_tasks"));
+        assert!(names.contains(&"sagas.close"));
+        assert!(names.contains(&"sagas.cancel"));
+        assert!(names.contains(&"sagas.reopen"));
+        assert!(names.contains(&"sagas.list"));
+        assert!(names.contains(&"sagas.frontier"));
+        assert!(names.contains(&"sagas.stats"));
         assert!(!names.contains(&"records.create_artifact"));
         assert!(!names.contains(&"tasks.create_remote"));
 
