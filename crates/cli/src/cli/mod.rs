@@ -255,13 +255,16 @@ pub(crate) enum Command {
         dry_run: bool,
     },
 
-    /// Initialize a new brain in the current directory
+    /// Initialize a new brain in the current directory.
+    ///
+    /// By default no directories are indexed — opt in with `--notes <path>`
+    /// (repeatable).
     Init {
         /// Brain name (defaults to directory name)
         #[arg(long)]
         name: Option<String>,
 
-        /// Note directories to index (defaults to current directory)
+        /// Note directories to index. If omitted, no directories are indexed.
         #[arg(long)]
         notes: Vec<PathBuf>,
 

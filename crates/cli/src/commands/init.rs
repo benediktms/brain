@@ -149,6 +149,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
             .unwrap_or_else(|| "brain".into())
     });
 
+    // No auto-index by default — caller must opt in via `--notes <path>`.
     let note_dirs: Vec<PathBuf> = resolve_initial_note_dirs(notes);
 
     // 1. Create .brain/ in the project root.
@@ -289,7 +290,8 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     // 9. Print success
     if note_dirs.is_empty() {
         println!(
-            "Brain \"{brain_name}\" initialized (id: {brain_id}). No indexed directories (use `brain reindex` to add notes later)."
+            "Brain \"{brain_name}\" initialized (id: {brain_id}) with no indexed directories. \
+             Pass `--notes <path>` on init to opt directories in."
         );
     } else {
         let display_notes: Vec<String> =
@@ -1169,15 +1171,6 @@ mod tests {
     }
 
     #[test]
-    fn render_brain_section_hash_changes_on_body_change() {
-        let a = render_brain_section("test", "## Build A\n\n");
-        let b = render_brain_section("test", "## Build B\n\n");
-        let hash_a = &a["<!-- brain:start:".len()..a.find(" -->\n").unwrap()];
-        let hash_b = &b["<!-- brain:start:".len()..b.find(" -->\n").unwrap()];
-        assert_ne!(hash_a, hash_b, "different body must produce different hash");
-    }
-
-    #[test]
     fn fresh_init_does_not_auto_index_cwd() {
         // Opt-in default: no `--notes` → empty notes list, never `["."]`.
         assert!(
@@ -1194,5 +1187,14 @@ mod tests {
             input,
             "explicit --notes paths must flow through unchanged"
         );
+    }
+
+    #[test]
+    fn render_brain_section_hash_changes_on_body_change() {
+        let a = render_brain_section("test", "## Build A\n\n");
+        let b = render_brain_section("test", "## Build B\n\n");
+        let hash_a = &a["<!-- brain:start:".len()..a.find(" -->\n").unwrap()];
+        let hash_b = &b["<!-- brain:start:".len()..b.find(" -->\n").unwrap()];
+        assert_ne!(hash_a, hash_b, "different body must produce different hash");
     }
 }
