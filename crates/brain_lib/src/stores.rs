@@ -11,6 +11,7 @@ use crate::config;
 use crate::error::{BrainCoreError, Result};
 use crate::records::RecordStore;
 use crate::records::objects::ObjectStore;
+use crate::sagas::SagaStore;
 use crate::tasks::TaskStore;
 use brain_persistence::db::Db;
 
@@ -26,6 +27,7 @@ pub struct BrainStores {
     pub tasks: TaskStore,
     pub records: RecordStore,
     pub objects: ObjectStore,
+    pub sagas: SagaStore,
     pub brain_id: String,
     pub brain_name: String,
     pub brain_home: PathBuf,
@@ -172,6 +174,7 @@ impl BrainStores {
 
         let objects_dir = tmp.path().join("objects");
         let objects = ObjectStore::new(&objects_dir)?;
+        let sagas = SagaStore::new(db.clone());
 
         let brain_home = tmp.path().to_path_buf();
         Ok((
@@ -181,6 +184,7 @@ impl BrainStores {
                 tasks,
                 records,
                 objects,
+                sagas,
                 brain_id: brain_id.to_string(),
                 brain_name: brain_name.to_string(),
                 brain_home,
@@ -210,6 +214,7 @@ impl BrainStores {
 
         let objects_dir = tmp.path().join("objects");
         let objects = ObjectStore::new(&objects_dir)?;
+        let sagas = SagaStore::new(db.clone());
 
         let brain_home = tmp.path().to_path_buf();
         Ok((
@@ -219,6 +224,7 @@ impl BrainStores {
                 tasks,
                 records,
                 objects,
+                sagas,
                 brain_id: brain_id_str,
                 brain_name: "test-brain".to_string(),
                 brain_home,
@@ -706,11 +712,13 @@ impl BrainStores {
         let tasks = TaskStore::with_brain_id(self.db.clone(), brain_id, brain_name)?;
         let records = RecordStore::with_brain_id(self.db.clone(), brain_id, brain_name)?;
         let objects = ObjectStore::new(self.objects.root())?;
+        let sagas = SagaStore::new(self.db.clone());
         Ok(Self {
             db: self.db.clone(),
             tasks,
             records,
             objects,
+            sagas,
             brain_id: brain_id.to_string(),
             brain_name: brain_name.to_string(),
             brain_home: self.brain_home.clone(),
@@ -796,12 +804,14 @@ impl BrainStores {
             brain_data_dir.join("objects")
         };
         let objects = ObjectStore::new(&objects_dir)?;
+        let sagas = SagaStore::new(db.clone());
 
         Ok(Self {
             db,
             tasks,
             records,
             objects,
+            sagas,
             brain_id,
             brain_name,
             brain_home,

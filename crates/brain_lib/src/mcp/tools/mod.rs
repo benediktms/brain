@@ -23,6 +23,19 @@ mod record_list;
 mod record_save_snapshot;
 mod record_search;
 mod record_tag;
+mod saga_add_tasks;
+mod saga_cancel;
+mod saga_close;
+mod saga_create;
+mod saga_frontier;
+mod saga_get;
+mod saga_list;
+mod saga_remove_tasks;
+mod saga_reopen;
+mod saga_start;
+mod saga_stats;
+mod saga_update;
+mod saga_validation;
 mod scope;
 mod status;
 mod tags_aliases_list;
@@ -136,6 +149,18 @@ impl ToolRegistry {
                 Box::new(tags_recluster::TagsRecluster),
                 Box::new(tags_aliases_list::TagsAliasesList),
                 Box::new(tags_aliases_status::TagsAliasesStatus),
+                Box::new(saga_add_tasks::SagaAddTasks),
+                Box::new(saga_cancel::SagaCancel),
+                Box::new(saga_close::SagaClose),
+                Box::new(saga_create::SagaCreate),
+                Box::new(saga_frontier::SagaFrontier),
+                Box::new(saga_get::SagaGet),
+                Box::new(saga_list::SagaList),
+                Box::new(saga_remove_tasks::SagaRemoveTasks),
+                Box::new(saga_reopen::SagaReopen),
+                Box::new(saga_start::SagaStart),
+                Box::new(saga_stats::SagaStats),
+                Box::new(saga_update::SagaUpdate),
             ],
         }
     }
@@ -167,7 +192,7 @@ pub(crate) mod tests {
     fn test_tool_definitions_valid() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 39); // see assertions below for canonical name list
+        assert_eq!(defs.len(), 51); // see assertions below for canonical name list
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"memory.retrieve"));
@@ -185,6 +210,16 @@ pub(crate) mod tests {
         assert!(names.contains(&"tags.recluster"));
         assert!(names.contains(&"tags.aliases_list"));
         assert!(names.contains(&"tags.aliases_status"));
+        assert!(names.contains(&"sagas.start"));
+        assert!(names.contains(&"sagas.update"));
+        assert!(names.contains(&"sagas.add_tasks"));
+        assert!(names.contains(&"sagas.remove_tasks"));
+        assert!(names.contains(&"sagas.close"));
+        assert!(names.contains(&"sagas.cancel"));
+        assert!(names.contains(&"sagas.reopen"));
+        assert!(names.contains(&"sagas.list"));
+        assert!(names.contains(&"sagas.frontier"));
+        assert!(names.contains(&"sagas.stats"));
         assert!(!names.contains(&"records.create_artifact"));
         assert!(!names.contains(&"tasks.create_remote"));
 

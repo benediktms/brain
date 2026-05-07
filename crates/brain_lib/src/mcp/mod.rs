@@ -689,7 +689,7 @@ mod tests {
         let tools = parsed["result"]["tools"]
             .as_array()
             .expect("checked in test assertions");
-        assert_eq!(tools.len(), 39); // see assertions below for canonical name list
+        assert_eq!(tools.len(), 51); // see assertions below for canonical name list
 
         let names: Vec<&str> = tools
             .iter()
@@ -705,6 +705,18 @@ mod tests {
         assert!(names.contains(&"tasks.list"));
         assert!(names.contains(&"tasks.next"));
         assert!(names.contains(&"jobs.status"));
+        assert!(names.contains(&"sagas.create"));
+        assert!(names.contains(&"sagas.get"));
+        assert!(names.contains(&"sagas.remove_tasks"));
+        assert!(names.contains(&"sagas.update"));
+        assert!(names.contains(&"sagas.add_tasks"));
+        assert!(names.contains(&"sagas.start"));
+        assert!(names.contains(&"sagas.close"));
+        assert!(names.contains(&"sagas.cancel"));
+        assert!(names.contains(&"sagas.reopen"));
+        assert!(names.contains(&"sagas.list"));
+        assert!(names.contains(&"sagas.frontier"));
+        assert!(names.contains(&"sagas.stats"));
         assert!(!names.contains(&"tasks.create_remote"));
     }
 

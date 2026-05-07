@@ -15,6 +15,7 @@ mod migrations;
 pub mod object_links;
 pub mod providers;
 pub mod records;
+pub mod sagas;
 pub mod schema;
 pub mod summaries;
 pub mod tag_aliases;

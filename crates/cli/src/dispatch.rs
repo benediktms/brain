@@ -347,6 +347,72 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 },
             }
         }
+        Command::Sagas { json, action } => {
+            let ctx = commands::sagas::SagaCtx::new(&cli.sqlite_db, json)?;
+            match action {
+                SagasAction::Create { title, description } => {
+                    commands::sagas::create(&ctx, &title, description.as_deref())?;
+                }
+                SagasAction::Show { saga_id } => {
+                    commands::sagas::show(&ctx, &saga_id)?;
+                }
+                SagasAction::List {
+                    include_closed,
+                    include_cancelled,
+                    all,
+                    containing_brain,
+                } => {
+                    commands::sagas::list(
+                        &ctx,
+                        include_closed,
+                        include_cancelled,
+                        all,
+                        containing_brain,
+                    )?;
+                }
+                SagasAction::Update {
+                    saga_id,
+                    title,
+                    description,
+                    clear_description,
+                } => {
+                    // Map CLI flags to the store's Option<Option<&str>> description convention:
+                    //   --clear-description  => Some(None)   (set NULL)
+                    //   --description "x"   => Some(Some("x"))
+                    //   (neither)           => None           (leave unchanged)
+                    let desc_arg = if clear_description {
+                        Some(None)
+                    } else {
+                        description.as_deref().map(Some)
+                    };
+                    commands::sagas::update(&ctx, &saga_id, title.as_deref(), desc_arg)?;
+                }
+                SagasAction::Add { saga_id, task_ids } => {
+                    commands::sagas::add_tasks(&ctx, &saga_id, &task_ids)?;
+                }
+                SagasAction::Start { saga_id } => {
+                    commands::sagas::start(&ctx, &saga_id)?;
+                }
+                SagasAction::Remove { saga_id, task_ids } => {
+                    commands::sagas::remove(&ctx, &saga_id, task_ids)?;
+                }
+                SagasAction::Close { saga_id, cascade } => {
+                    commands::sagas::close(&ctx, &saga_id, cascade)?;
+                }
+                SagasAction::Reopen { saga_id } => {
+                    commands::sagas::reopen(&ctx, &saga_id)?;
+                }
+                SagasAction::Frontier { saga_id } => {
+                    commands::sagas::frontier(&ctx, &saga_id)?;
+                }
+                SagasAction::Stats { saga_id } => {
+                    commands::sagas::stats(&ctx, &saga_id)?;
+                }
+                SagasAction::Cancel { saga_id, cascade } => {
+                    commands::sagas::cancel(&ctx, &saga_id, cascade)?;
+                }
+            }
+        }
         Command::Tasks {
             output: output_arg,
             json,
