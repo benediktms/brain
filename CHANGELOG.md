@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-05-07
+
+### Bug Fixes
+
+- Make force_optimize unconditional and wire startup_compact at boot (#119)
+- Prune notify watcher walk to skip node_modules/.git/build
+
+### Documentation
+
+- Add instructions to set current git user as task assignee
+
+### Features
+
+- Saga implementation (#123)
+- Make notes indexing opt-in by default (#122)
+- Honour --older-than on LanceDB side via aggressive version prune (#121)
+- Memory.thread — read-side complement to continues (#120)
+- Episode threading via continues edge + typed shortcut (#118)
+- Add collect_linked_episode_set BFS helper (#117)
+- Inline links parameter on memory write tools + docs (#116)
+- Expose consecutive_resets accessors on EmbeddingResetter
+- Replace fixed self-heal backoff with exponential schedule
+
 ## [0.3.9] - 2026-05-02
 
 ### Bug Fixes

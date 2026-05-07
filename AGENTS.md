@@ -17,7 +17,7 @@ just check        # cargo check
 just install      # Build release binary and symlink to ~/bin/brain
 ```
 
-<!-- brain:start:fe15f340 -->
+<!-- brain:start:cf772356 -->
 ## Build & Test
 
 ```bash
