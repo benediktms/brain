@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::saga_validation::validate_saga_id;
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -22,6 +23,10 @@ impl SagaGet {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
+
+        if let Err(msg) = validate_saga_id(&params.saga_id) {
+            return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
+        }
 
         let row = match ctx.stores.sagas.get(&params.saga_id) {
             Ok(Some(r)) => r,
@@ -39,6 +44,25 @@ impl SagaGet {
             .map(|b| json!({ "brain_id": b.brain_id, "name": b.name, "prefix": b.prefix }))
             .collect();
 
+        let members = match ctx.stores.sagas.list_member_stubs(&params.saga_id) {
+            Ok(stubs) => stubs,
+            Err(e) => {
+                return ToolCallResult::error(format!("Failed to fetch saga members: {e}"));
+            }
+        };
+        let members_json: Vec<serde_json::Value> = members
+            .iter()
+            .map(|m| {
+                json!({
+                    "task_id": m.task_id,
+                    "brain_id": m.brain_id,
+                    "title": m.title,
+                    "status": m.status,
+                    "task_type": m.task_type,
+                })
+            })
+            .collect();
+
         let response = json!({
             "saga_id": row.saga_id,
             "saga": {
@@ -49,8 +73,7 @@ impl SagaGet {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                // members is always empty until saga_tasks rows exist
-                "members": [],
+                "members": members_json,
                 "brains": brains_json,
             }
         });
@@ -74,7 +97,8 @@ impl McpTool for SagaGet {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID"
+                        "description": "Bare 26-char ULID saga ID",
+                        "pattern": "^[0-9A-Za-z]{26}$"
                     }
                 },
                 "required": ["saga_id"]
@@ -144,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_nonexistent_saga() {
         let (_dir, ctx) = create_test_context().await;
-        let result = call_get(json!({ "saga_id": "01NONEXISTENT000000000000" }), &ctx).await;
+        let result = call_get(json!({ "saga_id": "01HXXNONEXISTENT0000000000" }), &ctx).await;
         // Returns Ok with {"saga": null} rather than an error, matching the read-side convention.
         assert!(
             result.is_error.is_none(),

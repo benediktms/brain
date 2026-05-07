@@ -4,7 +4,6 @@ use anyhow::{Result, anyhow};
 use serde_json::json;
 
 use brain_lib::stores::BrainStores;
-use brain_lib::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
 use brain_persistence::db::sagas::SagaListFilter;
 
 pub struct SagaCtx {
@@ -224,7 +223,8 @@ pub fn stats(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         println!("  Done:        {}", c.done);
         println!("  Cancelled:   {}", c.cancelled);
         if let Some(pct) = c.completion_pct {
-            println!("  Completion:  {:.1}%", pct * 100.0);
+            // pct is already a 0–100 percentage from saga_stats; do not multiply.
+            println!("  Completion:  {pct:.1}%");
         } else {
             println!("  Completion:  n/a");
         }
@@ -261,30 +261,14 @@ pub fn start(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
 }
 
 pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
-    let (row, member_ids) = ctx.stores.sagas.close(saga_id, cascade, "cli")?;
+    // H2: cascade now happens inside SagaStore::close, atomically with the
+    // saga's status change. We just consume the per-task results here.
+    let (row, cascade_results) = ctx.stores.sagas.close(saga_id, cascade, "cli")?;
 
-    if cascade {
-        for task_id in &member_ids {
-            let task = match ctx.stores.tasks.get_task(task_id) {
-                Ok(Some(t)) => t,
-                Ok(None) => continue,
-                Err(_) => continue,
-            };
-            if task.status == "done" || task.status == "cancelled" {
-                continue;
-            }
-            let event = TaskEvent::from_payload(
-                task_id.as_str(),
-                "cli",
-                StatusChangedPayload {
-                    new_status: TaskStatus::Done,
-                },
-            );
-            let _ = ctx.stores.tasks.append(&event);
-        }
-    }
+    let any_failed = cascade_results.iter().any(|r| r.is_failure());
 
     if ctx.json {
+        let cascade_json = render_cascade_json(&cascade_results);
         let out = json!({
             "saga_id": row.saga_id,
             "saga": {
@@ -295,9 +279,9 @@ pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                "members": [],
             },
             "cascade": cascade,
+            "cascade_results": cascade_json,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
@@ -305,8 +289,16 @@ pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
         println!("  Title:  {}", row.title);
         println!("  Status: {}", row.status);
         if cascade {
-            println!("  Cascade: closed {} member task(s)", member_ids.len());
+            print_cascade_summary(&cascade_results, "closed");
         }
+    }
+
+    // H3: surface cascade failures as a non-zero exit so users notice them.
+    if any_failed {
+        anyhow::bail!(
+            "{} member task(s) failed to transition during cascade",
+            cascade_results.iter().filter(|r| r.is_failure()).count()
+        );
     }
     Ok(())
 }
@@ -350,8 +342,11 @@ pub fn reopen(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
 }
 
 pub fn cancel(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
-    let row = ctx.stores.sagas.cancel(saga_id, cascade, "cli")?;
+    let (row, cascade_results) = ctx.stores.sagas.cancel(saga_id, cascade, "cli")?;
+    let any_failed = cascade_results.iter().any(|r| r.is_failure());
+
     if ctx.json {
+        let cascade_json = render_cascade_json(&cascade_results);
         let out = json!({
             "saga_id": row.saga_id,
             "saga": {
@@ -362,16 +357,68 @@ pub fn cancel(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-            }
+            },
+            "cascade": cascade,
+            "cascade_results": cascade_json,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("Cancelled saga {}", row.saga_id);
         if cascade {
-            println!("  (member tasks cancelled)");
+            print_cascade_summary(&cascade_results, "cancelled");
         }
     }
+
+    if any_failed {
+        anyhow::bail!(
+            "{} member task(s) failed to transition during cascade",
+            cascade_results.iter().filter(|r| r.is_failure()).count()
+        );
+    }
     Ok(())
+}
+
+fn render_cascade_json(results: &[brain_lib::sagas::CascadeResult]) -> Vec<serde_json::Value> {
+    use brain_lib::sagas::CascadeOutcome;
+    results
+        .iter()
+        .map(|r| match &r.outcome {
+            CascadeOutcome::Closed => json!({ "task_id": r.task_id, "closed": true }),
+            CascadeOutcome::Cancelled => json!({ "task_id": r.task_id, "cancelled": true }),
+            CascadeOutcome::Skipped { reason } => {
+                json!({ "task_id": r.task_id, "skipped": true, "reason": reason })
+            }
+            CascadeOutcome::Failed { error } => {
+                json!({ "task_id": r.task_id, "failed": true, "error": error })
+            }
+        })
+        .collect()
+}
+
+fn print_cascade_summary(results: &[brain_lib::sagas::CascadeResult], success_verb: &str) {
+    use brain_lib::sagas::CascadeOutcome;
+    let mut closed = 0usize;
+    let mut cancelled = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    for r in results {
+        match &r.outcome {
+            CascadeOutcome::Closed => closed += 1,
+            CascadeOutcome::Cancelled => cancelled += 1,
+            CascadeOutcome::Skipped { .. } => skipped += 1,
+            CascadeOutcome::Failed { .. } => failed += 1,
+        }
+    }
+    let success_count = closed + cancelled;
+    println!(
+        "  Cascade: {success_count} member task(s) {success_verb}, {skipped} skipped, {failed} failed"
+    );
+    // List failures explicitly so users can see what didn't transition.
+    for r in results {
+        if let CascadeOutcome::Failed { error } = &r.outcome {
+            println!("    failed: {} ({error})", r.task_id);
+        }
+    }
 }
 
 pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
@@ -382,11 +429,24 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("saga not found: {saga_id}"))?;
 
     let brains = ctx.stores.sagas.brains_for_saga(saga_id)?;
+    let members = ctx.stores.sagas.list_member_stubs(saga_id)?;
 
     if ctx.json {
         let brains_json: Vec<serde_json::Value> = brains
             .iter()
             .map(|b| json!({ "brain_id": b.brain_id, "name": b.name, "prefix": b.prefix }))
+            .collect();
+        let members_json: Vec<serde_json::Value> = members
+            .iter()
+            .map(|m| {
+                json!({
+                    "task_id": m.task_id,
+                    "brain_id": m.brain_id,
+                    "title": m.title,
+                    "status": m.status,
+                    "task_type": m.task_type,
+                })
+            })
             .collect();
         let out = json!({
             "saga_id": row.saga_id,
@@ -398,7 +458,7 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                "members": [],
+                "members": members_json,
                 "brains": brains_json,
             }
         });

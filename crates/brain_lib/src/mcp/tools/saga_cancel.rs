@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::saga_validation::{validate_actor, validate_saga_id};
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -31,25 +32,42 @@ impl SagaCancel {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        match ctx
-            .stores
-            .sagas
-            .cancel(&params.saga_id, params.cascade, &params.actor)
-        {
-            Ok(row) => json_response(&json!({
-                "saga_id": row.saga_id,
-                "saga": {
-                    "saga_id": row.saga_id,
-                    "title": row.title,
-                    "description": row.description,
-                    "status": row.status,
-                    "created_at": row.created_at,
-                    "updated_at": row.updated_at,
-                    "closed_at": row.closed_at,
-                }
-            })),
-            Err(e) => ToolCallResult::error(format!("{e}")),
+        if let Err(msg) = validate_saga_id(&params.saga_id) {
+            return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
         }
+        if let Err(msg) = validate_actor(&params.actor) {
+            return ToolCallResult::error(format!("Invalid actor: {msg}"));
+        }
+
+        let (row, cascade_results) =
+            match ctx
+                .stores
+                .sagas
+                .cancel(&params.saga_id, params.cascade, &params.actor)
+            {
+                Ok(r) => r,
+                Err(e) => return ToolCallResult::error(format!("{e}")),
+            };
+
+        let cascade_json = super::cascade_results_to_json(
+            &cascade_results,
+            crate::sagas::CascadeOutcome::Cancelled,
+        );
+
+        json_response(&json!({
+            "saga_id": row.saga_id,
+            "saga": {
+                "saga_id": row.saga_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "closed_at": row.closed_at,
+            },
+            "cascade": params.cascade,
+            "cascade_results": cascade_json,
+        }))
     }
 }
 
@@ -61,16 +79,18 @@ impl McpTool for SagaCancel {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Cancel a saga. Allowed from any non-cancelled status. Sets closed_at \
-                and emits SagaCancelled. With cascade=true, non-terminal member tasks are \
-                transitioned to cancelled."
+            description: "Cancel a saga. Allowed from active states (planning, open). \
+                Closed sagas must be reopened before cancelling. Sets closed_at and emits \
+                SagaCancelled. With cascade=true, non-terminal member tasks are transitioned \
+                to cancelled."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID"
+                        "description": "Bare 26-char ULID saga ID",
+                        "pattern": "^[0-9A-Za-z]{26}$"
                     },
                     "cascade": {
                         "type": "boolean",
@@ -80,7 +100,9 @@ impl McpTool for SagaCancel {
                     "actor": {
                         "type": "string",
                         "description": "Who is cancelling the saga. Default: mcp",
-                        "default": "mcp"
+                        "default": "mcp",
+                        "maxLength": 64,
+                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id"]
@@ -148,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn test_cancel_nonexistent_saga_rejected() {
         let (_dir, ctx) = create_test_context().await;
-        let result = call_cancel(json!({ "saga_id": "01NONEXISTENT000000000000" }), &ctx).await;
+        let result = call_cancel(json!({ "saga_id": "01HXXNONEXISTENT0000000000" }), &ctx).await;
         assert_eq!(result.is_error, Some(true));
     }
 

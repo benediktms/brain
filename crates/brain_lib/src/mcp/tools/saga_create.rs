@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::saga_validation::{validate_actor, validate_description, validate_title};
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -29,6 +30,16 @@ impl SagaCreate {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
+
+        if let Err(msg) = validate_actor(&params.actor) {
+            return ToolCallResult::error(format!("Invalid actor: {msg}"));
+        }
+        if let Err(msg) = validate_title(&params.title) {
+            return ToolCallResult::error(format!("Invalid title: {msg}"));
+        }
+        if let Err(msg) = validate_description(params.description.as_deref()) {
+            return ToolCallResult::error(format!("Invalid description: {msg}"));
+        }
 
         let row = match ctx.stores.sagas.create(
             &params.title,
@@ -73,12 +84,22 @@ impl McpTool for SagaCreate {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "title": { "type": "string", "description": "Saga title" },
-                    "description": { "type": "string", "description": "Optional description" },
+                    "title": {
+                        "type": "string",
+                        "description": "Saga title",
+                        "maxLength": 1024
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional description",
+                        "maxLength": 65536
+                    },
                     "actor": {
                         "type": "string",
                         "description": "Who is creating the saga. Default: mcp",
-                        "default": "mcp"
+                        "default": "mcp",
+                        "maxLength": 64,
+                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["title"]

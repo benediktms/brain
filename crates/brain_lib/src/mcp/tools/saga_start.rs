@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::saga_validation::{validate_actor, validate_saga_id};
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -28,6 +29,13 @@ impl SagaStart {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
+
+        if let Err(msg) = validate_saga_id(&params.saga_id) {
+            return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
+        }
+        if let Err(msg) = validate_actor(&params.actor) {
+            return ToolCallResult::error(format!("Invalid actor: {msg}"));
+        }
 
         match ctx.stores.sagas.start(&params.saga_id, &params.actor) {
             Ok(row) => {
@@ -66,12 +74,15 @@ impl McpTool for SagaStart {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID"
+                        "description": "Bare 26-char ULID saga ID",
+                        "pattern": "^[0-9A-Za-z]{26}$"
                     },
                     "actor": {
                         "type": "string",
                         "description": "Who is starting the saga. Default: mcp",
-                        "default": "mcp"
+                        "default": "mcp",
+                        "maxLength": 64,
+                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id"]
@@ -151,7 +162,7 @@ mod tests {
     #[tokio::test]
     async fn test_start_nonexistent_fails() {
         let (_dir, ctx) = create_test_context().await;
-        let result = call_start(json!({ "saga_id": "01NONEXISTENT000000000000" }), &ctx).await;
+        let result = call_start(json!({ "saga_id": "01HXXNONEXISTENT0000000000" }), &ctx).await;
         assert_eq!(result.is_error, Some(true));
     }
 

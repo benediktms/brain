@@ -7,6 +7,9 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::saga_validation::{
+    validate_actor, validate_description, validate_saga_id, validate_title,
+};
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -30,6 +33,25 @@ impl SagaUpdate {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
+
+        if let Err(msg) = validate_saga_id(&params.saga_id) {
+            return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
+        }
+        if let Err(msg) = validate_actor(&params.actor) {
+            return ToolCallResult::error(format!("Invalid actor: {msg}"));
+        }
+        if let Some(t) = params.title.as_deref()
+            && let Err(msg) = validate_title(t)
+        {
+            return ToolCallResult::error(format!("Invalid title: {msg}"));
+        }
+        // description is Option<Option<String>>: outer None = not touching;
+        // inner None = clear; inner Some = set to value (bound the length).
+        if let Some(Some(d)) = params.description.as_ref()
+            && let Err(msg) = validate_description(Some(d.as_str()))
+        {
+            return ToolCallResult::error(format!("Invalid description: {msg}"));
+        }
 
         let row = match ctx.stores.sagas.update(
             &params.saga_id,
@@ -75,23 +97,27 @@ impl McpTool for SagaUpdate {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID"
+                        "description": "Bare 26-char ULID saga ID",
+                        "pattern": "^[0-9A-Za-z]{26}$"
                     },
                     "title": {
                         "type": "string",
-                        "description": "New title (must not be empty)"
+                        "description": "New title (must not be empty)",
+                        "maxLength": 1024
                     },
                     "description": {
                         "description": "New description (null to clear)",
                         "oneOf": [
-                            { "type": "string" },
+                            { "type": "string", "maxLength": 65536 },
                             { "type": "null" }
                         ]
                     },
                     "actor": {
                         "type": "string",
                         "description": "Who is updating the saga. Default: mcp",
-                        "default": "mcp"
+                        "default": "mcp",
+                        "maxLength": 64,
+                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id"]
