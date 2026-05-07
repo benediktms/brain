@@ -53,29 +53,12 @@ impl SagaRemoveTasks {
             }
         }
 
-        // Resolve every input ID to its full task_id before forwarding. The
-        // store's `add_tasks` resolves through `resolve_task_id_scoped` and
-        // stores the resolved full ID in `saga_tasks`; `remove_tasks` does
-        // *not* resolve, so without this normalization a short-hash or
-        // display-id passed by an MCP client will never match the stored
-        // membership row. Unresolvable IDs are kept as-is so the underlying
-        // remove can apply its idempotent no-op semantics (count == 0 for
-        // unknown IDs) instead of returning a hard error from this layer.
-        let resolved_task_ids: Vec<String> = params
-            .task_ids
-            .iter()
-            .map(|tid| {
-                ctx.stores
-                    .tasks
-                    .resolve_task_id(tid)
-                    .unwrap_or_else(|_| tid.clone())
-            })
-            .collect();
-
+        // ID resolution lives in `SagaStore::remove_tasks` (mirrors `add_tasks`)
+        // so all transports — MCP, CLI, future callers — benefit equally.
         match ctx
             .stores
             .sagas
-            .remove_tasks(&params.saga_id, resolved_task_ids, &params.actor)
+            .remove_tasks(&params.saga_id, params.task_ids, &params.actor)
         {
             Ok(removed) => {
                 let response = json!({

@@ -209,12 +209,13 @@ pub fn update_saga(
 }
 
 /// Close a saga: set status = 'closed', closed_at = now, bump updated_at.
-/// Returns an error if the saga is not in 'planning' or 'open' status.
+/// Only `'open'` sagas can be closed — to abandon a planning saga, use cancel.
+/// This matches the lifecycle state machine in `validate_transition`.
 pub fn close_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
     let ts = now_ts();
     let rows_changed = conn.execute(
         "UPDATE sagas SET status = 'closed', closed_at = ?1, updated_at = ?1
-         WHERE saga_id = ?2 AND status IN ('planning','open')",
+         WHERE saga_id = ?2 AND status = 'open'",
         rusqlite::params![ts, saga_id],
     )?;
     if rows_changed == 0 {
@@ -222,7 +223,7 @@ pub fn close_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
         return Err(match existing {
             None => crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()),
             Some(row) => crate::error::BrainCoreError::Parse(format!(
-                "saga cannot be closed from status '{}'; only 'planning' or 'open' sagas can be closed",
+                "saga cannot be closed from status '{}'; only 'open' sagas can be closed",
                 row.status
             )),
         });
@@ -770,14 +771,24 @@ mod tests {
     }
 
     #[test]
-    fn close_saga_from_planning_succeeds() {
+    fn close_saga_from_planning_rejected() {
+        // Planning sagas cannot be closed — use cancel to abandon them.
+        // This matches the lifecycle state machine which only allows Open → Closed.
         let db = setup_db();
         db.with_write_conn(|conn| {
             insert_saga_row(conn, "s_plan", "planning");
-            let row = close_saga(conn, "s_plan")?;
-            assert_eq!(row.status, "closed");
-            assert!(row.closed_at.is_some());
-            Ok(())
+            let err = close_saga(conn, "s_plan").unwrap_err();
+            match err {
+                BrainCoreError::Parse(msg) => {
+                    assert!(msg.contains("planning"), "expected planning in: {msg}");
+                    assert!(
+                        msg.contains("only 'open'"),
+                        "expected 'only open' in: {msg}"
+                    );
+                }
+                other => panic!("expected Parse error, got {other:?}"),
+            }
+            Ok::<_, BrainCoreError>(())
         })
         .unwrap();
     }

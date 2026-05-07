@@ -79,7 +79,8 @@ impl McpTool for SagaAddTasks {
             name: self.name().into(),
             description: "Atomically add one or more tasks to a saga. All task IDs must resolve \
                 (cross-brain short IDs are supported). The saga must not be closed or cancelled. \
-                Duplicate adds and unresolvable IDs cause the entire batch to fail."
+                Already-member tasks and intra-batch duplicates are silently skipped (idempotent). \
+                Unresolvable IDs cause the entire batch to fail."
                 .into(),
             input_schema: json!({
                 "type": "object",

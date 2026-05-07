@@ -67,7 +67,13 @@ impl SagaStore {
         }
         let saga_id = new_saga_id();
         let row = self.db.with_write_conn(|conn| {
-            let row = queries::insert_saga(conn, &saga_id, title, description)?;
+            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
+            // H1: wrap projection write + event insert in one SQLite tx so a failure
+            // between the two cannot leave the projection mutated without a corresponding
+            // saga_events row. Mirrors every other verb in this file.
+            let tx = conn.unchecked_transaction()?;
+
+            let row = queries::insert_saga(&tx, &saga_id, title, description)?;
 
             let event = SagaEvent::new(
                 &saga_id,
@@ -76,7 +82,7 @@ impl SagaStore {
                 &serde_json::json!({ "title": title, "description": description }),
             );
             queries::insert_saga_event(
-                conn,
+                &tx,
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
@@ -87,6 +93,7 @@ impl SagaStore {
                 },
             )?;
 
+            tx.commit()?;
             Ok(row)
         })?;
         Ok(row)
@@ -561,9 +568,19 @@ impl SagaStore {
                 )));
             }
 
+            // Resolve each input ID through the same path `add_tasks` uses, so
+            // display IDs / short hashes match the full ULID stored in
+            // saga_tasks. Unresolvable IDs pass through unchanged so the
+            // function keeps idempotent `removed: 0` semantics for unknown IDs
+            // (a typo shouldn't error, just no-op).
+            let resolved: Vec<String> = task_ids
+                .iter()
+                .map(|raw| resolve_task_id_scoped(&tx, raw, None).unwrap_or_else(|_| raw.clone()))
+                .collect();
+
             // Identify which task_ids are currently members before deleting,
             // so we know exactly which ones to emit events for.
-            let placeholders = task_ids
+            let placeholders = resolved
                 .iter()
                 .enumerate()
                 .map(|(i, _)| format!("?{}", i + 2))
@@ -575,7 +592,7 @@ impl SagaStore {
             let mut stmt = tx.prepare(&select_sql)?;
             let mut params: Vec<Box<dyn rusqlite::ToSql>> =
                 vec![Box::new(saga_id.clone()) as Box<dyn rusqlite::ToSql>];
-            for tid in &task_ids {
+            for tid in &resolved {
                 params.push(Box::new(tid.clone()));
             }
             let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
