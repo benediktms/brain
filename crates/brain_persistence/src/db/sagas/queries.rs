@@ -1,6 +1,9 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::error::Result;
+use crate::db::sagas::events::{SagaEvent, SagaEventType, SagaTaskCascadedPayload};
+use crate::db::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
+use crate::db::tasks::projections::apply_event;
+use crate::error::{BrainCoreError, Result};
 use crate::utils::now_ts;
 
 /// A saga event row for insertion.
@@ -451,4 +454,184 @@ pub fn cancel_saga(conn: &Connection, saga_id: &str) -> Result<()> {
         params![saga_id, ts],
     )?;
     Ok(())
+}
+
+/// Per-task outcome of a `close --cascade` or `cancel --cascade`.
+#[derive(Debug, Clone)]
+pub struct CascadeResult {
+    pub task_id: String,
+    pub outcome: CascadeOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub enum CascadeOutcome {
+    /// Task transitioned to Done (close-cascade success).
+    Closed,
+    /// Task transitioned to Cancelled (cancel-cascade success).
+    Cancelled,
+    /// Task was already terminal — left untouched.
+    Skipped { reason: String },
+    /// Task event append failed; saga's own state still committed.
+    Failed { error: String },
+}
+
+impl CascadeResult {
+    pub fn is_failure(&self) -> bool {
+        matches!(self.outcome, CascadeOutcome::Failed { .. })
+    }
+}
+
+/// Cascade member tasks of a saga to a target terminal status (Done for
+/// close-cascade, Cancelled for cancel-cascade). Returns one `CascadeResult`
+/// per member task; the caller commits or rolls back the enclosing
+/// transaction.
+///
+/// Invariants:
+/// - Already-terminal tasks (`done`, `cancelled`) are recorded as `Skipped`,
+///   not retransitioned.
+/// - Tasks with NULL/empty `brain_id` are recorded as `Failed` with an
+///   "orphan" reason rather than silently calling `apply_event("")`.
+/// - Each cascade attempt also emits a `SagaTaskCascaded` saga event so
+///   replay can reconstruct cascade results from the saga log alone.
+/// - The cascade does NOT roll back the outer transaction on per-task
+///   failures; failures are reported to the caller via `CascadeOutcome`.
+pub fn cascade_member_tasks(
+    conn: &Connection,
+    saga_id: &str,
+    actor: &str,
+    target_status: TaskStatus,
+) -> Result<Vec<CascadeResult>> {
+    let target_str: &'static str = match target_status {
+        TaskStatus::Done => "done",
+        TaskStatus::Cancelled => "cancelled",
+        // Other statuses don't make sense as a cascade target; the call
+        // sites only pass Done or Cancelled.
+        _ => {
+            return Err(BrainCoreError::Parse(format!(
+                "cascade_member_tasks: unsupported target status {target_status:?}"
+            )));
+        }
+    };
+    let task_ids = list_saga_task_ids(conn, saga_id)?;
+    let mut results = Vec::with_capacity(task_ids.len());
+    for task_id in task_ids {
+        let result = cascade_one_task(
+            conn,
+            saga_id,
+            actor,
+            &task_id,
+            target_status.clone(),
+            target_str,
+        )?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+fn cascade_one_task(
+    conn: &Connection,
+    saga_id: &str,
+    actor: &str,
+    task_id: &str,
+    target_status: TaskStatus,
+    target_str: &'static str,
+) -> Result<CascadeResult> {
+    let outcome = cascade_one_task_inner(conn, actor, task_id, target_status);
+
+    // Always emit a SagaTaskCascaded event regardless of outcome — the saga
+    // log is the single source of truth for what the cascade did.
+    let outcome_str: &'static str = match &outcome {
+        CascadeOutcome::Closed => "closed",
+        CascadeOutcome::Cancelled => "cancelled",
+        CascadeOutcome::Skipped { .. } => "skipped",
+        CascadeOutcome::Failed { .. } => "failed",
+    };
+    let payload = SagaTaskCascadedPayload {
+        task_id: task_id.to_string(),
+        new_status: target_str.to_string(),
+        outcome: outcome_str.to_string(),
+    };
+    let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaTaskCascaded, &payload);
+    insert_saga_event(
+        conn,
+        &SagaEventInsert {
+            event_id: &event.event_id,
+            saga_id: &event.saga_id,
+            event_type: event.event_type.as_column_str(),
+            timestamp: event.timestamp,
+            actor: &event.actor,
+            payload: &serde_json::to_string(&event.payload)?,
+        },
+    )?;
+
+    Ok(CascadeResult {
+        task_id: task_id.to_string(),
+        outcome,
+    })
+}
+
+fn cascade_one_task_inner(
+    conn: &Connection,
+    actor: &str,
+    task_id: &str,
+    target_status: TaskStatus,
+) -> CascadeOutcome {
+    // Fetch current task status. Orphan saga_tasks rows (task deleted) are
+    // recorded as Failed rather than panicking.
+    let row: rusqlite::Result<(String, Option<String>)> = conn.query_row(
+        "SELECT status, brain_id FROM tasks WHERE task_id = ?1",
+        [task_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    );
+    let (current_status, brain_id_opt) = match row {
+        Ok(v) => v,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return CascadeOutcome::Failed {
+                error: "task not found (orphaned saga membership)".into(),
+            };
+        }
+        Err(e) => {
+            return CascadeOutcome::Failed {
+                error: format!("failed to read task: {e}"),
+            };
+        }
+    };
+
+    if current_status == "done" || current_status == "cancelled" {
+        return CascadeOutcome::Skipped {
+            reason: current_status,
+        };
+    }
+
+    let brain_id = match brain_id_opt {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            return CascadeOutcome::Failed {
+                error: "task has no brain_id (orphan)".into(),
+            };
+        }
+    };
+
+    let success_outcome = match &target_status {
+        TaskStatus::Done => CascadeOutcome::Closed,
+        TaskStatus::Cancelled => CascadeOutcome::Cancelled,
+        _ => {
+            return CascadeOutcome::Failed {
+                error: "unexpected target status".into(),
+            };
+        }
+    };
+    let ev = TaskEvent::from_payload(
+        task_id,
+        actor,
+        StatusChangedPayload {
+            new_status: target_status,
+        },
+    );
+    match apply_event(conn, &ev, &brain_id) {
+        Ok(_) => success_outcome,
+        Err(e) => CascadeOutcome::Failed {
+            error: format!("{e}"),
+        },
+    }
 }

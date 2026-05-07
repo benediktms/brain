@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::saga_validation::validate_saga_id;
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -22,6 +23,10 @@ impl SagaGet {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
+
+        if let Err(msg) = validate_saga_id(&params.saga_id) {
+            return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
+        }
 
         let row = match ctx.stores.sagas.get(&params.saga_id) {
             Ok(Some(r)) => r,
@@ -92,7 +97,8 @@ impl McpTool for SagaGet {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID"
+                        "description": "Bare 26-char ULID saga ID",
+                        "pattern": "^[0-9A-Za-z]{26}$"
                     }
                 },
                 "required": ["saga_id"]
