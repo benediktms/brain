@@ -349,6 +349,31 @@ pub fn reopen(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn cancel(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
+    let row = ctx.stores.sagas.cancel(saga_id, cascade, "cli")?;
+    if ctx.json {
+        let out = json!({
+            "saga_id": row.saga_id,
+            "saga": {
+                "saga_id": row.saga_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "closed_at": row.closed_at,
+            }
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Cancelled saga {}", row.saga_id);
+        if cascade {
+            println!("  (member tasks cancelled)");
+        }
+    }
+    Ok(())
+}
+
 pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx
         .stores

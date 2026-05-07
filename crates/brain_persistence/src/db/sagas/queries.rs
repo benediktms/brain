@@ -399,3 +399,14 @@ pub fn saga_label_histogram(conn: &Connection, saga_id: &str) -> Result<Vec<Labe
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
+
+/// Project saga status to `cancelled` and set `closed_at`.
+pub fn cancel_saga(conn: &Connection, saga_id: &str) -> Result<()> {
+    let ts = now_ts();
+    conn.execute(
+        "UPDATE sagas SET status = 'cancelled', closed_at = ?2, updated_at = ?2
+         WHERE saga_id = ?1",
+        params![saga_id, ts],
+    )?;
+    Ok(())
+}
