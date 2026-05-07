@@ -1,7 +1,7 @@
-/// Shared validation helpers for saga MCP tool boundaries.
-///
-/// All saga tools call these at the top of `execute()` before touching the
-/// store. Failures surface as `ToolCallResult::error(...)` strings.
+//! Shared validation helpers for saga MCP tool boundaries.
+//!
+//! All saga tools call these at the top of `execute()` before touching the
+//! store. Failures surface as `ToolCallResult::error(...)` strings.
 
 pub const MAX_TASKS_PER_BATCH: usize = 500;
 pub const MAX_TITLE_LEN: usize = 1024;

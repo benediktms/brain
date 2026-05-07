@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::embedder::Embed;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
+use crate::sagas::{CascadeOutcome, CascadeResult};
 use brain_persistence::store::StoreReader;
 
 #[derive(Serialize, Debug, Clone)]
@@ -19,6 +20,42 @@ pub fn json_response(value: &impl Serialize) -> ToolCallResult {
         Ok(json) => ToolCallResult::text(json),
         Err(err) => ToolCallResult::error(format!("Internal serialization error: {err}")),
     }
+}
+
+/// Convert `Vec<CascadeResult>` to the existing wire-format JSON array used by
+/// the saga close/cancel MCP responses. Variants map to:
+///
+/// - `Closed`    → `{ "task_id": "...", "closed":    true }`
+/// - `Cancelled` → `{ "task_id": "...", "cancelled": true }`
+/// - `Skipped`   → `{ "task_id": "...", "skipped":   true, "reason": "..." }`
+/// - `Failed`    → `{ "task_id": "...", "failed":    true, "error":  "..." }`
+///
+/// The second arg is ignored — kept for source compatibility while we settle
+/// on the helper signature. Callers can pass any `CascadeOutcome`.
+pub fn cascade_results_to_json(results: &[CascadeResult], _hint: CascadeOutcome) -> Vec<Value> {
+    results
+        .iter()
+        .map(|r| match &r.outcome {
+            CascadeOutcome::Closed => json!({
+                "task_id": r.task_id,
+                "closed": true,
+            }),
+            CascadeOutcome::Cancelled => json!({
+                "task_id": r.task_id,
+                "cancelled": true,
+            }),
+            CascadeOutcome::Skipped { reason } => json!({
+                "task_id": r.task_id,
+                "skipped": true,
+                "reason": reason,
+            }),
+            CascadeOutcome::Failed { error } => json!({
+                "task_id": r.task_id,
+                "failed": true,
+                "error": error,
+            }),
+        })
+        .collect()
 }
 
 pub fn store_or_warn<T: Default>(

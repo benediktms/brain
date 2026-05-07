@@ -31,25 +31,35 @@ impl SagaCancel {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        match ctx
-            .stores
-            .sagas
-            .cancel(&params.saga_id, params.cascade, &params.actor)
-        {
-            Ok(row) => json_response(&json!({
+        let (row, cascade_results) =
+            match ctx
+                .stores
+                .sagas
+                .cancel(&params.saga_id, params.cascade, &params.actor)
+            {
+                Ok(r) => r,
+                Err(e) => return ToolCallResult::error(format!("{e}")),
+            };
+
+        let cascade_json = super::cascade_results_to_json(
+            &cascade_results,
+            crate::sagas::CascadeOutcome::Cancelled,
+        );
+
+        json_response(&json!({
+            "saga_id": row.saga_id,
+            "saga": {
                 "saga_id": row.saga_id,
-                "saga": {
-                    "saga_id": row.saga_id,
-                    "title": row.title,
-                    "description": row.description,
-                    "status": row.status,
-                    "created_at": row.created_at,
-                    "updated_at": row.updated_at,
-                    "closed_at": row.closed_at,
-                }
-            })),
-            Err(e) => ToolCallResult::error(format!("{e}")),
-        }
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "closed_at": row.closed_at,
+            },
+            "cascade": params.cascade,
+            "cascade_results": cascade_json,
+        }))
     }
 }
 

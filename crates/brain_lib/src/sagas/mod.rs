@@ -5,7 +5,8 @@ use brain_persistence::db::tasks::projections::apply_event;
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::SagaListFilter;
 use brain_persistence::db::sagas::events::{
-    SagaClosedPayload, SagaEvent, SagaEventType, SagaTaskPayload, SagaUpdatedPayload, new_saga_id,
+    SagaClosedPayload, SagaEvent, SagaEventType, SagaTaskCascadedPayload, SagaTaskPayload,
+    SagaUpdatedPayload, new_saga_id,
 };
 use brain_persistence::db::sagas::queries::{
     self, LabelCount, SagaEventInsert, SagaMemberStub, SagaRow, SagaStatsRow, close_saga,
@@ -38,9 +39,201 @@ pub struct SagaStats {
     pub brains: Vec<BrainSummary>,
 }
 
+/// Per-task outcome for a `close --cascade` or `cancel --cascade` operation.
+///
+/// The cascade is best-effort: a single task event failure does not roll back
+/// the saga's lifecycle transition (the saga still becomes closed/cancelled),
+/// but the individual task may end up in `Failed`. Callers should surface
+/// `Failed` to the user — silently swallowing them was the H3 defect.
+#[derive(Debug, Clone)]
+pub struct CascadeResult {
+    pub task_id: String,
+    pub outcome: CascadeOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub enum CascadeOutcome {
+    /// Task transitioned to Done (close-cascade).
+    Closed,
+    /// Task transitioned to Cancelled (cancel-cascade).
+    Cancelled,
+    /// Task was already in a terminal state — left untouched.
+    Skipped { reason: String },
+    /// Task event append failed; saga's own state is still committed.
+    Failed { error: String },
+}
+
+impl CascadeResult {
+    /// Whether this result represents a definitive failure that the CLI
+    /// should propagate as a non-zero exit.
+    pub fn is_failure(&self) -> bool {
+        matches!(self.outcome, CascadeOutcome::Failed { .. })
+    }
+}
+
 /// Store for saga lifecycle operations. Registry-level: not scoped to any brain.
 pub struct SagaStore {
     pub(crate) db: Db,
+}
+
+/// Run the close-cascade or cancel-cascade inside an open SQLite transaction.
+///
+/// Iterates `saga_tasks` for the given saga, transitioning each member task
+/// to `target_status` (Done for close, Cancelled for cancel) via the task
+/// event path. Already-terminal tasks are recorded as `Skipped`. Tasks with
+/// a missing/empty `brain_id` (orphans, M5) are recorded as `Failed` rather
+/// than silently calling `apply_event("")`. Each cascade attempt also emits
+/// a `SagaTaskCascaded` saga event so replay can reconstruct what the
+/// cascade did without joining `task_events`.
+//
+// Takes `&rusqlite::Connection` because callers obtain it via auto-deref from
+// the `Transaction` opened in `with_write_conn`. The `disallowed_types` lint
+// fires on any direct rusqlite type in `brain_lib`; this is the contained
+// internal boundary where the cascade does its per-task work, so the allow
+// is scoped to these private helpers only.
+#[allow(clippy::disallowed_types)]
+fn run_cascade(
+    tx: &rusqlite::Connection,
+    saga_id: &str,
+    actor: &str,
+    target_status: TaskStatus,
+) -> Result<Vec<CascadeResult>> {
+    let target_str = match target_status {
+        TaskStatus::Done => "done",
+        TaskStatus::Cancelled => "cancelled",
+        // Other statuses don't make sense here; the call sites only pass
+        // Done or Cancelled.
+        _ => {
+            return Err(BrainCoreError::Parse(format!(
+                "run_cascade: unsupported target status {target_status:?}"
+            )));
+        }
+    };
+    let task_ids = queries::list_saga_task_ids(tx, saga_id)?;
+    let mut results = Vec::with_capacity(task_ids.len());
+    for task_id in task_ids {
+        let result = cascade_one_task(
+            tx,
+            saga_id,
+            actor,
+            &task_id,
+            target_status.clone(),
+            target_str,
+        )?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+#[allow(clippy::disallowed_types)]
+fn cascade_one_task(
+    tx: &rusqlite::Connection,
+    saga_id: &str,
+    actor: &str,
+    task_id: &str,
+    target_status: TaskStatus,
+    target_str: &'static str,
+) -> Result<CascadeResult> {
+    let outcome = cascade_one_task_inner(tx, actor, task_id, target_status, target_str);
+
+    // Always emit a SagaTaskCascaded event regardless of outcome — the saga
+    // log is the single source of truth for what the cascade did.
+    let outcome_str = match &outcome {
+        CascadeOutcome::Closed => "closed",
+        CascadeOutcome::Cancelled => "cancelled",
+        CascadeOutcome::Skipped { .. } => "skipped",
+        CascadeOutcome::Failed { .. } => "failed",
+    };
+    let payload = SagaTaskCascadedPayload {
+        task_id: task_id.to_string(),
+        new_status: target_str.to_string(),
+        outcome: outcome_str.to_string(),
+    };
+    let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaTaskCascaded, &payload);
+    queries::insert_saga_event(
+        tx,
+        &SagaEventInsert {
+            event_id: &event.event_id,
+            saga_id: &event.saga_id,
+            event_type: event.event_type.as_column_str(),
+            timestamp: event.timestamp,
+            actor: &event.actor,
+            payload: &serde_json::to_string(&event.payload)?,
+        },
+    )?;
+
+    Ok(CascadeResult {
+        task_id: task_id.to_string(),
+        outcome,
+    })
+}
+
+#[allow(clippy::disallowed_types)]
+fn cascade_one_task_inner(
+    tx: &rusqlite::Connection,
+    actor: &str,
+    task_id: &str,
+    target_status: TaskStatus,
+    _target_str: &str,
+) -> CascadeOutcome {
+    // Fetch current task status. If the task doesn't exist (orphan saga_tasks
+    // row from a deleted task), treat as a Failed outcome rather than panicking.
+    let row: rusqlite::Result<(String, Option<String>)> = tx.query_row(
+        "SELECT status, brain_id FROM tasks WHERE task_id = ?1",
+        [task_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    );
+    let (current_status, brain_id_opt) = match row {
+        Ok(v) => v,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return CascadeOutcome::Failed {
+                error: "task not found (orphaned saga membership)".into(),
+            };
+        }
+        Err(e) => {
+            return CascadeOutcome::Failed {
+                error: format!("failed to read task: {e}"),
+            };
+        }
+    };
+
+    if current_status == "done" || current_status == "cancelled" {
+        return CascadeOutcome::Skipped {
+            reason: current_status,
+        };
+    }
+
+    let brain_id = match brain_id_opt {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            return CascadeOutcome::Failed {
+                error: "task has no brain_id (orphan)".into(),
+            };
+        }
+    };
+
+    let success_outcome = match &target_status {
+        TaskStatus::Done => CascadeOutcome::Closed,
+        TaskStatus::Cancelled => CascadeOutcome::Cancelled,
+        _ => {
+            return CascadeOutcome::Failed {
+                error: "unexpected target status".into(),
+            };
+        }
+    };
+    let ev = TaskEvent::from_payload(
+        task_id,
+        actor,
+        StatusChangedPayload {
+            new_status: target_status,
+        },
+    );
+    match apply_event(tx, &ev, &brain_id) {
+        Ok(_) => success_outcome,
+        Err(e) => CascadeOutcome::Failed {
+            error: format!("{e}"),
+        },
+    }
 }
 
 impl SagaStore {
@@ -152,39 +345,44 @@ impl SagaStore {
 
     /// Close a saga. Only `open` sagas can be closed.
     ///
-    /// Returns `(row, member_task_ids)`. The caller is responsible for
-    /// cascade-closing member tasks when `cascade = true`.
+    /// Returns `(row, cascade_results)`. With `cascade = true`, every member
+    /// task is examined and best-effort transitioned to `Done`. The saga's
+    /// own state change and the entire cascade run inside one SQLite
+    /// transaction, so a crash mid-cascade cannot leave the saga `closed`
+    /// with only some member tasks transitioned (H2). The cascade itself is
+    /// best-effort within that transaction: per-task append failures are
+    /// recorded as `CascadeOutcome::Failed` and do not roll back the saga's
+    /// status change.
     pub fn close(
         &self,
         saga_id: &str,
         cascade: bool,
         actor: &str,
-    ) -> Result<(SagaRow, Vec<String>)> {
-        let (row, member_ids) = self.db.with_write_conn(|conn| {
-            let current = queries::get_saga(conn, saga_id)?.ok_or_else(|| {
-                crate::error::BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+    ) -> Result<(SagaRow, Vec<CascadeResult>)> {
+        let actor_owned = actor.to_string();
+        self.db.with_write_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+
+            let current = queries::get_saga(&tx, saga_id)?.ok_or_else(|| {
+                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
             })?;
 
             let from: SagaStatus = current.status.parse().map_err(|_| {
-                crate::error::BrainCoreError::Database(format!(
-                    "unknown saga status: {}",
-                    current.status
-                ))
+                BrainCoreError::Parse(format!("unknown saga status: {}", current.status))
             })?;
 
             validate_transition(from, SagaStatus::Closed)?;
 
-            let member_ids = list_saga_member_task_ids(conn, saga_id)?;
-            let row = close_saga(conn, saga_id)?;
+            let row = close_saga(&tx, saga_id)?;
 
             let event = SagaEvent::new(
                 saga_id,
-                actor,
+                &actor_owned,
                 SagaEventType::SagaClosed,
                 &SagaClosedPayload { cascade },
             );
             queries::insert_saga_event(
-                conn,
+                &tx,
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
@@ -195,9 +393,15 @@ impl SagaStore {
                 },
             )?;
 
-            Ok((row, member_ids))
-        })?;
-        Ok((row, member_ids))
+            let cascade_results = if cascade {
+                run_cascade(&tx, saga_id, &actor_owned, TaskStatus::Done)?
+            } else {
+                vec![]
+            };
+
+            tx.commit()?;
+            Ok((row, cascade_results))
+        })
     }
 
     /// Fetch a saga by ID. Returns None if not found.
@@ -309,7 +513,7 @@ impl SagaStore {
     /// is the only place these get filtered.
     pub fn list_member_stubs(&self, saga_id: &str) -> Result<Vec<SagaMemberStub>> {
         self.db
-            .with_read_conn(move |conn| Ok(list_saga_member_stubs(conn, saga_id)?))
+            .with_read_conn(move |conn| list_saga_member_stubs(conn, saga_id))
     }
 
     /// Return raw task IDs for saga membership without joining `tasks`.
@@ -317,7 +521,7 @@ impl SagaStore {
     /// need orphan IDs for cleanup.
     pub fn list_members(&self, saga_id: &str) -> Result<Vec<String>> {
         self.db
-            .with_read_conn(move |conn| Ok(list_saga_member_task_ids(conn, saga_id)?))
+            .with_read_conn(move |conn| list_saga_member_task_ids(conn, saga_id))
     }
 
     /// Aggregate counts, completion %, label histogram, and brains for a saga.
@@ -336,47 +540,54 @@ impl SagaStore {
 
     /// Cancel a saga, optionally cascade-cancelling non-terminal member tasks.
     ///
-    /// Emits `SagaCancelled`. With `cascade = true`, any member task not in
-    /// `done` or `cancelled` is transitioned via the task event path.
-    pub fn cancel(&self, saga_id: &str, cascade: bool, actor: &str) -> Result<SagaRow> {
+    /// Returns `(row, cascade_results)`. The saga's state change and the
+    /// entire cascade run inside one SQLite transaction. The cascade itself
+    /// is best-effort: per-task append failures are recorded as
+    /// `CascadeOutcome::Failed` and do not roll back the saga's status
+    /// change. Already-done and already-cancelled tasks are recorded as
+    /// `Skipped`.
+    pub fn cancel(
+        &self,
+        saga_id: &str,
+        cascade: bool,
+        actor: &str,
+    ) -> Result<(SagaRow, Vec<CascadeResult>)> {
+        let actor_owned = actor.to_string();
         self.db.with_write_conn(|conn| {
-            let row = queries::get_saga(conn, saga_id)?.ok_or_else(|| {
-                crate::error::BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+            let tx = conn.unchecked_transaction()?;
+
+            let row = queries::get_saga(&tx, saga_id)?.ok_or_else(|| {
+                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
             })?;
 
             let from: SagaStatus = row.status.parse().map_err(|_| {
-                crate::error::BrainCoreError::Database(format!(
-                    "unknown saga status: {}",
-                    row.status
-                ))
+                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
             })?;
             // Pre-checks for friendlier error messages — `validate_transition`
             // would still reject these, but with a generic "invalid transition"
             // string. Spec: cancel applies only to active states.
             if matches!(from, SagaStatus::Cancelled) {
-                return Err(crate::error::BrainCoreError::Parse(format!(
+                return Err(BrainCoreError::Parse(format!(
                     "saga '{saga_id}' is already cancelled"
                 )));
             }
             if matches!(from, SagaStatus::Closed) {
-                return Err(crate::error::BrainCoreError::Parse(format!(
+                return Err(BrainCoreError::Parse(format!(
                     "saga '{saga_id}' is closed; reopen it before cancelling"
                 )));
             }
             validate_transition(from, SagaStatus::Cancelled)?;
 
-            let tx = conn.unchecked_transaction()?;
-
-            queries::cancel_saga(conn, saga_id)?;
+            queries::cancel_saga(&tx, saga_id)?;
 
             let event = SagaEvent::new(
                 saga_id,
-                actor,
+                &actor_owned,
                 SagaEventType::SagaCancelled,
                 &SagaCancelledPayload { cascade },
             );
             queries::insert_saga_event(
-                conn,
+                &tx,
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
@@ -387,42 +598,16 @@ impl SagaStore {
                 },
             )?;
 
-            if cascade {
-                let task_ids = queries::list_saga_task_ids(conn, saga_id)?;
-                for task_id in task_ids {
-                    let task_status: Option<String> = conn
-                        .query_row(
-                            "SELECT status FROM tasks WHERE task_id = ?1",
-                            [&task_id],
-                            |row| row.get(0),
-                        )
-                        .ok();
-                    let status = task_status.as_deref().unwrap_or("");
-                    if status == "done" || status == "cancelled" {
-                        continue;
-                    }
-                    let brain_id: String = conn
-                        .query_row(
-                            "SELECT COALESCE(brain_id, '') FROM tasks WHERE task_id = ?1",
-                            [&task_id],
-                            |row| row.get(0),
-                        )
-                        .unwrap_or_default();
-                    let ev = TaskEvent::from_payload(
-                        &task_id,
-                        actor,
-                        StatusChangedPayload {
-                            new_status: TaskStatus::Cancelled,
-                        },
-                    );
-                    apply_event(conn, &ev, &brain_id)?;
-                }
-            }
+            let cascade_results = if cascade {
+                run_cascade(&tx, saga_id, &actor_owned, TaskStatus::Cancelled)?
+            } else {
+                vec![]
+            };
 
+            let updated = queries::get_saga(&tx, saga_id)?
+                .ok_or_else(|| BrainCoreError::Database("saga disappeared after cancel".into()))?;
             tx.commit()?;
-            queries::get_saga(conn, saga_id)?.ok_or_else(|| {
-                crate::error::BrainCoreError::Database("saga disappeared after cancel".into())
-            })
+            Ok((updated, cascade_results))
         })
     }
 

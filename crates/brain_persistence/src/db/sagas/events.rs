@@ -78,6 +78,19 @@ pub struct SagaTaskPayload {
     pub task_id: String,
 }
 
+/// Payload for `SagaTaskCascaded` — emitted once per member task that the
+/// `close --cascade` or `cancel --cascade` path touched. `new_status` is the
+/// task status the cascade attempted to transition the task into ("done" or
+/// "cancelled"), regardless of whether the task event ultimately succeeded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SagaTaskCascadedPayload {
+    pub task_id: String,
+    pub new_status: String,
+    /// `"closed"` if the cascade succeeded, `"skipped"` if the task was already
+    /// terminal, `"failed"` if the task event failed.
+    pub outcome: String,
+}
+
 impl SagaEvent {
     pub fn new(
         saga_id: impl Into<String>,

@@ -6,9 +6,9 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
+use crate::sagas::CascadeOutcome;
 
-use super::{McpTool, json_response};
+use super::{McpTool, cascade_results_to_json, json_response};
 
 #[derive(Deserialize)]
 struct Params {
@@ -32,7 +32,9 @@ impl SagaClose {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let (row, member_ids) =
+        // H2: cascade now happens inside SagaStore::close, atomically with the
+        // saga's status change. We just consume the per-task results here.
+        let (row, cascade_results) =
             match ctx
                 .stores
                 .sagas
@@ -42,45 +44,7 @@ impl SagaClose {
                 Err(e) => return ToolCallResult::error(format!("Failed to close saga: {e}")),
             };
 
-        let mut cascade_results = Vec::new();
-        if params.cascade {
-            for task_id in &member_ids {
-                let task = match ctx.stores.tasks.get_task(task_id) {
-                    Ok(Some(t)) => t,
-                    Ok(None) => {
-                        cascade_results.push(
-                            json!({ "task_id": task_id, "skipped": true, "reason": "not found" }),
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        cascade_results.push(json!({ "task_id": task_id, "skipped": true, "reason": format!("{e}") }));
-                        continue;
-                    }
-                };
-
-                if task.status == "done" || task.status == "cancelled" {
-                    cascade_results.push(
-                        json!({ "task_id": task_id, "skipped": true, "reason": task.status }),
-                    );
-                    continue;
-                }
-
-                let event = TaskEvent::from_payload(
-                    task_id,
-                    &params.actor,
-                    StatusChangedPayload {
-                        new_status: TaskStatus::Done,
-                    },
-                );
-                match ctx.stores.tasks.append(&event) {
-                    Ok(_) => cascade_results.push(json!({ "task_id": task_id, "closed": true })),
-                    Err(e) => cascade_results.push(
-                        json!({ "task_id": task_id, "skipped": true, "reason": format!("{e}") }),
-                    ),
-                }
-            }
-        }
+        let cascade_json = cascade_results_to_json(&cascade_results, CascadeOutcome::Closed);
 
         let response = json!({
             "saga_id": row.saga_id,
@@ -92,10 +56,9 @@ impl SagaClose {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                "members": [],
             },
             "cascade": params.cascade,
-            "cascade_results": cascade_results,
+            "cascade_results": cascade_json,
         });
 
         json_response(&response)
