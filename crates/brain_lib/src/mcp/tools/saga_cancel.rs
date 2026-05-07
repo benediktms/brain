@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::saga_validation::{validate_actor, validate_saga_id};
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -30,6 +31,13 @@ impl SagaCancel {
             Ok(p) => p,
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
+
+        if let Err(msg) = validate_saga_id(&params.saga_id) {
+            return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
+        }
+        if let Err(msg) = validate_actor(&params.actor) {
+            return ToolCallResult::error(format!("Invalid actor: {msg}"));
+        }
 
         let (row, cascade_results) =
             match ctx
@@ -81,7 +89,8 @@ impl McpTool for SagaCancel {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID"
+                        "description": "Bare 26-char ULID saga ID",
+                        "pattern": "^[0-9A-Za-z]{26}$"
                     },
                     "cascade": {
                         "type": "boolean",
@@ -91,7 +100,9 @@ impl McpTool for SagaCancel {
                     "actor": {
                         "type": "string",
                         "description": "Who is cancelling the saga. Default: mcp",
-                        "default": "mcp"
+                        "default": "mcp",
+                        "maxLength": 64,
+                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id"]

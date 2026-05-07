@@ -7,6 +7,9 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
+use super::saga_validation::{
+    MAX_TASKS_PER_BATCH, validate_actor, validate_saga_id, validate_task_id,
+};
 use super::{McpTool, json_response};
 
 #[derive(Deserialize)]
@@ -30,8 +33,26 @@ impl SagaAddTasks {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
+        if let Err(msg) = validate_saga_id(&params.saga_id) {
+            return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
+        }
+        if let Err(msg) = validate_actor(&params.actor) {
+            return ToolCallResult::error(format!("Invalid actor: {msg}"));
+        }
         if params.task_ids.is_empty() {
             return ToolCallResult::error("task_ids must not be empty");
+        }
+        // M1: cap batch size so an errant agent can't hold the SQLite writer
+        // through a million-id transaction.
+        if params.task_ids.len() > MAX_TASKS_PER_BATCH {
+            return ToolCallResult::error(format!(
+                "task_ids exceeds maximum batch size of {MAX_TASKS_PER_BATCH}"
+            ));
+        }
+        for tid in &params.task_ids {
+            if let Err(msg) = validate_task_id(tid) {
+                return ToolCallResult::error(format!("Invalid task_id '{tid}': {msg}"));
+            }
         }
 
         match ctx
@@ -65,18 +86,22 @@ impl McpTool for SagaAddTasks {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID"
+                        "description": "Bare 26-char ULID saga ID",
+                        "pattern": "^[0-9A-Za-z]{26}$"
                     },
                     "task_ids": {
                         "type": "array",
-                        "items": { "type": "string" },
+                        "items": { "type": "string", "minLength": 1, "maxLength": 128 },
                         "description": "Task IDs to add (full IDs or short hashes, cross-brain aware)",
-                        "minItems": 1
+                        "minItems": 1,
+                        "maxItems": 500
                     },
                     "actor": {
                         "type": "string",
                         "description": "Who is adding the tasks. Default: mcp",
-                        "default": "mcp"
+                        "default": "mcp",
+                        "maxLength": 64,
+                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id", "task_ids"]
