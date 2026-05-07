@@ -628,19 +628,38 @@ impl SagaStore {
     }
 
     /// Force a saga's status directly (test-only).
+    ///
+    /// L5: uses `now_ts()` (seconds) like every other timestamp in the table —
+    /// previously wrote `as_millis()` which was ~1000× larger and would look
+    /// like a future timestamp to anything that compared across paths.
     #[cfg(test)]
     pub fn force_status_for_test(&self, saga_id: &str, status: &str) -> Result<()> {
         let saga_id = saga_id.to_string();
         let status = status.to_string();
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let ts = crate::utils::now_ts();
         self.db.with_write_conn(move |conn| {
             #[allow(clippy::disallowed_macros)]
             conn.execute(
                 "UPDATE sagas SET status = ?1, updated_at = ?2 WHERE saga_id = ?3",
                 rusqlite::params![status, ts, saga_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Backdate a saga's `updated_at` directly (test-only).
+    ///
+    /// Used by L6: timestamp-monotonicity tests no longer need a 1.1s sleep —
+    /// they backdate the row, then call `update()` and assert the new
+    /// `updated_at` is strictly greater than the backdated value.
+    #[cfg(test)]
+    pub fn force_updated_at_for_test(&self, saga_id: &str, ts: i64) -> Result<()> {
+        let saga_id = saga_id.to_string();
+        self.db.with_write_conn(move |conn| {
+            #[allow(clippy::disallowed_macros)]
+            conn.execute(
+                "UPDATE sagas SET updated_at = ?1, created_at = ?1 WHERE saga_id = ?2",
+                rusqlite::params![ts, saga_id],
             )?;
             Ok(())
         })
@@ -1180,21 +1199,27 @@ mod tests {
     }
 
     // T6: updated_at is strictly greater than created_at after update.
-    // now_ts() has second granularity, so we sleep 1100 ms to guarantee the next second.
+    //
+    // L6: previously slept 1.1s to cross now_ts()'s second boundary. That was
+    // both slow and racy on under-resourced CI. Instead, backdate the row by
+    // 2 seconds via the test-only helper, then update normally — the assertion
+    // is deterministic regardless of clock granularity.
     #[test]
     fn update_bumps_updated_at_strictly() {
         let store = in_memory_store();
         let row = store.create("Timing", None, "test").unwrap();
-        let created_at = row.created_at;
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let backdated = crate::utils::now_ts() - 2;
+        store
+            .force_updated_at_for_test(&row.saga_id, backdated)
+            .unwrap();
         let updated = store
             .update(&row.saga_id, Some("Timing Updated"), None, "actor")
             .unwrap();
         assert!(
-            updated.updated_at > created_at,
-            "updated_at ({}) must be strictly greater than created_at ({})",
+            updated.updated_at > backdated,
+            "updated_at ({}) must be strictly greater than backdated value ({})",
             updated.updated_at,
-            created_at
+            backdated
         );
     }
 
