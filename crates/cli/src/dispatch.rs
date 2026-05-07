@@ -399,6 +399,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 SagasAction::Close { saga_id, cascade } => {
                     commands::sagas::close(&ctx, &saga_id, cascade)?;
                 }
+                SagasAction::Reopen { saga_id } => {
+                    commands::sagas::reopen(&ctx, &saga_id)?;
+                }
             }
         }
         Command::Tasks {
