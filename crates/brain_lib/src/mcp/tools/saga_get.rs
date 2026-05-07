@@ -23,27 +23,38 @@ impl SagaGet {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        match ctx.stores.sagas.get(&params.saga_id) {
-            Ok(Some(row)) => {
-                let response = json!({
-                    "saga_id": row.saga_id,
-                    "saga": {
-                        "saga_id": row.saga_id,
-                        "title": row.title,
-                        "description": row.description,
-                        "status": row.status,
-                        "created_at": row.created_at,
-                        "updated_at": row.updated_at,
-                        "closed_at": row.closed_at,
-                        // members is always empty until saga_tasks rows exist
-                    "members": [],
-                    }
-                });
-                json_response(&response)
+        let row = match ctx.stores.sagas.get(&params.saga_id) {
+            Ok(Some(r)) => r,
+            Ok(None) => return json_response(&json!({ "saga": null })),
+            Err(e) => return ToolCallResult::error(format!("Failed to fetch saga: {e}")),
+        };
+
+        let brains = match ctx.stores.sagas.brains_for_saga(&params.saga_id) {
+            Ok(b) => b,
+            Err(e) => return ToolCallResult::error(format!("Failed to fetch saga brains: {e}")),
+        };
+
+        let brains_json: Vec<serde_json::Value> = brains
+            .iter()
+            .map(|b| json!({ "brain_id": b.brain_id, "name": b.name, "prefix": b.prefix }))
+            .collect();
+
+        let response = json!({
+            "saga_id": row.saga_id,
+            "saga": {
+                "saga_id": row.saga_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "closed_at": row.closed_at,
+                // members is always empty until saga_tasks rows exist
+                "members": [],
+                "brains": brains_json,
             }
-            Ok(None) => json_response(&json!({ "saga": null })),
-            Err(e) => ToolCallResult::error(format!("Failed to fetch saga: {e}")),
-        }
+        });
+        json_response(&response)
     }
 }
 
@@ -124,6 +135,10 @@ mod tests {
         assert_eq!(fetched["saga"]["title"], "Fetch Me");
         assert_eq!(fetched["saga"]["status"], "planning");
         assert!(fetched["saga"]["members"].as_array().unwrap().is_empty());
+        assert!(
+            fetched["saga"]["brains"].as_array().unwrap().is_empty(),
+            "new saga should have no brains"
+        );
     }
 
     #[tokio::test]

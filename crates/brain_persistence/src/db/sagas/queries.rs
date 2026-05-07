@@ -236,6 +236,39 @@ pub fn saga_has_task(conn: &Connection, saga_id: &str, task_id: &str) -> Result<
     Ok(n > 0)
 }
 
+/// Summary of a brain that has member tasks in a saga.
+#[derive(Debug, Clone)]
+pub struct BrainSummary {
+    pub brain_id: String,
+    pub name: String,
+    pub prefix: Option<String>,
+}
+
+/// Return the distinct set of brains that have member tasks in a saga.
+///
+/// Derived at read time via saga_tasks → tasks → brains JOIN.
+/// Returns an empty vec when the saga has no members.
+pub fn brains_for_saga(conn: &Connection, saga_id: &str) -> Result<Vec<BrainSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT b.brain_id, b.name, b.prefix
+         FROM saga_tasks st
+         JOIN tasks t ON t.task_id = st.task_id
+         JOIN brains b ON b.brain_id = t.brain_id
+         WHERE st.saga_id = ?1
+         ORDER BY b.brain_id",
+    )?;
+    let rows = stmt
+        .query_map([saga_id], |row| {
+            Ok(BrainSummary {
+                brain_id: row.get(0)?,
+                name: row.get(1)?,
+                prefix: row.get(2)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// List all task_ids belonging to a saga.
 pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String>> {
     let mut stmt =

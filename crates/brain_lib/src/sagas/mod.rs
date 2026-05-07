@@ -9,6 +9,8 @@ use brain_persistence::db::sagas::queries::{
 use brain_persistence::db::tasks::queries::resolve_task_id_scoped;
 use brain_persistence::error::BrainCoreError;
 
+pub use brain_persistence::db::sagas::queries::BrainSummary;
+
 use crate::error::Result;
 
 pub mod lifecycle;
@@ -18,7 +20,7 @@ pub use status::SagaStatus;
 
 /// Store for saga lifecycle operations. Registry-level: not scoped to any brain.
 pub struct SagaStore {
-    db: Db,
+    pub(crate) db: Db,
 }
 
 impl SagaStore {
@@ -232,6 +234,14 @@ impl SagaStore {
         })
     }
 
+    /// Return the distinct set of brains that have member tasks in this saga.
+    ///
+    /// Derived at read time — no denormalized table. Empty vec when saga has no members.
+    pub fn brains_for_saga(&self, saga_id: &str) -> Result<Vec<BrainSummary>> {
+        self.db
+            .with_read_conn(move |conn| queries::brains_for_saga(conn, saga_id))
+    }
+
     #[cfg(test)]
     pub(crate) fn db(&self) -> &Db {
         &self.db
@@ -379,6 +389,7 @@ impl SagaStore {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_macros)]
 mod tests {
     use super::*;
     use brain_persistence::db::Db;
@@ -1134,5 +1145,100 @@ mod tests {
             .start("01NONEXISTENT000000000000", "test")
             .unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn brains_for_saga_empty_when_no_members() {
+        let store = in_memory_store();
+        let saga = store.create("Empty", None, "test").unwrap();
+        let brains = store.brains_for_saga(&saga.saga_id).unwrap();
+        assert!(brains.is_empty(), "expected no brains for memberless saga");
+    }
+
+    #[test]
+    fn brains_for_saga_returns_distinct_brains() {
+        let store = in_memory_store();
+        let saga = store.create("Multi-brain", None, "test").unwrap();
+
+        // Insert two brains and tasks directly into the DB.
+        store.db.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('brain-a', 'Brain A', 'BRA', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('brain-b', 'Brain B', 'BRB', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tasks (task_id, brain_id, title, status, task_type, priority, created_at, updated_at)
+                 VALUES ('BRA-01TASK0000000000000000001', 'brain-a', 'Task A', 'open', 'task', 2, 0, 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tasks (task_id, brain_id, title, status, task_type, priority, created_at, updated_at)
+                 VALUES ('BRB-01TASK0000000000000000002', 'brain-b', 'Task B', 'open', 'task', 2, 0, 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 'BRA-01TASK0000000000000000001', 0)",
+                rusqlite::params![saga.saga_id],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 'BRB-01TASK0000000000000000002', 0)",
+                rusqlite::params![saga.saga_id],
+            )?;
+            Ok(())
+        }).unwrap();
+
+        let brains = store.brains_for_saga(&saga.saga_id).unwrap();
+        assert_eq!(brains.len(), 2);
+        let ids: Vec<&str> = brains.iter().map(|b| b.brain_id.as_str()).collect();
+        assert!(ids.contains(&"brain-a"));
+        assert!(ids.contains(&"brain-b"));
+    }
+
+    #[test]
+    fn brains_for_saga_deduplicates_same_brain() {
+        let store = in_memory_store();
+        let saga = store
+            .create("Single Brain Two Tasks", None, "test")
+            .unwrap();
+
+        store.db.with_write_conn(|conn| {
+            conn.execute(
+                "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('brain-c', 'Brain C', 'BRC', 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tasks (task_id, brain_id, title, status, task_type, priority, created_at, updated_at)
+                 VALUES ('BRC-01TASK0000000000000000003', 'brain-c', 'Task C1', 'open', 'task', 2, 0, 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tasks (task_id, brain_id, title, status, task_type, priority, created_at, updated_at)
+                 VALUES ('BRC-01TASK0000000000000000004', 'brain-c', 'Task C2', 'open', 'task', 2, 0, 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 'BRC-01TASK0000000000000000003', 0)",
+                rusqlite::params![saga.saga_id],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 'BRC-01TASK0000000000000000004', 0)",
+                rusqlite::params![saga.saga_id],
+            )?;
+            Ok(())
+        }).unwrap();
+
+        let brains = store.brains_for_saga(&saga.saga_id).unwrap();
+        assert_eq!(
+            brains.len(),
+            1,
+            "two tasks in same brain should yield one BrainSummary"
+        );
+        assert_eq!(brains[0].brain_id, "brain-c");
+        assert_eq!(brains[0].name, "Brain C");
+        assert_eq!(brains[0].prefix.as_deref(), Some("BRC"));
     }
 }
