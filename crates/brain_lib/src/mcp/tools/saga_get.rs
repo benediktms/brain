@@ -39,6 +39,25 @@ impl SagaGet {
             .map(|b| json!({ "brain_id": b.brain_id, "name": b.name, "prefix": b.prefix }))
             .collect();
 
+        let members = match ctx.stores.sagas.list_member_stubs(&params.saga_id) {
+            Ok(stubs) => stubs,
+            Err(e) => {
+                return ToolCallResult::error(format!("Failed to fetch saga members: {e}"));
+            }
+        };
+        let members_json: Vec<serde_json::Value> = members
+            .iter()
+            .map(|m| {
+                json!({
+                    "task_id": m.task_id,
+                    "brain_id": m.brain_id,
+                    "title": m.title,
+                    "status": m.status,
+                    "task_type": m.task_type,
+                })
+            })
+            .collect();
+
         let response = json!({
             "saga_id": row.saga_id,
             "saga": {
@@ -49,8 +68,7 @@ impl SagaGet {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                // members is always empty until saga_tasks rows exist
-                "members": [],
+                "members": members_json,
                 "brains": brains_json,
             }
         });

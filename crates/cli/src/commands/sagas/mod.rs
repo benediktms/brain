@@ -224,7 +224,8 @@ pub fn stats(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         println!("  Done:        {}", c.done);
         println!("  Cancelled:   {}", c.cancelled);
         if let Some(pct) = c.completion_pct {
-            println!("  Completion:  {:.1}%", pct * 100.0);
+            // pct is already a 0–100 percentage from saga_stats; do not multiply.
+            println!("  Completion:  {pct:.1}%");
         } else {
             println!("  Completion:  n/a");
         }

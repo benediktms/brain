@@ -24,6 +24,31 @@ pub enum SagaEventType {
     SagaReopened,
     SagaTaskAdded,
     SagaTaskRemoved,
+    /// Emitted once per member task transitioned by a `close --cascade` or
+    /// `cancel --cascade`. Replay can reconstruct cascade results without
+    /// joining `task_events`.
+    SagaTaskCascaded,
+}
+
+impl SagaEventType {
+    /// Bare snake_case string for the `saga_events.event_type` column.
+    ///
+    /// Use this instead of `serde_json::to_string(...)`, which would wrap the
+    /// value in JSON quotes (`"saga_task_added"`) — a permanent on-disk shape
+    /// that diverges from `task_events`.
+    pub fn as_column_str(&self) -> &'static str {
+        match self {
+            SagaEventType::SagaCreated => "saga_created",
+            SagaEventType::SagaUpdated => "saga_updated",
+            SagaEventType::SagaStarted => "saga_started",
+            SagaEventType::SagaClosed => "saga_closed",
+            SagaEventType::SagaCancelled => "saga_cancelled",
+            SagaEventType::SagaReopened => "saga_reopened",
+            SagaEventType::SagaTaskAdded => "saga_task_added",
+            SagaEventType::SagaTaskRemoved => "saga_task_removed",
+            SagaEventType::SagaTaskCascaded => "saga_task_cascaded",
+        }
+    }
 }
 
 /// Payload for `SagaUpdated` — carries the fields that changed.
@@ -104,6 +129,7 @@ mod tests {
         round_trip(&SagaEventType::SagaReopened);
         round_trip(&SagaEventType::SagaTaskAdded);
         round_trip(&SagaEventType::SagaTaskRemoved);
+        round_trip(&SagaEventType::SagaTaskCascaded);
     }
 
     #[test]
@@ -119,6 +145,22 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&SagaEventType::SagaTaskAdded).unwrap(),
             "\"saga_task_added\""
+        );
+    }
+
+    #[test]
+    fn as_column_str_is_unquoted_snake_case() {
+        // Storage shape on the saga_events.event_type column: bare snake_case,
+        // no JSON quotes. Matches task_events convention.
+        assert_eq!(SagaEventType::SagaCreated.as_column_str(), "saga_created");
+        assert_eq!(SagaEventType::SagaClosed.as_column_str(), "saga_closed");
+        assert_eq!(
+            SagaEventType::SagaTaskAdded.as_column_str(),
+            "saga_task_added"
+        );
+        assert_eq!(
+            SagaEventType::SagaTaskCascaded.as_column_str(),
+            "saga_task_cascaded"
         );
     }
 

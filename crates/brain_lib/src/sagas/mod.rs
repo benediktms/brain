@@ -8,7 +8,8 @@ use brain_persistence::db::sagas::events::{
     SagaClosedPayload, SagaEvent, SagaEventType, SagaTaskPayload, SagaUpdatedPayload, new_saga_id,
 };
 use brain_persistence::db::sagas::queries::{
-    self, LabelCount, SagaEventInsert, SagaRow, SagaStatsRow, close_saga, list_saga_member_task_ids,
+    self, LabelCount, SagaEventInsert, SagaMemberStub, SagaRow, SagaStatsRow, close_saga,
+    list_saga_member_stubs, list_saga_member_task_ids,
 };
 use brain_persistence::db::sagas::reopen_saga;
 use brain_persistence::db::tasks::queries::{
@@ -69,8 +70,7 @@ impl SagaStore {
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
-                    event_type: &serde_json::to_string(&event.event_type)
-                        .expect("SagaEventType serialization is infallible"),
+                    event_type: event.event_type.as_column_str(),
                     timestamp: event.timestamp,
                     actor: &event.actor,
                     payload: &serde_json::to_string(&event.payload)?,
@@ -131,11 +131,10 @@ impl SagaStore {
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
-                    event_type: &serde_json::to_string(&event.event_type)
-                        .expect("SagaEventType serialization is infallible"),
+                    event_type: event.event_type.as_column_str(),
                     timestamp: event.timestamp,
                     actor: &event.actor,
-                    payload: &event.payload.to_string(),
+                    payload: &serde_json::to_string(&event.payload)?,
                 },
             )?;
 
@@ -182,11 +181,10 @@ impl SagaStore {
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
-                    event_type: &serde_json::to_string(&event.event_type)
-                        .expect("SagaEventType serialization is infallible"),
+                    event_type: event.event_type.as_column_str(),
                     timestamp: event.timestamp,
                     actor: &event.actor,
-                    payload: &event.payload.to_string(),
+                    payload: &serde_json::to_string(&event.payload)?,
                 },
             )?;
 
@@ -240,11 +238,10 @@ impl SagaStore {
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
-                    event_type: &serde_json::to_string(&event.event_type)
-                        .expect("SagaEventType serialization is infallible"),
+                    event_type: event.event_type.as_column_str(),
                     timestamp: event.timestamp,
                     actor: &event.actor,
-                    payload: &event.payload.to_string(),
+                    payload: &serde_json::to_string(&event.payload)?,
                 },
             )?;
 
@@ -265,7 +262,22 @@ impl SagaStore {
     /// the brains those tasks belong to. Empty for planning/closed/cancelled sagas.
     pub fn frontier(&self, saga_id: &str) -> Result<SagaFrontier> {
         self.db.with_read_conn(move |conn| {
-            // Fetch member task IDs (cross-brain).
+            // Spec invariant: only `open` sagas can have a non-empty frontier.
+            // Without this guard the result is empty only by accident (no ready
+            // member tasks); the contract should be explicit.
+            let row = queries::get_saga(conn, saga_id)?.ok_or_else(|| {
+                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+            })?;
+            let status: SagaStatus = row.status.parse().map_err(|_| {
+                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
+            })?;
+            if !matches!(status, SagaStatus::Open) {
+                return Ok(SagaFrontier {
+                    tasks: vec![],
+                    brains: vec![],
+                });
+            }
+
             let mut stmt = conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1")?;
             let task_ids: Vec<String> = stmt
                 .query_map([saga_id], |row| row.get(0))?
@@ -275,6 +287,25 @@ impl SagaStore {
             let brains = queries::brains_for_saga(conn, saga_id)?;
             Ok(SagaFrontier { tasks, brains })
         })
+    }
+
+    /// Return saga member task stubs (task_id, brain_id, title, status, task_type)
+    /// in `added_at` order. Single JOIN — no N+1.
+    ///
+    /// Orphaned memberships (task deleted from another brain) are silently
+    /// dropped: `saga_tasks` has no FK to `tasks` by design, so the INNER JOIN
+    /// is the only place these get filtered.
+    pub fn list_member_stubs(&self, saga_id: &str) -> Result<Vec<SagaMemberStub>> {
+        self.db
+            .with_read_conn(move |conn| Ok(list_saga_member_stubs(conn, saga_id)?))
+    }
+
+    /// Return raw task IDs for saga membership without joining `tasks`.
+    /// Includes orphans. Use `list_member_stubs` instead unless you specifically
+    /// need orphan IDs for cleanup.
+    pub fn list_members(&self, saga_id: &str) -> Result<Vec<String>> {
+        self.db
+            .with_read_conn(move |conn| Ok(list_saga_member_task_ids(conn, saga_id)?))
     }
 
     /// Aggregate counts, completion %, label histogram, and brains for a saga.
@@ -307,9 +338,17 @@ impl SagaStore {
                     row.status
                 ))
             })?;
+            // Pre-checks for friendlier error messages — `validate_transition`
+            // would still reject these, but with a generic "invalid transition"
+            // string. Spec: cancel applies only to active states.
             if matches!(from, SagaStatus::Cancelled) {
                 return Err(crate::error::BrainCoreError::Parse(format!(
                     "saga '{saga_id}' is already cancelled"
+                )));
+            }
+            if matches!(from, SagaStatus::Closed) {
+                return Err(crate::error::BrainCoreError::Parse(format!(
+                    "saga '{saga_id}' is closed; reopen it before cancelling"
                 )));
             }
             validate_transition(from, SagaStatus::Cancelled)?;
@@ -329,11 +368,10 @@ impl SagaStore {
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
-                    event_type: &serde_json::to_string(&event.event_type)
-                        .expect("SagaEventType serialization is infallible"),
+                    event_type: event.event_type.as_column_str(),
                     timestamp: event.timestamp,
                     actor: &event.actor,
-                    payload: &event.payload.to_string(),
+                    payload: &serde_json::to_string(&event.payload)?,
                 },
             )?;
 
@@ -444,11 +482,10 @@ impl SagaStore {
                     &SagaEventInsert {
                         event_id: &event.event_id,
                         saga_id: &event.saga_id,
-                        event_type: &serde_json::to_string(&event.event_type)
-                            .expect("SagaEventType serialization is infallible"),
+                        event_type: event.event_type.as_column_str(),
                         timestamp: event.timestamp,
                         actor: &event.actor,
-                        payload: &event.payload.to_string(),
+                        payload: &serde_json::to_string(&event.payload)?,
                     },
                 )?;
             }
@@ -508,11 +545,10 @@ impl SagaStore {
                     &SagaEventInsert {
                         event_id: &event.event_id,
                         saga_id: &event.saga_id,
-                        event_type: &serde_json::to_string(&event.event_type)
-                            .expect("SagaEventType serialization is infallible"),
+                        event_type: event.event_type.as_column_str(),
                         timestamp: event.timestamp,
                         actor: &event.actor,
-                        payload: &event.payload.to_string(),
+                        payload: &serde_json::to_string(&event.payload)?,
                     },
                 )?;
             }
@@ -558,11 +594,10 @@ impl SagaStore {
                 &SagaEventInsert {
                     event_id: &event.event_id,
                     saga_id: &event.saga_id,
-                    event_type: &serde_json::to_string(&event.event_type)
-                        .expect("SagaEventType serialization is infallible"),
+                    event_type: event.event_type.as_column_str(),
                     timestamp: event.timestamp,
                     actor: &event.actor,
-                    payload: &event.payload.to_string(),
+                    payload: &serde_json::to_string(&event.payload)?,
                 },
             )?;
 
@@ -1293,7 +1328,7 @@ mod tests {
             .with_read_conn(|c| {
                 c.query_row(
                     "SELECT COUNT(*) FROM saga_events \
-                     WHERE saga_id = ?1 AND event_type = '\"saga_task_added\"'",
+                     WHERE saga_id = ?1 AND event_type = 'saga_task_added'",
                     [saga.saga_id.as_str()],
                     |r| r.get(0),
                 )

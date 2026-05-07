@@ -25,6 +25,48 @@ pub struct SagaRow {
     pub closed_at: Option<i64>,
 }
 
+/// A lightweight task stub for saga membership rendering. Includes `brain_id`
+/// because saga members are cross-brain by design — callers need to know which
+/// brain each member task belongs to without an extra round-trip.
+///
+/// Orphans (saga_tasks rows whose task is missing) are dropped by the LEFT-JOIN-style
+/// query; only resolvable members are returned.
+#[derive(Debug, Clone)]
+pub struct SagaMemberStub {
+    pub task_id: String,
+    pub brain_id: String,
+    pub title: String,
+    pub status: String,
+    pub task_type: String,
+}
+
+/// Return saga member task stubs in `added_at` order, joined with `tasks`.
+///
+/// Single query — no N+1. Orphaned memberships (task deleted in another brain)
+/// are silently dropped via the INNER JOIN: `saga_tasks` has no FK to `tasks`
+/// by design, so this is the only place where orphans get filtered.
+pub fn list_saga_member_stubs(conn: &Connection, saga_id: &str) -> Result<Vec<SagaMemberStub>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.task_id, COALESCE(t.brain_id, ''), t.title, t.status, t.task_type \
+         FROM saga_tasks st \
+         INNER JOIN tasks t ON t.task_id = st.task_id \
+         WHERE st.saga_id = ?1 \
+         ORDER BY st.added_at, st.task_id",
+    )?;
+    let rows = stmt
+        .query_map([saga_id], |row| {
+            Ok(SagaMemberStub {
+                task_id: row.get(0)?,
+                brain_id: row.get(1)?,
+                title: row.get(2)?,
+                status: row.get(3)?,
+                task_type: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SagaRow> {
     Ok(SagaRow {
         saga_id: row.get(0)?,

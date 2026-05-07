@@ -61,9 +61,10 @@ impl McpTool for SagaCancel {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Cancel a saga. Allowed from any non-cancelled status. Sets closed_at \
-                and emits SagaCancelled. With cascade=true, non-terminal member tasks are \
-                transitioned to cancelled."
+            description: "Cancel a saga. Allowed from active states (planning, open). \
+                Closed sagas must be reopened before cancelling. Sets closed_at and emits \
+                SagaCancelled. With cascade=true, non-terminal member tasks are transitioned \
+                to cancelled."
                 .into(),
             input_schema: json!({
                 "type": "object",

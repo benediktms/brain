@@ -2,21 +2,21 @@ use brain_persistence::error::{BrainCoreError, Result};
 
 use super::status::SagaStatus;
 
-/// Validate a lifecycle transition. Returns `Ok(())` for the 7 valid edges;
-/// returns an error for all 9 forbidden transitions.
+/// Validate a lifecycle transition. Returns `Ok(())` for the 6 valid edges;
+/// returns an error for all 10 forbidden transitions.
 ///
 /// This function is the single source of truth for the saga state machine.
-/// Tickets .7 (close), .8 (cancel), .9 (reopen) MUST NOT modify this function —
-/// they only emit their respective event and call this validator.
 ///
-/// Valid edges (7):
+/// Valid edges (6):
 ///   planning  → open        (start)
 ///   open      → closed      (close)
 ///   planning  → cancelled   (cancel from planning)
 ///   open      → cancelled   (cancel from open)
-///   closed    → cancelled   (cancel from closed)
 ///   closed    → open        (reopen)
 ///   cancelled → open        (reopen)
+///
+/// Cancel from `closed` is rejected — spec says "cancel any *active* status".
+/// Use `reopen` first if you need to flip a closed saga to cancelled.
 pub fn validate_transition(from: SagaStatus, to: SagaStatus) -> Result<()> {
     use SagaStatus::*;
     match (from, to) {
@@ -24,7 +24,6 @@ pub fn validate_transition(from: SagaStatus, to: SagaStatus) -> Result<()> {
         (Open, Closed) => Ok(()),
         (Planning, Cancelled) => Ok(()),
         (Open, Cancelled) => Ok(()),
-        (Closed, Cancelled) => Ok(()),
         (Closed, Open) => Ok(()),
         (Cancelled, Open) => Ok(()),
         _ => Err(BrainCoreError::Parse(format!(
@@ -49,7 +48,6 @@ mod tests {
                 | (Open, Closed)
                 | (Planning, Cancelled)
                 | (Open, Cancelled)
-                | (Closed, Cancelled)
                 | (Closed, Open)
                 | (Cancelled, Open)
         )
@@ -83,8 +81,8 @@ mod tests {
             }
         }
 
-        assert_eq!(valid_count, 7, "exactly 7 valid edges");
-        assert_eq!(forbidden_count, 9, "exactly 9 forbidden transitions");
+        assert_eq!(valid_count, 6, "exactly 6 valid edges");
+        assert_eq!(forbidden_count, 10, "exactly 10 forbidden transitions");
     }
 
     #[test]
@@ -108,8 +106,10 @@ mod tests {
     }
 
     #[test]
-    fn cancel_from_closed() {
-        assert!(validate_transition(Closed, Cancelled).is_ok());
+    fn cancel_from_closed_rejected() {
+        // Spec: cancel applies only to active states. Closed → Cancelled is
+        // rejected; callers must `reopen` first.
+        assert!(validate_transition(Closed, Cancelled).is_err());
     }
 
     #[test]
