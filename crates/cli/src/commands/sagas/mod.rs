@@ -31,7 +31,6 @@ pub fn create(ctx: &SagaCtx, title: &str, description: Option<&str>) -> Result<(
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                "members": [],
             }
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
@@ -96,7 +95,7 @@ pub fn update(
     description: Option<Option<&str>>,
 ) -> Result<()> {
     if title.is_none() && description.is_none() {
-        anyhow::bail!("at least one of --title or --description is required");
+        anyhow::bail!("at least one of --title, --description, or --clear-description is required");
     }
     let row = ctx
         .stores
@@ -153,6 +152,7 @@ pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
                     "title": t.title,
                     "status": t.status,
                     "priority": t.priority,
+                    "task_type": t.task_type,
                 })
             })
             .collect();
@@ -166,17 +166,25 @@ pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
             "{}",
             serde_json::to_string_pretty(&json!({
                 "saga_id": saga_id,
+                "saga_status": f.status.to_string(),
                 "tasks": tasks,
                 "brains": brains,
                 "total": total,
             }))?
         );
-    } else if f.tasks.is_empty() {
-        println!("No ready tasks in saga {saga_id}.");
     } else {
-        println!("Ready tasks in saga {saga_id}:");
-        for t in &f.tasks {
-            println!("  [{}] {} ({})", t.task_id, t.title, t.status);
+        if f.tasks.is_empty() {
+            println!("No ready tasks in saga {saga_id}.");
+        } else {
+            println!("Ready tasks in saga {saga_id}:");
+            for t in &f.tasks {
+                println!("  [{}] {} ({})", t.task_id, t.title, t.status);
+            }
+        }
+        // Mirror the `show` command's brains line.
+        if !f.brains.is_empty() {
+            let names: Vec<&str> = f.brains.iter().map(|b| b.name.as_str()).collect();
+            println!("Brains: {}", names.join(", "));
         }
     }
     Ok(())
@@ -233,6 +241,10 @@ pub fn stats(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
             for l in &s.label_histogram {
                 println!("    {}: {}", l.label, l.count);
             }
+        }
+        if !s.brains.is_empty() {
+            let names: Vec<&str> = s.brains.iter().map(|b| b.name.as_str()).collect();
+            println!("  Brains: {}", names.join(", "));
         }
     }
     Ok(())
@@ -330,7 +342,6 @@ pub fn reopen(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                "members": [],
             }
         });
         println!("{}", serde_json::to_string_pretty(&out)?);

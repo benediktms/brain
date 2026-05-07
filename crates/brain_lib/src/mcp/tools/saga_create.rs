@@ -60,8 +60,6 @@ impl SagaCreate {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                // members is always empty at creation time; populated once saga_tasks rows exist
-                "members": [],
             }
         });
 
@@ -146,7 +144,8 @@ mod tests {
         assert!(!saga_id.contains('-'), "saga_id must have no prefix");
         assert_eq!(parsed["saga"]["status"], "planning");
         assert_eq!(parsed["saga"]["title"], "My Saga");
-        assert!(parsed["saga"]["members"].as_array().unwrap().is_empty());
+        // Mutating verbs no longer include `members`; clients must call sagas.get.
+        assert!(parsed["saga"].get("members").is_none());
     }
 
     #[tokio::test]

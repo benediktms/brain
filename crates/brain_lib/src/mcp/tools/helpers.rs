@@ -29,10 +29,7 @@ pub fn json_response(value: &impl Serialize) -> ToolCallResult {
 /// - `Cancelled` → `{ "task_id": "...", "cancelled": true }`
 /// - `Skipped`   → `{ "task_id": "...", "skipped":   true, "reason": "..." }`
 /// - `Failed`    → `{ "task_id": "...", "failed":    true, "error":  "..." }`
-///
-/// The second arg is ignored — kept for source compatibility while we settle
-/// on the helper signature. Callers can pass any `CascadeOutcome`.
-pub fn cascade_results_to_json(results: &[CascadeResult], _hint: CascadeOutcome) -> Vec<Value> {
+pub fn cascade_results_to_json(results: &[CascadeResult]) -> Vec<Value> {
     results
         .iter()
         .map(|r| match &r.outcome {

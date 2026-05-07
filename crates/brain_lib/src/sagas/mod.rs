@@ -8,7 +8,7 @@ use brain_persistence::db::sagas::events::{
 };
 use brain_persistence::db::sagas::queries::{
     self, LabelCount, SagaEventInsert, SagaMemberStub, SagaRow, SagaStatsRow, close_saga,
-    list_saga_member_stubs, list_saga_member_task_ids,
+    list_saga_member_stubs, list_saga_task_ids,
 };
 use brain_persistence::db::sagas::reopen_saga;
 use brain_persistence::db::tasks::queries::{
@@ -25,9 +25,15 @@ pub use lifecycle::validate_transition;
 pub use status::SagaStatus;
 
 /// The ready tasks in a saga plus the set of brains those tasks belong to.
+///
+/// `status` is always populated from the saga's row. For non-`Open` sagas the
+/// `tasks` and `brains` vecs are empty by contract — callers can distinguish
+/// "no ready tasks" (Open with empty `tasks`) from "saga is in a non-Open
+/// state" (`status != Open`) by inspecting `status`.
 pub struct SagaFrontier {
     pub tasks: Vec<TaskRow>,
     pub brains: Vec<BrainSummary>,
+    pub status: SagaStatus,
 }
 
 /// Aggregated statistics for a saga's member tasks.
@@ -172,6 +178,7 @@ impl SagaStore {
     ) -> Result<(SagaRow, Vec<CascadeResult>)> {
         let actor_owned = actor.to_string();
         self.db.with_write_conn(|conn| {
+            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
             let tx = conn.unchecked_transaction()?;
 
             let current = queries::get_saga(&tx, saga_id)?.ok_or_else(|| {
@@ -230,6 +237,7 @@ impl SagaStore {
     /// Transition a saga from `planning` to `open`. Emits `SagaStarted`.
     pub fn start(&self, saga_id: &str, actor: &str) -> Result<SagaRow> {
         self.db.with_write_conn(|conn| {
+            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
             let tx = conn.unchecked_transaction()?;
 
             let row = queries::get_saga(&tx, saga_id)?.ok_or_else(|| {
@@ -302,6 +310,7 @@ impl SagaStore {
                 return Ok(SagaFrontier {
                     tasks: vec![],
                     brains: vec![],
+                    status,
                 });
             }
 
@@ -312,7 +321,11 @@ impl SagaStore {
 
             let tasks = list_ready_actionable_for_tasks(conn, &task_ids)?;
             let brains = queries::brains_for_saga(conn, saga_id)?;
-            Ok(SagaFrontier { tasks, brains })
+            Ok(SagaFrontier {
+                tasks,
+                brains,
+                status,
+            })
         })
     }
 
@@ -332,7 +345,7 @@ impl SagaStore {
     /// need orphan IDs for cleanup.
     pub fn list_members(&self, saga_id: &str) -> Result<Vec<String>> {
         self.db
-            .with_read_conn(move |conn| list_saga_member_task_ids(conn, saga_id))
+            .with_read_conn(move |conn| list_saga_task_ids(conn, saga_id))
     }
 
     /// Aggregate counts, completion %, label histogram, and brains for a saga.
@@ -365,6 +378,7 @@ impl SagaStore {
     ) -> Result<(SagaRow, Vec<CascadeResult>)> {
         let actor_owned = actor.to_string();
         self.db.with_write_conn(|conn| {
+            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
             let tx = conn.unchecked_transaction()?;
 
             let row = queries::get_saga(&tx, saga_id)?.ok_or_else(|| {
@@ -427,19 +441,23 @@ impl SagaStore {
         &self.db
     }
 
-    /// Atomically add one or more tasks to a saga.
+    /// Atomically add one or more tasks to a saga (atomic batch + idempotent —
+    /// already-member tasks are skipped).
     ///
     /// All task IDs are resolved via `resolve_task_id_scoped` (cross-brain
-    /// aware). The entire batch is all-or-nothing: if any task ID fails to
-    /// resolve, is already a member, or the saga is closed/cancelled, the
-    /// transaction is rolled back and an error is returned.
+    /// aware). If any task ID fails to resolve or the saga is
+    /// closed/cancelled, the entire transaction rolls back and an error is
+    /// returned. Tasks that are already members of the saga, and duplicates
+    /// within the input batch, are silently skipped — they do not insert and
+    /// do not emit events.
     ///
-    /// Returns the number of tasks successfully added.
+    /// Returns the number of *newly inserted* tasks.
     pub fn add_tasks(&self, saga_id: &str, task_ids: &[String], actor: &str) -> Result<usize> {
         if task_ids.is_empty() {
             return Ok(0);
         }
 
+        // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
         self.db.with_write_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
 
@@ -459,25 +477,35 @@ impl SagaStore {
                 _ => {}
             }
 
-            // Resolve all task IDs first — fail fast before any writes.
-            let mut resolved: Vec<String> = Vec::with_capacity(task_ids.len());
+            // Resolve all task IDs first — bad IDs fail-fast before any writes.
+            // Already-member tasks (and duplicates within the input batch) are
+            // skipped silently for idempotency.
+            let mut to_insert: Vec<String> = Vec::with_capacity(task_ids.len());
             for raw_id in task_ids {
                 let full_id = resolve_task_id_scoped(&tx, raw_id, None).map_err(|e| {
                     BrainCoreError::TaskEvent(format!("task '{raw_id}' could not be resolved: {e}"))
                 })?;
-                // Reject duplicates.
+                // Skip if already a member (includes prior iterations of this loop
+                // because insert_saga_tasks runs after the loop — so we also need
+                // to dedupe against `to_insert`).
                 if queries::saga_has_task(&tx, saga_id, &full_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
-                        "task '{full_id}' is already a member of saga '{saga_id}'"
-                    )));
+                    continue;
                 }
-                resolved.push(full_id);
+                if to_insert.contains(&full_id) {
+                    continue;
+                }
+                to_insert.push(full_id);
             }
 
-            queries::insert_saga_tasks(&tx, saga_id, &resolved)?;
+            if to_insert.is_empty() {
+                tx.commit()?;
+                return Ok(0);
+            }
 
-            // Emit one SagaTaskAdded event per task.
-            for task_id in &resolved {
+            queries::insert_saga_tasks(&tx, saga_id, &to_insert)?;
+
+            // Emit one SagaTaskAdded event per newly inserted task.
+            for task_id in &to_insert {
                 let event = SagaEvent::new(
                     saga_id,
                     actor,
@@ -500,7 +528,7 @@ impl SagaStore {
             }
 
             tx.commit()?;
-            Ok(resolved.len())
+            Ok(to_insert.len())
         })
     }
 
@@ -513,11 +541,25 @@ impl SagaStore {
         }
         let actor = actor.to_string();
         let saga_id = saga_id.to_string();
+        // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
         self.db.with_write_conn(move |conn| {
             // H1: SELECT-DELETE-INSERT must be atomic so a concurrent insert
             // between the SELECT and DELETE cannot create a member that is
             // then deleted without a SagaTaskRemoved event being emitted.
             let tx = conn.unchecked_transaction()?;
+
+            // Reject closed/cancelled sagas — same guard as `add_tasks`.
+            let row = queries::get_saga(&tx, &saga_id)?.ok_or_else(|| {
+                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+            })?;
+            let saga_status: SagaStatus = row.status.parse().map_err(|_| {
+                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
+            })?;
+            if matches!(saga_status, SagaStatus::Closed | SagaStatus::Cancelled) {
+                return Err(BrainCoreError::Parse(format!(
+                    "cannot remove tasks from saga in '{saga_status}' status; reopen it before modifying"
+                )));
+            }
 
             // Identify which task_ids are currently members before deleting,
             // so we know exactly which ones to emit events for.
@@ -582,6 +624,7 @@ impl SagaStore {
         let actor = actor.to_string();
         let saga_id = saga_id.to_string();
         self.db.with_write_conn(move |conn| {
+            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
             let tx = conn.unchecked_transaction()?;
 
             let row = queries::get_saga(&tx, &saga_id)?.ok_or_else(|| {
@@ -633,15 +676,15 @@ impl SagaStore {
     /// previously wrote `as_millis()` which was ~1000× larger and would look
     /// like a future timestamp to anything that compared across paths.
     #[cfg(test)]
-    pub fn force_status_for_test(&self, saga_id: &str, status: &str) -> Result<()> {
+    pub fn force_status_for_test(&self, saga_id: &str, status: SagaStatus) -> Result<()> {
         let saga_id = saga_id.to_string();
-        let status = status.to_string();
+        let status_str = status.as_str();
         let ts = crate::utils::now_ts();
         self.db.with_write_conn(move |conn| {
             #[allow(clippy::disallowed_macros)]
             conn.execute(
                 "UPDATE sagas SET status = ?1, updated_at = ?2 WHERE saga_id = ?3",
-                rusqlite::params![status, ts, saga_id],
+                rusqlite::params![status_str, ts, saga_id],
             )?;
             Ok(())
         })
@@ -1524,5 +1567,245 @@ mod tests {
         assert_eq!(brains[0].brain_id, "brain-c");
         assert_eq!(brains[0].name, "Brain C");
         assert_eq!(brains[0].prefix.as_deref(), Some("BRC"));
+    }
+
+    // ── M4: add_tasks idempotency ──────────────────────────────────────────
+
+    // M4a: duplicates within a single input batch are deduped — exactly one
+    // insert and one event are emitted.
+    #[test]
+    fn add_tasks_dedup_within_input_batch() {
+        let store = in_memory_store();
+        let saga = store.create("Dedup Saga", None, "test").unwrap();
+        insert_task(&store, "dup-brain-task01", "brain-d");
+
+        let count = store
+            .add_tasks(
+                &saga.saga_id,
+                &[
+                    "dup-brain-task01".to_string(),
+                    "dup-brain-task01".to_string(),
+                ],
+                "test",
+            )
+            .unwrap();
+        assert_eq!(count, 1, "duplicate within batch should count once");
+
+        let member_count: i64 = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1",
+                    [saga.saga_id.as_str()],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(member_count, 1, "should be exactly 1 saga_tasks row");
+
+        let event_count: i64 = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM saga_events \
+                     WHERE saga_id = ?1 AND event_type = 'saga_task_added'",
+                    [saga.saga_id.as_str()],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(event_count, 1, "should emit exactly 1 SagaTaskAdded event");
+    }
+
+    // M4b: tasks already members of the saga are skipped; only new ones are
+    // inserted/event-emitted, but the call still succeeds.
+    #[test]
+    fn add_tasks_skips_already_member_no_error() {
+        let store = in_memory_store();
+        let saga = store.create("Idempotent Saga", None, "test").unwrap();
+        insert_task(&store, "idem-task01", "brain-i");
+        insert_task(&store, "idem-task02", "brain-i");
+
+        // Add t1 first.
+        let first = store
+            .add_tasks(&saga.saga_id, &["idem-task01".to_string()], "test")
+            .unwrap();
+        assert_eq!(first, 1);
+
+        // Now add [t1, t2] — t1 is already a member, t2 is new.
+        let second = store
+            .add_tasks(
+                &saga.saga_id,
+                &["idem-task01".to_string(), "idem-task02".to_string()],
+                "test",
+            )
+            .unwrap();
+        assert_eq!(second, 1, "only t2 should be newly inserted");
+
+        // Both tasks must end up as members.
+        let ids: Vec<String> = store
+            .db
+            .with_read_conn(|c| {
+                let mut stmt = c
+                    .prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY task_id")
+                    .unwrap();
+                let ids = stmt
+                    .query_map([saga.saga_id.as_str()], |r| r.get(0))
+                    .unwrap()
+                    .collect::<std::result::Result<Vec<String>, _>>()
+                    .unwrap();
+                Ok(ids)
+            })
+            .unwrap();
+        assert!(ids.contains(&"idem-task01".to_string()));
+        assert!(ids.contains(&"idem-task02".to_string()));
+
+        // Exactly 2 SagaTaskAdded events total (1 from first call, 1 from
+        // second call — the dup must not emit a second event for t1).
+        let event_count: i64 = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM saga_events \
+                     WHERE saga_id = ?1 AND event_type = 'saga_task_added'",
+                    [saga.saga_id.as_str()],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(event_count, 2);
+    }
+
+    // ── M5: remove_tasks status guard ──────────────────────────────────────
+
+    #[test]
+    fn remove_tasks_closed_saga_rejected() {
+        let store = in_memory_store();
+        let saga = store.create("Closed Remove Saga", None, "test").unwrap();
+        insert_task(&store, "rem-brain-task01", "brain-r");
+
+        // Add the task while still in a non-terminal state.
+        store
+            .add_tasks(&saga.saga_id, &["rem-brain-task01".to_string()], "test")
+            .unwrap();
+
+        // Force the saga to closed.
+        store
+            .force_status_for_test(&saga.saga_id, SagaStatus::Closed)
+            .unwrap();
+
+        let err = store
+            .remove_tasks(&saga.saga_id, vec!["rem-brain-task01".to_string()], "test")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("closed") && msg.contains("reopen"),
+            "error should mention 'closed' and 'reopen', got: {msg}"
+        );
+
+        // Membership must be unchanged.
+        let count: i64 = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1 AND task_id = ?2",
+                    [saga.saga_id.as_str(), "rem-brain-task01"],
+                    |r| r.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "membership must be unchanged when remove rejected"
+        );
+    }
+
+    // ── reopen integration tests ───────────────────────────────────────────
+
+    #[test]
+    fn reopen_closed_succeeds_and_clears_closed_at() {
+        let store = in_memory_store();
+        let saga = store.create("Reopen Closed", None, "test").unwrap();
+        store.start(&saga.saga_id, "test").unwrap();
+        let (closed, _) = store.close(&saga.saga_id, false, "test").unwrap();
+        assert_eq!(closed.status, "closed");
+        assert!(closed.closed_at.is_some(), "close should set closed_at");
+
+        let reopened = store.reopen(&saga.saga_id, "test").unwrap();
+        assert_eq!(reopened.status, "open");
+        assert!(
+            reopened.closed_at.is_none(),
+            "reopen must clear closed_at, got: {:?}",
+            reopened.closed_at
+        );
+    }
+
+    #[test]
+    fn reopen_cancelled_succeeds() {
+        let store = in_memory_store();
+        let saga = store.create("Reopen Cancelled", None, "test").unwrap();
+        store.start(&saga.saga_id, "test").unwrap();
+        let (cancelled, _) = store.cancel(&saga.saga_id, false, "test").unwrap();
+        assert_eq!(cancelled.status, "cancelled");
+
+        let reopened = store.reopen(&saga.saga_id, "test").unwrap();
+        assert_eq!(reopened.status, "open");
+    }
+
+    #[test]
+    fn reopen_planning_rejected() {
+        let store = in_memory_store();
+        let saga = store.create("Planning Saga", None, "test").unwrap();
+        assert_eq!(saga.status, "planning");
+
+        let err = store.reopen(&saga.saga_id, "test").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("planning"),
+            "error should mention 'planning' status, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn reopen_open_rejected() {
+        let store = in_memory_store();
+        let saga = store.create("Open Saga", None, "test").unwrap();
+        store.start(&saga.saga_id, "test").unwrap();
+
+        let err = store.reopen(&saga.saga_id, "test").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("open"),
+            "error should mention 'open' status, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn reopen_emits_saga_reopened_event() {
+        let store = in_memory_store();
+        let saga = store.create("Reopen Event Saga", None, "test").unwrap();
+        store.start(&saga.saga_id, "test").unwrap();
+        store.close(&saga.saga_id, false, "test").unwrap();
+
+        store.reopen(&saga.saga_id, "actor-x").unwrap();
+
+        let (count, actor): (i64, String) = store
+            .db
+            .with_read_conn(|c| {
+                c.query_row(
+                    "SELECT COUNT(*), COALESCE(MAX(actor), '') FROM saga_events \
+                     WHERE saga_id = ?1 AND event_type = 'saga_reopened'",
+                    [saga.saga_id.as_str()],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        assert_eq!(count, 1, "expected exactly 1 saga_reopened event");
+        assert_eq!(actor, "actor-x");
     }
 }

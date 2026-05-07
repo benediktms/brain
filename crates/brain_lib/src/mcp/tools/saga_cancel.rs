@@ -46,13 +46,10 @@ impl SagaCancel {
                 .cancel(&params.saga_id, params.cascade, &params.actor)
             {
                 Ok(r) => r,
-                Err(e) => return ToolCallResult::error(format!("{e}")),
+                Err(e) => return ToolCallResult::error(format!("Failed to cancel saga: {e}")),
             };
 
-        let cascade_json = super::cascade_results_to_json(
-            &cascade_results,
-            crate::sagas::CascadeOutcome::Cancelled,
-        );
+        let cascade_json = super::cascade_results_to_json(&cascade_results);
 
         json_response(&json!({
             "saga_id": row.saga_id,
@@ -184,6 +181,45 @@ mod tests {
         let v: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let closed_at = v["saga"]["closed_at"].as_i64().unwrap_or(0);
         assert!(closed_at > 0, "closed_at must be a positive timestamp");
+    }
+
+    async fn make_task(ctx: &crate::mcp::McpContext, title: &str) -> String {
+        let r = crate::mcp::tools::task_create::TaskCreate
+            .call(json!({ "title": title, "task_type": "feature" }), ctx)
+            .await;
+        let v: Value = serde_json::from_str(&r.content[0].text).unwrap();
+        v["task_id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_cancel_cascade_marks_open_tasks_cancelled() {
+        let (_dir, ctx) = create_test_context().await;
+        let saga_id = make_saga(&ctx, "Cancel Cascade").await;
+        let t1 = make_task(&ctx, "T1").await;
+        let t2 = make_task(&ctx, "T2").await;
+        crate::mcp::tools::saga_add_tasks::SagaAddTasks
+            .call(
+                json!({ "saga_id": &saga_id, "task_ids": [t1.clone(), t2.clone()] }),
+                &ctx,
+            )
+            .await;
+
+        let result = call_cancel(json!({ "saga_id": &saga_id, "cascade": true }), &ctx).await;
+        assert!(
+            result.is_error.is_none(),
+            "should succeed: {:?}",
+            result.content
+        );
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["saga"]["status"], "cancelled");
+        let cascade = parsed["cascade_results"].as_array().unwrap();
+        assert_eq!(cascade.len(), 2);
+        for entry in cascade {
+            assert_eq!(
+                entry["cancelled"], true,
+                "open task should be cancelled: {entry:?}"
+            );
+        }
     }
 
     #[tokio::test]

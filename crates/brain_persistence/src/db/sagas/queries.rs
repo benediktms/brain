@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::sagas::events::{SagaEvent, SagaEventType, SagaTaskCascadedPayload};
 use crate::db::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
-use crate::db::tasks::projections::apply_event;
+use crate::db::tasks::projections::apply_event_inner;
 use crate::error::{BrainCoreError, Result};
 use crate::utils::now_ts;
 
@@ -96,7 +96,7 @@ pub fn insert_saga(
         params![saga_id, title, description, ts],
     )?;
     get_saga(conn, saga_id)?.ok_or_else(|| {
-        crate::error::BrainCoreError::Database("saga disappeared after insert".into())
+        crate::error::BrainCoreError::Internal("saga disappeared after insert".into())
     })
 }
 
@@ -199,7 +199,7 @@ pub fn update_saga(
             )?;
         }
         (None, None) => {
-            return Err(crate::error::BrainCoreError::Parse(
+            return Err(crate::error::BrainCoreError::InvalidOperation(
                 "update_saga: at least one field must be provided".into(),
             ));
         }
@@ -209,36 +209,26 @@ pub fn update_saga(
 }
 
 /// Close a saga: set status = 'closed', closed_at = now, bump updated_at.
-/// Returns an error if the saga is not in 'open' status.
+/// Returns an error if the saga is not in 'planning' or 'open' status.
 pub fn close_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
     let ts = now_ts();
     let rows_changed = conn.execute(
         "UPDATE sagas SET status = 'closed', closed_at = ?1, updated_at = ?1
-         WHERE saga_id = ?2 AND status = 'open'",
+         WHERE saga_id = ?2 AND status IN ('planning','open')",
         rusqlite::params![ts, saga_id],
     )?;
     if rows_changed == 0 {
         let existing = get_saga(conn, saga_id)?;
         return Err(match existing {
-            None => crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}")),
-            Some(row) => crate::error::BrainCoreError::Database(format!(
-                "saga cannot be closed from status '{}'; only 'open' sagas can be closed",
+            None => crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()),
+            Some(row) => crate::error::BrainCoreError::Parse(format!(
+                "saga cannot be closed from status '{}'; only 'planning' or 'open' sagas can be closed",
                 row.status
             )),
         });
     }
     get_saga(conn, saga_id)?
-        .ok_or_else(|| crate::error::BrainCoreError::Database(format!("saga not found: {saga_id}")))
-}
-
-/// List all member task IDs for a saga.
-pub fn list_saga_member_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String>> {
-    let mut stmt =
-        conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY added_at ASC")?;
-    let ids = stmt
-        .query_map([saga_id], |row| row.get(0))?
-        .collect::<std::result::Result<Vec<String>, _>>()?;
-    Ok(ids)
+        .ok_or_else(|| crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()))
 }
 
 /// Fetch a saga row by ID.
@@ -260,12 +250,12 @@ pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {
 /// Returns the number of rows inserted.
 pub fn insert_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> Result<usize> {
     let ts = now_ts();
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, ?3)",
+    )?;
     let mut count = 0usize;
     for task_id in task_ids {
-        conn.execute(
-            "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, ?3)",
-            params![saga_id, task_id, ts],
-        )?;
+        stmt.execute(params![saga_id, task_id, ts])?;
         count += 1;
     }
     Ok(count)
@@ -314,7 +304,11 @@ pub fn brains_for_saga(conn: &Connection, saga_id: &str) -> Result<Vec<BrainSumm
     Ok(rows)
 }
 
-/// List all task_ids belonging to a saga.
+/// List all task_ids belonging to a saga, ordered by `added_at` ascending.
+///
+/// Warning: the returned IDs are read directly from `saga_tasks` and may
+/// include orphans — task IDs whose underlying `tasks` row has been deleted.
+/// Use `list_saga_member_stubs` if you need only live (joinable) members.
 pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String>> {
     let mut stmt =
         conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY added_at")?;
@@ -359,35 +353,48 @@ pub fn reopen_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
         params![ts, saga_id],
     )?;
     get_saga(conn, saga_id)?.ok_or_else(|| {
-        crate::error::BrainCoreError::Database("saga disappeared after reopen".into())
+        crate::error::BrainCoreError::Internal("saga disappeared after reopen".into())
     })
 }
 
 /// Stats for a saga's member tasks.
+///
+/// `total` counts only live (non-orphan) members; `orphan` is the count of
+/// memberships whose underlying task has been deleted.
 #[derive(Debug, Clone)]
 pub struct SagaStatsRow {
+    /// Count of live (JOIN-resolved) member tasks.
     pub total: i64,
     pub open: i64,
     pub in_progress: i64,
     pub blocked: i64,
     pub done: i64,
     pub cancelled: i64,
+    /// Count of saga_tasks rows whose underlying `tasks` row has been deleted.
+    pub orphan: i64,
     /// done / (total - cancelled); None if denominator is 0
     pub completion_pct: Option<f64>,
 }
 
 /// Compute aggregate stats for a saga in a single SQL query.
+///
+/// `total` counts only live (non-orphan) members; `orphan` is the count of
+/// memberships whose underlying task has been deleted.
 pub fn saga_stats(conn: &Connection, saga_id: &str) -> Result<SagaStatsRow> {
     conn.query_row(
         "SELECT
-             COUNT(*) AS total,
+             COUNT(t.task_id) AS total,
              COUNT(CASE WHEN t.status = 'open'        THEN 1 END) AS open,
              COUNT(CASE WHEN t.status = 'in_progress' THEN 1 END) AS in_progress,
              COUNT(CASE WHEN t.status = 'blocked'     THEN 1 END) AS blocked,
              COUNT(CASE WHEN t.status = 'done'        THEN 1 END) AS done,
-             COUNT(CASE WHEN t.status = 'cancelled'   THEN 1 END) AS cancelled
+             COUNT(CASE WHEN t.status = 'cancelled'   THEN 1 END) AS cancelled,
+             (SELECT COUNT(*) FROM saga_tasks st
+                WHERE st.saga_id = ?1
+                  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.task_id = st.task_id)
+             ) AS orphan
          FROM saga_tasks st
-         JOIN tasks t ON t.task_id = st.task_id
+         LEFT JOIN tasks t ON t.task_id = st.task_id
          WHERE st.saga_id = ?1",
         [saga_id],
         |row| {
@@ -397,6 +404,7 @@ pub fn saga_stats(conn: &Connection, saga_id: &str) -> Result<SagaStatsRow> {
             let blocked: i64 = row.get(3)?;
             let done: i64 = row.get(4)?;
             let cancelled: i64 = row.get(5)?;
+            let orphan: i64 = row.get(6)?;
             let denominator = total - cancelled;
             let completion_pct = if denominator > 0 {
                 Some(done as f64 / denominator as f64 * 100.0)
@@ -410,6 +418,7 @@ pub fn saga_stats(conn: &Connection, saga_id: &str) -> Result<SagaStatsRow> {
                 blocked,
                 done,
                 cancelled,
+                orphan,
                 completion_pct,
             })
         },
@@ -446,13 +455,27 @@ pub fn saga_label_histogram(conn: &Connection, saga_id: &str) -> Result<Vec<Labe
 }
 
 /// Project saga status to `cancelled` and set `closed_at`.
+///
+/// Returns `SagaNotFound` if the saga does not exist, or `Parse` if the saga
+/// is already in a terminal status (`closed` or `cancelled`). Sagas in
+/// `planning` or `open` status transition to `cancelled` successfully.
 pub fn cancel_saga(conn: &Connection, saga_id: &str) -> Result<()> {
     let ts = now_ts();
-    conn.execute(
+    let rows_changed = conn.execute(
         "UPDATE sagas SET status = 'cancelled', closed_at = ?2, updated_at = ?2
-         WHERE saga_id = ?1",
+         WHERE saga_id = ?1 AND status IN ('planning','open')",
         params![saga_id, ts],
     )?;
+    if rows_changed == 0 {
+        let existing = get_saga(conn, saga_id)?;
+        return Err(match existing {
+            None => crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()),
+            Some(row) => crate::error::BrainCoreError::Parse(format!(
+                "saga already in terminal status '{}'",
+                row.status
+            )),
+        });
+    }
     Ok(())
 }
 
@@ -514,60 +537,40 @@ pub fn cascade_member_tasks(
     };
     let task_ids = list_saga_task_ids(conn, saga_id)?;
     let mut results = Vec::with_capacity(task_ids.len());
+    let mut event_stmt = conn.prepare_cached(
+        "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
     for task_id in task_ids {
-        let result = cascade_one_task(
-            conn,
-            saga_id,
-            actor,
-            &task_id,
-            target_status.clone(),
-            target_str,
-        )?;
-        results.push(result);
+        let outcome = cascade_one_task_inner(conn, actor, &task_id, target_status.clone());
+
+        // Always emit a SagaTaskCascaded event regardless of outcome — the saga
+        // log is the single source of truth for what the cascade did.
+        let outcome_str: &'static str = match &outcome {
+            CascadeOutcome::Closed => "closed",
+            CascadeOutcome::Cancelled => "cancelled",
+            CascadeOutcome::Skipped { .. } => "skipped",
+            CascadeOutcome::Failed { .. } => "failed",
+        };
+        let payload = SagaTaskCascadedPayload {
+            task_id: task_id.clone(),
+            new_status: target_str.to_string(),
+            outcome: outcome_str.to_string(),
+        };
+        let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaTaskCascaded, &payload);
+        let payload_json = serde_json::to_string(&event.payload)?;
+        event_stmt.execute(params![
+            event.event_id,
+            event.saga_id,
+            event.event_type.as_column_str(),
+            event.timestamp,
+            event.actor,
+            payload_json,
+        ])?;
+
+        results.push(CascadeResult { task_id, outcome });
     }
     Ok(results)
-}
-
-fn cascade_one_task(
-    conn: &Connection,
-    saga_id: &str,
-    actor: &str,
-    task_id: &str,
-    target_status: TaskStatus,
-    target_str: &'static str,
-) -> Result<CascadeResult> {
-    let outcome = cascade_one_task_inner(conn, actor, task_id, target_status);
-
-    // Always emit a SagaTaskCascaded event regardless of outcome — the saga
-    // log is the single source of truth for what the cascade did.
-    let outcome_str: &'static str = match &outcome {
-        CascadeOutcome::Closed => "closed",
-        CascadeOutcome::Cancelled => "cancelled",
-        CascadeOutcome::Skipped { .. } => "skipped",
-        CascadeOutcome::Failed { .. } => "failed",
-    };
-    let payload = SagaTaskCascadedPayload {
-        task_id: task_id.to_string(),
-        new_status: target_str.to_string(),
-        outcome: outcome_str.to_string(),
-    };
-    let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaTaskCascaded, &payload);
-    insert_saga_event(
-        conn,
-        &SagaEventInsert {
-            event_id: &event.event_id,
-            saga_id: &event.saga_id,
-            event_type: event.event_type.as_column_str(),
-            timestamp: event.timestamp,
-            actor: &event.actor,
-            payload: &serde_json::to_string(&event.payload)?,
-        },
-    )?;
-
-    Ok(CascadeResult {
-        task_id: task_id.to_string(),
-        outcome,
-    })
 }
 
 fn cascade_one_task_inner(
@@ -628,10 +631,258 @@ fn cascade_one_task_inner(
             new_status: target_status,
         },
     );
-    match apply_event(conn, &ev, &brain_id) {
+    // Use `apply_event_inner` (no internal tx) because we already operate
+    // inside the saga's outer transaction; calling `apply_event` here would
+    // attempt a nested BEGIN and SQLite would reject it.
+    match apply_event_inner(conn, &ev, &brain_id) {
         Ok(_) => success_outcome,
         Err(e) => CascadeOutcome::Failed {
             error: format!("{e}"),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+    use crate::error::BrainCoreError;
+
+    /// Open an in-memory DB and register one brain so tasks have a valid FK target.
+    fn setup_db() -> Db {
+        let db = Db::open_in_memory().expect("open in-memory db");
+        db.ensure_brain_registered("brain-x", "xeno")
+            .expect("register brain");
+        db
+    }
+
+    /// Insert a task row directly via SQL. Tests don't depend on task projection.
+    fn insert_task(conn: &Connection, task_id: &str, status: &str) {
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, created_at, updated_at, display_id)
+             VALUES (?1, 'brain-x', 'T', ?2, 2, strftime('%s','now'), strftime('%s','now'), ?1)",
+            params![task_id, status],
+        )
+        .unwrap();
+    }
+
+    fn insert_saga_row(conn: &Connection, saga_id: &str, status: &str) {
+        conn.execute(
+            "INSERT INTO sagas (saga_id, title, status, created_at, updated_at)
+             VALUES (?1, 'My saga', ?2, 1000, 1000)",
+            params![saga_id, status],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn empty_saga_stats_returns_zeros_and_no_completion_pct() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            insert_saga_row(conn, "s_empty", "open");
+            let stats = saga_stats(conn, "s_empty")?;
+            assert_eq!(stats.total, 0);
+            assert_eq!(stats.orphan, 0);
+            assert_eq!(stats.done, 0);
+            assert_eq!(stats.cancelled, 0);
+            assert!(stats.completion_pct.is_none());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn all_cancelled_stats_completion_pct_is_none() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            insert_saga_row(conn, "s_can", "open");
+            insert_task(conn, "t_a", "cancelled");
+            insert_task(conn, "t_b", "cancelled");
+            insert_saga_tasks(conn, "s_can", &["t_a".into(), "t_b".into()])?;
+            let stats = saga_stats(conn, "s_can")?;
+            assert_eq!(stats.total, 2);
+            assert_eq!(stats.cancelled, 2);
+            assert_eq!(stats.orphan, 0);
+            // denominator = total - cancelled = 0 → None
+            assert!(
+                stats.completion_pct.is_none(),
+                "expected None when every member is cancelled"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn orphan_member_excluded_from_stats_total_counted_in_orphan() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            insert_saga_row(conn, "s_orph", "open");
+            insert_task(conn, "t_live", "open");
+            insert_task(conn, "t_doomed", "open");
+            insert_saga_tasks(conn, "s_orph", &["t_live".into(), "t_doomed".into()])?;
+            // Delete the underlying task → its saga_tasks row becomes an orphan.
+            conn.execute("DELETE FROM tasks WHERE task_id = 't_doomed'", [])?;
+            let stats = saga_stats(conn, "s_orph")?;
+            assert_eq!(stats.total, 1, "orphan must not be counted in total");
+            assert_eq!(stats.orphan, 1, "orphan column counts dangling membership");
+            assert_eq!(stats.open, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn containing_brain_filter_only_matches_brain_id_not_name() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            insert_saga_row(conn, "s_brain", "open");
+            insert_task(conn, "t_a", "open");
+            insert_saga_tasks(conn, "s_brain", &["t_a".into()])?;
+
+            // brain_id matches → returned
+            let by_id = list_sagas(
+                conn,
+                &SagaListFilter {
+                    include_closed: false,
+                    include_cancelled: false,
+                    containing_brain: Some("brain-x".into()),
+                },
+            )?;
+            assert_eq!(by_id.len(), 1);
+
+            // brain name does NOT match — filter is brain_id only
+            let by_name = list_sagas(
+                conn,
+                &SagaListFilter {
+                    include_closed: false,
+                    include_cancelled: false,
+                    containing_brain: Some("xeno".into()),
+                },
+            )?;
+            assert!(
+                by_name.is_empty(),
+                "containing_brain filter must compare brain_id, not name"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn close_saga_from_planning_succeeds() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            insert_saga_row(conn, "s_plan", "planning");
+            let row = close_saga(conn, "s_plan")?;
+            assert_eq!(row.status, "closed");
+            assert!(row.closed_at.is_some());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn cancel_saga_missing_returns_not_found() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            let err = cancel_saga(conn, "no_such_saga").unwrap_err();
+            match err {
+                BrainCoreError::SagaNotFound(id) => assert_eq!(id, "no_such_saga"),
+                other => panic!("expected SagaNotFound, got {other:?}"),
+            }
+            Ok::<_, BrainCoreError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn cancel_saga_already_cancelled_returns_error() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            insert_saga_row(conn, "s_done", "cancelled");
+            let err = cancel_saga(conn, "s_done").unwrap_err();
+            match err {
+                BrainCoreError::Parse(msg) => assert!(
+                    msg.contains("terminal status 'cancelled'"),
+                    "unexpected message: {msg}"
+                ),
+                other => panic!("expected Parse, got {other:?}"),
+            }
+            Ok::<_, BrainCoreError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn dedup_list_saga_task_ids_returns_added_at_order() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            insert_saga_row(conn, "s_ord", "open");
+            insert_task(conn, "t1", "open");
+            insert_task(conn, "t2", "open");
+            insert_task(conn, "t3", "open");
+            // Insert with explicit added_at so order is deterministic regardless of
+            // strftime resolution.
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES ('s_ord','t2',100)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES ('s_ord','t1',200)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES ('s_ord','t3',300)",
+                [],
+            )?;
+            let ids = list_saga_task_ids(conn, "s_ord")?;
+            assert_eq!(ids, vec!["t2".to_string(), "t1".into(), "t3".into()]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn check_constraint_rejects_invalid_status() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            let err = conn
+                .execute(
+                    "INSERT INTO sagas (saga_id, title, status, created_at, updated_at)
+                     VALUES ('s_bad', 'T', 'nope', 1, 1)",
+                    [],
+                )
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.to_lowercase().contains("check") || msg.to_lowercase().contains("constraint"),
+                "expected CHECK constraint failure, got: {msg}"
+            );
+            Ok::<_, BrainCoreError>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn check_constraint_rejects_invalid_event_type() {
+        let db = setup_db();
+        db.with_write_conn(|conn| {
+            insert_saga_row(conn, "s_ev", "open");
+            let err = conn
+                .execute(
+                    "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
+                     VALUES ('e1', 's_ev', 'bogus_event', 1, 'me', '{}')",
+                    [],
+                )
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.to_lowercase().contains("check") || msg.to_lowercase().contains("constraint"),
+                "expected CHECK constraint failure, got: {msg}"
+            );
+            Ok::<_, BrainCoreError>(())
+        })
+        .unwrap();
     }
 }

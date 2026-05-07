@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::sagas::CascadeOutcome;
 
 use super::saga_validation::{validate_actor, validate_saga_id};
 use super::{McpTool, cascade_results_to_json, json_response};
@@ -52,7 +51,7 @@ impl SagaClose {
                 Err(e) => return ToolCallResult::error(format!("Failed to close saga: {e}")),
             };
 
-        let cascade_json = cascade_results_to_json(&cascade_results, CascadeOutcome::Closed);
+        let cascade_json = cascade_results_to_json(&cascade_results);
 
         let response = json!({
             "saga_id": row.saga_id,
@@ -202,6 +201,86 @@ mod tests {
         let (_dir, ctx) = create_test_context().await;
         let result = call_close(json!({ "saga_id": "01HXXNONEXISTENT0000000000" }), &ctx).await;
         assert_eq!(result.is_error, Some(true));
+    }
+
+    async fn make_task(ctx: &crate::mcp::McpContext, title: &str) -> String {
+        let r = crate::mcp::tools::task_create::TaskCreate
+            .call(json!({ "title": title, "task_type": "feature" }), ctx)
+            .await;
+        let v: Value = serde_json::from_str(&r.content[0].text).unwrap();
+        v["task_id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_close_cascade_marks_open_tasks_done() {
+        let (_dir, ctx) = create_test_context().await;
+        let saga_id = create_open_saga(&ctx).await;
+        let t1 = make_task(&ctx, "T1").await;
+        let t2 = make_task(&ctx, "T2").await;
+        crate::mcp::tools::saga_add_tasks::SagaAddTasks
+            .call(
+                json!({ "saga_id": &saga_id, "task_ids": [t1.clone(), t2.clone()] }),
+                &ctx,
+            )
+            .await;
+
+        let result = call_close(json!({ "saga_id": &saga_id, "cascade": true }), &ctx).await;
+        assert!(
+            result.is_error.is_none(),
+            "should succeed: {:?}",
+            result.content
+        );
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(parsed["saga"]["status"], "closed");
+        let cascade = parsed["cascade_results"].as_array().unwrap();
+        assert_eq!(cascade.len(), 2, "both members should appear in cascade");
+        for entry in cascade {
+            assert_eq!(
+                entry["closed"], true,
+                "open task should be marked closed: {entry:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_close_cascade_skips_already_done() {
+        let (_dir, ctx) = create_test_context().await;
+        let saga_id = create_open_saga(&ctx).await;
+        let t1 = make_task(&ctx, "T1").await;
+        let t2 = make_task(&ctx, "T2").await;
+        crate::mcp::tools::saga_add_tasks::SagaAddTasks
+            .call(
+                json!({ "saga_id": &saga_id, "task_ids": [t1.clone(), t2.clone()] }),
+                &ctx,
+            )
+            .await;
+
+        // Pre-mark t1 as done by writing the projection directly (the cascade
+        // logic only inspects `tasks.status`, so this is the minimal setup).
+        let resolved_t1 = ctx.stores.tasks.resolve_task_id(&t1).unwrap();
+        ctx.stores
+            .db_for_tests()
+            .with_write_conn(|conn| {
+                conn.execute(
+                    "UPDATE tasks SET status = 'done' WHERE task_id = ?1",
+                    [&resolved_t1],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let result = call_close(json!({ "saga_id": &saga_id, "cascade": true }), &ctx).await;
+        assert!(result.is_error.is_none());
+        let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let cascade = parsed["cascade_results"].as_array().unwrap();
+        assert_eq!(cascade.len(), 2);
+        // Find the entry for the pre-done task and verify it's skipped.
+        let skipped_entry = cascade
+            .iter()
+            .find(|e| e["task_id"].as_str() == Some(resolved_t1.as_str()))
+            .expect("pre-done task should appear in cascade results");
+        assert_eq!(skipped_entry["skipped"], true);
+        assert_eq!(skipped_entry["reason"], "done");
     }
 
     #[tokio::test]

@@ -73,7 +73,6 @@ impl SagaUpdate {
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
                 "closed_at": row.closed_at,
-                "members": [],
             }
         });
 

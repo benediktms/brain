@@ -42,6 +42,7 @@ impl SagaFrontier {
                     "title": t.title,
                     "status": t.status,
                     "priority": t.priority,
+                    "task_type": t.task_type,
                 })
             })
             .collect();
@@ -54,6 +55,7 @@ impl SagaFrontier {
 
         json_response(&json!({
             "saga_id": params.saga_id,
+            "saga_status": frontier.status.to_string(),
             "tasks": tasks,
             "brains": brains,
             "total": tasks.len(),

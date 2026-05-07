@@ -33,7 +33,8 @@ pub(crate) enum SagasAction {
         #[arg(long)]
         all: bool,
 
-        /// Only show sagas containing a task in this brain (brain_id)
+        /// Filter by brain_id (not brain name). Only sagas with at least one
+        /// live member task in this brain are returned.
         #[arg(long)]
         containing_brain: Option<String>,
     },

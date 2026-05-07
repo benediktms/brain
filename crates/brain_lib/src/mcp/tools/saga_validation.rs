@@ -49,9 +49,11 @@ pub fn validate_task_id(s: &str) -> Result<&str, String> {
         return Err("task_id must not be empty".into());
     }
     if s.len() > 128 {
+        // Use a char-safe truncation; `&s[..32]` panics when the byte boundary
+        // lands inside a multibyte UTF-8 character (e.g. a Japanese string).
+        let preview: String = s.chars().take(32).collect();
         return Err(format!(
-            "task_id exceeds maximum length of 128 characters: {}",
-            &s[..32]
+            "task_id exceeds maximum length of 128 characters: {preview}"
         ));
     }
     Ok(s)
@@ -68,6 +70,21 @@ pub fn validate_title(s: &str) -> Result<&str, String> {
         ));
     }
     Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_task_id_truncates_long_multibyte_input_without_panic() {
+        // 200 Japanese characters (each 3 bytes in UTF-8 -> 600 bytes total).
+        let s: String = "あ".repeat(200);
+        let result = validate_task_id(&s);
+        assert!(result.is_err(), "should error on overlong input, not panic");
+        let msg = result.unwrap_err();
+        assert!(msg.contains("exceeds maximum length"));
+    }
 }
 
 /// Validate an optional description: `None` is allowed; if `Some`, at most `MAX_DESCRIPTION_LEN` bytes.

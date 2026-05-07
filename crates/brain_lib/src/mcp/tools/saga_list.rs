@@ -102,7 +102,7 @@ impl McpTool for SagaList {
                     },
                     "containing_brain": {
                         "type": "string",
-                        "description": "Only return sagas with at least one member-task in this brain (brain_id)"
+                        "description": "Filter by brain_id (not brain name). Only sagas with at least one live member task in this brain are returned."
                     }
                 }
             }),
@@ -294,6 +294,45 @@ mod tests {
 
         // Empty string should be treated as None — returns all active sagas.
         let result = call(json!({ "containing_brain": "" }), &ctx).await;
+        let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(listed["total"], 1);
+    }
+
+    #[tokio::test]
+    async fn containing_brain_does_not_match_by_name() {
+        // M11: containing_brain filters by brain_id, never by brain name.
+        let (_dir, ctx) = create_test_context().await;
+        let create = super::super::saga_create::SagaCreate;
+        let r = create.call(json!({ "title": "Saga A" }), &ctx).await;
+        let p: Value = serde_json::from_str(&r.content[0].text).unwrap();
+        let saga_a = p["saga_id"].as_str().unwrap().to_string();
+
+        // Insert a brain whose `name` differs from its `brain_id`, then a task
+        // belonging to that brain joined to saga_a.
+        ctx.stores.sagas.db().with_write_conn(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES ('bid-xyz', 'human-name', 1000)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
+                 VALUES ('t-xyz', 'bid-xyz', 'task', 'open', 4, 'task', 1000, 1000)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 't-xyz', 1000)",
+                [&saga_a],
+            )?;
+            Ok(())
+        }).unwrap();
+
+        // Filtering by the brain's name (not brain_id) must not match.
+        let result = call(json!({ "containing_brain": "human-name" }), &ctx).await;
+        let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(listed["total"], 0, "name should not match brain_id filter");
+
+        // Filtering by the actual brain_id should still match.
+        let result = call(json!({ "containing_brain": "bid-xyz" }), &ctx).await;
         let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(listed["total"], 1);
     }

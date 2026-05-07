@@ -149,12 +149,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
             .unwrap_or_else(|| "brain".into())
     });
 
-    // Default note dirs to cwd if none specified.
-    let note_dirs: Vec<PathBuf> = if notes.is_empty() {
-        vec![PathBuf::from(".")]
-    } else {
-        notes
-    };
+    let note_dirs: Vec<PathBuf> = resolve_initial_note_dirs(notes);
 
     // 1. Create .brain/ in the project root.
     fs::create_dir_all(&brain_dir)?;
@@ -292,13 +287,27 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         .ok();
 
     // 9. Print success
-    let display_notes: Vec<String> = note_dirs.iter().map(|p| p.display().to_string()).collect();
-    println!(
-        "Brain \"{brain_name}\" initialized (id: {brain_id}). Note directories: {:?}",
-        display_notes
-    );
+    if note_dirs.is_empty() {
+        println!(
+            "Brain \"{brain_name}\" initialized (id: {brain_id}). No indexed directories (use `brain reindex` to add notes later)."
+        );
+    } else {
+        let display_notes: Vec<String> =
+            note_dirs.iter().map(|p| p.display().to_string()).collect();
+        println!(
+            "Brain \"{brain_name}\" initialized (id: {brain_id}). Note directories: {:?}",
+            display_notes
+        );
+    }
 
     Ok(())
+}
+
+/// Indexing is opt-in: empty input stays empty; explicit `--notes` paths flow
+/// through unchanged. Do not add an empty-input fallback here — opt-in is the
+/// contract.
+fn resolve_initial_note_dirs(notes: Vec<PathBuf>) -> Vec<PathBuf> {
+    notes
 }
 
 /// Attach `cwd` to an existing brain identified by `brain_id` / `brain_name`.
@@ -1166,5 +1175,24 @@ mod tests {
         let hash_a = &a["<!-- brain:start:".len()..a.find(" -->\n").unwrap()];
         let hash_b = &b["<!-- brain:start:".len()..b.find(" -->\n").unwrap()];
         assert_ne!(hash_a, hash_b, "different body must produce different hash");
+    }
+
+    #[test]
+    fn fresh_init_does_not_auto_index_cwd() {
+        // Opt-in default: no `--notes` → empty notes list, never `["."]`.
+        assert!(
+            resolve_initial_note_dirs(vec![]).is_empty(),
+            "fresh `brain init` must not auto-index any directory"
+        );
+    }
+
+    #[test]
+    fn explicit_notes_are_preserved() {
+        let input = vec![PathBuf::from("docs"), PathBuf::from("src/notes")];
+        assert_eq!(
+            resolve_initial_note_dirs(input.clone()),
+            input,
+            "explicit --notes paths must flow through unchanged"
+        );
     }
 }

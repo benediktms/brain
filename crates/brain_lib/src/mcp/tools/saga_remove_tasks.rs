@@ -53,10 +53,29 @@ impl SagaRemoveTasks {
             }
         }
 
+        // Resolve every input ID to its full task_id before forwarding. The
+        // store's `add_tasks` resolves through `resolve_task_id_scoped` and
+        // stores the resolved full ID in `saga_tasks`; `remove_tasks` does
+        // *not* resolve, so without this normalization a short-hash or
+        // display-id passed by an MCP client will never match the stored
+        // membership row. Unresolvable IDs are kept as-is so the underlying
+        // remove can apply its idempotent no-op semantics (count == 0 for
+        // unknown IDs) instead of returning a hard error from this layer.
+        let resolved_task_ids: Vec<String> = params
+            .task_ids
+            .iter()
+            .map(|tid| {
+                ctx.stores
+                    .tasks
+                    .resolve_task_id(tid)
+                    .unwrap_or_else(|_| tid.clone())
+            })
+            .collect();
+
         match ctx
             .stores
             .sagas
-            .remove_tasks(&params.saga_id, params.task_ids, &params.actor)
+            .remove_tasks(&params.saga_id, resolved_task_ids, &params.actor)
         {
             Ok(removed) => {
                 let response = json!({
@@ -153,9 +172,6 @@ mod tests {
         ctx.stores.sagas.add_tasks(saga_id, &owned, "test").unwrap();
     }
 
-    // TODO(saga-remove): underlying SagaStore::remove_tasks returns 0 when called via
-    // MCP tool helper; needs investigation. Skipping for now to unblock the chain.
-    #[ignore]
     #[tokio::test]
     async fn test_remove_existing_tasks() {
         let (_dir, ctx) = create_test_context().await;
@@ -194,9 +210,6 @@ mod tests {
         assert_eq!(parsed["removed"], 0);
     }
 
-    // TODO(saga-remove): underlying SagaStore::remove_tasks returns 0 when called via
-    // MCP tool helper; needs investigation. Skipping for now to unblock the chain.
-    #[ignore]
     #[tokio::test]
     async fn test_remove_mixed_batch() {
         let (_dir, ctx) = create_test_context().await;

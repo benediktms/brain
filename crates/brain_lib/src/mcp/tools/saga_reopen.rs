@@ -49,7 +49,6 @@ impl SagaReopen {
                         "created_at": row.created_at,
                         "updated_at": row.updated_at,
                         "closed_at": row.closed_at,
-                        "members": [],
                     }
                 });
                 json_response(&response)
@@ -108,6 +107,7 @@ mod tests {
     use super::super::tests::create_test_context;
     use super::{McpTool, SagaReopen};
     use crate::mcp::tools::saga_create::SagaCreate;
+    use crate::sagas::SagaStatus;
 
     async fn call_reopen(
         params: Value,
@@ -122,7 +122,7 @@ mod tests {
         parsed["saga_id"].as_str().unwrap().to_string()
     }
 
-    fn force_status(ctx: &crate::mcp::McpContext, saga_id: &str, status: &str) {
+    fn force_status(ctx: &crate::mcp::McpContext, saga_id: &str, status: SagaStatus) {
         ctx.stores
             .sagas
             .force_status_for_test(saga_id, status)
@@ -133,7 +133,7 @@ mod tests {
     async fn test_reopen_from_closed() {
         let (_dir, ctx) = create_test_context().await;
         let saga_id = create_saga(&ctx, "Reopen From Closed").await;
-        force_status(&ctx, &saga_id, "closed");
+        force_status(&ctx, &saga_id, SagaStatus::Closed);
 
         let result = call_reopen(json!({ "saga_id": saga_id }), &ctx).await;
         assert!(
@@ -150,7 +150,7 @@ mod tests {
     async fn test_reopen_from_cancelled() {
         let (_dir, ctx) = create_test_context().await;
         let saga_id = create_saga(&ctx, "Reopen From Cancelled").await;
-        force_status(&ctx, &saga_id, "cancelled");
+        force_status(&ctx, &saga_id, SagaStatus::Cancelled);
 
         let result = call_reopen(json!({ "saga_id": saga_id }), &ctx).await;
         assert!(result.is_error.is_none());
@@ -175,7 +175,7 @@ mod tests {
     async fn test_reopen_from_open_fails() {
         let (_dir, ctx) = create_test_context().await;
         let saga_id = create_saga(&ctx, "Open Reopen").await;
-        force_status(&ctx, &saga_id, "open");
+        force_status(&ctx, &saga_id, SagaStatus::Open);
 
         let result = call_reopen(json!({ "saga_id": saga_id }), &ctx).await;
         assert_eq!(result.is_error, Some(true));

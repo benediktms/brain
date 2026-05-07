@@ -179,7 +179,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_duplicate_add_rejected() {
+    async fn test_duplicate_add_is_idempotent_noop() {
+        // The store now skips already-member task_ids without erroring (see
+        // `add_tasks_skips_already_member_no_error` in `crate::sagas`). The
+        // MCP layer should reflect that contract: duplicate adds succeed and
+        // simply count zero new memberships.
         let (_dir, ctx) = create_test_context().await;
         let saga_id = make_saga(&ctx, "S3").await;
         let task_id = make_task(&ctx, "T1").await;
@@ -191,7 +195,16 @@ mod tests {
         .await;
 
         let result = call_add(json!({ "saga_id": saga_id, "task_ids": [task_id] }), &ctx).await;
-        assert_eq!(result.is_error, Some(true), "duplicate should fail");
+        assert!(
+            result.is_error.is_none(),
+            "duplicate add should be a no-op, not an error: {:?}",
+            result.content
+        );
+        let v: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(
+            v["added"], 0,
+            "duplicate add must not increase membership count"
+        );
     }
 
     #[tokio::test]

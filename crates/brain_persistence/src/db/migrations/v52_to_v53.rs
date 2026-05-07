@@ -13,7 +13,8 @@ pub fn migrate_v52_to_v53(conn: &Connection) -> Result<()> {
             saga_id     TEXT PRIMARY KEY,
             title       TEXT NOT NULL,
             description TEXT,
-            status      TEXT NOT NULL DEFAULT 'planning',
+            status      TEXT NOT NULL DEFAULT 'planning'
+                CHECK (status IN ('planning','open','closed','cancelled')),
             created_at  INTEGER NOT NULL,
             updated_at  INTEGER NOT NULL,
             closed_at   INTEGER
@@ -32,7 +33,12 @@ pub fn migrate_v52_to_v53(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS saga_events (
             event_id    TEXT PRIMARY KEY,
             saga_id     TEXT NOT NULL,
-            event_type  TEXT NOT NULL,
+            event_type  TEXT NOT NULL
+                CHECK (event_type IN (
+                    'saga_created','saga_updated','saga_started','saga_closed',
+                    'saga_cancelled','saga_reopened','saga_task_added',
+                    'saga_task_removed','saga_task_cascaded'
+                )),
             timestamp   INTEGER NOT NULL,
             actor       TEXT NOT NULL,
             payload     TEXT NOT NULL DEFAULT '{}'

@@ -14,8 +14,15 @@ use super::queries::next_child_seq;
 
 /// Apply a single event to SQLite projections (no transaction wrapper).
 ///
-/// Called by `apply_event` (with transaction) and `rebuild` (inside existing tx).
-fn apply_event_inner(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
+/// Called by `apply_event` (which wraps in its own tx), `rebuild` (inside an
+/// existing tx), and saga cascade flows (which pass through their outer tx).
+/// Callers operating inside an open transaction MUST use this rather than
+/// `apply_event` to avoid SQLite's nested-`BEGIN` rejection.
+pub(crate) fn apply_event_inner(
+    conn: &Connection,
+    event: &TaskEvent,
+    brain_id: &str,
+) -> Result<()> {
     match event.event_type {
         EventType::TaskCreated => {
             let p: TaskCreatedPayload = serde_json::from_value(event.payload.clone())
