@@ -71,4 +71,14 @@ pub(crate) enum SagasAction {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
     },
+
+    /// Remove tasks from a saga (idempotent)
+    Remove {
+        /// Saga ID (bare 26-char ULID)
+        saga_id: String,
+
+        /// One or more task IDs to remove
+        #[arg(required = true)]
+        task_ids: Vec<String>,
+    },
 }

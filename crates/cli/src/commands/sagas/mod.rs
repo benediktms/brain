@@ -161,6 +161,20 @@ pub fn start(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>) -> Result<()> {
+    let removed = ctx.store.remove_tasks(saga_id, task_ids, "cli")?;
+    if ctx.json {
+        let out = json!({
+            "saga_id": saga_id,
+            "removed": removed,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Removed {removed} task(s) from saga {saga_id}");
+    }
+    Ok(())
+}
+
 pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx
         .store
