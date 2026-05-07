@@ -614,6 +614,35 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `records.link_add` — Link a record to a task or note chunk.
 - `records.link_remove` — Remove a link from a record.
 
+**Saga tools:**
+- `sagas.create` — Create a new saga in `planning` status. Required: `title`. Optional: `description`. Returns `{saga_id, saga}`. Sagas are registry-level (not scoped to any brain).
+- `sagas.get` — Fetch a saga by ID. Returns full row including `members` (task stubs) and derived `brains` set (computed at read time from member tasks — no separate table).
+- `sagas.list` — List sagas. Default: status ∈ `{planning, open}`. Flags: `include_closed`, `include_cancelled`, `all`. Optional `containing_brain` filter (uses `saga_tasks → tasks` JOIN — no N+1).
+- `sagas.update` — Update `title` and/or `description`. Allowed in any status.
+- `sagas.start` — Transition `planning` → `open`. Emits `SagaStarted`.
+- `sagas.close` — Transition `open` → `closed`. Optional `cascade: bool` closes all member tasks.
+- `sagas.cancel` — Cancel a saga from any active status. Optional `cascade: bool` cancels member tasks.
+- `sagas.reopen` — Transition `closed` or `cancelled` → `open`. Clears `closed_at`.
+- `sagas.add_tasks` — Add one or more tasks to a saga by ID (`task_ids`). Atomic (all-or-nothing). Rejected if saga is `closed` or `cancelled`.
+- `sagas.remove_tasks` — Remove tasks from a saga. Idempotent: missing memberships are no-ops.
+- `sagas.frontier` — Ready tasks scoped to saga membership. Reuses `list_ready_actionable` restricted to `saga_tasks`. Returns tasks plus derived `brains` set. Empty for `planning`/`closed`/`cancelled` sagas.
+- `sagas.stats` — Saga statistics: `{total, open, in_progress, blocked, done, cancelled, completion_pct, label_histogram, brains}`.
+
+**Saga lifecycle:**
+```
+planning ──start──▶ open ──close──▶ closed
+    │                 │
+    └──cancel──▶ cancelled ◀──cancel──┘
+                      ▲
+              closed/cancelled ──reopen──▶ open
+```
+All transitions are enforced by `validate_transition` — invalid moves return an error.
+
+**When to use sagas vs other grouping primitives:**
+- **Saga**: long-running initiative spanning multiple brains or workstreams. Has its own lifecycle. Use when the work is referentially significant and you want membership integrity (no orphaned references).
+- **Label**: lightweight free-form tag for ad-hoc grouping or filtering. No lifecycle, no referential integrity. Use for cross-cutting concerns (`urgent`, `refactor`, `team:frontend`).
+- **`parent_task_id`**: strict single-parent tree hierarchy within a brain. Use for sub-tasks that belong to exactly one parent. Cannot span brains; cannot have multiple parents.
+
 **Other tools:**
 - `status` — Health/status probe. Returns project name, brain ID, task counts, and index stats.
 
@@ -675,6 +704,22 @@ brain snapshots save --title "State" --brain other-brain --stdin
 brain artifacts restore <id>          # Print artifact content to stdout
 brain artifacts restore <id> -o file  # Write artifact content to file
 brain snapshots restore <id>          # Print snapshot content to stdout
+
+# Sagas (long-running cross-brain initiatives)
+brain sagas create --title="..." [--description="..."]  # Create saga (planning)
+brain sagas show <saga_id>                              # Show saga details + members
+brain sagas list                                        # List active sagas (planning/open)
+brain sagas list --all                                  # Include closed and cancelled
+brain sagas update <saga_id> --title="..."              # Update title or description
+brain sagas start <saga_id>                             # planning → open
+brain sagas close <saga_id> [--cascade]                 # open → closed (cascade closes tasks)
+brain sagas cancel <saga_id> [--cascade]                # → cancelled (cascade cancels tasks)
+brain sagas reopen <saga_id>                            # closed/cancelled → open
+brain sagas add <saga_id> <task_id>...                  # Add tasks (atomic batch)
+brain sagas remove <saga_id> <task_id>...               # Remove tasks (idempotent)
+brain sagas frontier <saga_id>                          # Ready tasks scoped to this saga
+brain sagas stats <saga_id>                             # Completion stats + label histogram
+# Run `brain sagas --help` for full usage
 
 # Status
 brain status                  # Brain health check (task counts, index stats)
