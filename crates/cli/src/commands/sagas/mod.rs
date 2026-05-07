@@ -3,27 +3,24 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use serde_json::json;
 
-use brain_lib::sagas::SagaStore;
 use brain_lib::stores::BrainStores;
+use brain_lib::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
 use brain_persistence::db::sagas::SagaListFilter;
 
 pub struct SagaCtx {
-    pub(crate) store: SagaStore,
+    pub(crate) stores: BrainStores,
     pub(crate) json: bool,
 }
 
 impl SagaCtx {
     pub fn new(sqlite_db: &Path, json: bool) -> Result<Self> {
         let stores = BrainStores::from_path(sqlite_db, None)?;
-        Ok(Self {
-            store: stores.sagas,
-            json,
-        })
+        Ok(Self { stores, json })
     }
 }
 
 pub fn create(ctx: &SagaCtx, title: &str, description: Option<&str>) -> Result<()> {
-    let row = ctx.store.create(title, description, "cli")?;
+    let row = ctx.stores.sagas.create(title, description, "cli")?;
     if ctx.json {
         let out = json!({
             "saga_id": row.saga_id,
@@ -62,7 +59,7 @@ pub fn list(
         include_cancelled: include_cancelled || all,
         containing_brain,
     };
-    let rows = ctx.store.list(filter)?;
+    let rows = ctx.stores.sagas.list(filter)?;
 
     if ctx.json {
         let sagas: Vec<serde_json::Value> = rows
@@ -99,7 +96,13 @@ pub fn update(
     title: Option<&str>,
     description: Option<Option<&str>>,
 ) -> Result<()> {
-    let row = ctx.store.update(saga_id, title, description, "cli")?;
+    if title.is_none() && description.is_none() {
+        anyhow::bail!("at least one of --title or --description is required");
+    }
+    let row = ctx
+        .stores
+        .sagas
+        .update(saga_id, title, description, "cli")?;
     if ctx.json {
         let out = json!({
             "saga_id": row.saga_id,
@@ -126,7 +129,7 @@ pub fn update(
 }
 
 pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String]) -> Result<()> {
-    let count = ctx.store.add_tasks(saga_id, task_ids, "cli")?;
+    let count = ctx.stores.sagas.add_tasks(saga_id, task_ids, "cli")?;
     if ctx.json {
         let out = serde_json::json!({
             "saga_id": saga_id,
@@ -140,7 +143,7 @@ pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String]) -> Result<()
 }
 
 pub fn start(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
-    let row = ctx.store.start(saga_id, "cli")?;
+    let row = ctx.stores.sagas.start(saga_id, "cli")?;
     if ctx.json {
         let out = json!({
             "saga_id": row.saga_id,
@@ -161,8 +164,59 @@ pub fn start(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
+    let (row, member_ids) = ctx.stores.sagas.close(saga_id, cascade, "cli")?;
+
+    if cascade {
+        for task_id in &member_ids {
+            let task = match ctx.stores.tasks.get_task(task_id) {
+                Ok(Some(t)) => t,
+                Ok(None) => continue,
+                Err(_) => continue,
+            };
+            if task.status == "done" || task.status == "cancelled" {
+                continue;
+            }
+            let event = TaskEvent::from_payload(
+                task_id.as_str(),
+                "cli",
+                StatusChangedPayload {
+                    new_status: TaskStatus::Done,
+                },
+            );
+            let _ = ctx.stores.tasks.append(&event);
+        }
+    }
+
+    if ctx.json {
+        let out = json!({
+            "saga_id": row.saga_id,
+            "saga": {
+                "saga_id": row.saga_id,
+                "title": row.title,
+                "description": row.description,
+                "status": row.status,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "closed_at": row.closed_at,
+                "members": [],
+            },
+            "cascade": cascade,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Closed saga {}", row.saga_id);
+        println!("  Title:  {}", row.title);
+        println!("  Status: {}", row.status);
+        if cascade {
+            println!("  Cascade: closed {} member task(s)", member_ids.len());
+        }
+    }
+    Ok(())
+}
+
 pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>) -> Result<()> {
-    let removed = ctx.store.remove_tasks(saga_id, task_ids, "cli")?;
+    let removed = ctx.stores.sagas.remove_tasks(saga_id, task_ids, "cli")?;
     if ctx.json {
         let out = json!({
             "saga_id": saga_id,
@@ -177,7 +231,8 @@ pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>) -> Result<()>
 
 pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx
-        .store
+        .stores
+        .sagas
         .get(saga_id)?
         .ok_or_else(|| anyhow!("saga not found: {saga_id}"))?;
 
