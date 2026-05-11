@@ -338,10 +338,10 @@ fn install_hint_source(cwd: &Path) -> String {
 }
 
 /// Detects a brain-repo checkout: the cwd contains a
-/// `.claude-plugin/marketplace.json` (per Claude Code spec) that both
-/// names "brain" and sources the unified plugin from `./plugins/brain`.
-/// Both checks must pass to avoid false positives on unrelated
-/// marketplaces that happen to use either token.
+/// `.claude-plugin/marketplace.json` (per Claude Code spec) that names
+/// "brain" AND lists a plugin sourced from `./plugins/brain` anywhere
+/// in its plugins array. Iterating instead of inspecting `plugins[0]`
+/// keeps this stable if the marketplace ever gains sibling plugins.
 fn is_brain_repo_checkout(cwd: &Path) -> bool {
     let Ok(contents) = fs::read_to_string(cwd.join(MARKETPLACE_MANIFEST)) else {
         return false;
@@ -353,10 +353,11 @@ fn is_brain_repo_checkout(cwd: &Path) -> bool {
     let sources_brain_plugin = parsed
         .get("plugins")
         .and_then(|p| p.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|p| p.get("source"))
-        .and_then(|s| s.as_str())
-        == Some("./plugins/brain");
+        .is_some_and(|plugins| {
+            plugins
+                .iter()
+                .any(|p| p.get("source").and_then(|s| s.as_str()) == Some("./plugins/brain"))
+        });
     names_brain && sources_brain_plugin
 }
 

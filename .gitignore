@@ -22,3 +22,4 @@ AGENTS.md
 # Cross-machine attach is handled by `brain init`'s git common-dir lookup
 # (Case C); the marker file is no longer needed in version control.
 .brain/
+graphify-out/

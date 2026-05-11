@@ -1431,45 +1431,69 @@ fn plugin_json_is_valid_and_declares_brain() {
 
 #[test]
 fn manifests_declare_no_explicit_version() {
-    // Policy: omit `version` from both manifests so the git commit SHA
-    // drives plugin updates. The spec warns that setting `version` in
-    // both files is a footgun — `plugin.json` silently wins, and there
-    // is no release pipeline that would bump both atomically. Asserting
-    // absence makes the policy enforceable: a future maintainer who
-    // re-adds a version field fails this test until they justify it.
+    // Policy: omit `version` from every position the spec accepts one
+    // so the git commit SHA drives plugin updates. The spec warns that
+    // setting `version` in both files is a footgun — `plugin.json`
+    // silently wins, and there is no release pipeline that would bump
+    // both atomically. Asserting absence makes the policy enforceable.
     let marketplace: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(repo_root().join(MARKETPLACE_MANIFEST)).unwrap(),
     )
     .unwrap();
+    // Top-level marketplace `version` field — must be absent.
     assert!(
-        marketplace["plugins"][0].get("version").is_none(),
-        "marketplace.json must omit plugins[0].version (git SHA drives versioning)"
+        marketplace.get("version").is_none(),
+        "marketplace.json must omit top-level `version`"
     );
+    // Each plugin entry's `version` field — must be absent on every entry,
+    // and `plugins[i]` must be an object so a non-object slip (e.g. a
+    // string-shorthand a future maintainer might attempt) doesn't trick
+    // a shallow `get(...)` into reporting success.
+    let plugins = marketplace["plugins"]
+        .as_array()
+        .expect("marketplace.json `plugins` must be an array");
+    for (i, entry) in plugins.iter().enumerate() {
+        let obj = entry
+            .as_object()
+            .unwrap_or_else(|| panic!("plugins[{i}] must be an object"));
+        assert!(
+            !obj.contains_key("version"),
+            "marketplace.json plugins[{i}].version must be absent (git SHA drives versioning)"
+        );
+    }
 
     let plugin: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(repo_root().join(PLUGIN_MANIFEST_REL)).unwrap(),
     )
     .unwrap();
+    let plugin_obj = plugin
+        .as_object()
+        .expect("plugin.json must be a JSON object");
     assert!(
-        plugin.get("version").is_none(),
+        !plugin_obj.contains_key("version"),
         "plugin.json must omit `version` (git SHA drives versioning)"
     );
 }
 
-/// Shell out to the official validator. Gated on `which claude` so the
-/// test no-ops in environments where Claude Code isn't installed
-/// (currently includes most of CI). When `claude` is present, this is
-/// the canonical pin against spec drift — anything the upstream
-/// validator rejects we want to surface here, not in a user's session.
+/// Shell out to the official validator. Probes for `claude` via
+/// `claude --version` (portable across platforms; `which` is not on
+/// Windows and varies on Linux distros) and silently skips only when
+/// the binary itself isn't installed. ANY non-zero exit from
+/// `claude plugin validate` is treated as a test failure, including
+/// new-warning-as-error regressions, so spec drift surfaces loudly
+/// the moment a developer with Claude Code installed runs the suite.
 #[test]
 fn claude_plugin_validate_passes() {
-    let claude_available = std::process::Command::new("which")
-        .arg("claude")
+    let claude_installed = std::process::Command::new("claude")
+        .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    if !claude_available {
-        eprintln!("skipping: `claude` binary not on PATH");
+    if !claude_installed {
+        eprintln!(
+            "skipping `claude_plugin_validate_passes`: `claude` binary not installed. \
+             Install Claude Code locally to exercise the official manifest validator."
+        );
         return;
     }
 
