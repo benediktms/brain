@@ -308,30 +308,47 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     Ok(())
 }
 
+/// Public GitHub source for the brain marketplace. Used in the install
+/// hint when not running inside a local brain-repo checkout.
+const GITHUB_SOURCE: &str = "benediktms/brain";
+
 /// Prints the `/plugin marketplace add` two-liner the user should run in
 /// Claude Code to install the unified brain plugin.
-///
-/// Detects whether the caller is sitting inside a brain repo checkout
-/// (presence of a root `marketplace.json` naming brain) and, if so,
-/// suggests the local path. Otherwise points at the public GitHub source.
 fn print_install_hint(cwd: &Path) {
-    let source = if is_brain_repo_checkout(cwd) {
-        cwd.display().to_string()
-    } else {
-        "benediktms/brain".to_string()
-    };
-
+    let source = install_hint_source(cwd);
     println!();
     println!("Install the brain plugin in Claude Code:");
     println!("  /plugin marketplace add {source}");
     println!("  /plugin install brain@brain");
 }
 
+/// Returns the `source` argument for the `/plugin marketplace add` command:
+/// the cwd path when we're inside a brain-repo checkout, otherwise the
+/// public GitHub source. Paths containing whitespace are wrapped in double
+/// quotes so the hint stays copy-pasteable.
+fn install_hint_source(cwd: &Path) -> String {
+    if is_brain_repo_checkout(cwd) {
+        let path = cwd.display().to_string();
+        if path.chars().any(char::is_whitespace) {
+            format!("\"{path}\"")
+        } else {
+            path
+        }
+    } else {
+        GITHUB_SOURCE.to_string()
+    }
+}
+
+/// Heuristic detection of a brain-repo checkout: the cwd contains a root
+/// `marketplace.json` that both names "brain" and sources the unified
+/// plugin from `./plugins/brain`. Both checks must pass to avoid false
+/// positives on unrelated marketplaces that happen to use either token.
+/// If the marketplace.json schema changes, update these literals.
 fn is_brain_repo_checkout(cwd: &Path) -> bool {
-    let mp = cwd.join("marketplace.json");
-    fs::read_to_string(&mp)
-        .ok()
-        .is_some_and(|s| s.contains("\"name\": \"brain\""))
+    let Ok(contents) = fs::read_to_string(cwd.join("marketplace.json")) else {
+        return false;
+    };
+    contents.contains("\"name\": \"brain\"") && contents.contains("\"./plugins/brain\"")
 }
 
 /// Indexing is opt-in: empty input stays empty; explicit `--notes` paths flow
@@ -1225,5 +1242,50 @@ mod tests {
         let hash_a = &a["<!-- brain:start:".len()..a.find(" -->\n").unwrap()];
         let hash_b = &b["<!-- brain:start:".len()..b.find(" -->\n").unwrap()];
         assert_ne!(hash_a, hash_b, "different body must produce different hash");
+    }
+
+    #[test]
+    fn install_hint_source_uses_github_when_no_marketplace_json() {
+        let dir = tempdir().unwrap();
+        assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
+    }
+
+    #[test]
+    fn install_hint_source_uses_local_path_in_brain_checkout() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("marketplace.json"),
+            r#"{ "name": "brain", "plugins": [{ "source": "./plugins/brain" }] }"#,
+        )
+        .unwrap();
+        let src = install_hint_source(dir.path());
+        assert!(
+            src.contains(&dir.path().display().to_string()),
+            "expected local path in source, got {src:?}"
+        );
+    }
+
+    #[test]
+    fn install_hint_source_ignores_marketplace_with_only_brain_name() {
+        // Loose substring match would false-positive on any marketplace that
+        // happens to name "brain" — the second token must also be present.
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("marketplace.json"),
+            r#"{ "name": "brain", "plugins": [{ "source": "./different-plugin" }] }"#,
+        )
+        .unwrap();
+        assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
+    }
+
+    #[test]
+    fn install_hint_source_ignores_unrelated_marketplace() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("marketplace.json"),
+            r#"{ "name": "other", "plugins": [{ "source": "./plugins/brain" }] }"#,
+        )
+        .unwrap();
+        assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
     }
 }
