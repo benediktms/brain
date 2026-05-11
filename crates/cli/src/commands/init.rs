@@ -302,7 +302,36 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
         );
     }
 
+    // 10. Print the Claude Code plugin install hint.
+    print_install_hint(&cwd);
+
     Ok(())
+}
+
+/// Prints the `/plugin marketplace add` two-liner the user should run in
+/// Claude Code to install the unified brain plugin.
+///
+/// Detects whether the caller is sitting inside a brain repo checkout
+/// (presence of a root `marketplace.json` naming brain) and, if so,
+/// suggests the local path. Otherwise points at the public GitHub source.
+fn print_install_hint(cwd: &Path) {
+    let source = if is_brain_repo_checkout(cwd) {
+        cwd.display().to_string()
+    } else {
+        "benediktms/brain".to_string()
+    };
+
+    println!();
+    println!("Install the brain plugin in Claude Code:");
+    println!("  /plugin marketplace add {source}");
+    println!("  /plugin install brain@brain");
+}
+
+fn is_brain_repo_checkout(cwd: &Path) -> bool {
+    let mp = cwd.join("marketplace.json");
+    fs::read_to_string(&mp)
+        .ok()
+        .is_some_and(|s| s.contains("\"name\": \"brain\""))
 }
 
 /// Indexing is opt-in: empty input stays empty; explicit `--notes` paths flow
