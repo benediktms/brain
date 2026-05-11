@@ -86,35 +86,31 @@ fn subcommand_help_shows_usage() {
 }
 
 #[test]
-fn plugin_install_claude_dry_run_describes_without_writing() {
+fn plugin_install_prints_deprecation_hint_and_exits_nonzero() {
     let home = TempDir::new().unwrap();
     brain_cmd()
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .args(["plugin", "install", "--dry-run"])
+        .args(["plugin", "install"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Would write"))
-        .stdout(predicate::str::contains(".claude/plugins/marketplaces"))
-        .stdout(predicate::str::contains("Would register each marketplace"));
+        .failure()
+        .stderr(predicate::str::contains("deprecated"))
+        .stderr(predicate::str::contains(
+            "/plugin marketplace add benediktms/brain",
+        ));
 
+    // Deprecation stub must not touch the filesystem.
     assert!(!home.path().join(".claude").exists());
 }
 
 #[test]
-fn plugin_install_codex_dry_run_describes_without_writing() {
-    let home = TempDir::new().unwrap();
+fn plugin_uninstall_prints_deprecation_hint_and_exits_nonzero() {
     brain_cmd()
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .args(["plugin", "install", "--target", "codex", "--dry-run"])
+        .args(["plugin", "uninstall"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Would write"))
-        .stdout(predicate::str::contains(".agents/plugins/brain"))
-        .stdout(predicate::str::contains("source.path: ./plugins/brain"));
-
-    assert!(!home.path().join(".agents").exists());
+        .failure()
+        .stderr(predicate::str::contains("deprecated"))
+        .stderr(predicate::str::contains("/plugin uninstall brain@brain"));
 }
 
 /// Verify `brain -v` output is a valid short git SHA (7 hex chars).

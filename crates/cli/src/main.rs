@@ -304,39 +304,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_plugin_install_codex_dry_run() {
-        let cli = Cli::try_parse_from([
-            "brain",
-            "plugin",
-            "install",
-            "--target",
-            "codex",
-            "--dry-run",
-        ])
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Command::Plugin {
-                action: PluginAction::Install {
-                    target: PluginTarget::Codex,
-                    dry_run: true
-                }
-            }
-        ));
-    }
-
-    #[test]
-    fn parse_plugin_uninstall_codex() {
-        let cli =
-            Cli::try_parse_from(["brain", "plugin", "uninstall", "--target", "codex"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Command::Plugin {
-                action: PluginAction::Uninstall {
-                    target: PluginTarget::Codex
-                }
-            }
-        ));
+    fn parse_plugin_install_codex_target_rejected() {
+        // The Codex variant was removed when Codex distribution was dropped;
+        // anyone still passing `--target codex` should get a clap parse error
+        // rather than a silent fallback.
+        let result = Cli::try_parse_from(["brain", "plugin", "install", "--target", "codex"]);
+        assert!(result.is_err());
     }
 
     // ── Alias parsing ───────────────────────────────────────────────

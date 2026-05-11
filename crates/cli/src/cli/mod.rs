@@ -634,10 +634,9 @@ pub enum PluginAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PluginTarget {
-    /// Claude Code plugin marketplaces under ~/.claude
+    /// Claude Code (deprecated — install via `/plugin marketplace add`
+    /// inside Claude Code instead; this CLI path now prints a redirect).
     Claude,
-    /// Codex plugin marketplace under ~/.agents
-    Codex,
 }
 
 #[derive(Subcommand)]

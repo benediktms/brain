@@ -11,10 +11,11 @@ use serde_json::{Map, Value, json};
 
 /// The hook entries brain installs into `.claude/settings.json`.
 ///
-/// LEGACY: prefer `brain plugin install` (canonical plugin surface).
-/// This path mutates the project's `.claude/settings.json` directly and is
-/// retained for advanced / manual use only. New hooks ship via the canonical
-/// brain plugin manifest.
+/// ADVANCED: the canonical install path is `/plugin marketplace add
+/// benediktms/brain` inside Claude Code — the plugin manifest ships hooks
+/// automatically. This direct-injection path mutates the project's
+/// `.claude/settings.json` and is retained for environments where the
+/// Claude Code plugin marketplace is unavailable.
 ///
 /// Each entry carries `"_brain_managed": true` so `is_brain_hook` can detect
 /// and upgrade entries without command-prefix matching.
@@ -94,9 +95,9 @@ fn merge_hooks(existing: &Value) -> Value {
 
 /// Install brain hooks directly into `.claude/settings.json`.
 ///
-/// LEGACY: use `brain plugin install` for the canonical plugin surface.
-/// This command is retained for advanced / manual environments where the
-/// Claude Code plugin marketplace is unavailable.
+/// ADVANCED: the canonical install path is `/plugin marketplace add
+/// benediktms/brain` inside Claude Code. This command is retained for
+/// environments where the Claude Code plugin marketplace is unavailable.
 pub fn install(dry_run: bool) -> Result<()> {
     let hooks = brain_hooks();
 
