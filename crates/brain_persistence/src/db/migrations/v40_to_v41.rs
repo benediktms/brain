@@ -10,7 +10,7 @@ use crate::error::Result;
 /// paths and PageRank respectively).
 ///
 /// - `tags`: JSON array string (e.g. `'["rust","memory"]'`), default empty
-/// - `importance`: float [0.0, 1.0], default 0.5 per RETRIEVE_PLUS spec
+/// - `importance`: float [0.0, 1.0], default 0.5 per the Retrieve+ ADR
 ///
 /// Existing files get defaults until re-indexed with `brain scan --force`.
 pub fn migrate_v40_to_v41(conn: &Connection) -> Result<()> {

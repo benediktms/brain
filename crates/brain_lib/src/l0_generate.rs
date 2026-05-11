@@ -27,7 +27,7 @@ static RE_CAMEL: LazyLock<Regex> =
 
 /// Generate an extractive L0 abstract for a note chunk.
 ///
-/// Algorithm (from RETRIEVE_PLUS.md §2.3):
+/// Algorithm (from the Retrieve+ ADR §2.3):
 /// 1. Extract first sentence from content
 /// 2. Extract up to 5 key noun phrases (backtick tokens, UPPER_CASE, CamelCase)
 /// 3. Format as `{heading_path}: {first_sentence}. Key: {terms}`
