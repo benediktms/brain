@@ -47,12 +47,11 @@ Markdown-based knowledge base. brain watches your note directories and increment
 ### Jobs
 An internal job system for deferred and recurring work. Handles background tasks like embedding stale content, generating summaries, and consolidating episodic memories into reflections.
 
-### neural_link
-Real-time multi-agent coordination. Enables multiple agents to share a coordination room, exchange findings, and resolve blockers during complex multi-step tasks.
-
 ---
 
 ## Installation
+
+> **Install the brain CLI before the plugin marketplace step.** The Claude Code plugin's hooks (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `Stop`, `PreToolUse`) shell out to the `brain` binary. If the CLI is not installed first, all hooks will silently no-op — no error will appear in Claude Code.
 
 ### Homebrew (macOS)
 
@@ -130,6 +129,8 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 
 brain ships a single Claude Code plugin (`brain`) that exposes slash commands for tasks, memory, records, and administration, plus the Brain hooks (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `Stop`, `PreToolUse`) without mutating your project's `.claude/settings.json`.
 
+> **Prerequisite:** The plugin's hooks call into the `brain` CLI. Install the CLI from the [Installation](#installation) section above before running `/plugin marketplace add` in Claude Code, or hooks will silently no-op.
+
 ### Claude Code
 
 Install from the published marketplace inside Claude Code:
@@ -167,6 +168,10 @@ brain hooks install --dry-run  # preview changes without applying
 ```
 
 Prefer the marketplace install above for all standard Claude Code setups.
+
+### Troubleshooting
+
+If `/brain:status` reports the plugin as installed but session hooks aren't producing output, run `which brain` and confirm the CLI is on your `$PATH`. The plugin's hooks shell out to `brain` and silently swallow stderr (`2>/dev/null`), so a missing or mis-pathed binary fails invisibly. Re-install the CLI from the [Installation](#installation) section and restart Claude Code.
 
 ---
 
@@ -235,7 +240,6 @@ graph TB
         subgraph Server["MCP Server"]
             SM["memory.*"] ~~~ TA["tasks.*"]
             TA ~~~ RC["records.*"]
-            RC ~~~ NL["neural_link.*"]
         end
 
         subgraph Jobs["Job System"]
