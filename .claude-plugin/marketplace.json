@@ -1,5 +1,6 @@
 {
   "name": "brain",
+  "description": "Local-first personal knowledge base — tasks with dependencies, semantic memory, typed records, and the overview guide.",
   "owner": { "name": "Benedikt Schnatterbeck" },
   "plugins": [
     {

@@ -337,13 +337,15 @@ fn install_hint_source(cwd: &Path) -> String {
     }
 }
 
-/// Heuristic detection of a brain-repo checkout: the cwd contains a root
-/// `marketplace.json` that both names "brain" and sources the unified
-/// plugin from `./plugins/brain`. Both checks must pass to avoid false
-/// positives on unrelated marketplaces that happen to use either token.
-/// If the marketplace.json schema changes, update these literals.
+/// Heuristic detection of a brain-repo checkout: the cwd contains a
+/// `.claude-plugin/marketplace.json` (per Claude Code spec) that both
+/// names "brain" and sources the unified plugin from `./plugins/brain`.
+/// Both checks must pass to avoid false positives on unrelated
+/// marketplaces that happen to use either token. If the marketplace.json
+/// schema changes, update these literals.
 fn is_brain_repo_checkout(cwd: &Path) -> bool {
-    let Ok(contents) = fs::read_to_string(cwd.join("marketplace.json")) else {
+    let manifest = cwd.join(".claude-plugin").join("marketplace.json");
+    let Ok(contents) = fs::read_to_string(manifest) else {
         return false;
     };
     contents.contains("\"name\": \"brain\"") && contents.contains("\"./plugins/brain\"")
@@ -1248,14 +1250,21 @@ mod tests {
         assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
     }
 
+    /// Writes a marketplace.json at the spec-correct path
+    /// (`.claude-plugin/marketplace.json` inside the given dir).
+    fn write_marketplace(dir: &Path, body: &str) {
+        let mp_dir = dir.join(".claude-plugin");
+        fs::create_dir_all(&mp_dir).unwrap();
+        fs::write(mp_dir.join("marketplace.json"), body).unwrap();
+    }
+
     #[test]
     fn install_hint_source_uses_local_path_in_brain_checkout() {
         let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("marketplace.json"),
+        write_marketplace(
+            dir.path(),
             r#"{ "name": "brain", "plugins": [{ "source": "./plugins/brain" }] }"#,
-        )
-        .unwrap();
+        );
         let src = install_hint_source(dir.path());
         assert!(
             src.contains(&dir.path().display().to_string()),
@@ -1268,22 +1277,20 @@ mod tests {
         // Loose substring match would false-positive on any marketplace that
         // happens to name "brain" — the second token must also be present.
         let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("marketplace.json"),
+        write_marketplace(
+            dir.path(),
             r#"{ "name": "brain", "plugins": [{ "source": "./different-plugin" }] }"#,
-        )
-        .unwrap();
+        );
         assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
     }
 
     #[test]
     fn install_hint_source_ignores_unrelated_marketplace() {
         let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("marketplace.json"),
+        write_marketplace(
+            dir.path(),
             r#"{ "name": "other", "plugins": [{ "source": "./plugins/brain" }] }"#,
-        )
-        .unwrap();
+        );
         assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
     }
 }
