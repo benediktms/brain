@@ -128,26 +128,48 @@ Override the model location with `BRAIN_MODEL_DIR` or `BRAIN_HOME`. If a file is
 
 ## Agent Plugin Integration
 
-brain distributes plugins for agent runtimes. The plugin surface is canonical — install via the CLI and restart the target client.
+brain ships a single Claude Code plugin (`brain`) that exposes slash commands for tasks, memory, records, and administration, plus the Brain hooks (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `Stop`, `PreToolUse`) without mutating your project's `.claude/settings.json`.
 
-```sh
-brain plugin install                  # Claude Code, default target
-brain plugin install --target claude  # explicit Claude Code install
-brain plugin install --target codex   # Codex install
+### Claude Code
+
+Install from the published marketplace inside Claude Code:
+
+```
+/plugin marketplace add benediktms/brain
+/plugin install brain@brain
 ```
 
-Claude Code installs four domain plugins under `~/.claude/plugins/marketplaces/` and registers them with the `claude` CLI when available. This provides `/tasks:*`, `/mem:*`, `/records:*`, and `/brain:*` commands plus the Brain hooks (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `Stop`, `PreToolUse`) without mutating your project's `.claude/settings.json`.
+For local development against a brain checkout, point the marketplace at the repo path instead:
 
-Codex installs one consolidated home-local plugin at `~/.agents/plugins/brain/` and upserts the `brain` entry in `~/.agents/plugins/marketplace.json`. This exposes the bundled Brain skills for tasks, memory, records, and administration through the Codex plugin marketplace. Configure the Brain MCP server in Codex first so the skills can call the Brain MCP tools.
-
-To remove a plugin:
-
-```sh
-brain plugin uninstall                  # Claude Code, default target
-brain plugin uninstall --target codex   # Codex
+```
+/plugin marketplace add /abs/path/to/brain
+/plugin install brain@brain
 ```
 
-Restart Claude Code or Codex after installing or uninstalling so the client reloads plugin metadata.
+`brain init` prints the appropriate hint for you at the end of fresh-init.
+
+Once installed, every skill is addressable under `/brain:<domain>-<action>`:
+
+- Tasks — `/brain:tasks-next`, `/brain:tasks-create`, `/brain:tasks-blocked`, `/brain:tasks-show`, `/brain:tasks-update`, `/brain:tasks-dep`, `/brain:tasks-label`, `/brain:tasks-list`, `/brain:tasks-stats`, `/brain:tasks-close`
+- Memory — `/brain:mem-search`, `/brain:mem-write`, `/brain:mem-reflect`, `/brain:mem-procedure`, `/brain:mem-consolidate`, `/brain:mem-summarize`
+- Records — `/brain:records-search`, `/brain:records-snapshot`, `/brain:records-artifact`
+- Administration — `/brain:status`, `/brain:list`, `/brain:jobs`, `/brain:guide`
+
+Restart Claude Code after installing so plugin metadata reloads.
+
+### Codex
+
+```sh
+brain plugin install --target codex
+```
+
+Installs one consolidated home-local plugin at `~/.agents/plugins/brain/` and upserts the `brain` entry in `~/.agents/plugins/marketplace.json`. Configure the Brain MCP server in Codex first so the skills can call the Brain MCP tools.
+
+To remove:
+
+```sh
+brain plugin uninstall --target codex
+```
 
 ### Advanced / manual setup
 
@@ -158,7 +180,7 @@ brain hooks install            # mutates .claude/settings.json
 brain hooks install --dry-run  # preview changes without applying
 ```
 
-Prefer `brain plugin install --target claude` for all standard Claude Code setups.
+Prefer the marketplace install above for all standard Claude Code setups.
 
 ---
 
