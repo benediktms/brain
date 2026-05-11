@@ -15,9 +15,11 @@ if [ -n "$STAGED_RS" ]; then
     fi
 fi
 
-# ── Regenerate AGENTS.md ─────────────────────────────────────
+# ── Regenerate AGENTS.md + CLAUDE.md (gitignored, local-only) ────
+# Both files are per-machine references generated from the init.rs
+# template. They are .gitignored, so do NOT stage them — the regen
+# step keeps the local copy fresh for AI agents that read the repo.
 BIN="${REPO_ROOT}/target/release/brain"
 if [ -x "$BIN" ]; then
-    "$BIN" docs
-    git add -f AGENTS.md 2>/dev/null || true
+    "$BIN" docs || true
 fi

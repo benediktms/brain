@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regenerate AGENTS.md from template so it stays in sync.
-# If brain binary isn't built yet, skip silently — the drift will
-# be caught on the next commit after `just install`.
+# Regenerate AGENTS.md + bridge CLAUDE.md from template so they stay in
+# sync with the project's init.rs template. Both files are .gitignored
+# (per-machine, fully rebuildable from `brain docs`), so we do NOT
+# stage them — the regen step just keeps the local copy fresh for AI
+# agents that read the repo.
+#
+# If brain binary isn't built yet, skip silently — the next `just
+# install` rebuilds it and a future commit regenerates the docs.
 BIN="./target/release/brain"
 if [ -x "$BIN" ]; then
-    "$BIN" docs
-    # If AGENTS.md changed, stage it so the commit includes the update.
-    git add -f AGENTS.md 2>/dev/null || true
+    "$BIN" docs || true
 fi
