@@ -72,8 +72,11 @@ Requires Rust (stable, edition 2024), [just](https://github.com/casey/just), and
 ```sh
 git clone https://github.com/benediktms/brain.git
 cd brain
-just install
+just install        # builds the binary, symlinks it to ~/bin, installs hooks
+just docs           # regenerates AGENTS.md + CLAUDE.md for AI agents
 ```
+
+`AGENTS.md` and `CLAUDE.md` are generated locally from a template in `crates/cli/src/commands/init.rs` and are not checked into git — fresh clones don't have them until `just docs` runs. The pre-commit hook keeps them refreshed on every commit.
 
 ---
 
