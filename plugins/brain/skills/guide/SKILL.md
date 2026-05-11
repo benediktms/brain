@@ -5,7 +5,6 @@ description: >
   and records. Use when work needs persistent context, task tracking with
   dependencies, or semantic search across notes and episodes.
 allowed-tools: "Read,mcp__brain__*"
-version: "{{version}}"
 author: "Benedikt Schnatterbeck"
 license: "MIT"
 ---
