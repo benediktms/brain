@@ -188,7 +188,7 @@ fn prefix_from_single_word(word: &str) -> String {
 /// Two words: first letter of each + first consonant of the longer word.
 ///
 /// The consonant stays adjacent to its source word's initial to preserve
-/// reading order: "neural_link" → NRL (consonant R from "neural" follows N),
+/// reading order: "data_store" → DST (consonant T from "store" follows S),
 /// "b2c-gateway" → BGT (consonant T from "gateway" follows G).
 fn prefix_from_two_words(a: &str, b: &str) -> String {
     let first_a = a.chars().next().unwrap_or('X');
@@ -302,8 +302,8 @@ mod tests {
 
     #[test]
     fn test_prefix_two_words_ordering() {
-        // Two meaningful words: first_a + consonant_of_longer + first_b
-        assert_eq!(generate_prefix("neural_link"), "NRL");
+        // Two meaningful words: first_a + first_b + consonant_of_longer
+        assert_eq!(generate_prefix("data_store"), "DST");
     }
 
     #[test]

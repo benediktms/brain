@@ -97,7 +97,6 @@ graph TB
             RF["memory.reflect"]
             TA["tasks.*"]
             RC["records.*"]
-            NL["neural_link.*"]
             BL["brains.list / status"]
         end
 
