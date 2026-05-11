@@ -1,0 +1,69 @@
+{
+  "name": "brain",
+  "description": "Local-first personal knowledge base — tasks with dependencies, semantic memory, typed records, and the overview guide.",
+  "version": "0.4.0",
+  "author": { "name": "Benedikt Schnatterbeck" },
+  "license": "MIT",
+  "hooks": {
+    "SessionStart": [
+      {
+        "_brain_managed": true,
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain tasks stats --output=hook-envelope 2>/dev/null"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "_brain_managed": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain tasks list --ready --output=hook-envelope 2>/dev/null"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "_brain_managed": true,
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain hooks pre-compact 2>/dev/null"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "_brain_managed": true,
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain hooks stop 2>/dev/null"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "_brain_managed": true,
+        "matcher": "Edit|Write|MultiEdit",
+        "timeout": 5,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brain hooks pre-tool-use 2>/dev/null"
+          }
+        ]
+      }
+    ]
+  }
+}
