@@ -86,35 +86,37 @@ fn subcommand_help_shows_usage() {
 }
 
 #[test]
-fn plugin_install_claude_dry_run_describes_without_writing() {
+fn plugin_install_prints_deprecation_hint_and_exits_nonzero() {
     let home = TempDir::new().unwrap();
     brain_cmd()
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .args(["plugin", "install", "--dry-run"])
+        .args(["plugin", "install"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Would write"))
-        .stdout(predicate::str::contains(".claude/plugins/marketplaces"))
-        .stdout(predicate::str::contains("Would register each marketplace"));
+        .failure()
+        .stderr(predicate::str::contains("deprecated"))
+        .stderr(predicate::str::contains(
+            "/plugin marketplace add benediktms/brain",
+        ));
 
+    // Deprecation stub must not touch the filesystem.
     assert!(!home.path().join(".claude").exists());
 }
 
 #[test]
-fn plugin_install_codex_dry_run_describes_without_writing() {
+fn plugin_uninstall_prints_deprecation_hint_and_exits_nonzero() {
     let home = TempDir::new().unwrap();
     brain_cmd()
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .args(["plugin", "install", "--target", "codex", "--dry-run"])
+        .args(["plugin", "uninstall"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Would write"))
-        .stdout(predicate::str::contains(".agents/plugins/brain"))
-        .stdout(predicate::str::contains("source.path: ./plugins/brain"));
+        .failure()
+        .stderr(predicate::str::contains("deprecated"))
+        .stderr(predicate::str::contains("/plugin uninstall brain@brain"));
 
-    assert!(!home.path().join(".agents").exists());
+    // Deprecation stub must not touch the filesystem.
+    assert!(!home.path().join(".claude").exists());
 }
 
 /// Verify `brain -v` output is a valid short git SHA (7 hex chars).
@@ -1367,4 +1369,99 @@ fn tasks_transfer_help_shows_usage() {
         .success()
         .stdout(predicate::str::contains("--to"))
         .stdout(predicate::str::contains("--dry-run"));
+}
+
+// ---------------------------------------------------------------------------
+// Shipped manifest invariants
+// ---------------------------------------------------------------------------
+//
+// The unified `brain` plugin ships two JSON files from the repo root that
+// Claude Code consumes verbatim: `marketplace.json` and
+// `plugins/brain/plugin.json`. If either becomes invalid JSON or drifts
+// out of sync with the workspace version, the plugin install will fail in
+// users' Claude Code sessions with no signal back to brain. These tests
+// catch that at CI time instead.
+
+/// Anchor file-system reads at the workspace root regardless of how the
+/// test binary is invoked.
+fn repo_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+}
+
+#[test]
+fn marketplace_json_is_valid_and_lists_brain_plugin() {
+    let path = repo_root().join("marketplace.json");
+    let raw = std::fs::read_to_string(&path).expect("marketplace.json must exist at repo root");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).expect("marketplace.json must be valid JSON");
+    assert_eq!(
+        parsed["name"], "brain",
+        "marketplace name must be \"brain\""
+    );
+    let plugins = parsed["plugins"]
+        .as_array()
+        .expect("plugins field must be an array");
+    assert_eq!(plugins.len(), 1, "marketplace must list exactly one plugin");
+    assert_eq!(plugins[0]["name"], "brain");
+    assert_eq!(plugins[0]["source"], "./plugins/brain");
+}
+
+#[test]
+fn plugin_json_is_valid_and_declares_brain() {
+    let path = repo_root()
+        .join("plugins")
+        .join("brain")
+        .join("plugin.json");
+    let raw = std::fs::read_to_string(&path).expect("plugin.json must exist");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).expect("plugin.json must be valid JSON");
+    assert_eq!(parsed["name"], "brain");
+    assert!(
+        parsed["hooks"].is_object(),
+        "plugin.json must declare a hooks object"
+    );
+}
+
+#[test]
+fn marketplace_plugin_and_workspace_versions_match() {
+    // cargo-dist bumps Cargo.toml at release time. The two shipped JSON
+    // files are hand-edited. This test fails CI if a future version bump
+    // misses either JSON, so users never download a binary whose
+    // marketplace manifest disagrees with its own self-reported version.
+    let cargo_toml = std::fs::read_to_string(repo_root().join("Cargo.toml")).unwrap();
+    let workspace_version = cargo_toml
+        .lines()
+        .skip_while(|l| !l.starts_with("[workspace.package]"))
+        .find_map(|l| {
+            l.strip_prefix("version = \"")
+                .and_then(|s| s.strip_suffix('"'))
+        })
+        .expect("Cargo.toml must declare [workspace.package].version");
+
+    let marketplace: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo_root().join("marketplace.json")).unwrap(),
+    )
+    .unwrap();
+    let marketplace_version = marketplace["plugins"][0]["version"]
+        .as_str()
+        .expect("marketplace.json must declare plugins[0].version");
+
+    let plugin: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo_root().join("plugins/brain/plugin.json")).unwrap(),
+    )
+    .unwrap();
+    let plugin_version = plugin["version"]
+        .as_str()
+        .expect("plugin.json must declare version");
+
+    assert_eq!(
+        marketplace_version, workspace_version,
+        "marketplace.json version drifted from Cargo.toml [workspace.package].version"
+    );
+    assert_eq!(
+        plugin_version, workspace_version,
+        "plugin.json version drifted from Cargo.toml [workspace.package].version"
+    );
 }

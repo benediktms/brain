@@ -1,8 +1,0 @@
-{
-  "name": "records",
-  "description": "Work products — artifacts, snapshots, and record search.",
-  "version": "{{version}}",
-  "author": { "name": "Benedikt Schnatterbeck" },
-  "license": "MIT",
-  "hooks": {}
-}

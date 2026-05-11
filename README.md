@@ -157,20 +157,6 @@ Once installed, every skill is addressable under `/brain:<domain>-<action>`:
 
 Restart Claude Code after installing so plugin metadata reloads.
 
-### Codex
-
-```sh
-brain plugin install --target codex
-```
-
-Installs one consolidated home-local plugin at `~/.agents/plugins/brain/` and upserts the `brain` entry in `~/.agents/plugins/marketplace.json`. Configure the Brain MCP server in Codex first so the skills can call the Brain MCP tools.
-
-To remove:
-
-```sh
-brain plugin uninstall --target codex
-```
-
 ### Advanced / manual setup
 
 `brain hooks install` directly injects hook entries into `.claude/settings.json`. This path is retained for environments where the Claude Code plugin marketplace is unavailable (CI runners, air-gapped machines):

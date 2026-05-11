@@ -297,45 +297,55 @@ mod tests {
             Command::Plugin {
                 action: PluginAction::Install {
                     target: PluginTarget::Claude,
-                    dry_run: false
                 }
             }
         ));
     }
 
     #[test]
-    fn parse_plugin_install_codex_dry_run() {
-        let cli = Cli::try_parse_from([
-            "brain",
-            "plugin",
-            "install",
-            "--target",
-            "codex",
-            "--dry-run",
-        ])
-        .unwrap();
+    fn parse_plugin_install_target_claude_explicit() {
+        // The explicit `--target claude` form must continue to parse so
+        // existing scripts keep reaching the deprecation hint rather than
+        // hitting a clap parse error. `let-else` is used instead of
+        // `.expect` because `Cli` does not implement `Debug`.
+        let Ok(cli) = Cli::try_parse_from(["brain", "plugin", "install", "--target", "claude"])
+        else {
+            panic!("--target claude must parse");
+        };
         assert!(matches!(
             cli.command,
             Command::Plugin {
                 action: PluginAction::Install {
-                    target: PluginTarget::Codex,
-                    dry_run: true
+                    target: PluginTarget::Claude,
                 }
             }
         ));
     }
 
     #[test]
-    fn parse_plugin_uninstall_codex() {
-        let cli =
-            Cli::try_parse_from(["brain", "plugin", "uninstall", "--target", "codex"]).unwrap();
+    fn parse_plugin_install_codex_target_rejected() {
+        // The Codex variant was removed when Codex distribution was dropped;
+        // anyone still passing `--target codex` should get a clap parse error
+        // (specifically InvalidValue) rather than a silent fallback.
+        let result = Cli::try_parse_from(["brain", "plugin", "install", "--target", "codex"]);
+        let err = result
+            .err()
+            .expect("--target codex must be rejected at parse time");
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn parse_plugin_install_dry_run_flag_rejected() {
+        // `--dry-run` was meaningful for the legacy file-copy installer.
+        // Now that the command is a deprecation stub, the flag is removed
+        // entirely so users aren't misled into thinking a preview exists.
+        let result = Cli::try_parse_from(["brain", "plugin", "install", "--dry-run"]);
+        let err = result
+            .err()
+            .expect("--dry-run on the deprecation stub must be rejected");
         assert!(matches!(
-            cli.command,
-            Command::Plugin {
-                action: PluginAction::Uninstall {
-                    target: PluginTarget::Codex
-                }
-            }
+            err.kind(),
+            clap::error::ErrorKind::UnknownArgument | clap::error::ErrorKind::TooManyValues
         ));
     }
 

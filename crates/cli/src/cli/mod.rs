@@ -15,6 +15,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 
+/// Canonical GitHub source for the brain plugin marketplace. Referenced
+/// from `commands::plugin` (deprecation hint) and `commands::init`
+/// (install hint after fresh init) so the slug lives in one place.
+pub const GITHUB_SOURCE: &str = "benediktms/brain";
+
 pub(crate) use analyses::*;
 pub(crate) use artifacts::*;
 pub(crate) use documents::*;
@@ -324,7 +329,8 @@ pub(crate) enum Command {
         action: HooksAction,
     },
 
-    /// Manage the brain agent plugin (Claude Code or Codex)
+    /// Manage the brain agent plugin (deprecated — install via Claude Code's
+    /// `/plugin marketplace add` flow; this subcommand prints a redirect)
     Plugin {
         #[command(subcommand)]
         action: PluginAction,
@@ -615,18 +621,16 @@ pub enum McpTarget {
 
 #[derive(Subcommand)]
 pub enum PluginAction {
-    /// Install the brain agent plugin (skills, commands, agents)
+    /// Install the brain agent plugin (deprecated — see top-level doc)
     Install {
-        /// Target agent runtime to install for
+        /// Target agent runtime (deprecated — only `claude` parses, and
+        /// the command prints a redirect regardless of value).
         #[arg(long, value_enum, default_value = "claude")]
         target: PluginTarget,
-        /// Print what would be written without actually writing
-        #[arg(long)]
-        dry_run: bool,
     },
-    /// Uninstall the brain agent plugin
+    /// Uninstall the brain agent plugin (deprecated — see top-level doc)
     Uninstall {
-        /// Target agent runtime to uninstall from
+        /// Target agent runtime (deprecated — only `claude` parses).
         #[arg(long, value_enum, default_value = "claude")]
         target: PluginTarget,
     },
@@ -634,10 +638,9 @@ pub enum PluginAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PluginTarget {
-    /// Claude Code plugin marketplaces under ~/.claude
+    /// Claude Code (deprecated — install via `/plugin marketplace add`
+    /// inside Claude Code instead; this CLI path now prints a redirect).
     Claude,
-    /// Codex plugin marketplace under ~/.agents
-    Codex,
 }
 
 #[derive(Subcommand)]
