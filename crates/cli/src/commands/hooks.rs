@@ -1124,11 +1124,13 @@ mod tests {
             .expect("brain_hooks() must return an object");
 
         for (event, entries) in direct_hooks {
-            let manifest_entry = manifest_hooks
-                .get(event)
-                .unwrap_or_else(|| panic!("event {event} is declared in brain_hooks() but missing from plugin.json"));
+            let manifest_entry = manifest_hooks.get(event).unwrap_or_else(|| {
+                panic!("event {event} is declared in brain_hooks() but missing from plugin.json")
+            });
 
-            let direct_cmd = entries[0]["hooks"][0]["command"].as_str().unwrap_or_default();
+            let direct_cmd = entries[0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap_or_default();
             let manifest_cmd = manifest_entry[0]["hooks"][0]["command"]
                 .as_str()
                 .unwrap_or_default();

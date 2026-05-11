@@ -306,10 +306,12 @@ mod tests {
     fn parse_plugin_install_target_claude_explicit() {
         // The explicit `--target claude` form must continue to parse so
         // existing scripts keep reaching the deprecation hint rather than
-        // hitting a clap parse error.
-        let cli = Cli::try_parse_from(["brain", "plugin", "install", "--target", "claude"])
-            .ok()
-            .expect("--target claude must parse");
+        // hitting a clap parse error. `let-else` is used instead of
+        // `.expect` because `Cli` does not implement `Debug`.
+        let Ok(cli) = Cli::try_parse_from(["brain", "plugin", "install", "--target", "claude"])
+        else {
+            panic!("--target claude must parse");
+        };
         assert!(matches!(
             cli.command,
             Command::Plugin {

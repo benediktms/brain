@@ -1396,7 +1396,10 @@ fn marketplace_json_is_valid_and_lists_brain_plugin() {
     let raw = std::fs::read_to_string(&path).expect("marketplace.json must exist at repo root");
     let parsed: serde_json::Value =
         serde_json::from_str(&raw).expect("marketplace.json must be valid JSON");
-    assert_eq!(parsed["name"], "brain", "marketplace name must be \"brain\"");
+    assert_eq!(
+        parsed["name"], "brain",
+        "marketplace name must be \"brain\""
+    );
     let plugins = parsed["plugins"]
         .as_array()
         .expect("plugins field must be an array");
@@ -1407,7 +1410,10 @@ fn marketplace_json_is_valid_and_lists_brain_plugin() {
 
 #[test]
 fn plugin_json_is_valid_and_declares_brain() {
-    let path = repo_root().join("plugins").join("brain").join("plugin.json");
+    let path = repo_root()
+        .join("plugins")
+        .join("brain")
+        .join("plugin.json");
     let raw = std::fs::read_to_string(&path).expect("plugin.json must exist");
     let parsed: serde_json::Value =
         serde_json::from_str(&raw).expect("plugin.json must be valid JSON");
@@ -1428,12 +1434,16 @@ fn marketplace_plugin_and_workspace_versions_match() {
     let workspace_version = cargo_toml
         .lines()
         .skip_while(|l| !l.starts_with("[workspace.package]"))
-        .find_map(|l| l.strip_prefix("version = \"").and_then(|s| s.strip_suffix('"')))
+        .find_map(|l| {
+            l.strip_prefix("version = \"")
+                .and_then(|s| s.strip_suffix('"'))
+        })
         .expect("Cargo.toml must declare [workspace.package].version");
 
-    let marketplace: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(repo_root().join("marketplace.json")).unwrap())
-            .unwrap();
+    let marketplace: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo_root().join("marketplace.json")).unwrap(),
+    )
+    .unwrap();
     let marketplace_version = marketplace["plugins"][0]["version"]
         .as_str()
         .expect("marketplace.json must declare plugins[0].version");
