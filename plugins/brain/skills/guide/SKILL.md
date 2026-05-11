@@ -1,5 +1,4 @@
 ---
-name: guide
 description: >
   Local-first personal knowledge base with semantic memory, task management,
   and records. Use when work needs persistent context, task tracking with

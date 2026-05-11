@@ -308,7 +308,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     Ok(())
 }
 
-use crate::cli::GITHUB_SOURCE;
+use crate::cli::{GITHUB_SOURCE, MARKETPLACE_MANIFEST};
 
 /// Prints the `/plugin marketplace add` two-liner the user should run in
 /// Claude Code to install the unified brain plugin.
@@ -337,18 +337,27 @@ fn install_hint_source(cwd: &Path) -> String {
     }
 }
 
-/// Heuristic detection of a brain-repo checkout: the cwd contains a
+/// Detects a brain-repo checkout: the cwd contains a
 /// `.claude-plugin/marketplace.json` (per Claude Code spec) that both
 /// names "brain" and sources the unified plugin from `./plugins/brain`.
 /// Both checks must pass to avoid false positives on unrelated
-/// marketplaces that happen to use either token. If the marketplace.json
-/// schema changes, update these literals.
+/// marketplaces that happen to use either token.
 fn is_brain_repo_checkout(cwd: &Path) -> bool {
-    let manifest = cwd.join(".claude-plugin").join("marketplace.json");
-    let Ok(contents) = fs::read_to_string(manifest) else {
+    let Ok(contents) = fs::read_to_string(cwd.join(MARKETPLACE_MANIFEST)) else {
         return false;
     };
-    contents.contains("\"name\": \"brain\"") && contents.contains("\"./plugins/brain\"")
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    let names_brain = parsed.get("name").and_then(|v| v.as_str()) == Some("brain");
+    let sources_brain_plugin = parsed
+        .get("plugins")
+        .and_then(|p| p.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|p| p.get("source"))
+        .and_then(|s| s.as_str())
+        == Some("./plugins/brain");
+    names_brain && sources_brain_plugin
 }
 
 /// Indexing is opt-in: empty input stays empty; explicit `--notes` paths flow
@@ -1250,12 +1259,13 @@ mod tests {
         assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
     }
 
-    /// Writes a marketplace.json at the spec-correct path
-    /// (`.claude-plugin/marketplace.json` inside the given dir).
+    /// Writes a marketplace.json at the spec-correct path inside the
+    /// given dir. Uses the same `MARKETPLACE_MANIFEST` constant as the
+    /// production code so a future spec change ripples through one edit.
     fn write_marketplace(dir: &Path, body: &str) {
-        let mp_dir = dir.join(".claude-plugin");
-        fs::create_dir_all(&mp_dir).unwrap();
-        fs::write(mp_dir.join("marketplace.json"), body).unwrap();
+        let path = dir.join(MARKETPLACE_MANIFEST);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
     }
 
     #[test]

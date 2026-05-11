@@ -1097,20 +1097,22 @@ mod tests {
     }
 
     /// The hook commands shipped by the marketplace plugin manifest
-    /// (`plugins/brain/plugin.json`) and the direct-injection path
-    /// (`brain_hooks()`) MUST stay in sync. They are two surfaces over
-    /// the same intent — a user on either install path should see
-    /// identical hook behaviour. This test parses the manifest and
-    /// asserts that every event `brain_hooks()` emits has a
-    /// byte-equivalent `command` string in the manifest.
+    /// (`plugins/brain/.claude-plugin/plugin.json`) and the
+    /// direct-injection path (`brain_hooks()`) MUST stay in sync.
+    /// They are two surfaces over the same intent — a user on either
+    /// install path should see identical hook behaviour. This test
+    /// parses the manifest and asserts that every event
+    /// `brain_hooks()` emits has a byte-equivalent `command` string
+    /// in the manifest.
     #[test]
     fn brain_hooks_match_marketplace_plugin_manifest() {
         let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
-            .join("plugins/brain/.claude-plugin/plugin.json");
+            .join("plugins/brain")
+            .join(crate::cli::PLUGIN_MANIFEST);
         let raw = std::fs::read_to_string(&manifest_path)
-            .expect("plugins/brain/plugin.json must exist at repo root");
+            .expect("plugins/brain/.claude-plugin/plugin.json must exist at repo root");
         let manifest: Value = serde_json::from_str(&raw).expect("plugin.json must be valid JSON");
         let manifest_hooks = manifest["hooks"]
             .as_object()
