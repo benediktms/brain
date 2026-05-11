@@ -308,7 +308,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     Ok(())
 }
 
-use crate::cli::GITHUB_SOURCE;
+use crate::cli::{GITHUB_SOURCE, MARKETPLACE_MANIFEST};
 
 /// Prints the `/plugin marketplace add` two-liner the user should run in
 /// Claude Code to install the unified brain plugin.
@@ -337,16 +337,28 @@ fn install_hint_source(cwd: &Path) -> String {
     }
 }
 
-/// Heuristic detection of a brain-repo checkout: the cwd contains a root
-/// `marketplace.json` that both names "brain" and sources the unified
-/// plugin from `./plugins/brain`. Both checks must pass to avoid false
-/// positives on unrelated marketplaces that happen to use either token.
-/// If the marketplace.json schema changes, update these literals.
+/// Detects a brain-repo checkout: the cwd contains a
+/// `.claude-plugin/marketplace.json` (per Claude Code spec) that names
+/// "brain" AND lists a plugin sourced from `./plugins/brain` anywhere
+/// in its plugins array. Iterating instead of inspecting `plugins[0]`
+/// keeps this stable if the marketplace ever gains sibling plugins.
 fn is_brain_repo_checkout(cwd: &Path) -> bool {
-    let Ok(contents) = fs::read_to_string(cwd.join("marketplace.json")) else {
+    let Ok(contents) = fs::read_to_string(cwd.join(MARKETPLACE_MANIFEST)) else {
         return false;
     };
-    contents.contains("\"name\": \"brain\"") && contents.contains("\"./plugins/brain\"")
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    let names_brain = parsed.get("name").and_then(|v| v.as_str()) == Some("brain");
+    let sources_brain_plugin = parsed
+        .get("plugins")
+        .and_then(|p| p.as_array())
+        .is_some_and(|plugins| {
+            plugins
+                .iter()
+                .any(|p| p.get("source").and_then(|s| s.as_str()) == Some("./plugins/brain"))
+        });
+    names_brain && sources_brain_plugin
 }
 
 /// Indexing is opt-in: empty input stays empty; explicit `--notes` paths flow
@@ -1248,14 +1260,22 @@ mod tests {
         assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
     }
 
+    /// Writes a marketplace.json at the spec-correct path inside the
+    /// given dir. Uses the same `MARKETPLACE_MANIFEST` constant as the
+    /// production code so a future spec change ripples through one edit.
+    fn write_marketplace(dir: &Path, body: &str) {
+        let path = dir.join(MARKETPLACE_MANIFEST);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+
     #[test]
     fn install_hint_source_uses_local_path_in_brain_checkout() {
         let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("marketplace.json"),
+        write_marketplace(
+            dir.path(),
             r#"{ "name": "brain", "plugins": [{ "source": "./plugins/brain" }] }"#,
-        )
-        .unwrap();
+        );
         let src = install_hint_source(dir.path());
         assert!(
             src.contains(&dir.path().display().to_string()),
@@ -1268,22 +1288,20 @@ mod tests {
         // Loose substring match would false-positive on any marketplace that
         // happens to name "brain" — the second token must also be present.
         let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("marketplace.json"),
+        write_marketplace(
+            dir.path(),
             r#"{ "name": "brain", "plugins": [{ "source": "./different-plugin" }] }"#,
-        )
-        .unwrap();
+        );
         assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
     }
 
     #[test]
     fn install_hint_source_ignores_unrelated_marketplace() {
         let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("marketplace.json"),
+        write_marketplace(
+            dir.path(),
             r#"{ "name": "other", "plugins": [{ "source": "./plugins/brain" }] }"#,
-        )
-        .unwrap();
+        );
         assert_eq!(install_hint_source(dir.path()), GITHUB_SOURCE);
     }
 }

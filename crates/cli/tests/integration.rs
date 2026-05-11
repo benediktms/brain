@@ -1375,12 +1375,16 @@ fn tasks_transfer_help_shows_usage() {
 // Shipped manifest invariants
 // ---------------------------------------------------------------------------
 //
-// The unified `brain` plugin ships two JSON files from the repo root that
-// Claude Code consumes verbatim: `marketplace.json` and
-// `plugins/brain/plugin.json`. If either becomes invalid JSON or drifts
-// out of sync with the workspace version, the plugin install will fail in
-// users' Claude Code sessions with no signal back to brain. These tests
-// catch that at CI time instead.
+// The unified `brain` plugin ships two JSON files Claude Code consumes
+// per its plugin marketplace spec:
+//
+//   .claude-plugin/marketplace.json              (marketplace catalog)
+//   plugins/brain/.claude-plugin/plugin.json     (plugin manifest)
+//
+// If either becomes invalid JSON, drifts out of spec, or moves, plugin
+// install fails in users' Claude Code sessions with no signal back to
+// brain. These tests, plus `claude_plugin_validate_passes` below, catch
+// that at CI time. Spec: https://code.claude.com/docs/en/plugin-marketplaces.md
 
 /// Anchor file-system reads at the workspace root regardless of how the
 /// test binary is invoked.
@@ -1390,9 +1394,13 @@ fn repo_root() -> std::path::PathBuf {
         .join("..")
 }
 
+/// Path-segment constants kept in sync with the production code.
+const MARKETPLACE_MANIFEST: &str = ".claude-plugin/marketplace.json";
+const PLUGIN_MANIFEST_REL: &str = "plugins/brain/.claude-plugin/plugin.json";
+
 #[test]
 fn marketplace_json_is_valid_and_lists_brain_plugin() {
-    let path = repo_root().join("marketplace.json");
+    let path = repo_root().join(MARKETPLACE_MANIFEST);
     let raw = std::fs::read_to_string(&path).expect("marketplace.json must exist at repo root");
     let parsed: serde_json::Value =
         serde_json::from_str(&raw).expect("marketplace.json must be valid JSON");
@@ -1410,10 +1418,7 @@ fn marketplace_json_is_valid_and_lists_brain_plugin() {
 
 #[test]
 fn plugin_json_is_valid_and_declares_brain() {
-    let path = repo_root()
-        .join("plugins")
-        .join("brain")
-        .join("plugin.json");
+    let path = repo_root().join(PLUGIN_MANIFEST_REL);
     let raw = std::fs::read_to_string(&path).expect("plugin.json must exist");
     let parsed: serde_json::Value =
         serde_json::from_str(&raw).expect("plugin.json must be valid JSON");
@@ -1425,43 +1430,83 @@ fn plugin_json_is_valid_and_declares_brain() {
 }
 
 #[test]
-fn marketplace_plugin_and_workspace_versions_match() {
-    // cargo-dist bumps Cargo.toml at release time. The two shipped JSON
-    // files are hand-edited. This test fails CI if a future version bump
-    // misses either JSON, so users never download a binary whose
-    // marketplace manifest disagrees with its own self-reported version.
-    let cargo_toml = std::fs::read_to_string(repo_root().join("Cargo.toml")).unwrap();
-    let workspace_version = cargo_toml
-        .lines()
-        .skip_while(|l| !l.starts_with("[workspace.package]"))
-        .find_map(|l| {
-            l.strip_prefix("version = \"")
-                .and_then(|s| s.strip_suffix('"'))
-        })
-        .expect("Cargo.toml must declare [workspace.package].version");
-
+fn manifests_declare_no_explicit_version() {
+    // Policy: omit `version` from every position the spec accepts one
+    // so the git commit SHA drives plugin updates. The spec warns that
+    // setting `version` in both files is a footgun — `plugin.json`
+    // silently wins, and there is no release pipeline that would bump
+    // both atomically. Asserting absence makes the policy enforceable.
     let marketplace: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(repo_root().join("marketplace.json")).unwrap(),
+        &std::fs::read_to_string(repo_root().join(MARKETPLACE_MANIFEST)).unwrap(),
     )
     .unwrap();
-    let marketplace_version = marketplace["plugins"][0]["version"]
-        .as_str()
-        .expect("marketplace.json must declare plugins[0].version");
+    // Top-level marketplace `version` field — must be absent.
+    assert!(
+        marketplace.get("version").is_none(),
+        "marketplace.json must omit top-level `version`"
+    );
+    // Each plugin entry's `version` field — must be absent on every entry,
+    // and `plugins[i]` must be an object so a non-object slip (e.g. a
+    // string-shorthand a future maintainer might attempt) doesn't trick
+    // a shallow `get(...)` into reporting success.
+    let plugins = marketplace["plugins"]
+        .as_array()
+        .expect("marketplace.json `plugins` must be an array");
+    for (i, entry) in plugins.iter().enumerate() {
+        let obj = entry
+            .as_object()
+            .unwrap_or_else(|| panic!("plugins[{i}] must be an object"));
+        assert!(
+            !obj.contains_key("version"),
+            "marketplace.json plugins[{i}].version must be absent (git SHA drives versioning)"
+        );
+    }
 
     let plugin: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(repo_root().join("plugins/brain/plugin.json")).unwrap(),
+        &std::fs::read_to_string(repo_root().join(PLUGIN_MANIFEST_REL)).unwrap(),
     )
     .unwrap();
-    let plugin_version = plugin["version"]
-        .as_str()
-        .expect("plugin.json must declare version");
-
-    assert_eq!(
-        marketplace_version, workspace_version,
-        "marketplace.json version drifted from Cargo.toml [workspace.package].version"
+    let plugin_obj = plugin
+        .as_object()
+        .expect("plugin.json must be a JSON object");
+    assert!(
+        !plugin_obj.contains_key("version"),
+        "plugin.json must omit `version` (git SHA drives versioning)"
     );
-    assert_eq!(
-        plugin_version, workspace_version,
-        "plugin.json version drifted from Cargo.toml [workspace.package].version"
+}
+
+/// Shell out to the official validator. Probes for `claude` via
+/// `claude --version` (portable across platforms; `which` is not on
+/// Windows and varies on Linux distros) and silently skips only when
+/// the binary itself isn't installed. ANY non-zero exit from
+/// `claude plugin validate` is treated as a test failure, including
+/// new-warning-as-error regressions, so spec drift surfaces loudly
+/// the moment a developer with Claude Code installed runs the suite.
+#[test]
+fn claude_plugin_validate_passes() {
+    let claude_installed = std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !claude_installed {
+        eprintln!(
+            "skipping `claude_plugin_validate_passes`: `claude` binary not installed. \
+             Install Claude Code locally to exercise the official manifest validator."
+        );
+        return;
+    }
+
+    let output = std::process::Command::new("claude")
+        .args(["plugin", "validate", "."])
+        .current_dir(repo_root())
+        .output()
+        .expect("failed to spawn `claude plugin validate`");
+
+    assert!(
+        output.status.success(),
+        "claude plugin validate failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }

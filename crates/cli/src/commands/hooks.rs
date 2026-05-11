@@ -1096,23 +1096,27 @@ mod tests {
         assert!(empty.file_path.is_none());
     }
 
-    /// The hook commands shipped by the marketplace plugin manifest
-    /// (`plugins/brain/plugin.json`) and the direct-injection path
-    /// (`brain_hooks()`) MUST stay in sync. They are two surfaces over
-    /// the same intent — a user on either install path should see
-    /// identical hook behaviour. This test parses the manifest and
-    /// asserts that every event `brain_hooks()` emits has a
-    /// byte-equivalent `command` string in the manifest.
+    /// `brain_hooks()` is the *subset* of the marketplace plugin
+    /// manifest that `brain hooks install` injects directly into
+    /// `.claude/settings.json` — `SessionStart` and `UserPromptSubmit`
+    /// only. The marketplace manifest at
+    /// `plugins/brain/.claude-plugin/plugin.json` declares those same
+    /// two events plus three more (`PreCompact`, `Stop`, `PreToolUse`)
+    /// that only ship via the marketplace install path.
+    ///
+    /// This test asserts that for every event `brain_hooks()` emits,
+    /// the manifest declares a byte-equivalent `command` — so a user
+    /// on either install path sees identical behaviour for the shared
+    /// events. The reverse direction (manifest-only events) is covered
+    /// by `manifest_declares_full_event_set` below.
     #[test]
     fn brain_hooks_match_marketplace_plugin_manifest() {
         let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
-            .join("plugins")
-            .join("brain")
-            .join("plugin.json");
+            .join("plugins/brain/.claude-plugin/plugin.json");
         let raw = std::fs::read_to_string(&manifest_path)
-            .expect("plugins/brain/plugin.json must exist at repo root");
+            .expect("plugins/brain/.claude-plugin/plugin.json must exist at repo root");
         let manifest: Value = serde_json::from_str(&raw).expect("plugin.json must be valid JSON");
         let manifest_hooks = manifest["hooks"]
             .as_object()
@@ -1137,6 +1141,40 @@ mod tests {
             assert_eq!(
                 direct_cmd, manifest_cmd,
                 "hook command for event {event} drifted between brain_hooks() and plugin.json"
+            );
+        }
+    }
+
+    /// Inverse of the test above: assert the marketplace manifest
+    /// declares the FULL set of events brain depends on. `brain_hooks()`
+    /// only covers two; the manifest must additionally declare
+    /// `PreCompact`, `Stop`, and `PreToolUse`, since those events only
+    /// ship via the plugin install path. If a future edit drops one,
+    /// the corresponding `brain hooks <subcommand>` will never fire for
+    /// marketplace-installed users.
+    #[test]
+    fn manifest_declares_full_event_set() {
+        let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("plugins/brain/.claude-plugin/plugin.json");
+        let raw = std::fs::read_to_string(&manifest_path)
+            .expect("plugins/brain/.claude-plugin/plugin.json must exist at repo root");
+        let manifest: Value = serde_json::from_str(&raw).expect("plugin.json must be valid JSON");
+        let manifest_hooks = manifest["hooks"]
+            .as_object()
+            .expect("plugin.json must declare a hooks object");
+
+        for event in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreCompact",
+            "Stop",
+            "PreToolUse",
+        ] {
+            assert!(
+                manifest_hooks.contains_key(event),
+                "plugin.json must declare a hook entry for {event}"
             );
         }
     }
