@@ -308,9 +308,7 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     Ok(())
 }
 
-/// Public GitHub source for the brain marketplace. Used in the install
-/// hint when not running inside a local brain-repo checkout.
-const GITHUB_SOURCE: &str = "benediktms/brain";
+use crate::cli::GITHUB_SOURCE;
 
 /// Prints the `/plugin marketplace add` two-liner the user should run in
 /// Claude Code to install the unified brain plugin.

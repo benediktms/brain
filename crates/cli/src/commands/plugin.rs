@@ -5,35 +5,33 @@
 //! `--target` flag is still parsed (`claude` is the only remaining value;
 //! `codex` was dropped) so existing scripts surface a clear deprecation
 //! error rather than a clap parse failure.
+//!
+//! TODO: remove the `brain plugin` subcommand surface entirely in v0.6.0
+//! once the deprecation window has elapsed. Drop `PluginAction`,
+//! `PluginTarget`, and the dispatcher arm at that point.
 
 use anyhow::{Result, bail};
 
-use crate::cli::PluginTarget;
+use crate::cli::{GITHUB_SOURCE, PluginTarget};
 
-const INSTALL_REDIRECT: &str = "\
-The brain plugin is now distributed via Claude Code's plugin marketplace.
-
-Install it from inside Claude Code:
-  /plugin marketplace add benediktms/brain
-  /plugin install brain@brain
-
-For local development against a brain checkout, point at the repo path:
-  /plugin marketplace add /abs/path/to/brain
-  /plugin install brain@brain";
-
-const UNINSTALL_REDIRECT: &str = "\
-The brain plugin is now managed via Claude Code's plugin marketplace.
-
-Remove it from inside Claude Code:
-  /plugin uninstall brain@brain
-  /plugin marketplace remove brain";
-
-pub fn install(_target: PluginTarget, _dry_run: bool) -> Result<()> {
-    eprintln!("{INSTALL_REDIRECT}");
+pub fn install(_target: PluginTarget) -> Result<()> {
+    eprintln!("The brain plugin is now distributed via Claude Code's plugin marketplace.");
+    eprintln!();
+    eprintln!("Install it from inside Claude Code:");
+    eprintln!("  /plugin marketplace add {GITHUB_SOURCE}");
+    eprintln!("  /plugin install brain@brain");
+    eprintln!();
+    eprintln!("For local development against a brain checkout, point at the repo path:");
+    eprintln!("  /plugin marketplace add /abs/path/to/brain");
+    eprintln!("  /plugin install brain@brain");
     bail!("`brain plugin install` is deprecated; install via Claude Code");
 }
 
 pub fn uninstall(_target: PluginTarget) -> Result<()> {
-    eprintln!("{UNINSTALL_REDIRECT}");
+    eprintln!("The brain plugin is now managed via Claude Code's plugin marketplace.");
+    eprintln!();
+    eprintln!("Remove it from inside Claude Code:");
+    eprintln!("  /plugin uninstall brain@brain");
+    eprintln!("  /plugin marketplace remove brain");
     bail!("`brain plugin uninstall` is deprecated; uninstall via Claude Code");
 }

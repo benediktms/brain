@@ -1095,4 +1095,47 @@ mod tests {
         assert_eq!(empty.tool_name, "");
         assert!(empty.file_path.is_none());
     }
+
+    /// The hook commands shipped by the marketplace plugin manifest
+    /// (`plugins/brain/plugin.json`) and the direct-injection path
+    /// (`brain_hooks()`) MUST stay in sync. They are two surfaces over
+    /// the same intent — a user on either install path should see
+    /// identical hook behaviour. This test parses the manifest and
+    /// asserts that every event `brain_hooks()` emits has a
+    /// byte-equivalent `command` string in the manifest.
+    #[test]
+    fn brain_hooks_match_marketplace_plugin_manifest() {
+        let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("plugins")
+            .join("brain")
+            .join("plugin.json");
+        let raw = std::fs::read_to_string(&manifest_path)
+            .expect("plugins/brain/plugin.json must exist at repo root");
+        let manifest: Value = serde_json::from_str(&raw).expect("plugin.json must be valid JSON");
+        let manifest_hooks = manifest["hooks"]
+            .as_object()
+            .expect("plugin.json must declare a hooks object");
+
+        let direct = brain_hooks();
+        let direct_hooks = direct
+            .as_object()
+            .expect("brain_hooks() must return an object");
+
+        for (event, entries) in direct_hooks {
+            let manifest_entry = manifest_hooks
+                .get(event)
+                .unwrap_or_else(|| panic!("event {event} is declared in brain_hooks() but missing from plugin.json"));
+
+            let direct_cmd = entries[0]["hooks"][0]["command"].as_str().unwrap_or_default();
+            let manifest_cmd = manifest_entry[0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap_or_default();
+            assert_eq!(
+                direct_cmd, manifest_cmd,
+                "hook command for event {event} drifted between brain_hooks() and plugin.json"
+            );
+        }
+    }
 }
