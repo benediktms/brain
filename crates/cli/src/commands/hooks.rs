@@ -1114,8 +1114,7 @@ mod tests {
         let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
-            .join("plugins/brain")
-            .join(crate::cli::PLUGIN_MANIFEST);
+            .join("plugins/brain/.claude-plugin/plugin.json");
         let raw = std::fs::read_to_string(&manifest_path)
             .expect("plugins/brain/.claude-plugin/plugin.json must exist at repo root");
         let manifest: Value = serde_json::from_str(&raw).expect("plugin.json must be valid JSON");
@@ -1158,8 +1157,7 @@ mod tests {
         let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
-            .join("plugins/brain")
-            .join(crate::cli::PLUGIN_MANIFEST);
+            .join("plugins/brain/.claude-plugin/plugin.json");
         let raw = std::fs::read_to_string(&manifest_path)
             .expect("plugins/brain/.claude-plugin/plugin.json must exist at repo root");
         let manifest: Value = serde_json::from_str(&raw).expect("plugin.json must be valid JSON");

@@ -26,10 +26,6 @@ pub const GITHUB_SOURCE: &str = "benediktms/brain";
 /// marketplace root is the directory containing `.claude-plugin/`.
 pub const MARKETPLACE_MANIFEST: &str = ".claude-plugin/marketplace.json";
 
-/// Path to a plugin manifest relative to its source directory, per the
-/// official spec. Co-located with skill content under the plugin source.
-pub const PLUGIN_MANIFEST: &str = ".claude-plugin/plugin.json";
-
 pub(crate) use analyses::*;
 pub(crate) use artifacts::*;
 pub(crate) use documents::*;
