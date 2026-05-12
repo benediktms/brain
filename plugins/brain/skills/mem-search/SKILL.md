@@ -29,3 +29,5 @@ Use the `memory_retrieve` tool. Key parameters:
 Results include URI, kind, LOD-adjusted content, and hybrid search score.
 
 **One-shot retrieval**: `memory_retrieve` returns LOD-adjusted content in a single call.
+
+For ordered episode histories (chains connected by `continues` edges), use `/brain:mem-thread` instead — it walks structural linkage rather than ranking by similarity.
