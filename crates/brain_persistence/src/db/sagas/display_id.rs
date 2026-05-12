@@ -28,107 +28,56 @@ pub fn parse_short_form(input: &str) -> Option<&str> {
     input.strip_prefix("saga-")
 }
 
-/// Resolve any saga reference (bare ULID, `saga-<hex>` short form, or hex
-/// prefix of a stored `display_id`) to its canonical 26-char ULID saga_id.
+/// Resolve a saga reference to its canonical 26-char ULID `saga_id`.
 ///
-/// Precedence:
-/// 1. Exact ULID match on `saga_id`.
-/// 2. If input starts with `saga-`: exact match on `display_id`, then
-///    prefix range scan on `display_id`.
-/// 3. ULID prefix fallback (back-compat for tooling that holds historical
-///    bare-ULID references).
+/// Accepts exactly two forms:
+/// 1. The bare 26-char ULID (matches `saga_id` directly).
+/// 2. The `saga-<lowercase hex>` short form (matches `display_id`).
 ///
-/// Returns `BrainCoreError::Parse("ambiguous short id: …")` when a prefix
-/// matches multiple rows.
+/// Partial-prefix matching is intentionally absent: `display_id` values
+/// are forced unique by the insert-time collision walk, so `saga-abcd`
+/// can only exist if `saga-abc` was already taken at the time it was
+/// inserted. Combined with the fact that sagas are never physically
+/// deleted (only status-transitioned), there is no realistic state where
+/// a partial prefix would resolve unambiguously to a single saga without
+/// also matching its predecessor exactly. The simpler two-case resolver
+/// is therefore complete.
 pub fn resolve_saga_id(conn: &Connection, input: &str) -> Result<String> {
     if input.is_empty() {
         return Err(BrainCoreError::Parse("empty saga id".into()));
     }
 
     // 1. Exact ULID match.
-    let exact: Option<String> = conn
+    if let Some(id) = conn
         .query_row(
             "SELECT saga_id FROM sagas WHERE saga_id = ?1",
             [input],
-            |row| row.get(0),
+            |row| row.get::<_, String>(0),
         )
-        .optional()?;
-    if let Some(id) = exact {
+        .optional()?
+    {
         return Ok(id);
     }
 
-    // 2. Short-form resolution if input has the `saga-` prefix.
-    if let Some(stripped) = parse_short_form(input) {
-        return resolve_via_display_id(conn, stripped);
-    }
-
-    // 3. ULID-prefix fallback (back-compat).
-    resolve_via_ulid_prefix(conn, input)
-}
-
-fn resolve_via_display_id(conn: &Connection, hex_prefix: &str) -> Result<String> {
-    if hex_prefix.is_empty()
-        || !hex_prefix
+    // 2. Exact display_id match — input must be `saga-<lowercase hex>`.
+    let hex =
+        parse_short_form(input).ok_or_else(|| BrainCoreError::SagaNotFound(input.to_string()))?;
+    if hex.is_empty()
+        || !hex
             .chars()
             .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
     {
         return Err(BrainCoreError::Parse(format!(
-            "saga short id must be `saga-<lowercase hex>`, got `saga-{hex_prefix}`"
+            "saga short id must be `saga-<lowercase hex>`, got `{input}`"
         )));
     }
-
-    // Exact match first.
-    let exact: Vec<String> = {
-        let mut stmt = conn.prepare("SELECT saga_id FROM sagas WHERE display_id = ?1 LIMIT 2")?;
-        stmt.query_map([hex_prefix], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    if exact.len() == 1 {
-        return Ok(exact.into_iter().next().unwrap());
-    }
-
-    // Prefix range scan: user supplied a short prefix of a longer stored display_id.
-    let upper_bound = increment_string(hex_prefix);
-    let candidates: Vec<(String, String)> = {
-        let mut stmt = conn.prepare(
-            "SELECT saga_id, display_id FROM sagas \
-             WHERE display_id >= ?1 AND display_id < ?2 LIMIT 5",
-        )?;
-        stmt.query_map([hex_prefix, &upper_bound], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    match candidates.len() {
-        0 => Err(BrainCoreError::SagaNotFound(format!("saga-{hex_prefix}"))),
-        1 => Ok(candidates.into_iter().next().unwrap().0),
-        _ => Err(BrainCoreError::Parse(format!(
-            "ambiguous short id `saga-{hex_prefix}` matches: {}",
-            candidates
-                .iter()
-                .map(|(_, d)| format!("saga-{d}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))),
-    }
-}
-
-fn resolve_via_ulid_prefix(conn: &Connection, input: &str) -> Result<String> {
-    let upper_bound = increment_string(input);
-    let candidates: Vec<String> = {
-        let mut stmt =
-            conn.prepare("SELECT saga_id FROM sagas WHERE saga_id >= ?1 AND saga_id < ?2 LIMIT 5")?;
-        stmt.query_map([input, &upper_bound], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    match candidates.len() {
-        0 => Err(BrainCoreError::SagaNotFound(input.to_string())),
-        1 => Ok(candidates.into_iter().next().unwrap()),
-        _ => Err(BrainCoreError::Parse(format!(
-            "ambiguous saga id prefix `{input}` matches: {}",
-            candidates.join(", ")
-        ))),
-    }
+    conn.query_row(
+        "SELECT saga_id FROM sagas WHERE display_id = ?1",
+        [hex],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()?
+    .ok_or_else(|| BrainCoreError::SagaNotFound(input.to_string()))
 }
 
 /// Batch-load short IDs for all sagas. Returns a `saga_id (ULID) → saga-<hex>`
@@ -144,24 +93,6 @@ pub fn compact_saga_ids(conn: &Connection) -> Result<HashMap<String, String>> {
         out.insert(saga_id, compact_saga_id(&display_id));
     }
     Ok(out)
-}
-
-/// Increment a string lexicographically (upper bound of a half-open range scan).
-///
-/// Mirrors the helpers in `tasks/queries/resolve.rs` and `records/queries.rs`
-/// — a small ASCII-safe inc-and-carry. Two existing copies plus this one are
-/// candidates for a future shared-utility extraction.
-fn increment_string(s: &str) -> String {
-    debug_assert!(s.is_ascii(), "increment_string expects ASCII input");
-    let mut bytes = s.as_bytes().to_vec();
-    for i in (0..bytes.len()).rev() {
-        if bytes[i] < 0xFF {
-            bytes[i] += 1;
-            return String::from_utf8(bytes).unwrap_or_else(|_| format!("{s}\u{FFFF}"));
-        }
-        bytes[i] = 0;
-    }
-    format!("{s}\u{FFFF}")
 }
 
 #[cfg(test)]
@@ -219,31 +150,6 @@ mod tests {
 
         let resolved = resolve_saga_id(&conn, "saga-abc").unwrap();
         assert_eq!(resolved, "01KR16ZJRDVNF5D463QMVD9PH0");
-    }
-
-    #[test]
-    fn resolve_short_form_prefix_match() {
-        let conn = Connection::open_in_memory().unwrap();
-        fresh_v54(&conn);
-        // Stored display_id is longer than the user's input prefix.
-        insert_saga_with_display_id(&conn, "01KR16ZJRDVNF5D463QMVD9PH0", "abcd");
-
-        let resolved = resolve_saga_id(&conn, "saga-abc").unwrap();
-        assert_eq!(resolved, "01KR16ZJRDVNF5D463QMVD9PH0");
-    }
-
-    #[test]
-    fn resolve_short_form_ambiguous_prefix_errors() {
-        let conn = Connection::open_in_memory().unwrap();
-        fresh_v54(&conn);
-        insert_saga_with_display_id(&conn, "01KR16ZJRDVNF5D463QMVD9PH0", "abcd");
-        insert_saga_with_display_id(&conn, "01KR16ZJRDVNF5D463QMVD9PH1", "abce");
-
-        let err = resolve_saga_id(&conn, "saga-abc").unwrap_err();
-        match err {
-            BrainCoreError::Parse(msg) => assert!(msg.contains("ambiguous")),
-            other => panic!("expected Parse error, got {other:?}"),
-        }
     }
 
     #[test]
