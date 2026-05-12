@@ -119,7 +119,12 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
     if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
-            .map(|(t, d)| (ctx.store.compact_id_or_raw(t), ctx.store.compact_id_or_raw(d)))
+            .map(|(t, d)| {
+                (
+                    ctx.store.compact_id_or_raw(t),
+                    ctx.store.compact_id_or_raw(d),
+                )
+            })
             .collect::<Vec<_>>();
         let failed = failed
             .iter()
