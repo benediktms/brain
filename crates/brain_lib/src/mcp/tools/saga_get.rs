@@ -188,6 +188,50 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
     }
 
+    /// End-to-end verification that the MCP `saga_id` boundary accepts BOTH
+    /// the `saga-<hex>` short form (the wire-emitted form) and the bare
+    /// 26-char ULID (for back-compat with historical references). Both routes
+    /// must resolve to the same saga and emit the short form in the response.
+    #[tokio::test]
+    async fn test_get_accepts_both_input_forms_round_trip() {
+        use super::super::tests::assert_short_saga_id;
+
+        let (_dir, ctx) = create_test_context().await;
+        let create_result = call_create(json!({ "title": "Round Trip" }), &ctx).await;
+        let created: Value = serde_json::from_str(&create_result.content[0].text).unwrap();
+        let short_id = created["saga_id"].as_str().unwrap().to_string();
+        assert_short_saga_id(&short_id);
+
+        // Recover the canonical ULID via the store's public API.
+        let (canonical_ulid, returned_short) = ctx.stores.sagas.resolve_short(&short_id).unwrap();
+        assert_eq!(returned_short, short_id);
+        assert_eq!(canonical_ulid.len(), 26);
+
+        // Fetch via the short form.
+        let via_short = call_get(json!({ "saga_id": &short_id }), &ctx).await;
+        assert!(via_short.is_error.is_none(), "short form get failed");
+        let parsed_short: Value = serde_json::from_str(&via_short.content[0].text).unwrap();
+
+        // Fetch via the bare ULID.
+        let via_ulid = call_get(json!({ "saga_id": &canonical_ulid }), &ctx).await;
+        assert!(via_ulid.is_error.is_none(), "bare ULID get failed");
+        let parsed_ulid: Value = serde_json::from_str(&via_ulid.content[0].text).unwrap();
+
+        // Both routes return the same saga; both responses emit the short form.
+        assert_eq!(parsed_short["saga"]["title"], "Round Trip");
+        assert_eq!(parsed_ulid["saga"]["title"], "Round Trip");
+        assert_eq!(
+            parsed_short["saga"]["saga_id"],
+            parsed_ulid["saga"]["saga_id"]
+        );
+        assert_short_saga_id(parsed_short["saga"]["saga_id"].as_str().unwrap());
+        assert_short_saga_id(parsed_ulid["saga"]["saga_id"].as_str().unwrap());
+
+        // The canonical ULID must never appear in either response payload.
+        assert!(!via_short.content[0].text.contains(&canonical_ulid));
+        assert!(!via_ulid.content[0].text.contains(&canonical_ulid));
+    }
+
     #[tokio::test]
     async fn test_underscore_alias() {
         assert_eq!(SagaGet.underscore_alias(), "sagas_get");
