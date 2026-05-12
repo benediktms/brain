@@ -55,8 +55,13 @@ impl SagaGet {
         let members_json: Vec<serde_json::Value> = members
             .iter()
             .map(|m| {
+                let task_id = ctx
+                    .stores
+                    .tasks
+                    .compact_id(&m.task_id)
+                    .unwrap_or_else(|_| m.task_id.clone());
                 json!({
-                    "task_id": m.task_id,
+                    "task_id": task_id,
                     "brain_id": m.brain_id,
                     "title": m.title,
                     "status": m.status,
@@ -235,5 +240,64 @@ mod tests {
     #[tokio::test]
     async fn test_underscore_alias() {
         assert_eq!(SagaGet.underscore_alias(), "sagas_get");
+    }
+
+    /// Saga member responses must emit each `task_id` in the compact
+    /// `<prefix>-<hex>` form — never the canonical `PREFIX-ULID`. Regression
+    /// test for the cross-domain leak where saga endpoints were emitting full
+    /// task ULIDs even after the task-side cleanup.
+    #[tokio::test]
+    async fn test_members_emit_short_task_ids() {
+        use super::super::saga_add_tasks::SagaAddTasks;
+        use super::super::task_create::TaskCreate;
+        use super::super::tests::assert_short_task_id;
+
+        let (_dir, ctx) = create_test_context().await;
+
+        // Create the saga.
+        let saga_create = call_create(json!({ "title": "Members Leak" }), &ctx).await;
+        let saga_payload: Value = serde_json::from_str(&saga_create.content[0].text).unwrap();
+        let saga_id = saga_payload["saga_id"].as_str().unwrap().to_string();
+
+        // Create a task and capture its short form for cross-checking.
+        let task_create = TaskCreate
+            .call(
+                json!({ "title": "Member task", "task_type": "feature" }),
+                &ctx,
+            )
+            .await;
+        let task_payload: Value = serde_json::from_str(&task_create.content[0].text).unwrap();
+        let short_task_id = task_payload["task_id"].as_str().unwrap().to_string();
+        assert_short_task_id(&short_task_id);
+
+        // Add the task to the saga.
+        let add = SagaAddTasks
+            .call(
+                json!({ "saga_id": &saga_id, "task_ids": [&short_task_id] }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            add.is_error.is_none(),
+            "add_tasks should succeed: {:?}",
+            add.content
+        );
+
+        // Fetch the saga and verify the member emits the short form.
+        let get_result = call_get(json!({ "saga_id": &saga_id }), &ctx).await;
+        assert!(
+            get_result.is_error.is_none(),
+            "get should succeed: {:?}",
+            get_result.content
+        );
+        let fetched: Value = serde_json::from_str(&get_result.content[0].text).unwrap();
+        let members = fetched["saga"]["members"].as_array().unwrap();
+        assert_eq!(members.len(), 1, "expected one member");
+        let emitted = members[0]["task_id"].as_str().unwrap();
+        assert_short_task_id(emitted);
+        assert_eq!(
+            emitted, short_task_id,
+            "member task_id must match the task's wire-form short id"
+        );
     }
 }
