@@ -242,7 +242,7 @@ impl TaskCreate {
                 }
             };
 
-            let short_id = remote_tasks.compact_id(&task_id).unwrap_or(task_id.clone());
+            let short_id = remote_tasks.compact_id_or_raw(&task_id);
 
             // Optionally create bidirectional cross-brain references
             let mut local_ref_created = false;
@@ -374,11 +374,7 @@ impl TaskCreate {
                 }
             };
 
-            let short_id = ctx
-                .stores
-                .tasks
-                .compact_id(&task_id)
-                .unwrap_or(task_id.clone());
+            let short_id = ctx.stores.tasks.compact_id_or_raw(&task_id);
 
             let uri = SynapseUri::for_task(ctx.brain_name(), &short_id).to_string();
 

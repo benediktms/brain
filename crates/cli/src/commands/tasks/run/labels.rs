@@ -35,7 +35,14 @@ fn try_ipc_label_event(
             if ctx.output.is_json_mode() {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             } else {
-                println!("{action_name} label \"{label}\" on task {task_id} (via daemon)");
+                // The daemon owns the task's brain DB, so the CLI cannot
+                // compact the canonical id locally without opening the
+                // remote store. Rather than parse the MCP wire envelope to
+                // recover the compact form (brittle: couples the CLI to
+                // `CallToolResult` shape), omit the task id from this
+                // confirmation entirely. The user typed the id; JSON mode
+                // still surfaces the full structured response.
+                println!("{action_name} label \"{label}\" (via daemon)");
             }
             Ok(true)
         }
@@ -144,10 +151,7 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
         return label_add(&remote_ctx, task_id, label, None);
     }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let display_id = ctx.store.compact_id_or_raw(task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -194,10 +198,7 @@ pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&st
         return label_remove(&remote_ctx, task_id, label, None);
     }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let display_id = ctx.store.compact_id_or_raw(task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -261,16 +262,11 @@ fn batch_label_op(
     if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
-            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .map(|id| ctx.store.compact_id_or_raw(id))
             .collect::<Vec<_>>();
         let failed = failed
             .iter()
-            .map(|(id, e)| {
-                (
-                    ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()),
-                    format!("{e}"),
-                )
-            })
+            .map(|(id, e)| (ctx.store.compact_id_or_raw(id), format!("{e}")))
             .collect::<Vec<_>>();
         let out = json!({
             "succeeded": succeeded,
@@ -280,11 +276,11 @@ fn batch_label_op(
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         for tid in &succeeded {
-            let display_id = ctx.store.compact_id(tid).unwrap_or_else(|_| (*tid).clone());
+            let display_id = ctx.store.compact_id_or_raw(tid);
             println!("{action_name} label \"{label}\" on task {display_id}");
         }
         for (tid, e) in &failed {
-            let display_id = ctx.store.compact_id(tid).unwrap_or_else(|_| (*tid).clone());
+            let display_id = ctx.store.compact_id_or_raw(tid);
             println!("Failed on task {display_id}: {e}");
         }
         println!("{} succeeded, {} failed", succeeded.len(), failed.len());
@@ -389,11 +385,11 @@ pub fn label_rename(ctx: &TaskCtx, old_label: &str, new_label: &str) -> Result<(
     if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
-            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .map(|id| ctx.store.compact_id_or_raw(id))
             .collect::<Vec<_>>();
         let failed = failed
             .iter()
-            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .map(|id| ctx.store.compact_id_or_raw(id))
             .collect::<Vec<_>>();
         let out = json!({
             "succeeded": succeeded,
@@ -457,16 +453,11 @@ pub fn label_purge(ctx: &TaskCtx, label: &str) -> Result<()> {
     if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
-            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .map(|id| ctx.store.compact_id_or_raw(id))
             .collect::<Vec<_>>();
         let failed = failed
             .iter()
-            .map(|(id, e)| {
-                (
-                    ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()),
-                    format!("{e}"),
-                )
-            })
+            .map(|(id, e)| (ctx.store.compact_id_or_raw(id), format!("{e}")))
             .collect::<Vec<_>>();
         let out = json!({
             "succeeded": succeeded,

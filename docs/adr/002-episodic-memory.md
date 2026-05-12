@@ -158,4 +158,3 @@ The episodic memory system originally relied on a two-phase retrieval pattern: s
 
 - CLS theory: McClelland, McNaughton, O'Reilly (1995) — *Why there are complementary learning systems in the hippocampus and neocortex*
 - Stanford Generative Agents: Park et al. (2023) — *Generative agents: Interactive simulacra of human behavior*
-- Brain snapshot: BRN-01KKXMB1FJW77T0WRWPVA9DZA4

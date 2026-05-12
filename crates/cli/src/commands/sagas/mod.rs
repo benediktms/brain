@@ -150,13 +150,14 @@ pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
     let saga_id = saga_id_short.as_str();
     let f = ctx.stores.sagas.frontier(&canonical)?;
+    let compact = |canonical: &str| -> String { ctx.stores.tasks.compact_id_or_raw(canonical) };
     if ctx.json {
         let tasks: Vec<serde_json::Value> = f
             .tasks
             .iter()
             .map(|t| {
                 json!({
-                    "task_id": t.task_id,
+                    "task_id": compact(&t.task_id),
                     "title": t.title,
                     "status": t.status,
                     "priority": t.priority,
@@ -186,7 +187,7 @@ pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         } else {
             println!("Ready tasks in saga {saga_id}:");
             for t in &f.tasks {
-                println!("  [{}] {} ({})", t.task_id, t.title, t.status);
+                println!("  [{}] {} ({})", compact(&t.task_id), t.title, t.status);
             }
         }
         // Mirror the `show` command's brains line.
@@ -466,7 +467,7 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
             .iter()
             .map(|m| {
                 json!({
-                    "task_id": m.task_id,
+                    "task_id": ctx.stores.tasks.compact_id_or_raw(&m.task_id),
                     "brain_id": m.brain_id,
                     "title": m.title,
                     "status": m.status,

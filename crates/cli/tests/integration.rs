@@ -1116,9 +1116,22 @@ fn task_prefix_uses_brain_db() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
+    // Verify the canonical task_id in the DB carries the configured `AAA` prefix.
+    // The CLI prints the compact display form (`aaa-<hex>`) — see the JSON sibling
+    // test for the equivalent assertion against the wire-format short id. Asserting
+    // on the DB row decouples this check from display format and proves the prefix
+    // configuration is reaching the persistence layer.
+    let canonical: String = rusqlite::Connection::open(&db_path)
+        .unwrap()
+        .query_row(
+            "SELECT task_id FROM tasks WHERE title = 'Prefix test' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     assert!(
-        stdout.contains("AAA-"),
-        "Task ID should use prefix 'AAA', got: {stdout}"
+        canonical.starts_with("AAA-"),
+        "Task DB row should use prefix 'AAA', got: {canonical} (CLI stdout: {stdout})"
     );
 }
 
@@ -1211,29 +1224,19 @@ fn tasks_orphan_dep_not_in_ready_list() {
         .output()
         .unwrap();
     assert!(create_out.status.success(), "task create should succeed");
-    let create_stdout = String::from_utf8(create_out.stdout).unwrap();
 
-    // Extract the task_id from the create output (format: "Created task <id>").
-    let task_id = create_stdout
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            if line.starts_with("Created") || line.contains("Created task") {
-                line.split_whitespace().last().map(str::to_string)
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| {
-            // Fallback: query the DB directly for the task_id.
-            let conn = rusqlite::Connection::open(&db).unwrap();
-            conn.query_row(
-                "SELECT task_id FROM tasks WHERE title = 'Orphan dep task' LIMIT 1",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap()
-        });
+    // Read the canonical task_id from the DB rather than parsing CLI stdout.
+    // The CLI prints the compact display form (`<prefix>-<hex>`) which is not
+    // a valid foreign-key target for the raw inserts below (`task_deps`,
+    // `entity_links`); both tables key on the canonical `PREFIX-ULID` form.
+    let task_id: String = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT task_id FROM tasks WHERE title = 'Orphan dep task' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
 
     // Inject an orphan dep directly into the DB (FK checks off during insert).
     // We mirror dual-write into both `task_deps` (legacy) and `entity_links`
@@ -1301,27 +1304,19 @@ fn tasks_external_blocker_excluded_from_ready_and_shown_on_get() {
         .output()
         .unwrap();
     assert!(create_out.status.success(), "task create should succeed");
-    let create_stdout = String::from_utf8(create_out.stdout).unwrap();
 
-    let task_id = create_stdout
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            if line.starts_with("Created") || line.contains("Created task") {
-                line.split_whitespace().last().map(str::to_string)
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| {
-            let conn = rusqlite::Connection::open(&db).unwrap();
-            conn.query_row(
-                "SELECT task_id FROM tasks WHERE title = 'Awaits external sign-off' LIMIT 1",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap()
-        });
+    // Read the canonical task_id from the DB rather than parsing CLI stdout.
+    // The raw INSERT below targets `task_external_ids.task_id`, which is a
+    // foreign key on `tasks.task_id` — the canonical `PREFIX-ULID` form. The
+    // CLI prints the compact display form which does not match that key.
+    let task_id: String = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT task_id FROM tasks WHERE title = 'Awaits external sign-off' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
 
     // Inject an unresolved external blocker directly.
     {

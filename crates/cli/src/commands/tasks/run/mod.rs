@@ -164,7 +164,8 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&out)?);
         } else {
-            println!("Created task {task_id} in brain '{bname}'");
+            let display_id = remote_store.compact_id_or_raw(&task_id);
+            println!("Created task {display_id} in brain '{bname}'");
             println!("  Title: {}", params.title);
             println!("  Priority: {}", priority_label(params.priority));
             println!("  Type: {}", params.task_type.as_str());
@@ -220,7 +221,8 @@ pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Created task {task_id}");
+        let display_id = ctx.store.compact_id_or_raw(&task_id);
+        println!("Created task {display_id}");
         println!("  Title: {}", params.title);
         println!("  Priority: {}", priority_label(params.priority));
         println!("  Type: {}", params.task_type.as_str());

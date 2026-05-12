@@ -123,13 +123,13 @@ impl TaskLabelsBatch {
             match result {
                 Ok(()) => {
                     let tid = &events[i].task_id;
-                    let short_id = store.compact_id(tid).unwrap_or(tid.to_string());
+                    let short_id = store.compact_id_or_raw(tid);
                     let uri = SynapseUri::for_task(brain_name, &short_id).to_string();
                     succeeded.push(json!({ "task_id": short_id, "uri": uri }));
                 }
                 Err(e) => {
                     let tid = &events[i].task_id;
-                    let short_id = store.compact_id(tid).unwrap_or(tid.to_string());
+                    let short_id = store.compact_id_or_raw(tid);
                     failed.push(json!({
                         "task_id": short_id,
                         "error": format!("{e}"),
@@ -192,7 +192,7 @@ impl TaskLabelsBatch {
             let add_ok = results[add_idx].is_ok();
 
             if remove_ok && add_ok {
-                let short_id = store.compact_id(tid).unwrap_or(tid.to_string());
+                let short_id = store.compact_id_or_raw(tid);
                 let uri = SynapseUri::for_task(brain_name, &short_id).to_string();
                 succeeded.push(json!({ "task_id": short_id, "uri": uri }));
             } else {
@@ -203,7 +203,7 @@ impl TaskLabelsBatch {
                 if let Err(e) = &results[add_idx] {
                     errors.push(format!("add: {e}"));
                 }
-                let short_id = store.compact_id(tid).unwrap_or(tid.to_string());
+                let short_id = store.compact_id_or_raw(tid);
                 failed.push(json!({
                     "task_id": short_id,
                     "error": errors.join("; "),
@@ -251,13 +251,13 @@ impl TaskLabelsBatch {
             match result {
                 Ok(()) => {
                     let tid = &task_ids[i];
-                    let short_id = store.compact_id(tid).unwrap_or(tid.to_string());
+                    let short_id = store.compact_id_or_raw(tid);
                     let uri = SynapseUri::for_task(brain_name, &short_id).to_string();
                     succeeded.push(json!({ "task_id": short_id, "uri": uri }));
                 }
                 Err(e) => {
                     let tid = &task_ids[i];
-                    let short_id = store.compact_id(tid).unwrap_or(tid.to_string());
+                    let short_id = store.compact_id_or_raw(tid);
                     failed.push(json!({
                         "task_id": short_id,
                         "error": format!("{e}"),

@@ -265,6 +265,42 @@ pub(crate) mod tests {
         assert_ne!(result.is_error, Some(true));
     }
 
+    /// Assert that `s` is a well-formed task short ID: `<lowercase-prefix>-<hex>`
+    /// where the canonical `PREFIX-ULID` form would NOT pass. Used by MCP
+    /// tests that need to verify a `task_id` response field is the compact
+    /// form, not the canonical ULID — most relevant for cross-domain leak
+    /// surfaces such as saga member responses.
+    ///
+    /// The check looks at character classes rather than byte length: the
+    /// canonical form contains uppercase characters (the brain prefix and the
+    /// Crockford-base32 ULID body), while the compact form is exclusively
+    /// lowercase hex digits plus dot-notation for child sequences. Length-only
+    /// bounds would couple this assertion to the brain prefix length
+    /// invariant; the character-class check survives any prefix configuration.
+    pub(crate) fn assert_short_task_id(s: &str) {
+        let (prefix, rest) = s
+            .split_once('-')
+            .unwrap_or_else(|| panic!("task_id must contain `-`, got `{s}`"));
+        assert!(
+            prefix.chars().all(|c| c.is_ascii_lowercase()),
+            "task_id prefix must be all lowercase, got `{s}`"
+        );
+        assert!(
+            !rest.is_empty(),
+            "task_id must have a non-empty hash part, got `{s}`"
+        );
+        assert!(
+            !s.chars().any(|c| c.is_ascii_uppercase()),
+            "task_id contains uppercase chars — looks like the canonical PREFIX-ULID form, got `{s}`"
+        );
+        // Hash part is lowercase hex (plus `.` for child sequences like brn-a3f.1.2).
+        assert!(
+            rest.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c) || c == '.'),
+            "task_id hash part must be lowercase hex / dot-notation, got `{s}`"
+        );
+    }
+
     /// Assert that `s` is a well-formed saga short ID: `saga-<lowercase hex>`
     /// with at least 3 hex chars. Used by every saga MCP test that checks the
     /// emitted wire form of a `saga_id` response field.
