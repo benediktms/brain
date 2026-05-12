@@ -35,7 +35,21 @@ fn try_ipc_label_event(
             if ctx.output.is_json_mode() {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             } else {
-                println!("{action_name} label \"{label}\" on task {task_id} (via daemon)");
+                // The daemon's tasks_apply_event response carries `task_id` in
+                // compact form at the top level of the inner JSON payload.
+                // Echo that if available; otherwise echo what the user typed.
+                let display_id = value
+                    .pointer("/content/0/text")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .and_then(|inner| {
+                        inner
+                            .get("task_id")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| task_id.to_string());
+                println!("{action_name} label \"{label}\" on task {display_id} (via daemon)");
             }
             Ok(true)
         }

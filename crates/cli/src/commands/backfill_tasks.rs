@@ -57,9 +57,12 @@ pub async fn run(
                 .get(&task.task_id)
                 .map(|v| v.join(", "))
                 .unwrap_or_default();
+            let display_id = task_store
+                .compact_id(&task.task_id)
+                .unwrap_or_else(|_| task.task_id.clone());
             println!(
                 "  {} [{}] {} {}",
-                task.task_id,
+                display_id,
                 task.status,
                 task.title,
                 if labels.is_empty() {
@@ -97,7 +100,10 @@ pub async fn run(
         {
             Ok(()) => embedded += 1,
             Err(e) => {
-                eprintln!("  warn: task capsule failed for {}: {e}", task.task_id);
+                let display_id = task_store
+                    .compact_id(&task.task_id)
+                    .unwrap_or_else(|_| task.task_id.clone());
+                eprintln!("  warn: task capsule failed for {display_id}: {e}");
                 errors += 1;
             }
         }
@@ -117,7 +123,10 @@ pub async fn run(
             {
                 Ok(()) => outcomes += 1,
                 Err(e) => {
-                    eprintln!("  warn: outcome capsule failed for {}: {e}", task.task_id);
+                    let display_id = task_store
+                        .compact_id(&task.task_id)
+                        .unwrap_or_else(|_| task.task_id.clone());
+                    eprintln!("  warn: outcome capsule failed for {display_id}: {e}");
                     errors += 1;
                 }
             }

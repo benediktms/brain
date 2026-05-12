@@ -127,7 +127,7 @@ impl TaskGet {
         let task_id = task_id.as_str();
         let task = match store.get_task(task_id) {
             Ok(Some(t)) => t,
-            Ok(None) => return ToolCallResult::error(format!("Task not found: {task_id}")),
+            Ok(None) => return ToolCallResult::error(format!("Task not found: {}", params.task_id)),
             Err(e) => {
                 error!(error = %e, task_id, "failed to get task");
                 return ToolCallResult::error(format!("Failed to get task: {e}"));
