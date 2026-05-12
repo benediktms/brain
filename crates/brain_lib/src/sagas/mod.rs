@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use brain_persistence::db::sagas::events::SagaCancelledPayload;
 use brain_persistence::db::tasks::events::TaskStatus;
 
@@ -8,7 +10,7 @@ use brain_persistence::db::sagas::events::{
 };
 use brain_persistence::db::sagas::queries::{
     self, LabelCount, SagaEventInsert, SagaMemberStub, SagaRow, SagaStatsRow, close_saga,
-    list_saga_member_stubs, list_saga_task_ids,
+    list_saga_member_stubs, list_saga_task_ids, saga_members_in,
 };
 use brain_persistence::db::sagas::reopen_saga;
 use brain_persistence::db::sagas::{compact_saga_id, resolve_saga_id};
@@ -50,6 +52,17 @@ pub struct SagaStats {
 pub use brain_persistence::db::sagas::queries::{CascadeOutcome, CascadeResult};
 
 /// Store for saga lifecycle operations. Registry-level: not scoped to any brain.
+/// Hard upper bound on the number of tasks a single cascade-add or
+/// cascade-remove operation may touch.
+///
+/// The MCP `task_ids` array is capped at 500 input entries, but cascade
+/// expansion via `task_subtree` is unbounded by the input length — a single
+/// epic with 10 000 descendants would otherwise hold the SQLite writer mutex
+/// for the duration of the insert/delete + per-row event emission. This cap
+/// restores the same protection intent that the MCP input cap provides for
+/// non-cascade calls.
+const MAX_EXPANDED_BATCH: usize = 2000;
+
 pub struct SagaStore {
     pub(crate) db: Db,
 }
@@ -553,24 +566,37 @@ impl SagaStore {
             // When `cascade` is true, expand each input to itself plus every
             // transitive descendant in the parent_of graph. The expansion is
             // a single SQL pass; deduplication is naturally handled by the
-            // recursive CTE's UNION (no UNION ALL).
+            // recursive CTE's UNION (no UNION ALL). Reject runaway expansions
+            // before any other work — see MAX_EXPANDED_BATCH for rationale.
             let candidates = if cascade {
-                task_subtree(&tx, &seeds)?
+                let expanded = task_subtree(&tx, &seeds)?;
+                if expanded.len() > MAX_EXPANDED_BATCH {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "cascade expansion of {} tasks exceeds MAX_EXPANDED_BATCH ({}); narrow the seed set",
+                        expanded.len(),
+                        MAX_EXPANDED_BATCH
+                    )));
+                }
+                expanded
             } else {
                 seeds
             };
 
-            // Already-member tasks (and duplicates within the input batch) are
-            // skipped silently for idempotency. `cascade` expansion may surface
-            // tasks already added in a prior call — those drop out here.
+            // Pull existing memberships for the candidate set in a single SQL
+            // query (uses `json_each` — no per-row round-trips, no SQLite
+            // parameter-count limit). Combined with a HashSet for batch
+            // dedup, the add path is O(N) in candidates regardless of cascade
+            // depth or pre-existing membership count.
+            let existing: HashSet<String> = saga_members_in(&tx, &canonical, &candidates)?
+                .into_iter()
+                .collect();
+            let mut seen: HashSet<String> = HashSet::with_capacity(candidates.len());
             let mut to_insert: Vec<String> = Vec::with_capacity(candidates.len());
             for full_id in candidates {
-                // Skip if already a member (or already queued in this batch —
-                // insert_saga_tasks runs after the loop).
-                if queries::saga_has_task(&tx, &canonical, &full_id)? {
+                if existing.contains(&full_id) {
                     continue;
                 }
-                if to_insert.contains(&full_id) {
+                if !seen.insert(full_id.clone()) {
                     continue;
                 }
                 to_insert.push(full_id);
@@ -647,49 +673,56 @@ impl SagaStore {
                 )));
             }
 
-            // Resolve each input ID through the same path `add_tasks` uses, so
-            // display IDs / short hashes match the full ULID stored in
-            // saga_tasks. Unresolvable IDs pass through unchanged so the
-            // function keeps idempotent `removed: 0` semantics for unknown IDs
-            // (a typo shouldn't error, just no-op).
-            let seeds: Vec<String> = task_ids
-                .iter()
-                .map(|raw| resolve_task_id_scoped(&tx, raw, None).unwrap_or_else(|_| raw.clone()))
-                .collect();
+            // Resolve each input ID. The lenient (typo-tolerant) path is the
+            // contract for cascade=false — unresolvable inputs become no-ops
+            // so that a stale task_id doesn't break a routine cleanup. With
+            // cascade=true, the user has explicitly asked for subtree
+            // semantics; a typo would silently degrade to a single-task
+            // no-op rather than the intended subtree strip, so we fail loud.
+            let seeds: Vec<String> = if cascade {
+                let mut out = Vec::with_capacity(task_ids.len());
+                for raw in &task_ids {
+                    let full = resolve_task_id_scoped(&tx, raw, None).map_err(|e| {
+                        BrainCoreError::TaskEvent(format!(
+                            "task '{raw}' could not be resolved (cascade=true requires resolvable seeds): {e}"
+                        ))
+                    })?;
+                    out.push(full);
+                }
+                out
+            } else {
+                task_ids
+                    .iter()
+                    .map(|raw| {
+                        resolve_task_id_scoped(&tx, raw, None).unwrap_or_else(|_| raw.clone())
+                    })
+                    .collect()
+            };
 
             // When `cascade` is true, expand each input to itself plus every
             // transitive descendant in the parent_of graph. The intersection
-            // with `saga_tasks` is computed by the SELECT below — descendants
-            // that aren't currently members drop out idempotently.
+            // with `saga_tasks` is computed by `saga_members_in` below —
+            // descendants that aren't currently members drop out idempotently.
+            // Reject runaway expansions before any other work.
             let resolved: Vec<String> = if cascade {
-                task_subtree(&tx, &seeds)?
+                let expanded = task_subtree(&tx, &seeds)?;
+                if expanded.len() > MAX_EXPANDED_BATCH {
+                    return Err(BrainCoreError::TaskEvent(format!(
+                        "cascade expansion of {} tasks exceeds MAX_EXPANDED_BATCH ({}); narrow the seed set",
+                        expanded.len(),
+                        MAX_EXPANDED_BATCH
+                    )));
+                }
+                expanded
             } else {
                 seeds
             };
 
             // Identify which task_ids are currently members before deleting,
-            // so we know exactly which ones to emit events for.
-            let placeholders = resolved
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("?{}", i + 2))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let select_sql = format!(
-                "SELECT task_id FROM saga_tasks WHERE saga_id = ?1 AND task_id IN ({placeholders})"
-            );
-            let mut stmt = tx.prepare(&select_sql)?;
-            let mut params: Vec<Box<dyn rusqlite::ToSql>> =
-                vec![Box::new(canonical.clone()) as Box<dyn rusqlite::ToSql>];
-            for tid in &resolved {
-                params.push(Box::new(tid.clone()));
-            }
-            let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-            let present: Vec<String> = stmt
-                .query_map(params_ref.as_slice(), |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
-            drop(stmt);
+            // so we know exactly which ones to emit events for. Single SQL
+            // pass via `json_each` — no per-row round-trips, no SQLite
+            // parameter-count limit on large cascade-expanded sets.
+            let present: Vec<String> = saga_members_in(&tx, &canonical, &resolved)?;
 
             if present.is_empty() {
                 tx.commit()?;
@@ -1991,6 +2024,79 @@ mod tests {
             })
             .unwrap();
         assert_eq!(removed_events, 3);
+    }
+
+    /// cascade-add rejects an expansion that would exceed MAX_EXPANDED_BATCH.
+    /// Restores the writer-mutex protection that the MCP `task_ids: 500`
+    /// cap provides for non-cascade calls — without this, a single seed with
+    /// a runaway descendant set could hold the SQLite writer through a
+    /// multi-thousand-row insert + event loop.
+    #[test]
+    fn add_tasks_cascade_rejects_over_max_expanded_batch() {
+        let store = in_memory_store();
+        let saga = store
+            .create("Oversize Cascade", None, "test")
+            .unwrap();
+        // Wire a chain of MAX_EXPANDED_BATCH+1 tasks (root + N descendants).
+        insert_task(&store, "root", "brain-big");
+        let mut prev = "root".to_string();
+        for i in 0..MAX_EXPANDED_BATCH {
+            let id = format!("child-{i:05}");
+            insert_task(&store, &id, "brain-big");
+            link_parent_of(&store, &prev, &id);
+            prev = id;
+        }
+
+        let result = store.add_tasks(&saga.saga_id, &["root".to_string()], true, "test");
+        let err = result.expect_err("cascade above MAX_EXPANDED_BATCH must error");
+        assert!(
+            format!("{err}").contains("MAX_EXPANDED_BATCH"),
+            "error message should name the cap: {err}"
+        );
+        // Nothing was inserted because the cap fires before any writes.
+        assert_eq!(member_count(&store, &saga.saga_id), 0);
+    }
+
+    /// cascade-remove with an unresolvable input errors loudly (different
+    /// from non-cascade remove, which treats typos as idempotent no-ops).
+    /// The user explicitly asked for subtree semantics — silently degrading
+    /// to a single-task no-op would mask the intent.
+    #[test]
+    fn remove_tasks_cascade_hard_errors_on_unresolved_seed() {
+        let store = in_memory_store();
+        let saga = store
+            .create("Cascade Resolve Saga", None, "test")
+            .unwrap();
+        insert_task(&store, "real-task", "brain-rs");
+        store
+            .add_tasks(&saga.saga_id, &["real-task".to_string()], false, "test")
+            .unwrap();
+
+        // cascade=false: unresolved typo is a silent no-op (existing contract).
+        let lenient = store
+            .remove_tasks(
+                &saga.saga_id,
+                vec!["nonexistent-typo".to_string()],
+                false,
+                "test",
+            )
+            .unwrap();
+        assert_eq!(lenient, 0);
+
+        // cascade=true: unresolved typo should fail loud.
+        let strict = store.remove_tasks(
+            &saga.saga_id,
+            vec!["nonexistent-typo".to_string()],
+            true,
+            "test",
+        );
+        let err = strict.expect_err("cascade=true with unresolved seed must error");
+        assert!(
+            format!("{err}").contains("could not be resolved"),
+            "error should explain resolution failure: {err}"
+        );
+        // The real task is still a member — cascade-remove failed atomically.
+        assert_eq!(member_count(&store, &saga.saga_id), 1);
     }
 
     /// cascade-remove of an epic whose descendants are NOT all currently

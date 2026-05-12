@@ -996,6 +996,19 @@ mod tests {
         assert_eq!(got, vec!["leaf".to_string()]);
     }
 
+    /// task_subtree contract: roots that don't exist in `tasks` are still
+    /// returned in the output (the helper does not assert membership). This
+    /// is the documented behaviour at the doc-comment for `task_subtree` —
+    /// callers that need stricter validation must pre-check via
+    /// `resolve_task_id_scoped` or similar.
+    #[test]
+    fn test_task_subtree_unknown_seed_returns_itself() {
+        let conn = setup();
+        // No `create_task` for "ghost" — it never existed in `tasks`.
+        let got = task_subtree(&conn, &["ghost".to_string()]).unwrap();
+        assert_eq!(got, vec!["ghost".to_string()]);
+    }
+
     /// Cycle safety: parent_of is a forest by invariant, but nothing in the
     /// schema enforces it. Manually wire a cycle via raw SQL (bypassing
     /// projections) and confirm the recursive CTE terminates with a finite

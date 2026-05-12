@@ -304,6 +304,32 @@ pub fn saga_has_task(conn: &Connection, saga_id: &str, task_id: &str) -> Result<
     Ok(n > 0)
 }
 
+/// Return the subset of `task_ids` that are currently members of `saga_id`.
+///
+/// Single SQL pass — uses `json_each` to bind the candidate set as one
+/// JSON-string parameter. Avoids the parameter-count limit that a
+/// per-element `IN (?, ?, ...)` placeholder list would hit on large
+/// cascade-expanded sets (SQLite's `SQLITE_MAX_VARIABLE_NUMBER` defaults
+/// to 999 on older builds).
+pub fn saga_members_in(
+    conn: &Connection,
+    saga_id: &str,
+    task_ids: &[String],
+) -> Result<Vec<String>> {
+    if task_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let seeds_json = serde_json::to_string(task_ids)?;
+    let mut stmt = conn.prepare(
+        "SELECT task_id FROM saga_tasks \
+         WHERE saga_id = ?1 AND task_id IN (SELECT value FROM json_each(?2))",
+    )?;
+    let rows = stmt
+        .query_map(params![saga_id, seeds_json], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Summary of a brain that has member tasks in a saga.
 #[derive(Debug, Clone)]
 pub struct BrainSummary {
@@ -359,19 +385,16 @@ pub fn remove_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) 
     if task_ids.is_empty() {
         return Ok(0);
     }
-    let placeholders = task_ids
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("?{}", i + 2))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!("DELETE FROM saga_tasks WHERE saga_id = ?1 AND task_id IN ({placeholders})");
-    let mut stmt = conn.prepare(&sql)?;
-    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&saga_id as &dyn rusqlite::ToSql];
-    for tid in task_ids {
-        params.push(tid);
-    }
-    let changed = stmt.execute(params.as_slice())?;
+    // Bind the candidate set as a single JSON parameter rather than a
+    // placeholder list — same idiom as `saga_members_in` and `task_subtree`.
+    // Avoids the SQLite per-statement variable cap that a 1k+ cascade
+    // expansion would otherwise hit.
+    let seeds_json = serde_json::to_string(task_ids)?;
+    let changed = conn.execute(
+        "DELETE FROM saga_tasks \
+         WHERE saga_id = ?1 AND task_id IN (SELECT value FROM json_each(?2))",
+        params![saga_id, seeds_json],
+    )?;
     Ok(changed)
 }
 
