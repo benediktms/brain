@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::short_id::{blake3_short_hex, pick_unique_prefix};
 use crate::error::Result;
@@ -16,32 +16,47 @@ use crate::error::Result;
 pub fn migrate_v53_to_v54(conn: &Connection) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
-    // 1. Add the column. NOT NULL with an empty-string sentinel that the
-    //    backfill loop overwrites before the UNIQUE index is created.
-    tx.execute_batch("ALTER TABLE sagas ADD COLUMN display_id TEXT NOT NULL DEFAULT '';")?;
+    // Idempotency guard: SQLite's `ALTER TABLE ADD COLUMN` has no
+    // `IF NOT EXISTS`. If the column was already added (e.g. by a fixture
+    // that runs `init_schema` before downgrading `user_version`), skip the
+    // ALTER + backfill — the existing values are already correct because
+    // backfill is deterministic in saga_id order. The UNIQUE index is
+    // ensured below either way.
+    let already_present: Option<i64> = tx
+        .prepare("SELECT 1 FROM pragma_table_info('sagas') WHERE name = 'display_id'")?
+        .query_row([], |row| row.get(0))
+        .optional()?;
 
-    // 2. Backfill in deterministic order (sort by saga_id ASC) so the result
-    //    is reproducible across replays.
-    let saga_ids: Vec<String> = {
-        let mut stmt = tx.prepare("SELECT saga_id FROM sagas ORDER BY saga_id ASC")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    if already_present.is_none() {
+        // 1. Add the column. NOT NULL with an empty-string sentinel that the
+        //    backfill loop overwrites before the UNIQUE index is created.
+        tx.execute_batch("ALTER TABLE sagas ADD COLUMN display_id TEXT NOT NULL DEFAULT '';")?;
 
-    let mut used: HashSet<String> = HashSet::new();
-    for saga_id in &saga_ids {
-        let full_hex = blake3_short_hex(saga_id);
-        let display_id = pick_unique_prefix(&full_hex, &used);
-        tx.execute(
-            "UPDATE sagas SET display_id = ?1 WHERE saga_id = ?2",
-            rusqlite::params![display_id, saga_id],
-        )?;
-        used.insert(display_id);
+        // 2. Backfill in deterministic order (sort by saga_id ASC) so the
+        //    result is reproducible across replays.
+        let saga_ids: Vec<String> = {
+            let mut stmt = tx.prepare("SELECT saga_id FROM sagas ORDER BY saga_id ASC")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let mut used: HashSet<String> = HashSet::new();
+        for saga_id in &saga_ids {
+            let full_hex = blake3_short_hex(saga_id);
+            let display_id = pick_unique_prefix(&full_hex, &used);
+            tx.execute(
+                "UPDATE sagas SET display_id = ?1 WHERE saga_id = ?2",
+                rusqlite::params![display_id, saga_id],
+            )?;
+            used.insert(display_id);
+        }
     }
 
-    // 3. Create the global UNIQUE index. Safe because every row now has a
-    //    unique non-empty display_id; no row carries the empty sentinel.
-    tx.execute_batch("CREATE UNIQUE INDEX idx_sagas_display_id ON sagas(display_id);")?;
+    // 3. Create the global UNIQUE index. `IF NOT EXISTS` keeps this
+    //    idempotent for the same reason as above.
+    tx.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_sagas_display_id ON sagas(display_id);",
+    )?;
 
     tx.pragma_update(None, "user_version", 54i32)?;
     tx.commit()?;
