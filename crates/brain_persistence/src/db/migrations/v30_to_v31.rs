@@ -2,8 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::db::tasks::display_id::pick_unique_prefix;
-use crate::db::tasks::queries::blake3_short_hex;
+use crate::db::short_id::{blake3_short_hex, pick_unique_prefix};
 use crate::error::Result;
 
 /// v30 → v31: Add `id` column to tasks for stable, hash-based display IDs.
