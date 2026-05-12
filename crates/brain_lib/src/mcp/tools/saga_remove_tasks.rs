@@ -36,6 +36,12 @@ impl SagaRemoveTasks {
         if let Err(msg) = validate_saga_id(&params.saga_id) {
             return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
         }
+
+        let (saga_id, saga_id_short) = match ctx.stores.sagas.resolve_short(&params.saga_id) {
+            Ok(pair) => pair,
+            Err(e) => return ToolCallResult::error(format!("Failed to resolve saga_id: {e}")),
+        };
+
         if let Err(msg) = validate_actor(&params.actor) {
             return ToolCallResult::error(format!("Invalid actor: {msg}"));
         }
@@ -58,11 +64,11 @@ impl SagaRemoveTasks {
         match ctx
             .stores
             .sagas
-            .remove_tasks(&params.saga_id, params.task_ids, &params.actor)
+            .remove_tasks(&saga_id, params.task_ids, &params.actor)
         {
             Ok(removed) => {
                 let response = json!({
-                    "saga_id": params.saga_id,
+                    "saga_id": saga_id_short,
                     "removed": removed,
                 });
                 json_response(&response)
@@ -82,15 +88,15 @@ impl McpTool for SagaRemoveTasks {
             name: self.name().into(),
             description: "Remove one or more tasks from a saga. Idempotent: task IDs that are \
                 not members of the saga are silently ignored. Returns the count of tasks \
-                actually removed. Allowed in any saga status."
+                actually removed. Allowed in any saga status. \
+                Accepts compact `saga-<hex>` IDs (e.g. `saga-3j5`); 26-char ULIDs are still accepted for back-compat."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID",
-                        "pattern": "^[0-9A-Za-z]{26}$"
+                        "description": super::saga_validation::SAGA_ID_PARAM_DESCRIPTION
                     },
                     "task_ids": {
                         "type": "array",

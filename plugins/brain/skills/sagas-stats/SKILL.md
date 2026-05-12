@@ -6,7 +6,7 @@ allowed-tools: "mcp__brain__*"
 Aggregate statistics for a saga's member tasks.
 
 Use `mcp__brain__sagas_stats` with:
-- `saga_id` (required): bare 26-char ULID — no prefix
+- `saga_id` (required): `saga-<hex>` short form (3+ lowercase hex chars) or bare 26-char ULID
 
 Returns:
 - counts by status (open, in_progress, blocked, done, cancelled)

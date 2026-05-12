@@ -1,6 +1,8 @@
+pub mod display_id;
 pub mod events;
 pub mod queries;
 
+pub use display_id::{compact_saga_id, compact_saga_ids, parse_short_form, resolve_saga_id};
 pub use events::{
     SagaCancelledPayload, SagaClosedPayload, SagaEvent, SagaEventType, SagaTaskPayload,
     SagaUpdatedPayload, new_saga_event_id, new_saga_id,

@@ -17,6 +17,9 @@ pub struct SagaEventInsert<'a> {
 }
 
 /// A fully-projected saga row from the `sagas` table.
+///
+/// `display_id` is the hex portion (no `saga-` prefix); call
+/// [`crate::db::sagas::display_id::compact_saga_id`] for the user-facing form.
 #[derive(Debug, Clone)]
 pub struct SagaRow {
     pub saga_id: String,
@@ -26,6 +29,7 @@ pub struct SagaRow {
     pub created_at: i64,
     pub updated_at: i64,
     pub closed_at: Option<i64>,
+    pub display_id: String,
 }
 
 /// A lightweight task stub for saga membership rendering. Includes `brain_id`
@@ -79,10 +83,18 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SagaRow> {
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
         closed_at: row.get(6)?,
+        display_id: row.get(7)?,
     })
 }
 
-/// Insert a new saga row.
+/// Insert a new saga row with an auto-assigned `display_id`.
+///
+/// Derives the short ID via BLAKE3 of `saga_id` and picks the shortest unique
+/// prefix (starting at `MIN_SHORT_HASH_LEN = 3`). On UNIQUE collisions
+/// (sqlite extended code 2067), extends the hash by one character and retries
+/// — mirrors the task projection at `tasks/projections.rs`. The SQLite WAL
+/// write lock serialises `insert_saga` calls, so two concurrent inserts
+/// cannot race to claim the same prefix.
 pub fn insert_saga(
     conn: &Connection,
     saga_id: &str,
@@ -90,11 +102,31 @@ pub fn insert_saga(
     description: Option<&str>,
 ) -> Result<SagaRow> {
     let ts = now_ts();
-    conn.execute(
-        "INSERT INTO sagas (saga_id, title, description, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)",
-        params![saga_id, title, description, ts],
-    )?;
+    let full_hex = crate::db::short_id::blake3_short_hex(saga_id);
+    let mut hash_len = crate::db::short_id::MIN_SHORT_HASH_LEN;
+
+    loop {
+        let display_id = &full_hex[..hash_len];
+        let result = conn.execute(
+            "INSERT INTO sagas (saga_id, title, description, created_at, updated_at, display_id)
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+            params![saga_id, title, description, ts, display_id],
+        );
+
+        match result {
+            Ok(_) => break,
+            Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
+                hash_len += 1;
+                if hash_len > full_hex.len() {
+                    return Err(crate::error::BrainCoreError::Internal(
+                        "saga short-hash collision exhausted all 64 hex chars".into(),
+                    ));
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+
     get_saga(conn, saga_id)?.ok_or_else(|| {
         crate::error::BrainCoreError::Internal("saga disappeared after insert".into())
     })
@@ -152,7 +184,7 @@ pub fn list_sagas(conn: &Connection, filter: &SagaListFilter) -> Result<Vec<Saga
 
     let sql = format!(
         "SELECT s.saga_id, s.title, s.description, s.status, \
-                s.created_at, s.updated_at, s.closed_at \
+                s.created_at, s.updated_at, s.closed_at, s.display_id \
          FROM sagas s \
          {where_sql} \
          ORDER BY s.created_at DESC"
@@ -236,7 +268,7 @@ pub fn close_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
 pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {
     let row = conn
         .query_row(
-            "SELECT saga_id, title, description, status, created_at, updated_at, closed_at
+            "SELECT saga_id, title, description, status, created_at, updated_at, closed_at, display_id
              FROM sagas WHERE saga_id = ?1",
             [saga_id],
             map_row,

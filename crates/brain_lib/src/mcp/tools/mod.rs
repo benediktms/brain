@@ -265,6 +265,26 @@ pub(crate) mod tests {
         assert_ne!(result.is_error, Some(true));
     }
 
+    /// Assert that `s` is a well-formed saga short ID: `saga-<lowercase hex>`
+    /// with at least 3 hex chars. Used by every saga MCP test that checks the
+    /// emitted wire form of a `saga_id` response field.
+    pub(crate) fn assert_short_saga_id(s: &str) {
+        assert!(
+            s.starts_with("saga-"),
+            "saga_id must start with `saga-`, got `{s}`"
+        );
+        let hex = &s[5..];
+        assert!(
+            hex.len() >= 3,
+            "saga_id hex part must be at least 3 chars, got `{s}`"
+        );
+        assert!(
+            hex.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "saga_id hex part must be lowercase hex, got `{s}`"
+        );
+    }
+
     pub(crate) async fn create_test_context() -> (tempfile::TempDir, McpContext) {
         // Use a non-empty brain_id so the strict ambient-resolution check in
         // `resolve_scope` succeeds. Use prefix "TST" so it does not collide

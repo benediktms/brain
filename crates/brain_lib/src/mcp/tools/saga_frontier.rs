@@ -28,7 +28,12 @@ impl SagaFrontier {
             return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
         }
 
-        let frontier = match ctx.stores.sagas.frontier(&params.saga_id) {
+        let (saga_id, saga_id_short) = match ctx.stores.sagas.resolve_short(&params.saga_id) {
+            Ok(pair) => pair,
+            Err(e) => return ToolCallResult::error(format!("Failed to resolve saga_id: {e}")),
+        };
+
+        let frontier = match ctx.stores.sagas.frontier(&saga_id) {
             Ok(f) => f,
             Err(e) => return ToolCallResult::error(format!("Failed to compute frontier: {e}")),
         };
@@ -54,7 +59,7 @@ impl SagaFrontier {
             .collect();
 
         json_response(&json!({
-            "saga_id": params.saga_id,
+            "saga_id": saga_id_short,
             "saga_status": frontier.status.to_string(),
             "tasks": tasks,
             "brains": brains,
@@ -74,15 +79,15 @@ impl McpTool for SagaFrontier {
             description: "Return the ready-actionable tasks in a saga (same qualification rules as \
                 tasks.next: open/in_progress, no blocked_reason, no unresolved deps, not deferred, \
                 not epic), together with the brains those tasks belong to. \
-                Planning/closed/cancelled sagas return an empty task list but still populate brains."
+                Planning/closed/cancelled sagas return an empty task list but still populate brains. \
+                Accepts compact `saga-<hex>` IDs (e.g. `saga-3j5`); 26-char ULIDs are still accepted for back-compat."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Saga ID (bare 26-char ULID)",
-                        "pattern": "^[0-9A-Za-z]{26}$"
+                        "description": super::saga_validation::SAGA_ID_PARAM_DESCRIPTION
                     }
                 },
                 "required": ["saga_id"]

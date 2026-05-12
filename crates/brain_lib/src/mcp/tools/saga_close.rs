@@ -4,6 +4,8 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use brain_persistence::db::sagas::compact_saga_id;
+
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
@@ -54,9 +56,9 @@ impl SagaClose {
         let cascade_json = cascade_results_to_json(&cascade_results);
 
         let response = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -89,8 +91,7 @@ impl McpTool for SagaClose {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID",
-                        "pattern": "^[0-9A-Za-z]{26}$"
+                        "description": super::saga_validation::SAGA_ID_PARAM_DESCRIPTION,
                     },
                     "cascade": {
                         "type": "boolean",
@@ -145,13 +146,16 @@ mod tests {
         let result = call_create(json!({ "title": "Test Saga" }), ctx).await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let saga_id = parsed["saga_id"].as_str().unwrap().to_string();
+        // saga_id is the `saga-<hex>` short form; resolve to canonical for the
+        // raw-SQL UPDATE since the `saga_id` column stores the ULID.
+        let (canonical, _) = ctx.stores.sagas.resolve_short(&saga_id).unwrap();
         // Force status to open directly so close tests don't depend on start impl
         ctx.stores
             .db_for_tests()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE sagas SET status = 'open' WHERE saga_id = ?1",
-                    [&saga_id],
+                    [&canonical],
                 )?;
                 Ok(())
             })

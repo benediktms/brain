@@ -36,6 +36,12 @@ impl SagaAddTasks {
         if let Err(msg) = validate_saga_id(&params.saga_id) {
             return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
         }
+
+        let (saga_id, saga_id_short) = match ctx.stores.sagas.resolve_short(&params.saga_id) {
+            Ok(pair) => pair,
+            Err(e) => return ToolCallResult::error(format!("Failed to resolve saga_id: {e}")),
+        };
+
         if let Err(msg) = validate_actor(&params.actor) {
             return ToolCallResult::error(format!("Invalid actor: {msg}"));
         }
@@ -58,10 +64,10 @@ impl SagaAddTasks {
         match ctx
             .stores
             .sagas
-            .add_tasks(&params.saga_id, &params.task_ids, &params.actor)
+            .add_tasks(&saga_id, &params.task_ids, &params.actor)
         {
             Ok(count) => json_response(&json!({
-                "saga_id": params.saga_id,
+                "saga_id": saga_id_short,
                 "added": count,
             })),
             Err(e) => ToolCallResult::error(format!("{e}")),
@@ -87,13 +93,12 @@ impl McpTool for SagaAddTasks {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID",
-                        "pattern": "^[0-9A-Za-z]{26}$"
+                        "description": super::saga_validation::SAGA_ID_PARAM_DESCRIPTION
                     },
                     "task_ids": {
                         "type": "array",
                         "items": { "type": "string", "minLength": 1, "maxLength": 128 },
-                        "description": "Task IDs to add (full IDs or short hashes, cross-brain aware)",
+                        "description": "Task IDs to add — `<brain>-<hex>` short form or full task ID; cross-brain aware",
                         "minItems": 1,
                         "maxItems": 500
                     },
@@ -163,7 +168,11 @@ mod tests {
         );
         let v: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(v["added"], 1);
-        assert_eq!(v["saga_id"], saga_id);
+        let saga_id_out = v["saga_id"].as_str().unwrap();
+        assert!(
+            saga_id_out.starts_with("saga-"),
+            "saga_id must use short form, got {saga_id_out}"
+        );
     }
 
     #[tokio::test]

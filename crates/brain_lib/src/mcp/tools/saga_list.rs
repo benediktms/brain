@@ -4,7 +4,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use brain_persistence::db::sagas::SagaListFilter;
+use brain_persistence::db::sagas::{SagaListFilter, compact_saga_id};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -54,7 +54,7 @@ impl SagaList {
             .into_iter()
             .map(|r| {
                 json!({
-                    "saga_id": r.saga_id,
+                    "saga_id": compact_saga_id(&r.display_id),
                     "title": r.title,
                     "description": r.description,
                     "status": r.status,
@@ -156,6 +156,7 @@ mod tests {
         let closed_result = create.call(json!({ "title": "Closed" }), &ctx).await;
         let parsed: Value = serde_json::from_str(&closed_result.content[0].text).unwrap();
         let saga_id = parsed["saga_id"].as_str().unwrap().to_string();
+        let (canonical, _) = ctx.stores.sagas.resolve_short(&saga_id).unwrap();
 
         ctx.stores
             .sagas
@@ -163,7 +164,7 @@ mod tests {
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                    [&saga_id],
+                    [&canonical],
                 )?;
                 Ok(())
             })
@@ -182,13 +183,14 @@ mod tests {
         let r = create.call(json!({ "title": "One" }), &ctx).await;
         let p: Value = serde_json::from_str(&r.content[0].text).unwrap();
         let sid = p["saga_id"].as_str().unwrap().to_string();
+        let (canonical, _) = ctx.stores.sagas.resolve_short(&sid).unwrap();
         ctx.stores
             .sagas
             .db()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
-                    [&sid],
+                    [&canonical],
                 )?;
                 Ok(())
             })
@@ -206,13 +208,14 @@ mod tests {
         let r = create.call(json!({ "title": "Active" }), &ctx).await;
         let p: Value = serde_json::from_str(&r.content[0].text).unwrap();
         let sid = p["saga_id"].as_str().unwrap().to_string();
+        let (canonical, _) = ctx.stores.sagas.resolve_short(&sid).unwrap();
         ctx.stores
             .sagas
             .db()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
-                    [&sid],
+                    [&canonical],
                 )?;
                 Ok(())
             })
@@ -232,10 +235,12 @@ mod tests {
         let r_a = create.call(json!({ "title": "Saga A" }), &ctx).await;
         let p_a: Value = serde_json::from_str(&r_a.content[0].text).unwrap();
         let saga_a = p_a["saga_id"].as_str().unwrap().to_string();
+        let (saga_a, _) = ctx.stores.sagas.resolve_short(&saga_a).unwrap();
 
         let r_b = create.call(json!({ "title": "Saga B" }), &ctx).await;
         let p_b: Value = serde_json::from_str(&r_b.content[0].text).unwrap();
         let saga_b = p_b["saga_id"].as_str().unwrap().to_string();
+        let (saga_b, _) = ctx.stores.sagas.resolve_short(&saga_b).unwrap();
 
         // Wire tasks into brains via direct DB inserts.
         // tasks.brain_id has a FK to brains, so insert brain rows first.
@@ -306,6 +311,7 @@ mod tests {
         let r = create.call(json!({ "title": "Saga A" }), &ctx).await;
         let p: Value = serde_json::from_str(&r.content[0].text).unwrap();
         let saga_a = p["saga_id"].as_str().unwrap().to_string();
+        let (saga_a, _) = ctx.stores.sagas.resolve_short(&saga_a).unwrap();
 
         // Insert a brain whose `name` differs from its `brain_id`, then a task
         // belonging to that brain joined to saga_a.

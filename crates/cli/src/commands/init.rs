@@ -682,7 +682,7 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `records.link_remove` — Remove a link from a record.
 
 **Saga tools:**
-- `sagas.create` — Create a new saga in `planning` status. Required: `title`. Optional: `description`. Returns `{saga_id, saga}`. Sagas are registry-level (not scoped to any brain).
+- `sagas.create` — Create a new saga in `planning` status. Required: `title`. Optional: `description`. Returns `{saga_id, saga}` where `saga_id` is the compact `saga-<hex>` short form (e.g. `saga-3j5`); the bare 26-char ULID is also accepted as input wherever a `saga_id` is consumed. Sagas are registry-level (not scoped to any brain).
 - `sagas.get` — Fetch a saga by ID. Returns full row including `members` (task stubs) and derived `brains` set (computed at read time from member tasks — no separate table).
 - `sagas.list` — List sagas. Default: status ∈ `{planning, open}`. Flags: `include_closed`, `include_cancelled`, `all`. Optional `containing_brain` filter (uses `saga_tasks → tasks` JOIN — no N+1).
 - `sagas.update` — Update `title` and/or `description`. Allowed in any status.

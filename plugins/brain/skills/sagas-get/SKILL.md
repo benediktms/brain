@@ -6,7 +6,7 @@ allowed-tools: "mcp__brain__*"
 Fetch a single saga and its member task stubs.
 
 Use `mcp__brain__sagas_get` with:
-- `saga_id` (required): bare 26-char ULID — no prefix (e.g. `01KR16ZJRDVNF5D463QMVD9PH0`)
+- `saga_id` (required): `saga-<hex>` short form (e.g. `saga-3j5`) or bare 26-char ULID for back-compat
 
 Returns the saga row (title, description, status, timestamps), the `brains` array of brains contributing member tasks, and stubs for each member task. Member stubs are empty until tasks have been added via `/brain:sagas-add-tasks`.
 

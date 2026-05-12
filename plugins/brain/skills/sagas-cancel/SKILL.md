@@ -6,7 +6,7 @@ allowed-tools: "mcp__brain__*"
 Cancel a saga that will not be completed.
 
 Use `mcp__brain__sagas_cancel` with:
-- `saga_id` (required): bare 26-char ULID — no prefix
+- `saga_id` (required): `saga-<hex>` short form (3+ lowercase hex chars) or bare 26-char ULID
 - `cascade` (optional): if `true`, cancels all non-terminal member tasks; defaults to `false`
 - `actor` (optional): who is cancelling the saga, defaults to `mcp`
 

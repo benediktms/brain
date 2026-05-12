@@ -6,7 +6,7 @@ allowed-tools: "mcp__brain__*"
 Return the actionable tasks in a saga — the orchestration sweet spot.
 
 Use `mcp__brain__sagas_frontier` with:
-- `saga_id` (required): bare 26-char ULID — no prefix
+- `saga_id` (required): `saga-<hex>` short form (3+ lowercase hex chars) or bare 26-char ULID
 
 Applies the same readiness filter as `tasks_next`: tasks must be `open` or `in_progress`, have no unresolved dependencies, no `blocked_reason`, not be deferred, and not be epics. The result spans all brains in the saga, making this the primary tool for cross-brain orchestration.
 

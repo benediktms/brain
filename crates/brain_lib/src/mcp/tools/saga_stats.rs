@@ -28,7 +28,12 @@ impl SagaStats {
             return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
         }
 
-        let stats = match ctx.stores.sagas.stats(&params.saga_id) {
+        let (saga_id, saga_id_short) = match ctx.stores.sagas.resolve_short(&params.saga_id) {
+            Ok(pair) => pair,
+            Err(e) => return ToolCallResult::error(format!("Failed to resolve saga_id: {e}")),
+        };
+
+        let stats = match ctx.stores.sagas.stats(&saga_id) {
             Ok(s) => s,
             Err(e) => return ToolCallResult::error(format!("Failed to compute stats: {e}")),
         };
@@ -47,7 +52,7 @@ impl SagaStats {
 
         let c = &stats.counts;
         json_response(&json!({
-            "saga_id": params.saga_id,
+            "saga_id": saga_id_short,
             "stats": {
                 "total": c.total,
                 "open": c.open,
@@ -73,15 +78,15 @@ impl McpTool for SagaStats {
             name: self.name().into(),
             description: "Aggregate statistics for a saga's member tasks: counts by status, \
                 completion percentage (done / (total - cancelled), null if denominator is 0), \
-                label histogram, and contributing brains."
+                label histogram, and contributing brains. \
+                Accepts compact `saga-<hex>` IDs (e.g. `saga-3j5`); 26-char ULIDs are still accepted for back-compat."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Saga ID (bare 26-char ULID)",
-                        "pattern": "^[0-9A-Za-z]{26}$"
+                        "description": super::saga_validation::SAGA_ID_PARAM_DESCRIPTION
                     }
                 },
                 "required": ["saga_id"]

@@ -12,15 +12,10 @@ const MIN_ULID_PREFIX_LEN: usize = 4;
 /// Minimum display prefix: "BRN-" (4) + 4 ULID chars = 8.
 pub(crate) const MIN_DISPLAY_PREFIX_LEN: usize = 8;
 
-/// Minimum length for the hex portion of a hash-based short ID.
-pub const MIN_SHORT_HASH_LEN: usize = 3;
-
-/// BLAKE3 hash of a task_id → full 64-char lowercase hex string.
-///
-/// Pure function, no DB access. Used by migration backfill and projection.
-pub fn blake3_short_hex(task_id: &str) -> String {
-    blake3::hash(task_id.as_bytes()).to_hex().to_string()
-}
+// Short-ID helpers live in the shared `crate::db::short_id` module so sagas
+// can reuse them; re-exported here to preserve the existing `super::queries::*`
+// import paths used by `tasks::projections` and friends.
+pub use crate::db::short_id::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 
 /// Get the next child_seq for a parent task (max existing + 1, or 1 if no children).
 pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> Result<i64> {

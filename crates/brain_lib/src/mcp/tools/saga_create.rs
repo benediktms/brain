@@ -4,6 +4,8 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use brain_persistence::db::sagas::compact_saga_id;
+
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
@@ -51,9 +53,9 @@ impl SagaCreate {
         };
 
         let response = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -76,7 +78,8 @@ impl McpTool for SagaCreate {
         ToolDefinition {
             name: self.name().into(),
             description: "Create a new saga in 'planning' status. Sagas are registry-level \
-                (not scoped to any brain) and use bare ULID IDs. Returns the saga_id and \
+                (not scoped to any brain) and use compact `saga-<hex>` IDs (e.g. `saga-3j5`); \
+                26-char ULIDs are still accepted for back-compat. Returns the saga_id and \
                 initial state."
                 .into(),
             input_schema: json!({
@@ -140,8 +143,14 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         let saga_id = parsed["saga_id"].as_str().unwrap();
-        assert_eq!(saga_id.len(), 26, "saga_id must be 26-char ULID");
-        assert!(!saga_id.contains('-'), "saga_id must have no prefix");
+        assert!(
+            saga_id.starts_with("saga-"),
+            "saga_id must use short form, got {saga_id}"
+        );
+        assert!(
+            saga_id.len() >= 8,
+            "saga_id must be at least `saga-` + 3 hex chars"
+        );
         assert_eq!(parsed["saga"]["status"], "planning");
         assert_eq!(parsed["saga"]["title"], "My Saga");
         // Mutating verbs no longer include `members`; clients must call sagas.get.

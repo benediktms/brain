@@ -6,7 +6,7 @@ allowed-tools: "mcp__brain__*"
 Add one or more tasks to a saga.
 
 Use `mcp__brain__sagas_add_tasks` with:
-- `saga_id` (required): bare 26-char ULID — no prefix
+- `saga_id` (required): `saga-<hex>` short form (3+ lowercase hex chars) or bare 26-char ULID
 - `task_ids` (required): array of task IDs to add; full IDs or short hashes are accepted, cross-brain aware. Min 1, max 500 per call
 - `actor` (optional): who is adding the tasks, defaults to `mcp`
 

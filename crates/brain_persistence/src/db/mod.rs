@@ -17,6 +17,7 @@ pub mod providers;
 pub mod records;
 pub mod sagas;
 pub mod schema;
+pub mod short_id;
 pub mod summaries;
 pub mod tag_aliases;
 pub mod tags;
