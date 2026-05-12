@@ -68,10 +68,21 @@ impl SagaAddTasks {
             .sagas
             .add_tasks(&saga_id, &params.task_ids, params.cascade, &params.actor)
         {
-            Ok(count) => json_response(&json!({
-                "saga_id": saga_id_short,
-                "added": count,
-            })),
+            Ok(added) => {
+                // Compact each canonical task_id for the wire response so
+                // callers see the same short form they pass in. Crucial for
+                // cascade=true — the expanded set is otherwise invisible to
+                // the caller without scope-creep-prone counting.
+                let added_task_ids: Vec<String> = added
+                    .iter()
+                    .map(|id| ctx.stores.tasks.compact_id_or_raw(id))
+                    .collect();
+                json_response(&json!({
+                    "saga_id": saga_id_short,
+                    "added": added_task_ids.len(),
+                    "added_task_ids": added_task_ids,
+                }))
+            }
             Err(e) => ToolCallResult::error(format!("{e}")),
         }
     }

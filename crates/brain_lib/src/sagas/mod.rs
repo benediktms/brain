@@ -521,16 +521,20 @@ impl SagaStore {
     /// within the input batch, are silently skipped — they do not insert and
     /// do not emit events.
     ///
-    /// Returns the number of *newly inserted* tasks.
+    /// Returns the canonical task IDs that were *actually inserted* (i.e.
+    /// the candidate set minus already-members and within-batch duplicates).
+    /// Callers use `.len()` for the count. Surfacing the set lets transports
+    /// (MCP, CLI) tell the user which tasks were pulled in — particularly
+    /// important when `cascade=true` and the input expanded silently.
     pub fn add_tasks(
         &self,
         saga_id: &str,
         task_ids: &[String],
         cascade: bool,
         actor: &str,
-    ) -> Result<usize> {
+    ) -> Result<Vec<String>> {
         if task_ids.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
         // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
@@ -604,7 +608,7 @@ impl SagaStore {
 
             if to_insert.is_empty() {
                 tx.commit()?;
-                return Ok(0);
+                return Ok(Vec::new());
             }
 
             queries::insert_saga_tasks(&tx, &canonical, &to_insert)?;
@@ -633,22 +637,27 @@ impl SagaStore {
             }
 
             tx.commit()?;
-            Ok(to_insert.len())
+            Ok(to_insert)
         })
     }
 
     /// Remove tasks from a saga. Idempotent: missing memberships are no-ops.
-    /// Returns the number of tasks actually removed. Emits one `SagaTaskRemoved`
-    /// event per actual removal. Single transaction.
+    /// Returns the canonical task IDs that were *actually removed* (i.e.
+    /// the intersection of the resolved candidate set with current
+    /// membership). Callers use `.len()` for the count. Surfacing the
+    /// set lets transports (MCP, CLI) tell the user which tasks were
+    /// stripped — particularly important when `cascade=true` and the
+    /// removal expanded silently. Emits one `SagaTaskRemoved` event per
+    /// actual removal. Single transaction.
     pub fn remove_tasks(
         &self,
         saga_id: &str,
         task_ids: Vec<String>,
         cascade: bool,
         actor: &str,
-    ) -> Result<usize> {
+    ) -> Result<Vec<String>> {
         if task_ids.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
         let actor = actor.to_string();
         let saga_id = saga_id.to_string();
@@ -726,7 +735,7 @@ impl SagaStore {
 
             if present.is_empty() {
                 tx.commit()?;
-                return Ok(0);
+                return Ok(Vec::new());
             }
 
             // Only delete the rows that were actually members; this also
@@ -753,7 +762,7 @@ impl SagaStore {
             }
 
             tx.commit()?;
-            Ok(present.len())
+            Ok(present)
         })
     }
 
@@ -1525,7 +1534,7 @@ mod tests {
                 "test",
             )
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count.len(), 2);
 
         let ids: Vec<String> = store
             .db
@@ -1566,7 +1575,7 @@ mod tests {
                 "test",
             )
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count.len(), 3);
 
         let event_count: i64 = store
             .db
@@ -1592,7 +1601,7 @@ mod tests {
         let store = in_memory_store();
         let saga = store.create("Noop Saga", None, "test").unwrap();
         let count = store.add_tasks(&saga.saga_id, &[], false, "test").unwrap();
-        assert_eq!(count, 0);
+        assert_eq!(count.len(), 0);
     }
 
     // ── start tests ────────────────────────────────────────────────────────
@@ -1745,7 +1754,7 @@ mod tests {
                 "test",
             )
             .unwrap();
-        assert_eq!(count, 1, "duplicate within batch should count once");
+        assert_eq!(count.len(), 1, "duplicate within batch should count once");
 
         let member_count: i64 = store
             .db
@@ -1788,7 +1797,7 @@ mod tests {
         let first = store
             .add_tasks(&saga.saga_id, &["idem-task01".to_string()], false, "test")
             .unwrap();
-        assert_eq!(first, 1);
+        assert_eq!(first.len(), 1);
 
         // Now add [t1, t2] — t1 is already a member, t2 is new.
         let second = store
@@ -1799,7 +1808,7 @@ mod tests {
                 "test",
             )
             .unwrap();
-        assert_eq!(second, 1, "only t2 should be newly inserted");
+        assert_eq!(second.len(), 1, "only t2 should be newly inserted");
 
         // Both tasks must end up as members.
         let ids: Vec<String> = store
@@ -1894,7 +1903,7 @@ mod tests {
         let count = store
             .add_tasks(&saga.saga_id, &["epic".to_string()], true, "test")
             .unwrap();
-        assert_eq!(count, 4, "cascade should add epic + 3 descendants");
+        assert_eq!(count.len(), 4, "cascade should add epic + 3 descendants");
         assert_eq!(member_count(&store, &saga.saga_id), 4);
 
         // One SagaTaskAdded event per insertion.
@@ -1934,7 +1943,7 @@ mod tests {
         let count = store
             .add_tasks(&saga.saga_id, &["epic2".to_string()], true, "test")
             .unwrap();
-        assert_eq!(count, 2, "kid1 already a member; cascade adds epic2 + kid2");
+        assert_eq!(count.len(), 2, "kid1 already a member; cascade adds epic2 + kid2");
         assert_eq!(member_count(&store, &saga.saga_id), 3);
     }
 
@@ -1952,7 +1961,7 @@ mod tests {
         let count = store
             .add_tasks(&saga.saga_id, &["xb-parent".to_string()], true, "test")
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count.len(), 2);
 
         let ids: Vec<String> = store
             .db
@@ -1983,7 +1992,7 @@ mod tests {
         let count = store
             .add_tasks(&saga.saga_id, &["lonely".to_string()], true, "test")
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count.len(), 1);
         assert_eq!(member_count(&store, &saga.saga_id), 1);
     }
 
@@ -2008,7 +2017,7 @@ mod tests {
         let removed = store
             .remove_tasks(&saga.saga_id, vec!["rc-epic".to_string()], true, "test")
             .unwrap();
-        assert_eq!(removed, 3, "cascade-remove should strip the full subtree");
+        assert_eq!(removed.len(), 3, "cascade-remove should strip the full subtree");
         assert_eq!(member_count(&store, &saga.saga_id), 0);
 
         let removed_events: i64 = store
@@ -2081,7 +2090,7 @@ mod tests {
                 "test",
             )
             .unwrap();
-        assert_eq!(lenient, 0);
+        assert_eq!(lenient.len(), 0);
 
         // cascade=true: unresolved typo should fail loud.
         let strict = store.remove_tasks(
@@ -2122,7 +2131,8 @@ mod tests {
             .remove_tasks(&saga.saga_id, vec!["pe-epic".to_string()], true, "test")
             .unwrap();
         assert_eq!(
-            removed, 1,
+            removed.len(),
+            1,
             "only the epic was a member; cascade is a no-op for the non-member child"
         );
         assert_eq!(member_count(&store, &saga.saga_id), 0);

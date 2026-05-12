@@ -15,4 +15,6 @@ The operation is atomic and idempotent — tasks already in the saga and intra-b
 
 The saga must not be closed or cancelled. Use on a `planning` saga to shape membership before starting, or on an `open` saga to add work mid-flight. To remove tasks use `/brain:sagas-remove-tasks`.
 
-**Large subtrees**: the `task_ids` array is capped at 500 entries on input, but `cascade` expansion can produce many more memberships. There is no hard cap on the expanded set — assume the runtime cost scales with the total number of descendants. At current repo scales (epics with <100 descendants) this is well under a second; if you are about to cascade across a very large tree, prefer a planning pass first.
+The response carries `added` (count) and `added_task_ids` (the exact compact task IDs that were inserted). Use `added_task_ids` to see what `cascade=true` pulled in — without it the count alone hides which descendants were attached.
+
+**Subtree cap**: cascade expansion is bounded by `MAX_EXPANDED_BATCH = 2000` tasks. A call that would expand beyond that limit errors before any writes with a clear message naming the cap. The MCP `task_ids` array is separately capped at 500 input entries.

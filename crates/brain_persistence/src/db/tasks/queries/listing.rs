@@ -634,6 +634,16 @@ fn get_children_via_entity_links(conn: &Connection, parent_task_id: &str) -> Res
 ///
 /// Cross-brain works for free — `entity_links.brain_scope` is independent of
 /// the parent_of relationship's brain membership.
+///
+/// **Transaction contract**: callers that subsequently mutate based on the
+/// expansion (e.g. `SagaStore::add_tasks` cascade) MUST run this helper
+/// inside the same write transaction that performs the mutation. The
+/// signature accepts `&Connection` (a `Transaction` derefs to one), but
+/// reading the parent_of graph and then writing without a held write lock
+/// would expose a TOCTOU race against a concurrent ParentSet projection.
+/// Today the codebase has a single-writer mutex on `with_write_conn` so the
+/// race is latent; the doc-comment is the contract for the next person who
+/// changes that assumption.
 pub fn task_subtree(conn: &Connection, roots: &[String]) -> Result<Vec<String>> {
     if roots.is_empty() {
         return Ok(Vec::new());

@@ -70,9 +70,14 @@ impl SagaRemoveTasks {
             &params.actor,
         ) {
             Ok(removed) => {
+                let removed_task_ids: Vec<String> = removed
+                    .iter()
+                    .map(|id| ctx.stores.tasks.compact_id_or_raw(id))
+                    .collect();
                 let response = json!({
                     "saga_id": saga_id_short,
-                    "removed": removed,
+                    "removed": removed_task_ids.len(),
+                    "removed_task_ids": removed_task_ids,
                 });
                 json_response(&response)
             }

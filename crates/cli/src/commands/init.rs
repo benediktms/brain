@@ -690,8 +690,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `sagas.close` — Transition `open` → `closed`. Optional `cascade: bool` closes all member tasks.
 - `sagas.cancel` — Cancel a saga from any active status. Optional `cascade: bool` cancels member tasks.
 - `sagas.reopen` — Transition `closed` or `cancelled` → `open`. Clears `closed_at`.
-- `sagas.add_tasks` — Add one or more tasks to a saga by ID (`task_ids`). Atomic (all-or-nothing). Rejected if saga is `closed` or `cancelled`. Optional `cascade: true` also adds every transitive descendant (via `parent_of`) — useful for pulling an entire epic into a saga in one call.
-- `sagas.remove_tasks` — Remove tasks from a saga. Idempotent: missing memberships are no-ops. Optional `cascade: true` also removes every transitive descendant currently in the saga.
+- `sagas.add_tasks` — Add one or more tasks to a saga by ID (`task_ids`). Atomic (all-or-nothing). Rejected if saga is `closed` or `cancelled`. Optional `cascade: true` cascades through the `parent_of` task hierarchy — pulls each input plus every transitive descendant. Returns `added` (count) and `added_task_ids` (compact IDs of every task actually inserted). Subtree expansion is bounded by `MAX_EXPANDED_BATCH = 2000`.
+- `sagas.remove_tasks` — Remove tasks from a saga. Idempotent: missing memberships are no-ops. Optional `cascade: true` cascades through the `parent_of` task hierarchy — strips each input plus every transitive descendant currently in the saga. Returns `removed` (count) and `removed_task_ids` (compact IDs of every task actually removed). With `cascade=true`, unresolvable inputs are hard errors (cascade=false stays typo-tolerant).
 - `sagas.frontier` — Ready tasks scoped to saga membership. Reuses `list_ready_actionable` restricted to `saga_tasks`. Returns tasks plus derived `brains` set. Empty for `planning`/`closed`/`cancelled` sagas.
 - `sagas.stats` — Saga statistics: `{total, open, in_progress, blocked, done, cancelled, completion_pct, label_histogram, brains}`.
 
