@@ -46,6 +46,7 @@ Local-first knowledge base combining semantic search, task management, and recor
 | Tasks | `tasks_next`, `tasks_create`, `tasks_get`, `tasks_close` | Work tracking, dependencies, priorities |
 | Memory | `memory_retrieve`, `memory_write_episode` | LOD-aware retrieval with search and expansion in one call, episode recording |
 | Records | `records_create_document`, `records_create_analysis`, `records_create_plan`, `records_save_snapshot`, `records_list` | Typed work products, snapshots, and per-kind retrieval policy |
+| Sagas | `sagas_create`, `sagas_frontier`, `sagas_add_tasks`, `sagas_close` | Cross-brain task groupings; coordination above the per-brain task scope |
 | Brain | `status`, `brains_list`, `jobs_status` | Health checks, brain registry, job queue |
 
 ## Resources
