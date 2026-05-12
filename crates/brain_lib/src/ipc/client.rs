@@ -33,6 +33,13 @@ pub enum IpcClientError {
     #[error("JSON-RPC error {code}: {message}")]
     Rpc { code: i64, message: String },
 
+    /// The MCP tool ran successfully at the transport layer but reported
+    /// `isError: true` in the response envelope (the standard MCP
+    /// `CallToolResult.isError` flag). The inner `content[0].text` is
+    /// surfaced as the error message when available.
+    #[error("tool reported error: {message}")]
+    ToolError { message: String },
+
     /// The server returned an unexpected or empty response.
     #[error("unexpected response from daemon: {0}")]
     Protocol(String),

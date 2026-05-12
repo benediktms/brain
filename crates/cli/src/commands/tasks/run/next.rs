@@ -49,7 +49,7 @@ pub fn next(ctx: &TaskCtx, k: usize) -> Result<()> {
                     .and_then(|v| v.as_str())
                     .map(String::from)
                 {
-                    let short = ctx.store.compact_id(&tid).unwrap_or_else(|_| tid.clone());
+                    let short = ctx.store.compact_id_or_raw(&tid);
                     obj.insert("task_id".into(), json!(short));
                 }
                 obj.remove("description");
@@ -70,10 +70,7 @@ pub fn next(ctx: &TaskCtx, k: usize) -> Result<()> {
                     .flatten()
                     .filter(|t| t.task_type == TaskType::Epic)
                     .map(|t| {
-                        let short_id = ctx
-                            .store
-                            .compact_id(&t.task_id)
-                            .unwrap_or_else(|_| t.task_id.clone());
+                        let short_id = ctx.store.compact_id_or_raw(&t.task_id);
                         json!({ "task_id": short_id, "title": t.title })
                     });
                 epic_cache.insert(parent_id.clone(), epic_val);

@@ -367,6 +367,24 @@ impl TaskStore {
             .with_read_conn(|conn| queries::compact_id(conn, task_id))
     }
 
+    /// Compact a task ID for user-facing emission, falling back to the input
+    /// verbatim if compaction fails (raw SQLite I/O error).
+    ///
+    /// This is the canonical helper for the "compact-or-raw" pattern that
+    /// every CLI/MCP emission site applies — it replaces dozens of inline
+    /// `compact_id(id).unwrap_or_else(|_| id.clone())` dances and gives the
+    /// audit a single grep target (`compact_id_or_raw\(`).
+    ///
+    /// `compact_id` itself is effectively infallible by design — orphan and
+    /// pre-migration tasks both succeed and return the raw input — so the
+    /// fallback only fires when the underlying SQLite read errors. Emitting
+    /// the raw canonical there is strictly better than panicking the
+    /// response, but the failure is logged-worthy at the caller's discretion.
+    pub fn compact_id_or_raw(&self, task_id: &str) -> String {
+        self.compact_id(task_id)
+            .unwrap_or_else(|_| task_id.to_string())
+    }
+
     /// Get the project prefix for this brain.
     ///
     /// Reads from `brains.prefix` (per-brain column). If `brain_id` is not

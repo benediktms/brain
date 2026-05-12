@@ -12,10 +12,7 @@ use super::{TaskCtx, UpdateParams, priority_label};
 
 pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
     params.id = ctx.store.resolve_task_id(&params.id)?;
-    let display_id = ctx
-        .store
-        .compact_id(&params.id)
-        .unwrap_or_else(|_| params.id.clone());
+    let display_id = ctx.store.compact_id_or_raw(&params.id);
     let has_status = params.status.is_some();
     let has_field_updates = params.title.is_some()
         || params.description.is_some()
@@ -80,7 +77,7 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
 
     for raw_id in ids {
         let id = ctx.store.resolve_task_id(raw_id)?;
-        let display_id = ctx.store.compact_id(&id).unwrap_or_else(|_| id.clone());
+        let display_id = ctx.store.compact_id_or_raw(&id);
         let event = TaskEvent::from_payload(
             &id,
             "cli",
@@ -99,7 +96,7 @@ pub fn close(ctx: &TaskCtx, ids: &[String], _brain: Option<&str>) -> Result<()> 
         };
         let display_unblocked: Vec<String> = unblocked
             .iter()
-            .map(|u| ctx.store.compact_id(u).unwrap_or_else(|_| u.clone()))
+            .map(|u| ctx.store.compact_id_or_raw(u))
             .collect();
         all_unblocked.extend(display_unblocked.clone());
 
@@ -177,10 +174,7 @@ pub fn stats(ctx: &TaskCtx) -> Result<()> {
 
 pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let display_id = ctx.store.compact_id_or_raw(task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -208,10 +202,7 @@ pub fn link(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
 
 pub fn unlink(ctx: &TaskCtx, task_id: &str, chunk_id: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let display_id = ctx.store.compact_id_or_raw(task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -247,10 +238,7 @@ pub fn ext_link_add(
     url: Option<&str>,
 ) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let display_id = ctx.store.compact_id_or_raw(task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -282,10 +270,7 @@ pub fn ext_link_add(
 
 pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let display_id = ctx.store.compact_id_or_raw(task_id);
     let event = TaskEvent::new(
         task_id.as_str(),
         "cli",
@@ -316,10 +301,7 @@ pub fn ext_link_remove(ctx: &TaskCtx, task_id: &str, source: &str, id: &str) -> 
 
 pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let display_id = ctx.store.compact_id_or_raw(task_id);
     let refs = ctx.store.get_external_ids(task_id)?;
 
     if ctx.output.is_json_mode() {
@@ -353,10 +335,7 @@ pub fn ext_link_list(ctx: &TaskCtx, task_id: &str) -> Result<()> {
 
 pub fn comment(ctx: &TaskCtx, task_id: &str, body: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
-    let display_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let display_id = ctx.store.compact_id_or_raw(task_id);
     let event = TaskEvent::from_payload(
         task_id.as_str(),
         "cli",

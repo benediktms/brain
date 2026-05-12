@@ -53,9 +53,7 @@ pub fn apply_compact_task_id(store: &TaskStore, task_json: &mut Value) {
     if task_id.is_empty() {
         return;
     }
-    let compact = store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
+    let compact = store.compact_id_or_raw(task_id);
     obj.insert("task_id".into(), json!(compact));
 }
 
@@ -73,9 +71,7 @@ pub fn apply_compact_parent_id(store: &TaskStore, task_json: &mut Value) {
     if parent_id.is_empty() {
         return;
     }
-    let compact = store
-        .compact_id(parent_id)
-        .unwrap_or_else(|_| parent_id.to_string());
+    let compact = store.compact_id_or_raw(parent_id);
     obj.insert("parent_task_id".into(), json!(compact));
 }
 
@@ -126,7 +122,7 @@ pub fn dep_summary_to_json_with_blocking(store: &TaskStore, summary: &Dependency
     let compact_blocking: Vec<String> = summary
         .blocking_task_ids
         .iter()
-        .map(|id| store.compact_id(id).unwrap_or_else(|_| id.clone()))
+        .map(|id| store.compact_id_or_raw(id))
         .collect();
     json!({
         "total_deps": summary.total_deps,
@@ -141,9 +137,7 @@ pub fn children_stubs_to_json(store: &TaskStore, children: &[TaskRow]) -> Vec<Va
     children
         .iter()
         .map(|c| {
-            let short = store
-                .compact_id(&c.task_id)
-                .unwrap_or_else(|_| c.task_id.clone());
+            let short = store.compact_id_or_raw(&c.task_id);
             json!({
                 "task_id": short,
                 "title": c.title,

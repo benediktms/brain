@@ -60,6 +60,19 @@ pub fn sync_tools_call(
     }
 
     if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(line) {
+        // The MCP tool layer signals tool-level failures via
+        // `result.isError == true` while keeping the JSON-RPC envelope
+        // successful. Callers expect a hard `Err` here so a daemon-side
+        // tool failure cannot be silently treated as success.
+        if resp.result.get("isError").and_then(Value::as_bool) == Some(true) {
+            let message = resp
+                .result
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .unwrap_or("tool returned isError without a message")
+                .to_string();
+            return Err(IpcClientError::ToolError { message });
+        }
         return Ok(resp.result);
     }
 

@@ -10,14 +10,8 @@ use super::TaskCtx;
 pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let depends_on = &ctx.store.resolve_task_id(depends_on)?;
-    let display_task_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
-    let display_depends_on = ctx
-        .store
-        .compact_id(depends_on)
-        .unwrap_or_else(|_| depends_on.to_string());
+    let display_task_id = ctx.store.compact_id_or_raw(task_id);
+    let display_depends_on = ctx.store.compact_id_or_raw(depends_on);
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -46,14 +40,8 @@ pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
 pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let depends_on = &ctx.store.resolve_task_id(depends_on)?;
-    let display_task_id = ctx
-        .store
-        .compact_id(task_id)
-        .unwrap_or_else(|_| task_id.to_string());
-    let display_depends_on = ctx
-        .store
-        .compact_id(depends_on)
-        .unwrap_or_else(|_| depends_on.to_string());
+    let display_task_id = ctx.store.compact_id_or_raw(task_id);
+    let display_depends_on = ctx.store.compact_id_or_raw(depends_on);
     let event = TaskEvent::new(
         task_id,
         "cli",
@@ -112,28 +100,16 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
             Ok(()) => {
                 succeeded.push((task_id.clone(), depends_on.clone()));
                 if !ctx.output.is_json_mode() {
-                    let display_task_id = ctx
-                        .store
-                        .compact_id(task_id)
-                        .unwrap_or_else(|_| task_id.clone());
-                    let display_depends_on = ctx
-                        .store
-                        .compact_id(depends_on)
-                        .unwrap_or_else(|_| depends_on.clone());
+                    let display_task_id = ctx.store.compact_id_or_raw(task_id);
+                    let display_depends_on = ctx.store.compact_id_or_raw(depends_on);
                     println!("{display_task_id} depends on {display_depends_on}");
                 }
             }
             Err(e) => {
                 failed.push((task_id.clone(), depends_on.clone(), format!("{e}")));
                 if !ctx.output.is_json_mode() {
-                    let display_task_id = ctx
-                        .store
-                        .compact_id(task_id)
-                        .unwrap_or_else(|_| task_id.clone());
-                    let display_depends_on = ctx
-                        .store
-                        .compact_id(depends_on)
-                        .unwrap_or_else(|_| depends_on.clone());
+                    let display_task_id = ctx.store.compact_id_or_raw(task_id);
+                    let display_depends_on = ctx.store.compact_id_or_raw(depends_on);
                     println!("Failed: {display_task_id} -> {display_depends_on}: {e}");
                 }
             }
@@ -143,19 +119,14 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
     if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
-            .map(|(t, d)| {
-                (
-                    ctx.store.compact_id(t).unwrap_or_else(|_| t.clone()),
-                    ctx.store.compact_id(d).unwrap_or_else(|_| d.clone()),
-                )
-            })
+            .map(|(t, d)| (ctx.store.compact_id_or_raw(t), ctx.store.compact_id_or_raw(d)))
             .collect::<Vec<_>>();
         let failed = failed
             .iter()
             .map(|(t, d, e)| {
                 (
-                    ctx.store.compact_id(t).unwrap_or_else(|_| t.clone()),
-                    ctx.store.compact_id(d).unwrap_or_else(|_| d.clone()),
+                    ctx.store.compact_id_or_raw(t),
+                    ctx.store.compact_id_or_raw(d),
                     e.clone(),
                 )
             })
@@ -179,10 +150,7 @@ pub fn dep_add_chain(ctx: &TaskCtx, task_ids: &[String]) -> Result<()> {
 
 pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result<()> {
     let source_resolved = ctx.store.resolve_task_id(source)?;
-    let source_display = ctx
-        .store
-        .compact_id(&source_resolved)
-        .unwrap_or_else(|_| source_resolved.clone());
+    let source_display = ctx.store.compact_id_or_raw(&source_resolved);
 
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
@@ -212,10 +180,7 @@ pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result
             Ok(()) => {
                 succeeded.push(dep_id.clone());
                 if !ctx.output.is_json_mode() {
-                    let display_dep_id = ctx
-                        .store
-                        .compact_id(&dep_id)
-                        .unwrap_or_else(|_| dep_id.clone());
+                    let display_dep_id = ctx.store.compact_id_or_raw(&dep_id);
                     println!("{display_dep_id} depends on {source_display}");
                 }
             }
@@ -231,14 +196,14 @@ pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result
     if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
-            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| id.clone()))
+            .map(|id| ctx.store.compact_id_or_raw(id))
             .collect::<Vec<_>>();
         let out = json!({
             "source": source_display,
             "succeeded": succeeded,
             "failed": failed.iter().map(|(id, e, resolved)| {
                 let display_id = if *resolved {
-                    ctx.store.compact_id(id).unwrap_or_else(|_| id.clone())
+                    ctx.store.compact_id_or_raw(id)
                 } else {
                     id.clone()
                 };
@@ -260,10 +225,7 @@ pub fn dep_add_fan(ctx: &TaskCtx, source: &str, dependents: &[String]) -> Result
 
 pub fn dep_clear(ctx: &TaskCtx, task_id: &str) -> Result<()> {
     let resolved = ctx.store.resolve_task_id(task_id)?;
-    let display_resolved = ctx
-        .store
-        .compact_id(&resolved)
-        .unwrap_or_else(|_| resolved.clone());
+    let display_resolved = ctx.store.compact_id_or_raw(&resolved);
     let deps = ctx.store.get_deps_for_task(&resolved)?;
 
     if deps.is_empty() {
@@ -309,16 +271,11 @@ pub fn dep_clear(ctx: &TaskCtx, task_id: &str) -> Result<()> {
     if ctx.output.is_json_mode() {
         let succeeded = succeeded
             .iter()
-            .map(|id| ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()))
+            .map(|id| ctx.store.compact_id_or_raw(id))
             .collect::<Vec<_>>();
         let failed = failed
             .iter()
-            .map(|(id, e)| {
-                (
-                    ctx.store.compact_id(id).unwrap_or_else(|_| (*id).clone()),
-                    format!("{e}"),
-                )
-            })
+            .map(|(id, e)| (ctx.store.compact_id_or_raw(id), format!("{e}")))
             .collect::<Vec<_>>();
         let out = json!({
             "task_id": display_resolved,

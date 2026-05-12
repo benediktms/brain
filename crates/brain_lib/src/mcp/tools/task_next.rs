@@ -176,11 +176,7 @@ fn build_single_groups(
                 .flatten()
                 .filter(|t| t.task_type == TaskType::Epic)
                 .map(|t| {
-                    let short = ctx
-                        .stores
-                        .tasks
-                        .compact_id(&t.task_id)
-                        .unwrap_or(t.task_id.clone());
+                    let short = ctx.stores.tasks.compact_id_or_raw(&t.task_id);
                     json!({
                         "task_id": short,
                         "title": t.title,

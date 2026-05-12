@@ -55,13 +55,8 @@ impl SagaGet {
         let members_json: Vec<serde_json::Value> = members
             .iter()
             .map(|m| {
-                let task_id = ctx
-                    .stores
-                    .tasks
-                    .compact_id(&m.task_id)
-                    .unwrap_or_else(|_| m.task_id.clone());
                 json!({
-                    "task_id": task_id,
+                    "task_id": ctx.stores.tasks.compact_id_or_raw(&m.task_id),
                     "brain_id": m.brain_id,
                     "title": m.title,
                     "status": m.status,

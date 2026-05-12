@@ -65,7 +65,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        let display_id = ctx.store.compact_id(&id).unwrap_or_else(|_| id.clone());
+        let display_id = ctx.store.compact_id_or_raw(&id);
         println!("Task: {display_id}");
         println!("Title: {}", task.title);
         println!("Status: {}", task.status);
@@ -73,10 +73,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
         println!("Type: {}", task.task_type);
         println!("Assignee: {}", task.assignee.as_deref().unwrap_or("-"));
         if let Some(ref parent) = task.parent_task_id {
-            let display_parent = ctx
-                .store
-                .compact_id(parent)
-                .unwrap_or_else(|_| parent.clone());
+            let display_parent = ctx.store.compact_id_or_raw(parent);
             println!("Parent: {display_parent}");
         }
         println!("Created: {}", format_ts(task.created_at));
@@ -129,10 +126,7 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
         if !children.is_empty() {
             println!("\nChildren:");
             for child in &children {
-                let short = ctx
-                    .store
-                    .compact_id(&child.task_id)
-                    .unwrap_or_else(|_| child.task_id.clone());
+                let short = ctx.store.compact_id_or_raw(&child.task_id);
                 println!(
                     "  [{}] {} {}  {}",
                     child.status,

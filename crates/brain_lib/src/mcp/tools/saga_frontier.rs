@@ -42,13 +42,8 @@ impl SagaFrontier {
             .tasks
             .iter()
             .map(|t| {
-                let task_id = ctx
-                    .stores
-                    .tasks
-                    .compact_id(&t.task_id)
-                    .unwrap_or_else(|_| t.task_id.clone());
                 json!({
-                    "task_id": task_id,
+                    "task_id": ctx.stores.tasks.compact_id_or_raw(&t.task_id),
                     "title": t.title,
                     "status": t.status,
                     "priority": t.priority,
@@ -153,5 +148,75 @@ mod tests {
     #[tokio::test]
     async fn test_underscore_alias() {
         assert_eq!(SagaFrontier.underscore_alias(), "sagas_frontier");
+    }
+
+    /// Frontier task entries must emit each `task_id` in the compact
+    /// `<prefix>-<hex>` form — never the canonical `PREFIX-ULID`. Mirror of
+    /// `saga_get::test_members_emit_short_task_ids`; covers the second saga
+    /// endpoint that surfaces member task_id fields cross-domain.
+    #[tokio::test]
+    async fn test_frontier_emits_short_task_ids() {
+        use super::super::saga_add_tasks::SagaAddTasks;
+        use super::super::saga_create::SagaCreate;
+        use super::super::saga_start::SagaStart;
+        use super::super::task_create::TaskCreate;
+        use super::super::tests::assert_short_task_id;
+
+        let (_dir, ctx) = create_test_context().await;
+
+        // Create the saga and start it (frontier is empty for planning sagas).
+        let saga_create = SagaCreate
+            .call(json!({ "title": "Frontier Leak" }), &ctx)
+            .await;
+        let saga_payload: Value = serde_json::from_str(&saga_create.content[0].text).unwrap();
+        let saga_id = saga_payload["saga_id"].as_str().unwrap().to_string();
+
+        // Create a task and capture its compact form.
+        let task_create = TaskCreate
+            .call(
+                json!({ "title": "Frontier task", "task_type": "feature" }),
+                &ctx,
+            )
+            .await;
+        let task_payload: Value = serde_json::from_str(&task_create.content[0].text).unwrap();
+        let short_task_id = task_payload["task_id"].as_str().unwrap().to_string();
+        assert_short_task_id(&short_task_id);
+
+        // Wire the task into the saga and move the saga to `open` so the
+        // frontier qualification rules can return a non-empty task list.
+        let add = SagaAddTasks
+            .call(
+                json!({ "saga_id": &saga_id, "task_ids": [&short_task_id] }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            add.is_error.is_none(),
+            "add_tasks should succeed: {:?}",
+            add.content
+        );
+        let start = SagaStart.call(json!({ "saga_id": &saga_id }), &ctx).await;
+        assert!(
+            start.is_error.is_none(),
+            "start should succeed: {:?}",
+            start.content
+        );
+
+        // Compute the frontier and assert the wire form is compact.
+        let result = call(json!({ "saga_id": &saga_id }), &ctx).await;
+        assert!(
+            result.is_error.is_none(),
+            "frontier should succeed: {:?}",
+            result.content
+        );
+        let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        let tasks = listed["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1, "frontier should return one ready task");
+        let emitted = tasks[0]["task_id"].as_str().unwrap();
+        assert_short_task_id(emitted);
+        assert_eq!(
+            emitted, short_task_id,
+            "frontier task_id must match the task's wire-form short id"
+        );
     }
 }

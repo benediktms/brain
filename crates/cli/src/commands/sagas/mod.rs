@@ -150,12 +150,7 @@ pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
     let saga_id = saga_id_short.as_str();
     let f = ctx.stores.sagas.frontier(&canonical)?;
-    let compact = |canonical: &str| -> String {
-        ctx.stores
-            .tasks
-            .compact_id(canonical)
-            .unwrap_or_else(|_| canonical.to_string())
-    };
+    let compact = |canonical: &str| -> String { ctx.stores.tasks.compact_id_or_raw(canonical) };
     if ctx.json {
         let tasks: Vec<serde_json::Value> = f
             .tasks
@@ -471,13 +466,8 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         let members_json: Vec<serde_json::Value> = members
             .iter()
             .map(|m| {
-                let task_id = ctx
-                    .stores
-                    .tasks
-                    .compact_id(&m.task_id)
-                    .unwrap_or_else(|_| m.task_id.clone());
                 json!({
-                    "task_id": task_id,
+                    "task_id": ctx.stores.tasks.compact_id_or_raw(&m.task_id),
                     "brain_id": m.brain_id,
                     "title": m.title,
                     "status": m.status,
