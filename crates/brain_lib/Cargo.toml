@@ -12,6 +12,7 @@ accelerate = ["candle-core/accelerate"]
 test-utils = ["brain-persistence/test-utils"]
 
 [dependencies]
+brain-core = { path = "../brain_core" }
 brain-persistence = { path = "../brain_persistence" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
