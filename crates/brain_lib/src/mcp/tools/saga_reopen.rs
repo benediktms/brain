@@ -4,6 +4,8 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use brain_persistence::db::sagas::compact_saga_id;
+
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
@@ -40,9 +42,9 @@ impl SagaReopen {
         match ctx.stores.sagas.reopen(&params.saga_id, &params.actor) {
             Ok(row) => {
                 let response = json!({
-                    "saga_id": row.saga_id,
+                    "saga_id": compact_saga_id(&row.display_id),
                     "saga": {
-                        "saga_id": row.saga_id,
+                        "saga_id": compact_saga_id(&row.display_id),
                         "title": row.title,
                         "description": row.description,
                         "status": row.status,
@@ -75,7 +77,7 @@ impl McpTool for SagaReopen {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID",
+                        "description": "Saga ID — either `saga-<hex>` short form or bare 26-char ULID",
                         "pattern": "^[0-9A-Za-z]{26}$"
                     },
                     "actor": {

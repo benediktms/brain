@@ -29,18 +29,32 @@ pub fn validate_actor(s: &str) -> Result<&str, String> {
     Ok(s)
 }
 
-/// Validate a saga ID: exactly 26 ASCII alphanumeric characters (Crockford-base32 ULID).
+/// Validate a saga ID at the MCP boundary.
+///
+/// Accepts EITHER:
+/// - A bare 26-char ASCII-alphanumeric ULID (the canonical durable form), OR
+/// - The user-facing `saga-<lowercase hex>` short form (length ≥ 3 hex chars
+///   after the prefix).
+///
+/// Syntactic gate only — existence is checked downstream by
+/// `brain_persistence::db::sagas::resolve_saga_id` when the store is touched.
 pub fn validate_saga_id(s: &str) -> Result<&str, String> {
-    if s.len() != 26 {
-        return Err(format!(
-            "saga_id must be exactly 26 characters, got {}",
-            s.len()
-        ));
+    // Bare ULID form.
+    if s.len() == 26 && s.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Ok(s);
     }
-    if !s.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err("saga_id must contain only ASCII alphanumeric characters".into());
+    // Short form: saga-<lowercase hex, length >= 3>.
+    if let Some(hex) = s.strip_prefix("saga-")
+        && hex.len() >= 3
+        && hex
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    {
+        return Ok(s);
     }
-    Ok(s)
+    Err(format!(
+        "saga_id must be a 26-char ULID or `saga-<lowercase hex>` (got `{s}`)"
+    ))
 }
 
 /// Validate a single task ID: non-empty, at most 128 characters.

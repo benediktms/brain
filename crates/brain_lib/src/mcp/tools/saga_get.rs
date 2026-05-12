@@ -4,6 +4,8 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use brain_persistence::db::sagas::compact_saga_id;
+
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
@@ -64,9 +66,9 @@ impl SagaGet {
             .collect();
 
         let response = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -89,7 +91,8 @@ impl McpTool for SagaGet {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Fetch a single saga by its bare-ULID saga_id. Returns the saga row \
+            description: "Fetch a single saga by its compact `saga-<hex>` ID (e.g. `saga-3j5`); \
+                26-char ULIDs are still accepted for back-compat. Returns the saga row \
                 and member task stubs (empty until tasks are added)."
                 .into(),
             input_schema: json!({
@@ -97,7 +100,7 @@ impl McpTool for SagaGet {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Bare 26-char ULID saga ID",
+                        "description": "Saga ID — either `saga-<hex>` short form or bare 26-char ULID",
                         "pattern": "^[0-9A-Za-z]{26}$"
                     }
                 },
