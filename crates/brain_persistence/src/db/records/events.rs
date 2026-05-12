@@ -289,7 +289,7 @@ pub fn new_event_id() -> String {
 }
 
 /// Generate a new record ID with project prefix.
-/// Format: "{PREFIX}-{ULID}" e.g. "BRN-01JPHZS7VXQK4R3BGTHNED2P8M"
+/// Format: "{PREFIX}-{ULID}" e.g. "BRN-<ulid>"
 pub fn new_record_id(prefix: &str) -> String {
     format!("{}-{}", prefix, Ulid::new())
 }

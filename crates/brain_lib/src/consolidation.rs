@@ -3,7 +3,7 @@
 //!
 //! **STATUS: WIP** — cluster summaries use naive extractive concatenation
 //! (first 200 chars per episode). Quality synthesis requires an external LLM
-//! via the planned job queue (see task BRN-01KM5Z5TMJV0ANN0H6QCHVB9KW).
+//! via the planned job queue.
 //!
 //! This module defines the types and the `consolidate_episodes` function that
 //! implements the `memory.consolidate` MCP tool.

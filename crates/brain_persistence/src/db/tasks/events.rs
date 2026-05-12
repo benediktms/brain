@@ -416,7 +416,7 @@ pub fn new_event_id() -> String {
 }
 
 /// Generate a new task ID with project prefix.
-/// Format: "{PREFIX}-{ULID}" e.g. "BRN-01JPHZS7VXQK4R3BGTHNED2P8M"
+/// Format: "{PREFIX}-{ULID}" e.g. "BRN-<ulid>"
 pub fn new_task_id(prefix: &str) -> String {
     format!("{}-{}", prefix, Ulid::new())
 }
