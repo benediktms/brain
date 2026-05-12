@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use serde_json::json;
 
 use brain_lib::stores::BrainStores;
-use brain_persistence::db::sagas::SagaListFilter;
+use brain_persistence::db::sagas::{SagaListFilter, compact_saga_id};
 
 pub struct SagaCtx {
     pub(crate) stores: BrainStores,
@@ -22,9 +22,9 @@ pub fn create(ctx: &SagaCtx, title: &str, description: Option<&str>) -> Result<(
     let row = ctx.stores.sagas.create(title, description, "cli")?;
     if ctx.json {
         let out = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -35,7 +35,7 @@ pub fn create(ctx: &SagaCtx, title: &str, description: Option<&str>) -> Result<(
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Created saga {}", row.saga_id);
+        println!("Created saga {}", compact_saga_id(&row.display_id));
         println!("  Title:  {}", row.title);
         println!("  Status: {}", row.status);
         if let Some(desc) = &row.description {
@@ -64,7 +64,7 @@ pub fn list(
             .iter()
             .map(|r| {
                 json!({
-                    "saga_id": r.saga_id,
+                    "saga_id": compact_saga_id(&r.display_id),
                     "title": r.title,
                     "description": r.description,
                     "status": r.status,
@@ -82,7 +82,12 @@ pub fn list(
         println!("No sagas found.");
     } else {
         for r in &rows {
-            println!("[{}] {} ({})", r.saga_id, r.title, r.status);
+            println!(
+                "[{}] {} ({})",
+                compact_saga_id(&r.display_id),
+                r.title,
+                r.status
+            );
         }
     }
     Ok(())
@@ -103,9 +108,9 @@ pub fn update(
         .update(saga_id, title, description, "cli")?;
     if ctx.json {
         let out = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -116,7 +121,7 @@ pub fn update(
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Updated saga {}", row.saga_id);
+        println!("Updated saga {}", compact_saga_id(&row.display_id));
         println!("  Title:  {}", row.title);
         println!("  Status: {}", row.status);
         if let Some(desc) = &row.description {
@@ -127,21 +132,24 @@ pub fn update(
 }
 
 pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String]) -> Result<()> {
-    let count = ctx.stores.sagas.add_tasks(saga_id, task_ids, "cli")?;
+    let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
+    let count = ctx.stores.sagas.add_tasks(&canonical, task_ids, "cli")?;
     if ctx.json {
         let out = serde_json::json!({
-            "saga_id": saga_id,
+            "saga_id": saga_id_short,
             "added": count,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Added {count} task(s) to saga {saga_id}");
+        println!("Added {count} task(s) to saga {saga_id_short}");
     }
     Ok(())
 }
 
 pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
-    let f = ctx.stores.sagas.frontier(saga_id)?;
+    let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
+    let saga_id = saga_id_short.as_str();
+    let f = ctx.stores.sagas.frontier(&canonical)?;
     if ctx.json {
         let tasks: Vec<serde_json::Value> = f
             .tasks
@@ -191,7 +199,9 @@ pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
 }
 
 pub fn stats(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
-    let s = ctx.stores.sagas.stats(saga_id)?;
+    let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
+    let saga_id = saga_id_short.as_str();
+    let s = ctx.stores.sagas.stats(&canonical)?;
     if ctx.json {
         let label_histogram: Vec<serde_json::Value> = s
             .label_histogram
@@ -254,9 +264,9 @@ pub fn start(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx.stores.sagas.start(saga_id, "cli")?;
     if ctx.json {
         let out = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -267,7 +277,11 @@ pub fn start(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Started saga {} (status: {})", row.saga_id, row.status);
+        println!(
+            "Started saga {} (status: {})",
+            compact_saga_id(&row.display_id),
+            row.status
+        );
     }
     Ok(())
 }
@@ -282,9 +296,9 @@ pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
     if ctx.json {
         let cascade_json = render_cascade_json(&cascade_results);
         let out = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -297,7 +311,7 @@ pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Closed saga {}", row.saga_id);
+        println!("Closed saga {}", compact_saga_id(&row.display_id));
         println!("  Title:  {}", row.title);
         println!("  Status: {}", row.status);
         if cascade {
@@ -316,15 +330,16 @@ pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
 }
 
 pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>) -> Result<()> {
-    let removed = ctx.stores.sagas.remove_tasks(saga_id, task_ids, "cli")?;
+    let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
+    let removed = ctx.stores.sagas.remove_tasks(&canonical, task_ids, "cli")?;
     if ctx.json {
         let out = json!({
-            "saga_id": saga_id,
+            "saga_id": saga_id_short,
             "removed": removed,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Removed {removed} task(s) from saga {saga_id}");
+        println!("Removed {removed} task(s) from saga {saga_id_short}");
     }
     Ok(())
 }
@@ -333,9 +348,9 @@ pub fn reopen(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
     let row = ctx.stores.sagas.reopen(saga_id, "cli")?;
     if ctx.json {
         let out = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -346,7 +361,7 @@ pub fn reopen(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Reopened saga {}", row.saga_id);
+        println!("Reopened saga {}", compact_saga_id(&row.display_id));
         println!("  Status: {}", row.status);
     }
     Ok(())
@@ -359,9 +374,9 @@ pub fn cancel(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
     if ctx.json {
         let cascade_json = render_cascade_json(&cascade_results);
         let out = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -374,7 +389,7 @@ pub fn cancel(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Cancelled saga {}", row.saga_id);
+        println!("Cancelled saga {}", compact_saga_id(&row.display_id));
         if cascade {
             print_cascade_summary(&cascade_results, "cancelled");
         }
@@ -460,9 +475,9 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
             })
             .collect();
         let out = json!({
-            "saga_id": row.saga_id,
+            "saga_id": compact_saga_id(&row.display_id),
             "saga": {
-                "saga_id": row.saga_id,
+                "saga_id": compact_saga_id(&row.display_id),
                 "title": row.title,
                 "description": row.description,
                 "status": row.status,
@@ -475,7 +490,7 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Saga {}", row.saga_id);
+        println!("Saga {}", compact_saga_id(&row.display_id));
         println!("  Title:  {}", row.title);
         println!("  Status: {}", row.status);
         if let Some(desc) = &row.description {
