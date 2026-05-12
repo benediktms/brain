@@ -614,6 +614,45 @@ fn get_children_via_entity_links(conn: &Connection, parent_task_id: &str) -> Res
     crate::db::collect_rows(rows)
 }
 
+/// Return each input `task_id` together with every transitive descendant in the
+/// `parent_of` task graph, deduplicated.
+///
+/// Walks `entity_links` (`edge_kind='parent_of'`) downward from each seed in
+/// `roots` via a multi-seed recursive CTE. Returns one entry per distinct task
+/// in the union of every subtree — never duplicates, even when one root is
+/// itself a descendant of another root in the input.
+///
+/// **Cycle safety**: `parent_of` is a forest by invariant (each task has at
+/// most one parent), but no FK or trigger enforces it. The CTE uses `UNION`
+/// rather than `UNION ALL` so SQLite terminates as soon as the recursion stops
+/// emitting new rows — even malformed data with a cycle cannot loop forever.
+///
+/// Returns an empty `Vec` when `roots` is empty; never errors on roots that
+/// happen to be missing from `tasks` — they simply contribute themselves (and
+/// no descendants) to the output, because the CTE seeds the recursion from the
+/// caller's input rather than from a `tasks` row.
+///
+/// Cross-brain works for free — `entity_links.brain_scope` is independent of
+/// the parent_of relationship's brain membership.
+pub fn task_subtree(conn: &Connection, roots: &[String]) -> Result<Vec<String>> {
+    if roots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let seeds_json = serde_json::to_string(roots)?;
+    let sql = "WITH RECURSIVE subtree(task_id) AS (
+        SELECT value FROM json_each(?1)
+        UNION
+        SELECT el.to_id FROM entity_links el
+        JOIN subtree s ON el.from_id = s.task_id
+        WHERE el.from_type='TASK' AND el.to_type='TASK'
+          AND el.edge_kind='parent_of'
+    )
+    SELECT task_id FROM subtree";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([seeds_json], |row| row.get::<_, String>(0))?;
+    crate::db::collect_rows(rows)
+}
+
 /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
 pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> Result<Vec<TaskRow>> {
     let new_result = get_tasks_blocking_via_entity_links(conn, task_id)?;

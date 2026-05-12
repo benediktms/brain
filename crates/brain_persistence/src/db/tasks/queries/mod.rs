@@ -929,6 +929,100 @@ mod tests {
         assert_eq!(children[2].task_id, "c3");
     }
 
+    /// task_subtree returns the root plus every transitive descendant via the
+    /// parent_of graph. Exercises depth ≥ 3 to confirm the recursive CTE
+    /// expands beyond direct children.
+    #[test]
+    fn test_task_subtree_returns_root_plus_descendants() {
+        let conn = setup();
+        // Tree shape:
+        //   root
+        //   ├── a
+        //   │   └── a1
+        //   │       └── a1x
+        //   └── b
+        create_task(&conn, "root", "Root", 2);
+        create_task(&conn, "a", "A", 2);
+        create_task(&conn, "a1", "A1", 2);
+        create_task(&conn, "a1x", "A1X", 2);
+        create_task(&conn, "b", "B", 2);
+        set_parent(&conn, "a", "root");
+        set_parent(&conn, "a1", "a");
+        set_parent(&conn, "a1x", "a1");
+        set_parent(&conn, "b", "root");
+
+        let mut got = task_subtree(&conn, &["root".to_string()]).unwrap();
+        got.sort();
+        assert_eq!(got, vec!["a", "a1", "a1x", "b", "root"]);
+    }
+
+    /// Empty input returns an empty vec without touching the DB.
+    #[test]
+    fn test_task_subtree_empty_input() {
+        let conn = setup();
+        create_task(&conn, "lonely", "Lonely", 2);
+        let got = task_subtree(&conn, &[]).unwrap();
+        assert!(got.is_empty());
+    }
+
+    /// Multi-seed input deduplicates: when one root is itself a descendant of
+    /// another root, each task appears at most once in the output.
+    #[test]
+    fn test_task_subtree_multi_root_dedup() {
+        let conn = setup();
+        create_task(&conn, "root", "Root", 2);
+        create_task(&conn, "a", "A", 2);
+        create_task(&conn, "b", "B", 2);
+        set_parent(&conn, "a", "root");
+        set_parent(&conn, "b", "a");
+
+        let mut got =
+            task_subtree(&conn, &["root".to_string(), "a".to_string(), "b".to_string()]).unwrap();
+        got.sort();
+        assert_eq!(got, vec!["a", "b", "root"]);
+    }
+
+    /// task_subtree includes a root that has no children in `entity_links` —
+    /// leaf tasks and tasks not present in the table seed themselves into the
+    /// output but contribute no descendants.
+    #[test]
+    fn test_task_subtree_leaf_root_returns_just_itself() {
+        let conn = setup();
+        create_task(&conn, "leaf", "Leaf", 2);
+        let got = task_subtree(&conn, &["leaf".to_string()]).unwrap();
+        assert_eq!(got, vec!["leaf".to_string()]);
+    }
+
+    /// Cycle safety: parent_of is a forest by invariant, but nothing in the
+    /// schema enforces it. Manually wire a cycle via raw SQL (bypassing
+    /// projections) and confirm the recursive CTE terminates with a finite
+    /// result instead of looping. SQLite's `UNION` (not `UNION ALL`) recursion
+    /// dedupes incrementally and stops when no new rows are produced.
+    #[test]
+    fn test_task_subtree_cycle_safety() {
+        let conn = setup();
+        create_task(&conn, "a", "A", 2);
+        create_task(&conn, "b", "B", 2);
+        create_task(&conn, "c", "C", 2);
+        // Legitimate edges first via ParentSet projections.
+        set_parent(&conn, "b", "a");
+        set_parent(&conn, "c", "b");
+        // Then inject a cycle a → c directly into entity_links. This bypasses
+        // the projection and creates state the codebase will never produce on
+        // its own — the test is a guard against future invariant violations.
+        conn.execute(
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', 'c', 'TASK', 'a', 'parent_of',
+                     strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)",
+            [],
+        )
+        .unwrap();
+
+        let mut got = task_subtree(&conn, &["a".to_string()]).unwrap();
+        got.sort();
+        assert_eq!(got, vec!["a", "b", "c"], "cycle must terminate at the 3-node set");
+    }
+
     /// Task A blocked by task B via entity_links blocks edge — A is excluded from ready set.
     #[test]
     fn test_blocking_dep_via_entity_links() {
