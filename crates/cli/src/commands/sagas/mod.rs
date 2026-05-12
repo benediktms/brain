@@ -131,9 +131,17 @@ pub fn update(
     Ok(())
 }
 
-pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String]) -> Result<()> {
+pub fn add_tasks(
+    ctx: &SagaCtx,
+    saga_id: &str,
+    task_ids: &[String],
+    cascade: bool,
+) -> Result<()> {
     let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
-    let count = ctx.stores.sagas.add_tasks(&canonical, task_ids, "cli")?;
+    let count = ctx
+        .stores
+        .sagas
+        .add_tasks(&canonical, task_ids, cascade, "cli")?;
     if ctx.json {
         let out = serde_json::json!({
             "saga_id": saga_id_short,
@@ -330,9 +338,17 @@ pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>) -> Result<()> {
+pub fn remove(
+    ctx: &SagaCtx,
+    saga_id: &str,
+    task_ids: Vec<String>,
+    cascade: bool,
+) -> Result<()> {
     let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
-    let removed = ctx.stores.sagas.remove_tasks(&canonical, task_ids, "cli")?;
+    let removed = ctx
+        .stores
+        .sagas
+        .remove_tasks(&canonical, task_ids, cascade, "cli")?;
     if ctx.json {
         let out = json!({
             "saga_id": saga_id_short,
