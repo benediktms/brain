@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] - 2026-05-12
+
+### Bug Fixes
+
+- Place marketplace.json and plugin.json under `.claude-plugin/` (#142)
+
+### Documentation
+
+- Correct architecture + document brain CLI prerequisite (#144)
+- Document skill-naming convention (#143)
+- Document unified Claude Code plugin install flow (#140)
+
+### Features
+
+- Add the sagas skill set
+- Add mem-thread skill for continues-edge episode walking
+- Add typed record creator skills
+- Print Claude Code plugin install hint after successful init (#139)
+- Introduce unified brain plugin with single marketplace.json (#138)
+
 ## [0.4.0] - 2026-05-07
 
 ### Bug Fixes
