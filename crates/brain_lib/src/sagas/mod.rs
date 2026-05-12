@@ -1943,7 +1943,11 @@ mod tests {
         let count = store
             .add_tasks(&saga.saga_id, &["epic2".to_string()], true, "test")
             .unwrap();
-        assert_eq!(count.len(), 2, "kid1 already a member; cascade adds epic2 + kid2");
+        assert_eq!(
+            count.len(),
+            2,
+            "kid1 already a member; cascade adds epic2 + kid2"
+        );
         assert_eq!(member_count(&store, &saga.saga_id), 3);
     }
 
@@ -2017,7 +2021,11 @@ mod tests {
         let removed = store
             .remove_tasks(&saga.saga_id, vec!["rc-epic".to_string()], true, "test")
             .unwrap();
-        assert_eq!(removed.len(), 3, "cascade-remove should strip the full subtree");
+        assert_eq!(
+            removed.len(),
+            3,
+            "cascade-remove should strip the full subtree"
+        );
         assert_eq!(member_count(&store, &saga.saga_id), 0);
 
         let removed_events: i64 = store
@@ -2043,9 +2051,7 @@ mod tests {
     #[test]
     fn add_tasks_cascade_rejects_over_max_expanded_batch() {
         let store = in_memory_store();
-        let saga = store
-            .create("Oversize Cascade", None, "test")
-            .unwrap();
+        let saga = store.create("Oversize Cascade", None, "test").unwrap();
         // Wire a chain of MAX_EXPANDED_BATCH+1 tasks (root + N descendants).
         insert_task(&store, "root", "brain-big");
         let mut prev = "root".to_string();
@@ -2073,9 +2079,7 @@ mod tests {
     #[test]
     fn remove_tasks_cascade_hard_errors_on_unresolved_seed() {
         let store = in_memory_store();
-        let saga = store
-            .create("Cascade Resolve Saga", None, "test")
-            .unwrap();
+        let saga = store.create("Cascade Resolve Saga", None, "test").unwrap();
         insert_task(&store, "real-task", "brain-rs");
         store
             .add_tasks(&saga.saga_id, &["real-task".to_string()], false, "test")
