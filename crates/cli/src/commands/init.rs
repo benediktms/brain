@@ -690,8 +690,8 @@ When running as an MCP server (`brain mcp`), these tools are available:
 - `sagas.close` — Transition `open` → `closed`. Optional `cascade: bool` closes all member tasks.
 - `sagas.cancel` — Cancel a saga from any active status. Optional `cascade: bool` cancels member tasks.
 - `sagas.reopen` — Transition `closed` or `cancelled` → `open`. Clears `closed_at`.
-- `sagas.add_tasks` — Add one or more tasks to a saga by ID (`task_ids`). Atomic (all-or-nothing). Rejected if saga is `closed` or `cancelled`.
-- `sagas.remove_tasks` — Remove tasks from a saga. Idempotent: missing memberships are no-ops.
+- `sagas.add_tasks` — Add one or more tasks to a saga by ID (`task_ids`). Atomic (all-or-nothing). Rejected if saga is `closed` or `cancelled`. Optional `cascade: true` cascades through the `parent_of` task hierarchy — pulls each input plus every transitive descendant. Returns `added` (count) and `added_task_ids` (compact IDs of every task actually inserted). Subtree expansion is bounded by `MAX_EXPANDED_BATCH = 2000`.
+- `sagas.remove_tasks` — Remove tasks from a saga. Idempotent: missing memberships are no-ops. Optional `cascade: true` cascades through the `parent_of` task hierarchy — strips each input plus every transitive descendant currently in the saga. Returns `removed` (count) and `removed_task_ids` (compact IDs of every task actually removed). With `cascade=true`, unresolvable inputs are hard errors (cascade=false stays typo-tolerant).
 - `sagas.frontier` — Ready tasks scoped to saga membership. Reuses `list_ready_actionable` restricted to `saga_tasks`. Returns tasks plus derived `brains` set. Empty for `planning`/`closed`/`cancelled` sagas.
 - `sagas.stats` — Saga statistics: `{total, open, in_progress, blocked, done, cancelled, completion_pct, label_histogram, brains}`.
 
@@ -782,8 +782,8 @@ brain sagas start <saga_id>                             # planning → open
 brain sagas close <saga_id> [--cascade]                 # open → closed (cascade closes tasks)
 brain sagas cancel <saga_id> [--cascade]                # → cancelled (cascade cancels tasks)
 brain sagas reopen <saga_id>                            # closed/cancelled → open
-brain sagas add <saga_id> <task_id>...                  # Add tasks (atomic batch)
-brain sagas remove <saga_id> <task_id>...               # Remove tasks (idempotent)
+brain sagas add <saga_id> <task_id>... [--cascade]      # Add tasks (atomic batch; --cascade pulls subtrees)
+brain sagas remove <saga_id> <task_id>... [--cascade]   # Remove tasks (idempotent; --cascade strips subtrees)
 brain sagas frontier <saga_id>                          # Ready tasks scoped to this saga
 brain sagas stats <saga_id>                             # Completion stats + label histogram
 # Run `brain sagas --help` for full usage

@@ -387,14 +387,22 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     };
                     commands::sagas::update(&ctx, &saga_id, title.as_deref(), desc_arg)?;
                 }
-                SagasAction::Add { saga_id, task_ids } => {
-                    commands::sagas::add_tasks(&ctx, &saga_id, &task_ids)?;
+                SagasAction::Add {
+                    saga_id,
+                    task_ids,
+                    cascade,
+                } => {
+                    commands::sagas::add_tasks(&ctx, &saga_id, &task_ids, cascade)?;
                 }
                 SagasAction::Start { saga_id } => {
                     commands::sagas::start(&ctx, &saga_id)?;
                 }
-                SagasAction::Remove { saga_id, task_ids } => {
-                    commands::sagas::remove(&ctx, &saga_id, task_ids)?;
+                SagasAction::Remove {
+                    saga_id,
+                    task_ids,
+                    cascade,
+                } => {
+                    commands::sagas::remove(&ctx, &saga_id, task_ids, cascade)?;
                 }
                 SagasAction::Close { saga_id, cascade } => {
                     commands::sagas::close(&ctx, &saga_id, cascade)?;

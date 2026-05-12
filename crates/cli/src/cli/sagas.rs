@@ -65,6 +65,10 @@ pub(crate) enum SagasAction {
         /// Task IDs to add (full IDs or short hashes, cross-brain aware)
         #[arg(required = true)]
         task_ids: Vec<String>,
+
+        /// Also add every transitive descendant of each input task (via parent_of)
+        #[arg(long)]
+        cascade: bool,
     },
 
     /// Start a saga (planning → open)
@@ -91,6 +95,10 @@ pub(crate) enum SagasAction {
         /// One or more task IDs to remove
         #[arg(required = true)]
         task_ids: Vec<String>,
+
+        /// Also remove every transitive descendant of each input task (via parent_of) currently in the saga
+        #[arg(long)]
+        cascade: bool,
     },
 
     /// Reopen a closed or cancelled saga (status → open)

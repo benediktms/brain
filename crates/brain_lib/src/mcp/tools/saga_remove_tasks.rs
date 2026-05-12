@@ -16,6 +16,8 @@ use super::{McpTool, json_response};
 struct Params {
     saga_id: String,
     task_ids: Vec<String>,
+    #[serde(default)]
+    cascade: bool,
     #[serde(default = "default_actor")]
     actor: String,
 }
@@ -61,15 +63,21 @@ impl SagaRemoveTasks {
 
         // ID resolution lives in `SagaStore::remove_tasks` (mirrors `add_tasks`)
         // so all transports — MCP, CLI, future callers — benefit equally.
-        match ctx
-            .stores
-            .sagas
-            .remove_tasks(&saga_id, params.task_ids, &params.actor)
-        {
+        match ctx.stores.sagas.remove_tasks(
+            &saga_id,
+            params.task_ids,
+            params.cascade,
+            &params.actor,
+        ) {
             Ok(removed) => {
+                let removed_task_ids: Vec<String> = removed
+                    .iter()
+                    .map(|id| ctx.stores.tasks.compact_id_or_raw(id))
+                    .collect();
                 let response = json!({
                     "saga_id": saga_id_short,
-                    "removed": removed,
+                    "removed": removed_task_ids.len(),
+                    "removed_task_ids": removed_task_ids,
                 });
                 json_response(&response)
             }
@@ -88,7 +96,10 @@ impl McpTool for SagaRemoveTasks {
             name: self.name().into(),
             description: "Remove one or more tasks from a saga. Idempotent: task IDs that are \
                 not members of the saga are silently ignored. Returns the count of tasks \
-                actually removed. Allowed in any saga status. \
+                actually removed. Allowed in any saga status. Set `cascade: true` to also remove \
+                every transitive descendant of each input task (via the parent_of graph) that is \
+                currently a member of the saga — useful for stripping an entire epic subtree out \
+                of the saga in one call. \
                 Accepts compact `saga-<hex>` IDs (e.g. `saga-3j5`); 26-char ULIDs are still accepted for back-compat."
                 .into(),
             input_schema: json!({
@@ -103,6 +114,11 @@ impl McpTool for SagaRemoveTasks {
                         "items": { "type": "string", "minLength": 1, "maxLength": 128 },
                         "description": "Task IDs to remove from the saga (empty array is a valid no-op)",
                         "maxItems": 500
+                    },
+                    "cascade": {
+                        "type": "boolean",
+                        "description": "When true, also remove every transitive descendant of each input task currently in the saga. Default: false.",
+                        "default": false
                     },
                     "actor": {
                         "type": "string",
@@ -158,7 +174,10 @@ mod tests {
 
     async fn add_tasks(ctx: &crate::mcp::McpContext, saga_id: &str, task_ids: &[&str]) {
         let owned: Vec<String> = task_ids.iter().map(|s| s.to_string()).collect();
-        ctx.stores.sagas.add_tasks(saga_id, &owned, "test").unwrap();
+        ctx.stores
+            .sagas
+            .add_tasks(saga_id, &owned, false, "test")
+            .unwrap();
     }
 
     #[tokio::test]
@@ -239,5 +258,30 @@ mod tests {
     #[tokio::test]
     async fn test_underscore_alias() {
         assert_eq!(SagaRemoveTasks.underscore_alias(), "sagas_remove_tasks");
+    }
+
+    /// MCP boundary smoke: `cascade: true` deserializes and routes through
+    /// the store. With a leaf task (no parent_of descendants) the removed
+    /// count matches cascade=false. The store-level tests cover the
+    /// expansion semantics for non-trivial trees.
+    #[tokio::test]
+    async fn test_cascade_parameter_accepted() {
+        let (_dir, ctx) = create_test_context().await;
+        let saga_id = create_saga(&ctx, "Cascade Remove Param").await;
+        let task_id = make_task(&ctx, "Solo Remove").await;
+        add_tasks(&ctx, &saga_id, &[&task_id]).await;
+
+        let result = call_remove(
+            json!({ "saga_id": saga_id, "task_ids": [task_id], "cascade": true }),
+            &ctx,
+        )
+        .await;
+        assert!(
+            result.is_error.is_none(),
+            "cascade: true should be accepted: {:?}",
+            result.content
+        );
+        let v: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(v["removed"], 1);
     }
 }

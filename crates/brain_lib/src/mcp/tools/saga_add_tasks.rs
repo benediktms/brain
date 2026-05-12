@@ -16,6 +16,8 @@ use super::{McpTool, json_response};
 struct Params {
     saga_id: String,
     task_ids: Vec<String>,
+    #[serde(default)]
+    cascade: bool,
     #[serde(default = "default_actor")]
     actor: String,
 }
@@ -64,12 +66,23 @@ impl SagaAddTasks {
         match ctx
             .stores
             .sagas
-            .add_tasks(&saga_id, &params.task_ids, &params.actor)
+            .add_tasks(&saga_id, &params.task_ids, params.cascade, &params.actor)
         {
-            Ok(count) => json_response(&json!({
-                "saga_id": saga_id_short,
-                "added": count,
-            })),
+            Ok(added) => {
+                // Compact each canonical task_id for the wire response so
+                // callers see the same short form they pass in. Crucial for
+                // cascade=true — the expanded set is otherwise invisible to
+                // the caller without scope-creep-prone counting.
+                let added_task_ids: Vec<String> = added
+                    .iter()
+                    .map(|id| ctx.stores.tasks.compact_id_or_raw(id))
+                    .collect();
+                json_response(&json!({
+                    "saga_id": saga_id_short,
+                    "added": added_task_ids.len(),
+                    "added_task_ids": added_task_ids,
+                }))
+            }
             Err(e) => ToolCallResult::error(format!("{e}")),
         }
     }
@@ -86,7 +99,9 @@ impl McpTool for SagaAddTasks {
             description: "Atomically add one or more tasks to a saga. All task IDs must resolve \
                 (cross-brain short IDs are supported). The saga must not be closed or cancelled. \
                 Already-member tasks and intra-batch duplicates are silently skipped (idempotent). \
-                Unresolvable IDs cause the entire batch to fail."
+                Unresolvable IDs cause the entire batch to fail. Set `cascade: true` to also add \
+                every transitive descendant of each input task (via the parent_of graph) — useful \
+                for pulling an entire epic and its subtasks into the saga in one call."
                 .into(),
             input_schema: json!({
                 "type": "object",
@@ -101,6 +116,11 @@ impl McpTool for SagaAddTasks {
                         "description": "Task IDs to add — `<brain>-<hex>` short form or full task ID; cross-brain aware",
                         "minItems": 1,
                         "maxItems": 500
+                    },
+                    "cascade": {
+                        "type": "boolean",
+                        "description": "When true, expand each input task to itself plus every transitive descendant in the parent_of graph. Default: false.",
+                        "default": false
                     },
                     "actor": {
                         "type": "string",
@@ -255,5 +275,30 @@ mod tests {
     #[tokio::test]
     async fn test_underscore_alias() {
         assert_eq!(SagaAddTasks.underscore_alias(), "sagas_add_tasks");
+    }
+
+    /// MCP boundary smoke: the `cascade: true` parameter deserializes and the
+    /// call routes through the store. With a leaf task (no parent_of edges)
+    /// the count matches cascade=false — exercises the plumbing without
+    /// requiring graph fixture wiring at this layer (the store-level tests
+    /// in `crates/brain_lib/src/sagas/mod.rs` cover the actual expansion).
+    #[tokio::test]
+    async fn test_cascade_parameter_accepted() {
+        let (_dir, ctx) = create_test_context().await;
+        let saga_id = make_saga(&ctx, "Cascade Param").await;
+        let task_id = make_task(&ctx, "Solo").await;
+
+        let result = call_add(
+            json!({ "saga_id": saga_id, "task_ids": [task_id], "cascade": true }),
+            &ctx,
+        )
+        .await;
+        assert!(
+            result.is_error.is_none(),
+            "cascade: true should be accepted: {:?}",
+            result.content
+        );
+        let v: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        assert_eq!(v["added"], 1);
     }
 }

@@ -131,15 +131,33 @@ pub fn update(
     Ok(())
 }
 
-pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String]) -> Result<()> {
+pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String], cascade: bool) -> Result<()> {
     let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
-    let count = ctx.stores.sagas.add_tasks(&canonical, task_ids, "cli")?;
+    let added = ctx
+        .stores
+        .sagas
+        .add_tasks(&canonical, task_ids, cascade, "cli")?;
+    let added_task_ids: Vec<String> = added
+        .iter()
+        .map(|id| ctx.stores.tasks.compact_id_or_raw(id))
+        .collect();
+    let count = added_task_ids.len();
     if ctx.json {
         let out = serde_json::json!({
             "saga_id": saga_id_short,
             "added": count,
+            "added_task_ids": added_task_ids,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
+    } else if cascade && count > task_ids.len() {
+        // Make the cascade expansion explicit in human-readable output so a
+        // caller running `--cascade` over an epic sees the breakdown rather
+        // than just a single suspiciously-high count.
+        println!(
+            "Added {count} task(s) to saga {saga_id_short} ({} input + {} cascaded)",
+            task_ids.len(),
+            count.saturating_sub(task_ids.len())
+        );
     } else {
         println!("Added {count} task(s) to saga {saga_id_short}");
     }
@@ -330,17 +348,32 @@ pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>) -> Result<()> {
+pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>, cascade: bool) -> Result<()> {
     let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
-    let removed = ctx.stores.sagas.remove_tasks(&canonical, task_ids, "cli")?;
+    let input_count = task_ids.len();
+    let removed = ctx
+        .stores
+        .sagas
+        .remove_tasks(&canonical, task_ids, cascade, "cli")?;
+    let removed_task_ids: Vec<String> = removed
+        .iter()
+        .map(|id| ctx.stores.tasks.compact_id_or_raw(id))
+        .collect();
+    let count = removed_task_ids.len();
     if ctx.json {
         let out = json!({
             "saga_id": saga_id_short,
-            "removed": removed,
+            "removed": count,
+            "removed_task_ids": removed_task_ids,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
+    } else if cascade && count > input_count {
+        println!(
+            "Removed {count} task(s) from saga {saga_id_short} ({input_count} input + {} cascaded)",
+            count.saturating_sub(input_count)
+        );
     } else {
-        println!("Removed {removed} task(s) from saga {saga_id_short}");
+        println!("Removed {count} task(s) from saga {saga_id_short}");
     }
     Ok(())
 }
