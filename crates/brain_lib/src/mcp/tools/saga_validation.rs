@@ -8,6 +8,12 @@ pub const MAX_TITLE_LEN: usize = 1024;
 pub const MAX_DESCRIPTION_LEN: usize = 64 * 1024;
 pub const MAX_ACTOR_LEN: usize = 64;
 
+/// Single source of truth for the `saga_id` parameter description across every
+/// saga MCP tool's `input_schema`. Centralising avoids drift when the accepted
+/// forms change.
+pub const SAGA_ID_PARAM_DESCRIPTION: &str =
+    "Saga ID — either `saga-<hex>` short form or bare 26-char ULID";
+
 /// Validate an actor string: 1–64 ASCII chars, alphanumeric + `_`, `-`, `:`.
 pub fn validate_actor(s: &str) -> Result<&str, String> {
     if s.is_empty() {

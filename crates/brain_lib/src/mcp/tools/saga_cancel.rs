@@ -88,8 +88,7 @@ impl McpTool for SagaCancel {
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Saga ID — either `saga-<hex>` short form or bare 26-char ULID",
-                        "pattern": "^[0-9A-Za-z]{26}$"
+                        "description": super::saga_validation::SAGA_ID_PARAM_DESCRIPTION,
                     },
                     "cascade": {
                         "type": "boolean",

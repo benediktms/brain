@@ -86,20 +86,19 @@ impl McpTool for SagaAddTasks {
             description: "Atomically add one or more tasks to a saga. All task IDs must resolve \
                 (cross-brain short IDs are supported). The saga must not be closed or cancelled. \
                 Already-member tasks and intra-batch duplicates are silently skipped (idempotent). \
-                Unresolvable IDs cause the entire batch to fail. \
-                Accepts compact `saga-<hex>` IDs (e.g. `saga-3j5`); 26-char ULIDs are still accepted for back-compat."
+                Unresolvable IDs cause the entire batch to fail."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "saga_id": {
                         "type": "string",
-                        "description": "Saga ID — either `saga-<hex>` short form or bare 26-char ULID"
+                        "description": super::saga_validation::SAGA_ID_PARAM_DESCRIPTION
                     },
                     "task_ids": {
                         "type": "array",
                         "items": { "type": "string", "minLength": 1, "maxLength": 128 },
-                        "description": "Task IDs to add (full IDs or short hashes, cross-brain aware)",
+                        "description": "Task IDs to add — `<brain>-<hex>` short form or full task ID; cross-brain aware",
                         "minItems": 1,
                         "maxItems": 500
                     },
