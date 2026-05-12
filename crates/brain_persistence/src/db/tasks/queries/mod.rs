@@ -976,8 +976,11 @@ mod tests {
         set_parent(&conn, "a", "root");
         set_parent(&conn, "b", "a");
 
-        let mut got =
-            task_subtree(&conn, &["root".to_string(), "a".to_string(), "b".to_string()]).unwrap();
+        let mut got = task_subtree(
+            &conn,
+            &["root".to_string(), "a".to_string(), "b".to_string()],
+        )
+        .unwrap();
         got.sort();
         assert_eq!(got, vec!["a", "b", "root"]);
     }
@@ -1020,7 +1023,11 @@ mod tests {
 
         let mut got = task_subtree(&conn, &["a".to_string()]).unwrap();
         got.sort();
-        assert_eq!(got, vec!["a", "b", "c"], "cycle must terminate at the 3-node set");
+        assert_eq!(
+            got,
+            vec!["a", "b", "c"],
+            "cycle must terminate at the 3-node set"
+        );
     }
 
     /// Task A blocked by task B via entity_links blocks edge — A is excluded from ready set.

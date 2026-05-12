@@ -131,12 +131,7 @@ pub fn update(
     Ok(())
 }
 
-pub fn add_tasks(
-    ctx: &SagaCtx,
-    saga_id: &str,
-    task_ids: &[String],
-    cascade: bool,
-) -> Result<()> {
+pub fn add_tasks(ctx: &SagaCtx, saga_id: &str, task_ids: &[String], cascade: bool) -> Result<()> {
     let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
     let count = ctx
         .stores
@@ -338,12 +333,7 @@ pub fn close(ctx: &SagaCtx, saga_id: &str, cascade: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn remove(
-    ctx: &SagaCtx,
-    saga_id: &str,
-    task_ids: Vec<String>,
-    cascade: bool,
-) -> Result<()> {
+pub fn remove(ctx: &SagaCtx, saga_id: &str, task_ids: Vec<String>, cascade: bool) -> Result<()> {
     let (canonical, saga_id_short) = ctx.stores.sagas.resolve_short(saga_id)?;
     let removed = ctx
         .stores

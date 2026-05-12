@@ -63,11 +63,12 @@ impl SagaRemoveTasks {
 
         // ID resolution lives in `SagaStore::remove_tasks` (mirrors `add_tasks`)
         // so all transports — MCP, CLI, future callers — benefit equally.
-        match ctx
-            .stores
-            .sagas
-            .remove_tasks(&saga_id, params.task_ids, params.cascade, &params.actor)
-        {
+        match ctx.stores.sagas.remove_tasks(
+            &saga_id,
+            params.task_ids,
+            params.cascade,
+            &params.actor,
+        ) {
             Ok(removed) => {
                 let response = json!({
                     "saga_id": saga_id_short,
@@ -168,7 +169,10 @@ mod tests {
 
     async fn add_tasks(ctx: &crate::mcp::McpContext, saga_id: &str, task_ids: &[&str]) {
         let owned: Vec<String> = task_ids.iter().map(|s| s.to_string()).collect();
-        ctx.stores.sagas.add_tasks(saga_id, &owned, false, "test").unwrap();
+        ctx.stores
+            .sagas
+            .add_tasks(saga_id, &owned, false, "test")
+            .unwrap();
     }
 
     #[tokio::test]

@@ -1429,7 +1429,12 @@ mod tests {
             .unwrap();
 
         let err = store
-            .add_tasks(&saga.saga_id, &["brain-z-task01".to_string()], false, "test")
+            .add_tasks(
+                &saga.saga_id,
+                &["brain-z-task01".to_string()],
+                false,
+                "test",
+            )
             .unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -1457,7 +1462,12 @@ mod tests {
             .unwrap();
 
         let err = store
-            .add_tasks(&saga.saga_id, &["brain-w-task01".to_string()], false, "test")
+            .add_tasks(
+                &saga.saga_id,
+                &["brain-w-task01".to_string()],
+                false,
+                "test",
+            )
             .unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -1915,9 +1925,7 @@ mod tests {
             .db
             .with_read_conn(|c| {
                 let mut stmt = c
-                    .prepare(
-                        "SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY task_id",
-                    )
+                    .prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY task_id")
                     .unwrap();
                 let ids = stmt
                     .query_map([saga.saga_id.as_str()], |r| r.get(0))
@@ -1991,7 +1999,9 @@ mod tests {
     #[test]
     fn remove_tasks_cascade_on_partial_membership() {
         let store = in_memory_store();
-        let saga = store.create("Partial Remove Cascade", None, "test").unwrap();
+        let saga = store
+            .create("Partial Remove Cascade", None, "test")
+            .unwrap();
         insert_task(&store, "pe-epic", "brain-pe");
         insert_task(&store, "pe-orphan-child", "brain-pe");
         link_parent_of(&store, "pe-epic", "pe-orphan-child");
@@ -2005,7 +2015,10 @@ mod tests {
         let removed = store
             .remove_tasks(&saga.saga_id, vec!["pe-epic".to_string()], true, "test")
             .unwrap();
-        assert_eq!(removed, 1, "only the epic was a member; cascade is a no-op for the non-member child");
+        assert_eq!(
+            removed, 1,
+            "only the epic was a member; cascade is a no-op for the non-member child"
+        );
         assert_eq!(member_count(&store, &saga.saga_id), 0);
     }
 
@@ -2019,7 +2032,12 @@ mod tests {
 
         // Add the task while still in a non-terminal state.
         store
-            .add_tasks(&saga.saga_id, &["rem-brain-task01".to_string()], false, "test")
+            .add_tasks(
+                &saga.saga_id,
+                &["rem-brain-task01".to_string()],
+                false,
+                "test",
+            )
             .unwrap();
 
         // Force the saga to closed.
@@ -2028,7 +2046,12 @@ mod tests {
             .unwrap();
 
         let err = store
-            .remove_tasks(&saga.saga_id, vec!["rem-brain-task01".to_string()], false, "test")
+            .remove_tasks(
+                &saga.saga_id,
+                vec!["rem-brain-task01".to_string()],
+                false,
+                "test",
+            )
             .unwrap_err();
         let msg = err.to_string();
         assert!(
