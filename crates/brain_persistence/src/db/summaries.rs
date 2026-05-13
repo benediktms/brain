@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension, types::ToSql};
 use ulid::Ulid;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// An episode record for the summaries table.
 pub struct Episode {
@@ -38,7 +38,7 @@ pub struct SummaryRow {
 ///
 /// Trust defaults to `untrusted` via the SQL column default. Use
 /// [`store_episode_with_trust`] when the caller must record a different band.
-pub fn store_episode(conn: &Connection, episode: &Episode) -> Result<String> {
+pub fn store_episode(conn: &Connection, episode: &Episode) -> SqlResult<String> {
     let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
     let tags_json = serde_json::to_string(&episode.tags).unwrap_or_else(|_| "[]".into());
@@ -76,7 +76,7 @@ pub fn store_episode_with_trust(
     conn: &Connection,
     episode: &Episode,
     trust: &str,
-) -> Result<String> {
+) -> SqlResult<String> {
     let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
     let tags_json = serde_json::to_string(&episode.tags).unwrap_or_else(|_| "[]".into());
@@ -114,7 +114,7 @@ pub fn store_reflection(
     tags: &[String],
     importance: f64,
     brain_id: &str,
-) -> Result<String> {
+) -> SqlResult<String> {
     let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
@@ -156,7 +156,7 @@ pub fn store_procedure(
     tags: &[String],
     importance: f64,
     brain_id: &str,
-) -> Result<String> {
+) -> SqlResult<String> {
     let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
@@ -206,7 +206,7 @@ fn map_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SummaryRow> {
 
 /// Get a summary by ID.
 /// No brain_id filter — PK lookup, intentional for cross-brain references.
-pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<SummaryRow>> {
+pub fn get_summary(conn: &Connection, summary_id: &str) -> SqlResult<Option<SummaryRow>> {
     let result = conn
         .query_row(
             "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
@@ -225,7 +225,7 @@ pub fn get_summary(conn: &Connection, summary_id: &str) -> Result<Option<Summary
 pub fn get_summaries_by_prefixed_ids(
     conn: &Connection,
     prefixed_ids: &[String],
-) -> Result<Vec<SummaryRow>> {
+) -> SqlResult<Vec<SummaryRow>> {
     if prefixed_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -256,7 +256,7 @@ pub fn store_ml_summary(
     chunk_id: &str,
     summary_text: &str,
     summarizer: &str,
-) -> Result<String> {
+) -> SqlResult<String> {
     let summary_id = Ulid::new().to_string();
     let now = crate::utils::now_ts();
     conn.execute(
@@ -275,7 +275,7 @@ pub fn find_chunks_lacking_summary(
     conn: &Connection,
     summarizer: &str,
     limit: usize,
-) -> Result<Vec<(String, String)>> {
+) -> SqlResult<Vec<(String, String)>> {
     let mut stmt = conn.prepare(
         "SELECT c.chunk_id, c.content FROM chunks c
          WHERE NOT EXISTS (
@@ -297,7 +297,7 @@ pub fn find_chunks_lacking_summary(
 pub fn get_ml_summaries_for_chunks(
     conn: &Connection,
     chunk_ids: &[&str],
-) -> Result<HashMap<String, String>> {
+) -> SqlResult<HashMap<String, String>> {
     if chunk_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -338,7 +338,7 @@ pub struct SummaryMeta {
 pub fn get_summary_metadata(
     conn: &Connection,
     ids: &[String],
-) -> Result<HashMap<String, SummaryMeta>> {
+) -> SqlResult<HashMap<String, SummaryMeta>> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -395,7 +395,7 @@ fn in_clause_bucket(n: usize) -> Option<usize> {
 /// while keeping hot-path callers on the cached path.
 ///
 /// Returns rows in unspecified order; caller is responsible for reordering if needed.
-pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<SummaryRow>> {
+pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> SqlResult<Vec<SummaryRow>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -451,7 +451,7 @@ pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<Sum
 
 /// List recent episodes.
 /// When `brain_id` is non-empty, filters to that brain only. Empty string returns all brains.
-pub fn list_episodes(conn: &Connection, limit: usize, brain_id: &str) -> Result<Vec<SummaryRow>> {
+pub fn list_episodes(conn: &Connection, limit: usize, brain_id: &str) -> SqlResult<Vec<SummaryRow>> {
     if brain_id.is_empty() {
         let mut stmt = conn.prepare(
             "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
@@ -481,7 +481,7 @@ pub fn list_episodes_multi_brain(
     conn: &Connection,
     limit: usize,
     brain_ids: &[String],
-) -> Result<Vec<SummaryRow>> {
+) -> SqlResult<Vec<SummaryRow>> {
     if brain_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -508,7 +508,7 @@ pub fn list_episodes_multi_brain(
 }
 
 /// List distinct brain_ids that have unconsolidated episodes.
-pub fn list_unconsolidated_brain_ids(conn: &Connection) -> Result<Vec<String>> {
+pub fn list_unconsolidated_brain_ids(conn: &Connection) -> SqlResult<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT brain_id FROM summaries
          WHERE kind = 'episode' AND consolidated_by IS NULL
@@ -524,7 +524,7 @@ pub fn list_unconsolidated_episodes(
     conn: &Connection,
     limit: usize,
     brain_id: &str,
-) -> Result<Vec<SummaryRow>> {
+) -> SqlResult<Vec<SummaryRow>> {
     let mut stmt = conn.prepare(
         "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,
                 brain_id, parent_id, source_hash, confidence, valid_from
@@ -548,7 +548,7 @@ pub struct SummaryPollRow {
 pub fn find_stale_summaries_for_embedding(
     conn: &Connection,
     brain_id: &str,
-) -> Result<Vec<SummaryPollRow>> {
+) -> SqlResult<Vec<SummaryPollRow>> {
     let mut stmt = conn.prepare(
         "SELECT summary_id, kind, title, content
          FROM summaries
@@ -570,7 +570,7 @@ pub fn find_stale_summaries_for_embedding(
     super::collect_rows(rows)
 }
 
-pub fn mark_summaries_embedded(conn: &Connection, summary_ids: &[&str]) -> Result<()> {
+pub fn mark_summaries_embedded(conn: &Connection, summary_ids: &[&str]) -> SqlResult<()> {
     if summary_ids.is_empty() {
         return Ok(());
     }

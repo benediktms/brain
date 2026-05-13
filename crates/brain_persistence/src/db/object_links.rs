@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// A cross-domain object link between two synapse:// URIs.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,7 +20,7 @@ pub fn add_object_link(
     source_uri: &str,
     target_uri: &str,
     link_type: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO object_links (source_uri, target_uri, link_type, created_at)
          VALUES (?1, ?2, ?3, strftime('%s', 'now'))",
@@ -32,7 +32,7 @@ pub fn add_object_link(
 /// Remove a directional link between two synapse:// URIs.
 ///
 /// No-op if the link does not exist.
-pub fn remove_object_link(conn: &Connection, source_uri: &str, target_uri: &str) -> Result<()> {
+pub fn remove_object_link(conn: &Connection, source_uri: &str, target_uri: &str) -> SqlResult<()> {
     conn.execute(
         "DELETE FROM object_links WHERE source_uri = ?1 AND target_uri = ?2",
         rusqlite::params![source_uri, target_uri],
@@ -43,7 +43,7 @@ pub fn remove_object_link(conn: &Connection, source_uri: &str, target_uri: &str)
 /// Return all links where `uri` appears as either source or target.
 ///
 /// Both outgoing (uri is source) and incoming (uri is target) links are included.
-pub fn get_object_links(conn: &Connection, uri: &str) -> Result<Vec<ObjectLink>> {
+pub fn get_object_links(conn: &Connection, uri: &str) -> SqlResult<Vec<ObjectLink>> {
     let mut stmt = conn.prepare_cached(
         "SELECT source_uri, target_uri, link_type, created_at
          FROM object_links

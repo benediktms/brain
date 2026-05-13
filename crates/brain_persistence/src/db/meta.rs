@@ -3,10 +3,10 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension};
 use tracing::warn;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Get a meta value by key.
-pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
+pub fn get_meta(conn: &Connection, key: &str) -> SqlResult<Option<String>> {
     let result = conn
         .query_row(
             "SELECT value FROM brain_meta WHERE key = ?1",
@@ -21,7 +21,7 @@ pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
 ///
 /// Returns `Ok(None)` if the key does not exist or the stored value is not a
 /// valid u32. Emits a warning on parse failure so bad values are visible in logs.
-pub fn get_meta_u32(conn: &Connection, key: &str) -> Result<Option<u32>> {
+pub fn get_meta_u32(conn: &Connection, key: &str) -> SqlResult<Option<u32>> {
     match get_meta(conn, key)? {
         None => Ok(None),
         Some(s) => match s.parse::<u32>() {
@@ -38,7 +38,7 @@ pub fn get_meta_u32(conn: &Connection, key: &str) -> Result<Option<u32>> {
 ///
 /// Returns `Ok(None)` if the key does not exist or the stored value is not a
 /// valid i64.
-pub fn get_meta_i64(conn: &Connection, key: &str) -> Result<Option<i64>> {
+pub fn get_meta_i64(conn: &Connection, key: &str) -> SqlResult<Option<i64>> {
     match get_meta(conn, key)? {
         None => Ok(None),
         Some(s) => match s.parse::<i64>() {
@@ -52,7 +52,7 @@ pub fn get_meta_i64(conn: &Connection, key: &str) -> Result<Option<i64>> {
 }
 
 /// Set a meta value (upsert).
-pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
+pub fn set_meta(conn: &Connection, key: &str, value: &str) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO brain_meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -70,7 +70,7 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
 /// read-then-write is safe. Cross-process races on a fresh database could
 /// theoretically produce two different prefixes, but `INSERT ... ON CONFLICT`
 /// ensures the second writer's value wins deterministically.
-pub fn get_or_init_project_prefix(conn: &Connection, brain_dir: &Path) -> Result<String> {
+pub fn get_or_init_project_prefix(conn: &Connection, brain_dir: &Path) -> SqlResult<String> {
     if let Some(prefix) = get_meta(conn, "project_prefix")? {
         // Validate stored prefix — reject corrupted values
         if prefix.len() == 3 && prefix.chars().all(|c| c.is_ascii_uppercase()) {
@@ -248,7 +248,7 @@ fn prefix_from_multi_words(segments: &[&str]) -> String {
 }
 
 /// Read the `stale_hashes_prevented` counter from `brain_meta`.
-pub fn stale_hashes_prevented(conn: &Connection) -> Result<u64> {
+pub fn stale_hashes_prevented(conn: &Connection) -> SqlResult<u64> {
     let count: u64 = conn
         .query_row(
             "SELECT value FROM brain_meta WHERE key = 'stale_hashes_prevented'",

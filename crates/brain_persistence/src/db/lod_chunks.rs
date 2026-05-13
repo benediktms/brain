@@ -6,7 +6,7 @@
 
 use rusqlite::{Connection, params};
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// A row from the `lod_chunks` table.
 #[derive(Debug, Clone)]
@@ -61,7 +61,7 @@ fn row_from_rusqlite(row: &rusqlite::Row<'_>) -> rusqlite::Result<LodChunkRow> {
 /// Insert or replace an LOD chunk keyed on `(object_uri, lod_level)`.
 ///
 /// On conflict the existing row is updated in place (new id, content, hash, etc.).
-pub fn upsert_lod_chunk(conn: &Connection, input: &InsertLodChunk) -> Result<()> {
+pub fn upsert_lod_chunk(conn: &Connection, input: &InsertLodChunk) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO lod_chunks
              (id, object_uri, brain_id, lod_level, content, token_est,
@@ -101,7 +101,7 @@ pub fn get_lod_chunk(
     conn: &Connection,
     object_uri: &str,
     lod_level: &str,
-) -> Result<Option<LodChunkRow>> {
+) -> SqlResult<Option<LodChunkRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, object_uri, brain_id, lod_level, content, token_est,
                 method, model_id, source_hash, created_at, expires_at, job_id
@@ -117,7 +117,7 @@ pub fn get_lod_chunk(
 }
 
 /// Get all LOD chunks for an object URI, ordered by level.
-pub fn get_lod_chunks_for_uri(conn: &Connection, object_uri: &str) -> Result<Vec<LodChunkRow>> {
+pub fn get_lod_chunks_for_uri(conn: &Connection, object_uri: &str) -> SqlResult<Vec<LodChunkRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, object_uri, brain_id, lod_level, content, token_est,
                 method, model_id, source_hash, created_at, expires_at, job_id
@@ -132,7 +132,7 @@ pub fn get_lod_chunks_for_uri(conn: &Connection, object_uri: &str) -> Result<Vec
 }
 
 /// Delete all LOD chunks for an object URI. Returns the number of rows deleted.
-pub fn delete_lod_chunks_for_uri(conn: &Connection, object_uri: &str) -> Result<usize> {
+pub fn delete_lod_chunks_for_uri(conn: &Connection, object_uri: &str) -> SqlResult<usize> {
     let count = conn.execute(
         "DELETE FROM lod_chunks WHERE object_uri = ?1",
         params![object_uri],
@@ -145,7 +145,7 @@ pub fn delete_lod_chunks_for_uri(conn: &Connection, object_uri: &str) -> Result<
 /// Used to clean up LOD entries when a file is deleted or emptied.
 /// Pattern example: `"synapse://my-brain/memory/file123:%"` deletes all
 /// LOD entries for chunks of that file.
-pub fn delete_lod_chunks_by_uri_pattern(conn: &Connection, uri_pattern: &str) -> Result<usize> {
+pub fn delete_lod_chunks_by_uri_pattern(conn: &Connection, uri_pattern: &str) -> SqlResult<usize> {
     let count = conn.execute(
         "DELETE FROM lod_chunks WHERE object_uri LIKE ?1",
         params![uri_pattern],
@@ -154,7 +154,7 @@ pub fn delete_lod_chunks_by_uri_pattern(conn: &Connection, uri_pattern: &str) ->
 }
 
 /// Delete expired LOD chunks where `expires_at < now_iso`. Returns count deleted.
-pub fn delete_expired_lod_chunks(conn: &Connection, now_iso: &str) -> Result<usize> {
+pub fn delete_expired_lod_chunks(conn: &Connection, now_iso: &str) -> SqlResult<usize> {
     let count = conn.execute(
         "DELETE FROM lod_chunks WHERE expires_at IS NOT NULL AND expires_at < ?1",
         params![now_iso],
@@ -167,7 +167,7 @@ pub fn count_lod_chunks_by_brain(
     conn: &Connection,
     brain_id: &str,
     lod_level: Option<&str>,
-) -> Result<usize> {
+) -> SqlResult<usize> {
     let count: i64 = match lod_level {
         Some(level) => conn.query_row(
             "SELECT COUNT(*) FROM lod_chunks WHERE brain_id = ?1 AND lod_level = ?2",
@@ -189,7 +189,7 @@ pub fn list_lod_chunks_by_brain(
     brain_id: &str,
     limit: usize,
     offset: usize,
-) -> Result<Vec<LodChunkRow>> {
+) -> SqlResult<Vec<LodChunkRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, object_uri, brain_id, lod_level, content, token_est,
                 method, model_id, source_hash, created_at, expires_at, job_id

@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use ulid::Ulid;
 
 use crate::db::links::{LinkCreatedPayload, LinkRemovedPayload, edge_kind_str, entity_type_str};
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 // ── Event enum ────────────────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ pub enum LinkEvent {
 ///   matches (idempotent).
 ///
 /// `brain_scope` is always written as `NULL` — cross-brain edge symmetry.
-pub fn apply_link_event(conn: &Connection, event: &LinkEvent) -> Result<()> {
+pub fn apply_link_event(conn: &Connection, event: &LinkEvent) -> SqlResult<()> {
     match event {
         LinkEvent::Created(p) => {
             let id = Ulid::new().to_string();
@@ -102,12 +102,12 @@ pub fn apply_link_event(conn: &Connection, event: &LinkEvent) -> Result<()> {
 ///
 /// Unlike [`apply_link_event`] for `Removed`, this variant surfaces the
 /// rows-affected count so callers can distinguish "deleted" from "no-op".
-pub fn apply_link_remove(conn: &Connection, payload: &LinkRemovedPayload) -> Result<bool> {
+pub fn apply_link_remove(conn: &Connection, payload: &LinkRemovedPayload) -> SqlResult<bool> {
     let rows = apply_link_remove_inner(conn, payload)?;
     Ok(rows > 0)
 }
 
-fn apply_link_remove_inner(conn: &Connection, p: &LinkRemovedPayload) -> Result<usize> {
+fn apply_link_remove_inner(conn: &Connection, p: &LinkRemovedPayload) -> SqlResult<usize> {
     let from_type = entity_type_str(p.from.kind);
     let from_id = &p.from.id;
     let to_type = entity_type_str(p.to.kind);

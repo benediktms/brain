@@ -3,7 +3,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::db::sagas::events::{SagaEvent, SagaEventType, SagaTaskCascadedPayload};
 use crate::db::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
 use crate::db::tasks::projections::apply_event_inner;
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::SqlResult;
 use crate::utils::now_ts;
 
 /// A saga event row for insertion.
@@ -52,7 +53,7 @@ pub struct SagaMemberStub {
 /// Single query — no N+1. Orphaned memberships (task deleted in another brain)
 /// are silently dropped via the INNER JOIN: `saga_tasks` has no FK to `tasks`
 /// by design, so this is the only place where orphans get filtered.
-pub fn list_saga_member_stubs(conn: &Connection, saga_id: &str) -> Result<Vec<SagaMemberStub>> {
+pub fn list_saga_member_stubs(conn: &Connection, saga_id: &str) -> SqlResult<Vec<SagaMemberStub>> {
     let mut stmt = conn.prepare(
         "SELECT t.task_id, COALESCE(t.brain_id, ''), t.title, t.status, t.task_type \
          FROM saga_tasks st \
@@ -100,7 +101,7 @@ pub fn insert_saga(
     saga_id: &str,
     title: &str,
     description: Option<&str>,
-) -> Result<SagaRow> {
+) -> SqlResult<SagaRow> {
     let ts = now_ts();
     let full_hex = crate::db::short_id::blake3_short_hex(saga_id);
     let mut hash_len = crate::db::short_id::MIN_SHORT_HASH_LEN;
@@ -133,7 +134,7 @@ pub fn insert_saga(
 }
 
 /// Insert a saga event row into `saga_events`.
-pub fn insert_saga_event(conn: &Connection, ev: &SagaEventInsert<'_>) -> Result<()> {
+pub fn insert_saga_event(conn: &Connection, ev: &SagaEventInsert<'_>) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO saga_events (event_id, saga_id, event_type, timestamp, actor, payload)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -159,7 +160,7 @@ pub struct SagaListFilter {
 }
 
 /// List sagas with optional filters. Single query, no N+1.
-pub fn list_sagas(conn: &Connection, filter: &SagaListFilter) -> Result<Vec<SagaRow>> {
+pub fn list_sagas(conn: &Connection, filter: &SagaListFilter) -> SqlResult<Vec<SagaRow>> {
     // Build status exclusion clause.
     let mut where_clauses: Vec<&str> = Vec::new();
     if !filter.include_closed {
@@ -209,7 +210,7 @@ pub fn update_saga(
     saga_id: &str,
     title: Option<&str>,
     description: Option<Option<&str>>,
-) -> Result<SagaRow> {
+) -> SqlResult<SagaRow> {
     let ts = now_ts();
     match (title, description) {
         (Some(t), Some(d)) => {
@@ -243,7 +244,7 @@ pub fn update_saga(
 /// Close a saga: set status = 'closed', closed_at = now, bump updated_at.
 /// Only `'open'` sagas can be closed — to abandon a planning saga, use cancel.
 /// This matches the lifecycle state machine in `validate_transition`.
-pub fn close_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
+pub fn close_saga(conn: &Connection, saga_id: &str) -> SqlResult<SagaRow> {
     let ts = now_ts();
     let rows_changed = conn.execute(
         "UPDATE sagas SET status = 'closed', closed_at = ?1, updated_at = ?1
@@ -265,7 +266,7 @@ pub fn close_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
 }
 
 /// Fetch a saga row by ID.
-pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {
+pub fn get_saga(conn: &Connection, saga_id: &str) -> SqlResult<Option<SagaRow>> {
     let row = conn
         .query_row(
             "SELECT saga_id, title, description, status, created_at, updated_at, closed_at, display_id
@@ -281,7 +282,7 @@ pub fn get_saga(conn: &Connection, saga_id: &str) -> Result<Option<SagaRow>> {
 ///
 /// Caller is responsible for transaction boundaries and pre-validation.
 /// Returns the number of rows inserted.
-pub fn insert_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> Result<usize> {
+pub fn insert_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> SqlResult<usize> {
     let ts = now_ts();
     let mut stmt = conn.prepare_cached(
         "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, ?3)",
@@ -295,7 +296,7 @@ pub fn insert_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) 
 }
 
 /// Check whether a task is already a member of a saga.
-pub fn saga_has_task(conn: &Connection, saga_id: &str, task_id: &str) -> Result<bool> {
+pub fn saga_has_task(conn: &Connection, saga_id: &str, task_id: &str) -> SqlResult<bool> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1 AND task_id = ?2",
         params![saga_id, task_id],
@@ -315,7 +316,7 @@ pub fn saga_members_in(
     conn: &Connection,
     saga_id: &str,
     task_ids: &[String],
-) -> Result<Vec<String>> {
+) -> SqlResult<Vec<String>> {
     if task_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -342,7 +343,7 @@ pub struct BrainSummary {
 ///
 /// Derived at read time via saga_tasks → tasks → brains JOIN.
 /// Returns an empty vec when the saga has no members.
-pub fn brains_for_saga(conn: &Connection, saga_id: &str) -> Result<Vec<BrainSummary>> {
+pub fn brains_for_saga(conn: &Connection, saga_id: &str) -> SqlResult<Vec<BrainSummary>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT b.brain_id, b.name, b.prefix
          FROM saga_tasks st
@@ -368,7 +369,7 @@ pub fn brains_for_saga(conn: &Connection, saga_id: &str) -> Result<Vec<BrainSumm
 /// Warning: the returned IDs are read directly from `saga_tasks` and may
 /// include orphans — task IDs whose underlying `tasks` row has been deleted.
 /// Use `list_saga_member_stubs` if you need only live (joinable) members.
-pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String>> {
+pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> SqlResult<Vec<String>> {
     let mut stmt =
         conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY added_at")?;
     let ids = stmt
@@ -381,7 +382,7 @@ pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> Result<Vec<String
 ///
 /// Missing memberships are silently skipped (idempotent). Runs inside the
 /// caller's transaction — does NOT commit.
-pub fn remove_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> Result<usize> {
+pub fn remove_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> SqlResult<usize> {
     if task_ids.is_empty() {
         return Ok(0);
     }
@@ -401,7 +402,7 @@ pub fn remove_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) 
 /// Reopen a saga: set status = 'open', closed_at = NULL, updated_at = now.
 /// Returns the updated row. Caller is responsible for validating the prior
 /// status before calling this.
-pub fn reopen_saga(conn: &Connection, saga_id: &str) -> Result<SagaRow> {
+pub fn reopen_saga(conn: &Connection, saga_id: &str) -> SqlResult<SagaRow> {
     let ts = now_ts();
     conn.execute(
         "UPDATE sagas SET status = 'open', closed_at = NULL, updated_at = ?1
@@ -436,7 +437,7 @@ pub struct SagaStatsRow {
 ///
 /// `total` counts only live (non-orphan) members; `orphan` is the count of
 /// memberships whose underlying task has been deleted.
-pub fn saga_stats(conn: &Connection, saga_id: &str) -> Result<SagaStatsRow> {
+pub fn saga_stats(conn: &Connection, saga_id: &str) -> SqlResult<SagaStatsRow> {
     conn.query_row(
         "SELECT
              COUNT(t.task_id) AS total,
@@ -490,7 +491,7 @@ pub struct LabelCount {
 }
 
 /// Compute label histogram across all member tasks of a saga.
-pub fn saga_label_histogram(conn: &Connection, saga_id: &str) -> Result<Vec<LabelCount>> {
+pub fn saga_label_histogram(conn: &Connection, saga_id: &str) -> SqlResult<Vec<LabelCount>> {
     let mut stmt = conn.prepare(
         "SELECT tl.label, COUNT(*) AS cnt
          FROM saga_tasks st
@@ -515,7 +516,7 @@ pub fn saga_label_histogram(conn: &Connection, saga_id: &str) -> Result<Vec<Labe
 /// Returns `SagaNotFound` if the saga does not exist, or `Parse` if the saga
 /// is already in a terminal status (`closed` or `cancelled`). Sagas in
 /// `planning` or `open` status transition to `cancelled` successfully.
-pub fn cancel_saga(conn: &Connection, saga_id: &str) -> Result<()> {
+pub fn cancel_saga(conn: &Connection, saga_id: &str) -> SqlResult<()> {
     let ts = now_ts();
     let rows_changed = conn.execute(
         "UPDATE sagas SET status = 'cancelled', closed_at = ?2, updated_at = ?2
@@ -579,7 +580,7 @@ pub fn cascade_member_tasks(
     saga_id: &str,
     actor: &str,
     target_status: TaskStatus,
-) -> Result<Vec<CascadeResult>> {
+) -> SqlResult<Vec<CascadeResult>> {
     let target_str: &'static str = match target_status {
         TaskStatus::Done => "done",
         TaskStatus::Cancelled => "cancelled",
@@ -588,7 +589,7 @@ pub fn cascade_member_tasks(
         _ => {
             return Err(BrainCoreError::Parse(format!(
                 "cascade_member_tasks: unsupported target status {target_status:?}"
-            )));
+            )).into());
         }
     };
     let task_ids = list_saga_task_ids(conn, saga_id)?;

@@ -8,7 +8,7 @@
 use rusqlite::{Connection, params};
 
 use crate::db::collect_rows;
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagSource {
@@ -38,7 +38,7 @@ pub struct RawTag {
 /// — `None` returns globally-unfiltered rows and is intended for tests
 /// only. Per-brain consolidation is a non-negotiable invariant of the brain
 /// data model (see `feedback_per_brain_consolidation.md`).
-pub fn collect_raw_tags(conn: &Connection, brain_id: Option<&str>) -> Result<Vec<RawTag>> {
+pub fn collect_raw_tags(conn: &Connection, brain_id: Option<&str>) -> SqlResult<Vec<RawTag>> {
     let mut out = Vec::new();
 
     let (records_sql, tasks_sql) = match brain_id {

@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Get labels for a task.
-pub fn get_task_labels(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
+pub fn get_task_labels(conn: &Connection, task_id: &str) -> SqlResult<Vec<String>> {
     let mut stmt =
         conn.prepare("SELECT label FROM task_labels WHERE task_id = ?1 ORDER BY label")?;
     let rows = stmt.query_map([task_id], |row| row.get::<_, String>(0))?;
@@ -16,7 +16,7 @@ pub fn get_task_labels(conn: &Connection, task_id: &str) -> Result<Vec<String>> 
 pub fn get_labels_for_tasks(
     conn: &Connection,
     task_ids: &[&str],
-) -> Result<HashMap<String, Vec<String>>> {
+) -> SqlResult<HashMap<String, Vec<String>>> {
     if task_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -42,14 +42,14 @@ pub fn get_labels_for_tasks(
 }
 
 /// Get all task IDs that have a given label.
-pub fn get_task_ids_with_label(conn: &Connection, label: &str) -> Result<Vec<String>> {
+pub fn get_task_ids_with_label(conn: &Connection, label: &str) -> SqlResult<Vec<String>> {
     let mut stmt = conn.prepare("SELECT task_id FROM task_labels WHERE label = ?1")?;
     let rows = stmt.query_map([label], |row| row.get::<_, String>(0))?;
     crate::db::collect_rows(rows)
 }
 
 /// List all (task_id, label) pairs (bulk load for export).
-pub fn list_all_labels(conn: &Connection) -> Result<Vec<(String, String)>> {
+pub fn list_all_labels(conn: &Connection) -> SqlResult<Vec<(String, String)>> {
     let mut stmt =
         conn.prepare("SELECT task_id, label FROM task_labels ORDER BY task_id, label")?;
     let rows = stmt.query_map([], |row| {
@@ -67,7 +67,7 @@ pub struct LabelSummary {
 }
 
 /// Get all labels with counts and associated task IDs, sorted by count descending.
-pub fn label_summary(conn: &Connection) -> Result<Vec<LabelSummary>> {
+pub fn label_summary(conn: &Connection) -> SqlResult<Vec<LabelSummary>> {
     let mut stmt = conn.prepare(
         "SELECT label, COUNT(*) as cnt, GROUP_CONCAT(task_id) as task_ids \
          FROM task_labels GROUP BY label ORDER BY cnt DESC, label ASC",

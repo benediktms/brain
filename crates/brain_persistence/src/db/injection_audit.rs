@@ -5,7 +5,7 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Parameters for one injection-audit row.
 pub struct InjectionAuditEntry<'a> {
@@ -34,7 +34,7 @@ pub struct InjectionAuditEntry<'a> {
 /// The table must already exist (created by migration v46→v47). This function
 /// is called from `Db::log_injection_audit` — callers should use that method
 /// rather than this free function directly.
-pub fn insert(conn: &Connection, entry: &InjectionAuditEntry<'_>) -> Result<()> {
+pub fn insert(conn: &Connection, entry: &InjectionAuditEntry<'_>) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO injection_audit
              (ts, hook_event, session_id, record_ids,

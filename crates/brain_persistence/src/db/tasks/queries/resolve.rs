@@ -4,7 +4,8 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::listing::{get_task, task_exists};
 use crate::db::meta;
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::SqlResult;
 
 /// Minimum ULID prefix length (after project prefix + separator).
 const MIN_ULID_PREFIX_LEN: usize = 4;
@@ -18,7 +19,7 @@ pub(crate) const MIN_DISPLAY_PREFIX_LEN: usize = 8;
 pub use crate::db::short_id::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 
 /// Get the next child_seq for a parent task (max existing + 1, or 1 if no children).
-pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> Result<i64> {
+pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> SqlResult<i64> {
     let max: Option<i64> = conn
         .query_row(
             "SELECT MAX(t.child_seq) FROM tasks t
@@ -33,7 +34,7 @@ pub fn next_child_seq(conn: &Connection, parent_task_id: &str) -> Result<i64> {
     Ok(max.unwrap_or(0) + 1)
 }
 
-pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
+pub fn resolve_task_id(conn: &Connection, input: &str) -> SqlResult<String> {
     resolve_task_id_scoped(conn, input, None)
 }
 
@@ -41,7 +42,7 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> Result<String> {
 ///
 /// Returns `Some(brain_id)` if the input has a short prefix (1-4 chars before dash)
 /// that matches a registered brain's prefix. Returns `None` otherwise.
-pub fn resolve_brain_from_prefix(conn: &Connection, input: &str) -> Result<Option<String>> {
+pub fn resolve_brain_from_prefix(conn: &Connection, input: &str) -> SqlResult<Option<String>> {
     match input.find('-') {
         Some(dash_pos) if dash_pos > 0 && dash_pos <= 4 => {
             let prefix = input[..dash_pos].to_ascii_uppercase();
@@ -67,7 +68,7 @@ pub fn resolve_task_id_scoped(
     conn: &Connection,
     input: &str,
     brain_id: Option<&str>,
-) -> Result<String> {
+) -> SqlResult<String> {
     // Fast path: exact match
     if task_exists(conn, input)? {
         return Ok(input.to_string());
@@ -169,7 +170,7 @@ pub fn resolve_task_id_scoped(
                     return Err(BrainCoreError::TaskEvent(format!(
                         "ambiguous short hash '{input}': matches {n} tasks:\n{}",
                         candidates.join("\n")
-                    )));
+                    )).into());
                 }
                 _ => {} // 0 matches — fall through to prefix path
             }
@@ -206,7 +207,7 @@ pub fn resolve_task_id_scoped(
                     return Err(BrainCoreError::TaskEvent(format!(
                         "ambiguous short hash '{input}': matches {n} tasks:\n{}",
                         candidates.join("\n")
-                    )));
+                    )).into());
                 }
                 _ => {} // 0 matches — fall through to ULID path
             }
@@ -225,7 +226,7 @@ pub fn resolve_task_id_scoped(
                 return Err(BrainCoreError::TaskEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters after '{}'",
                     &normalized[..=dash_pos]
-                )));
+                )).into());
             }
             normalized
         }
@@ -239,7 +240,7 @@ pub fn resolve_task_id_scoped(
                 return Err(BrainCoreError::TaskEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters, got {}",
                     normalized.len()
-                )));
+                )).into());
             }
             let prefix =
                 meta::get_meta(conn, "project_prefix")?.unwrap_or_else(|| "BRN".to_string());
@@ -272,7 +273,8 @@ pub fn resolve_task_id_scoped(
     match matches.len() {
         0 => Err(BrainCoreError::TaskEvent(format!(
             "no task found matching prefix: {input}"
-        ))),
+        ))
+        .into()),
         1 => Ok(matches.into_iter().next().unwrap().0),
         n => {
             let candidates: Vec<String> = matches
@@ -282,13 +284,14 @@ pub fn resolve_task_id_scoped(
             Err(BrainCoreError::TaskEvent(format!(
                 "ambiguous prefix '{input}': matches {n} tasks:\n{}",
                 candidates.join("\n")
-            )))
+            ))
+            .into())
         }
     }
 }
 
 /// Core ULID-based prefix computation without dot notation.
-fn compact_id_ulid(conn: &Connection, task_id: &str) -> Result<String> {
+fn compact_id_ulid(conn: &Connection, task_id: &str) -> SqlResult<String> {
     let prev: Option<String> = conn
         .query_row(
             "SELECT task_id FROM tasks WHERE task_id < ?1 ORDER BY task_id DESC LIMIT 1",
@@ -331,7 +334,7 @@ fn compact_id_ulid(conn: &Connection, task_id: &str) -> Result<String> {
 /// If `task_id` does not exist in the `tasks` table (orphan dep, deleted target),
 /// returns the raw ID unchanged — the ULID-prefix fallback is only valid for
 /// tasks that exist but lack a `display_id`, not for missing tasks.
-pub fn compact_id(conn: &Connection, task_id: &str) -> Result<String> {
+pub fn compact_id(conn: &Connection, task_id: &str) -> SqlResult<String> {
     // Orphan / non-existent task: no compaction possible, return raw.
     let task = match get_task(conn, task_id)? {
         Some(t) => t,
@@ -355,7 +358,7 @@ pub fn compact_id(conn: &Connection, task_id: &str) -> Result<String> {
 
 /// Build display ID from `id` column + brain prefix: `{prefix_lower}-{id}`.
 /// Returns `None` if the task has no `id` value (pre-migration).
-fn short_id_display(conn: &Connection, task_id: &str) -> Result<Option<String>> {
+fn short_id_display(conn: &Connection, task_id: &str) -> SqlResult<Option<String>> {
     let row: Option<(Option<String>, String)> = conn
         .query_row(
             "SELECT t.display_id, COALESCE(LOWER(b.prefix), 'brx')
@@ -378,7 +381,7 @@ fn short_id_display(conn: &Connection, task_id: &str) -> Result<Option<String>> 
 /// Uses hash-based short IDs (`{prefix_lower}-{id}`) when available.
 /// Falls back to ULID prefix computation for pre-migration tasks.
 /// Applies dot notation for children with `parent_task_id` + `child_seq`.
-pub fn compact_ids(conn: &Connection) -> Result<HashMap<String, String>> {
+pub fn compact_ids(conn: &Connection) -> SqlResult<HashMap<String, String>> {
     // Load all tasks with their id and brain prefix
     let mut stmt = conn.prepare(
         "SELECT t.task_id, t.display_id, COALESCE(LOWER(b.prefix), 'brx')

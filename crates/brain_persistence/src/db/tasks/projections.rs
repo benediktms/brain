@@ -2,7 +2,8 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::links::projections::{LinkEvent, apply_link_event};
 use crate::db::links::{EdgeKind, EntityRef, LinkCreatedPayload, LinkRemovedPayload};
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::SqlResult;
 
 use super::events::{
     CommentPayload, CommentUpdatedPayload, DependencyPayload, EventType,
@@ -22,7 +23,7 @@ pub(crate) fn apply_event_inner(
     conn: &Connection,
     event: &TaskEvent,
     brain_id: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     match event.event_type {
         EventType::TaskCreated => {
             let p: TaskCreatedPayload = serde_json::from_value(event.payload.clone())
@@ -80,7 +81,7 @@ pub(crate) fn apply_event_inner(
                         if hash_len > full_hex.len() {
                             return Err(BrainCoreError::TaskEvent(
                                 "short hash collision exhausted all 64 hex chars".into(),
-                            ));
+                            ).into());
                         }
                     }
                     Err(e) => return Err(e.into()),
@@ -305,7 +306,7 @@ pub(crate) fn apply_event_inner(
                 return Err(BrainCoreError::TaskEvent(format!(
                     "comment_id '{}' not found for task '{}'",
                     p.comment_id, event.task_id
-                )));
+                )).into());
             }
         }
 
@@ -536,7 +537,7 @@ pub(crate) fn apply_event_inner(
 ///
 /// The projection mutation and event INSERT are wrapped in an explicit
 /// transaction for atomicity.
-pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
+pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
     apply_event_inner(&tx, event, brain_id)?;
     tx.commit()?;
@@ -551,7 +552,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Resu
 /// - `DependencyAdded`: both tasks must exist, no cycle
 /// - `ParentSet`: task must exist; parent must exist and not be self
 /// - Others: task must exist
-pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
+pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) -> SqlResult<()> {
     use super::cycle;
     use super::queries::task_exists;
 
@@ -564,7 +565,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
                 return Err(BrainCoreError::TaskEvent(format!(
                     "task already exists: {}",
                     event.task_id
-                )));
+                )).into());
             }
             let payload: TaskCreatedPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}")))?;
@@ -572,12 +573,12 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
                 if parent_id == &event.task_id {
                     return Err(BrainCoreError::TaskEvent(
                         "task cannot be its own parent".to_string(),
-                    ));
+                    ).into());
                 }
                 if !task_exists(&tx, parent_id)? {
                     return Err(BrainCoreError::TaskEvent(format!(
                         "parent task not found: {parent_id}"
-                    )));
+                    )).into());
                 }
             }
         }
@@ -587,7 +588,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
                 return Err(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",
                     event.task_id
-                )));
+                )).into());
             }
         }
 
@@ -596,7 +597,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
                 return Err(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",
                     event.task_id
-                )));
+                )).into());
             }
             let payload: DependencyPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| {
@@ -606,7 +607,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
                 return Err(BrainCoreError::TaskEvent(format!(
                     "dependency target not found: {}",
                     payload.depends_on_task_id
-                )));
+                )).into());
             }
             cycle::check_cycle(&tx, &event.task_id, &payload.depends_on_task_id)?;
         }
@@ -616,7 +617,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
                 return Err(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",
                     event.task_id
-                )));
+                )).into());
             }
             let payload: ParentSetPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}")))?;
@@ -624,12 +625,12 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
                 if parent_id == &event.task_id {
                     return Err(BrainCoreError::TaskEvent(
                         "task cannot be its own parent".to_string(),
-                    ));
+                    ).into());
                 }
                 if !task_exists(&tx, parent_id)? {
                     return Err(BrainCoreError::TaskEvent(format!(
                         "parent task not found: {parent_id}"
-                    )));
+                    )).into());
                 }
             }
         }
@@ -650,7 +651,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
                 return Err(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",
                     event.task_id
-                )));
+                )).into());
             }
         }
     }
@@ -666,7 +667,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
 /// Drops FTS task triggers before the bulk delete to avoid content-sync
 /// deletes on a potentially corrupt index, then rebuilds the FTS index
 /// and re-creates triggers after commit.
-pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
+pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> SqlResult<()> {
     // Drop FTS triggers to avoid content-sync deletes on potentially corrupt index
     conn.execute_batch(
         "DROP TRIGGER IF EXISTS tasks_fts_insert;

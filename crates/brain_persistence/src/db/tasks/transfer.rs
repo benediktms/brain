@@ -6,7 +6,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::tasks::display_id::compute_display_id_for_target;
 use crate::db::tasks::events::{TaskEvent, TaskTransferredPayload};
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::SqlResult;
 
 /// Result of a successful task transfer.
 #[derive(Debug, Clone)]
@@ -41,7 +42,7 @@ pub fn transfer_task_inner(
     conn: &Connection,
     task_id: &str,
     target_brain_id: &str,
-) -> Result<TaskTransferResult> {
+) -> SqlResult<TaskTransferResult> {
     // 1. Read current state.
     let current: Option<(String, Option<String>)> = conn
         .query_row(
@@ -80,12 +81,12 @@ pub fn transfer_task_inner(
         .optional()?
         .unwrap_or(false);
     if !target_exists {
-        return Err(BrainCoreError::BrainNotFound(target_brain_id.to_string()));
+        return Err(BrainCoreError::BrainNotFound(target_brain_id.to_string()).into());
     }
 
     conn.execute_batch("BEGIN IMMEDIATE")?;
 
-    let result = (|| -> Result<TaskTransferResult> {
+    let result = (|| -> SqlResult<TaskTransferResult> {
         // 3. Compute collision-safe display_id for target brain.
         let to_display_id = compute_display_id_for_target(conn, task_id, target_brain_id)?;
 
@@ -99,7 +100,7 @@ pub fn transfer_task_inner(
         if rows != 1 {
             return Err(BrainCoreError::TaskTransferCasFailed(format!(
                 "task {task_id}: concurrent transfer detected — retry"
-            )));
+            )).into());
         }
 
         // 5. Update SQLite chunks and files.

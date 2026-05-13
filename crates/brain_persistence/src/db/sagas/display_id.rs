@@ -9,7 +9,8 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::SqlResult;
 
 /// Format a saga `display_id` for user-facing emission as `saga-<hex>`.
 ///
@@ -42,7 +43,7 @@ pub fn parse_short_form(input: &str) -> Option<&str> {
 /// a partial prefix would resolve unambiguously to a single saga without
 /// also matching its predecessor exactly. The simpler two-case resolver
 /// is therefore complete.
-pub fn resolve_saga_id(conn: &Connection, input: &str) -> Result<String> {
+pub fn resolve_saga_id(conn: &Connection, input: &str) -> SqlResult<String> {
     if input.is_empty() {
         return Err(BrainCoreError::Parse("empty saga id".into()));
     }
@@ -69,7 +70,7 @@ pub fn resolve_saga_id(conn: &Connection, input: &str) -> Result<String> {
     {
         return Err(BrainCoreError::Parse(format!(
             "saga short id must be `saga-<lowercase hex>`, got `{input}`"
-        )));
+        )).into());
     }
     conn.query_row(
         "SELECT saga_id FROM sagas WHERE display_id = ?1",
@@ -83,7 +84,7 @@ pub fn resolve_saga_id(conn: &Connection, input: &str) -> Result<String> {
 /// Batch-load short IDs for all sagas. Returns a `saga_id (ULID) → saga-<hex>`
 /// map suitable for CLI table rendering where many rows need their short
 /// form without a round-trip per row.
-pub fn compact_saga_ids(conn: &Connection) -> Result<HashMap<String, String>> {
+pub fn compact_saga_ids(conn: &Connection) -> SqlResult<HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT saga_id, display_id FROM sagas")?;
     let mut out = HashMap::new();
     for row in stmt.query_map([], |row| {

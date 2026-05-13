@@ -3,7 +3,8 @@ use rusqlite::Connection;
 use crate::db::links::{
     EdgeKind, EntityRef, LinkCreatedPayload, LinkEvent, LinkRemovedPayload, apply_link_event,
 };
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::SqlResult;
 
 use super::events::{
     LinkPayload, PayloadEvictedPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
@@ -19,20 +20,22 @@ fn searchable_for_kind(kind: &str) -> bool {
 ///
 /// Exactly one of `task_id` / `chunk_id` must be non-null. Both null or both
 /// non-null are invalid; an error is returned.
-fn link_payload_to_entity_ref(p: &LinkPayload) -> Result<EntityRef> {
+fn link_payload_to_entity_ref(p: &LinkPayload) -> SqlResult<EntityRef> {
     match (&p.task_id, &p.chunk_id) {
         (Some(tid), None) => EntityRef::task(tid).map_err(|_| {
-            BrainCoreError::RecordEvent("link payload task_id must not be empty".into())
+            BrainCoreError::RecordEvent("link payload task_id must not be empty".into()).into()
         }),
         (None, Some(cid)) => EntityRef::chunk(cid).map_err(|_| {
-            BrainCoreError::RecordEvent("link payload chunk_id must not be empty".into())
+            BrainCoreError::RecordEvent("link payload chunk_id must not be empty".into()).into()
         }),
         (None, None) => Err(BrainCoreError::RecordEvent(
             "link payload must have exactly one of task_id or chunk_id, got neither".into(),
-        )),
+        )
+        .into()),
         (Some(_), Some(_)) => Err(BrainCoreError::RecordEvent(
             "link payload must have exactly one of task_id or chunk_id, got both".into(),
-        )),
+        )
+        .into()),
     }
 }
 
@@ -44,14 +47,14 @@ fn link_payload_to_entity_ref(p: &LinkPayload) -> Result<EntityRef> {
 ///
 /// The projection mutation and event INSERT are wrapped in an explicit
 /// transaction for atomicity.
-pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
+pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
     apply_event_inner(&tx, event, brain_id)?;
     tx.commit()?;
     Ok(())
 }
 
-fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
+fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> SqlResult<()> {
     match event.event_type {
         RecordEventType::RecordCreated => {
             let p: RecordCreatedPayload =
@@ -294,7 +297,7 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 ///
 /// The rebuild is fully deterministic: the same event sequence always produces
 /// the same projection state.
-pub fn rebuild_from_events(conn: &Connection, events: &[RecordEvent]) -> Result<usize> {
+pub fn rebuild_from_events(conn: &Connection, events: &[RecordEvent]) -> SqlResult<usize> {
     let tx = conn.unchecked_transaction()?;
 
     // Clear in FK-safe order (child tables before parent)

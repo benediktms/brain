@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 pub use super::job::{Job, JobPayload, JobStatus, RetryStrategy};
 
@@ -94,7 +94,7 @@ pub struct EnqueueJobInput {
 }
 
 /// Enqueue a job. Returns the new job_id.
-pub fn enqueue_job(conn: &Connection, input: &EnqueueJobInput) -> Result<String> {
+pub fn enqueue_job(conn: &Connection, input: &EnqueueJobInput) -> SqlResult<String> {
     let job_id = ulid::Ulid::new().to_string();
     let now = now_secs();
     let scheduled_at = if input.scheduled_at == 0 {
@@ -147,7 +147,7 @@ pub fn enqueue_job(conn: &Connection, input: &EnqueueJobInput) -> Result<String>
 /// Atomically claim up to `limit` ready jobs.
 /// Sets status to 'pending', increments attempts, records started_at.
 /// Returns jobs sorted by priority then scheduled_at.
-pub fn claim_ready_jobs(conn: &Connection, limit: i32) -> Result<Vec<Job>> {
+pub fn claim_ready_jobs(conn: &Connection, limit: i32) -> SqlResult<Vec<Job>> {
     let now = now_secs();
 
     let mut stmt = conn.prepare(&format!(
@@ -179,7 +179,7 @@ pub fn claim_ready_jobs(conn: &Connection, limit: i32) -> Result<Vec<Job>> {
 }
 
 /// Advance a job from `pending` to `in_progress` just before dispatch.
-pub fn advance_to_in_progress(conn: &Connection, job_id: &str) -> Result<()> {
+pub fn advance_to_in_progress(conn: &Connection, job_id: &str) -> SqlResult<()> {
     let now = now_secs();
     conn.execute(
         "UPDATE jobs SET status = 'in_progress', updated_at = ?1
@@ -192,7 +192,7 @@ pub fn advance_to_in_progress(conn: &Connection, job_id: &str) -> Result<()> {
 // ─── Complete / fail ─────────────────────────────────────────────
 
 /// Mark a job as done with an optional result. Sets processed_at.
-pub fn complete_job(conn: &Connection, job_id: &str, result: Option<&str>) -> Result<()> {
+pub fn complete_job(conn: &Connection, job_id: &str, result: Option<&str>) -> SqlResult<()> {
     let now = now_secs();
     conn.execute(
         "UPDATE jobs SET status = 'done', result = ?1, processed_at = ?2, updated_at = ?2
@@ -204,7 +204,7 @@ pub fn complete_job(conn: &Connection, job_id: &str, result: Option<&str>) -> Re
 
 /// Handle a job failure. If retries remain, reschedule to `ready` with
 /// exponential backoff. If exhausted, mark as `failed` and set processed_at.
-pub fn fail_job(conn: &Connection, job_id: &str, error_msg: &str) -> Result<()> {
+pub fn fail_job(conn: &Connection, job_id: &str, error_msg: &str) -> SqlResult<()> {
     let now = now_secs();
 
     let (attempts, retry_config_str): (i32, String) = conn.query_row(
@@ -247,7 +247,7 @@ pub fn fail_job(conn: &Connection, job_id: &str, error_msg: &str) -> Result<()> 
 
 /// Reap stuck jobs: reset in_progress/pending jobs that exceeded their
 /// `stuck_threshold_secs` back to `ready`. Only reaps retryable jobs.
-pub fn reap_stuck_jobs(conn: &Connection) -> Result<usize> {
+pub fn reap_stuck_jobs(conn: &Connection) -> SqlResult<usize> {
     let stuck = list_stuck_jobs(conn)?;
 
     let retryable_ids: Vec<&str> = stuck
@@ -285,7 +285,7 @@ pub fn gc_completed_jobs(
     conn: &Connection,
     age_secs: i64,
     protected_kinds: &[&str],
-) -> Result<usize> {
+) -> SqlResult<usize> {
     let cutoff = now_secs() - age_secs;
 
     if protected_kinds.is_empty() {
@@ -320,7 +320,7 @@ pub fn gc_completed_jobs(
 // ─── Queries ─────────────────────────────────────────────────────
 
 /// Get a single job by ID.
-pub fn get_job(conn: &Connection, job_id: &str) -> Result<Option<Job>> {
+pub fn get_job(conn: &Connection, job_id: &str) -> SqlResult<Option<Job>> {
     let job = conn
         .query_row(
             &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE job_id = ?1"),
@@ -336,7 +336,7 @@ pub fn list_jobs(
     conn: &Connection,
     status_filter: Option<&JobStatus>,
     limit: i32,
-) -> Result<Vec<Job>> {
+) -> SqlResult<Vec<Job>> {
     let mut sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE 1=1");
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -364,7 +364,7 @@ pub fn list_jobs(
 // ─── Status counts ────────────────────────────────────────────────
 
 /// Count jobs by status.
-pub fn count_jobs_by_status(conn: &Connection, status: &JobStatus) -> Result<i64> {
+pub fn count_jobs_by_status(conn: &Connection, status: &JobStatus) -> SqlResult<i64> {
     let status_str = status.as_ref().to_string();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM jobs WHERE status = ?1",
@@ -375,7 +375,7 @@ pub fn count_jobs_by_status(conn: &Connection, status: &JobStatus) -> Result<i64
 }
 
 /// List recent jobs filtered by status, ordered by most recent first.
-pub fn list_jobs_by_status(conn: &Connection, status: &JobStatus, limit: i32) -> Result<Vec<Job>> {
+pub fn list_jobs_by_status(conn: &Connection, status: &JobStatus, limit: i32) -> SqlResult<Vec<Job>> {
     let status_str = status.as_ref().to_string();
     let mut stmt = conn.prepare(&format!(
         "SELECT {JOB_COLUMNS} FROM jobs
@@ -391,7 +391,7 @@ pub fn list_jobs_by_status(conn: &Connection, status: &JobStatus, limit: i32) ->
 
 /// List stuck jobs (in_progress with started_at past threshold, or pending with
 /// updated_at past threshold) that are still retryable.
-pub fn list_stuck_jobs(conn: &Connection) -> Result<Vec<Job>> {
+pub fn list_stuck_jobs(conn: &Connection) -> SqlResult<Vec<Job>> {
     let now = now_secs();
     let mut stmt = conn.prepare(&format!(
         "SELECT {JOB_COLUMNS} FROM jobs
@@ -407,7 +407,7 @@ pub fn list_stuck_jobs(conn: &Connection) -> Result<Vec<Job>> {
 }
 
 /// Reset a failed job back to `ready`. Returns `true` if a row was updated.
-pub fn retry_failed_job(conn: &Connection, job_id: &str) -> Result<bool> {
+pub fn retry_failed_job(conn: &Connection, job_id: &str) -> SqlResult<bool> {
     let now = now_secs();
     let rows = conn.execute(
         "UPDATE jobs
@@ -431,7 +431,7 @@ pub fn retry_failed_job(conn: &Connection, job_id: &str) -> Result<bool> {
 ///
 /// Uses `json_extract` on the payload column, consistent with the
 /// `ensure_singleton_job` dedup pattern.
-pub fn has_active_lod_job(conn: &Connection, object_uri: &str) -> Result<bool> {
+pub fn has_active_lod_job(conn: &Connection, object_uri: &str) -> SqlResult<bool> {
     let found: Option<i64> = conn
         .query_row(
             "SELECT 1 FROM jobs \
@@ -449,7 +449,7 @@ pub fn has_active_lod_job(conn: &Connection, object_uri: &str) -> Result<bool> {
 // ─── Singleton / dedup ──────────────────────────────────────────
 
 /// Update a job's status directly. Returns true if a row was updated.
-pub fn update_job_status(conn: &Connection, job_id: &str, status: &JobStatus) -> Result<bool> {
+pub fn update_job_status(conn: &Connection, job_id: &str, status: &JobStatus) -> SqlResult<bool> {
     let status_str = status.as_ref().to_string();
     let now = now_secs();
     let rows = conn.execute(
@@ -466,7 +466,7 @@ pub fn update_job_status(conn: &Connection, job_id: &str, status: &JobStatus) ->
 
 /// Get a job by its `kind` column. Prefers active (non-terminal) jobs;
 /// falls back to the most recently updated row.
-pub fn get_job_by_kind(conn: &Connection, kind: &str) -> Result<Option<Job>> {
+pub fn get_job_by_kind(conn: &Connection, kind: &str) -> SqlResult<Option<Job>> {
     let job = conn
         .query_row(
             &format!(
@@ -490,7 +490,7 @@ pub fn get_job_by_kind(conn: &Connection, kind: &str) -> Result<Option<Job>> {
 ///
 /// Uses a single INSERT ... WHERE NOT EXISTS for atomicity under
 /// SQLite's single-writer serialization.
-pub fn ensure_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Result<Option<String>> {
+pub fn ensure_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> SqlResult<Option<String>> {
     let job_id = ulid::Ulid::new().to_string();
     let now = now_secs();
     let scheduled_at = if input.scheduled_at == 0 {
@@ -562,7 +562,7 @@ pub fn ensure_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Resul
 /// 1. If no row exists for this kind (+ brain scope) → insert as `ready`.
 /// 2. If a row exists in terminal state → reset to `ready`.
 /// 3. If a row exists and is active → no-op.
-pub fn reconcile_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> Result<()> {
+pub fn reconcile_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> SqlResult<()> {
     reconcile_singleton_job_with_delay(conn, input, 0)
 }
 
@@ -572,7 +572,7 @@ pub fn reconcile_singleton_job_with_delay(
     conn: &Connection,
     input: &EnqueueJobInput,
     delay_secs: i64,
-) -> Result<()> {
+) -> SqlResult<()> {
     let inserted = ensure_singleton_job(conn, input)?;
     if inserted.is_none() {
         // Row already exists — try to reschedule if terminal.
@@ -597,7 +597,7 @@ pub fn reschedule_terminal_job(
     kind: &str,
     brain_id: Option<&str>,
     delay_secs: i64,
-) -> Result<bool> {
+) -> SqlResult<bool> {
     let now = now_secs();
     let scheduled_at = now + delay_secs;
 
@@ -655,7 +655,7 @@ pub fn reschedule_terminal_job(
 /// Uses `INSERT ... SELECT ... WHERE NOT EXISTS` for atomicity under
 /// SQLite's single-writer serialization, then falls back to a SELECT
 /// if the INSERT matched zero rows (another writer won the race).
-pub fn enqueue_dedup_job(conn: &Connection, input: &EnqueueJobInput) -> Result<(String, bool)> {
+pub fn enqueue_dedup_job(conn: &Connection, input: &EnqueueJobInput) -> SqlResult<(String, bool)> {
     let job_id = ulid::Ulid::new().to_string();
     let now = now_secs();
     let scheduled_at = if input.scheduled_at == 0 {
