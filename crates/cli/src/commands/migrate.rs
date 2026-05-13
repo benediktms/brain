@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use brain_lib::config::{brain_home, load_global_config};
-#[allow(clippy::disallowed_types)]
-use rusqlite::Connection;
+use brain_persistence::db::schema::{count_migration_stats, register_brain_for_migration};
+use brain_persistence::sql::SqlResultExt;
 
 /// Arguments for `brain migrate`.
 pub struct MigrateArgs {
@@ -20,7 +20,6 @@ pub struct MigrateArgs {
 ///
 /// Replays per-brain JSONL event logs into the unified `~/.brain/brain.db`.
 /// Idempotent — safe to re-run. Events already present are skipped.
-#[allow(clippy::disallowed_types)]
 pub fn run(args: MigrateArgs) -> Result<()> {
     let home = brain_home()?;
     let unified_db_path = home.join("brain.db");
@@ -170,55 +169,25 @@ pub fn run(args: MigrateArgs) -> Result<()> {
     println!();
     println!("Verifying migration…");
     {
-        let conn = Connection::open(&unified_db_path)
-            .context("failed to open unified DB for verification")?;
+        let stats = db
+            .with_read_conn(|conn| count_migration_stats(conn))
+            .into_brain_core()
+            .context("failed to collect migration verification stats")?;
 
-        let brain_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM brains", [], |r| r.get(0))
-            .context("verification: failed to count brains")?;
-
-        let task_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tasks WHERE brain_id != ''", [], |r| {
-                r.get(0)
-            })
-            .context("verification: failed to count tasks")?;
-
-        let record_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM records WHERE brain_id != ''",
-                [],
-                |r| r.get(0),
-            )
-            .context("verification: failed to count records")?;
-
-        let orphaned_tasks: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tasks WHERE brain_id = ''", [], |r| {
-                r.get(0)
-            })
-            .context("verification: failed to count orphaned tasks")?;
-
-        let orphaned_records: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM records WHERE brain_id = ''",
-                [],
-                |r| r.get(0),
-            )
-            .context("verification: failed to count orphaned records")?;
-
-        println!("  Brains registered:  {}", brain_count);
+        println!("  Brains registered:  {}", stats.brain_count);
         println!(
             "  Tasks migrated:     {} (orphaned: {})",
-            task_count, orphaned_tasks
+            stats.task_count, stats.orphaned_tasks
         );
         println!(
             "  Records migrated:   {} (orphaned: {})",
-            record_count, orphaned_records
+            stats.record_count, stats.orphaned_records
         );
 
-        if orphaned_tasks > 0 || orphaned_records > 0 {
+        if stats.orphaned_tasks > 0 || stats.orphaned_records > 0 {
             eprintln!(
                 "Warning: {} orphaned task(s) and {} orphaned record(s) detected.",
-                orphaned_tasks, orphaned_records
+                stats.orphaned_tasks, stats.orphaned_records
             );
             eprintln!("These rows have no brain_id set. Inspect manually.");
         }
@@ -302,7 +271,6 @@ fn collect_jsonl_paths(
 /// Migrate a single brain by replaying JSONL event logs into the unified DB.
 ///
 /// Idempotent: events that already exist are skipped.
-#[allow(clippy::disallowed_macros)]
 fn migrate_one_brain(
     db: &brain_persistence::db::Db,
     brain_id: &str,
@@ -315,15 +283,9 @@ fn migrate_one_brain(
         .unwrap_or_default()
         .as_secs() as i64;
 
-    db.with_write_conn(|conn| {
-        conn.execute(
-            "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES (?1, ?2, ?3)",
-            rusqlite::params![brain_id, name, now],
-        )?;
-        Ok(())
-    })
+    db.with_write_conn(|conn| register_brain_for_migration(conn, brain_id, name, now))
         .into_brain_core()
-    .with_context(|| format!("failed to register brain '{name}' ({brain_id})"))?;
+        .with_context(|| format!("failed to register brain '{name}' ({brain_id})"))?;
 
     // Replay task JSONL sources.
     let task_store = brain_lib::tasks::TaskStore::with_brain_id(db.clone(), brain_id, name)?;
