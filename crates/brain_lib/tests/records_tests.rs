@@ -255,10 +255,7 @@ fn test_rebuild_creates_all_records_with_tags_and_links() {
     )
     .unwrap();
 
-    let event_count = db
-        .with_write_conn(|conn| rebuild(conn, &events_path))
-            .into_brain_core()
-        .unwrap();
+    let event_count = rebuild(&db, &events_path).unwrap();
     assert_eq!(event_count, 4);
 
     // Both records exist
@@ -320,10 +317,7 @@ fn test_rebuild_event_count_matches() {
     .unwrap();
 
     let total_events = read_all_events(&events_path).unwrap().len();
-    let rebuild_count = db
-        .with_write_conn(|conn| rebuild(conn, &events_path))
-            .into_brain_core()
-        .unwrap();
+    let rebuild_count = rebuild(&db, &events_path).unwrap();
 
     assert_eq!(rebuild_count, total_events);
     assert_eq!(rebuild_count, n_records + 2);
@@ -363,19 +357,13 @@ fn test_rebuild_twice_is_idempotent() {
     )
     .unwrap();
 
-    let count1 = db
-        .with_write_conn(|conn| rebuild(conn, &events_path))
-            .into_brain_core()
-        .unwrap();
+    let count1 = rebuild(&db, &events_path).unwrap();
     let records_after_first = count_records(&db);
     let tags_after_first = count_tags_for(&db, &r1);
     let links_after_first = count_links_for(&db, &r1);
     let title_after_first = get_title(&db, &r1);
 
-    let count2 = db
-        .with_write_conn(|conn| rebuild(conn, &events_path))
-            .into_brain_core()
-        .unwrap();
+    let count2 = rebuild(&db, &events_path).unwrap();
     let records_after_second = count_records(&db);
     let tags_after_second = count_tags_for(&db, &r1);
     let links_after_second = count_links_for(&db, &r1);
@@ -420,10 +408,7 @@ fn test_rebuild_recovers_when_sqlite_is_behind_event_log() {
     assert_eq!(count_records(&db), 1);
 
     // Rebuild recovers to full consistent state
-    let recovered = db
-        .with_write_conn(|conn| rebuild(conn, &events_path))
-            .into_brain_core()
-        .unwrap();
+    let recovered = rebuild(&db, &events_path).unwrap();
     assert_eq!(recovered, 2);
     assert_eq!(count_records(&db), 2);
     assert_eq!(get_status(&db, &r1), "active");
@@ -469,9 +454,7 @@ fn test_rebuild_recovers_when_more_events_logged_than_projected() {
     assert_eq!(count_tags_for(&db, &rid), 0);
 
     // Rebuild recovers the full state
-    db.with_write_conn(|conn| rebuild(conn, &events_path))
-        .into_brain_core()
-        .unwrap();
+    rebuild(&db, &events_path).unwrap();
 
     assert_eq!(get_status(&db, &rid), "archived");
     assert_eq!(count_tags_for(&db, &rid), 1);
@@ -506,10 +489,7 @@ fn test_rebuild_skips_truncated_last_line_and_recovers() {
     assert_eq!(events.len(), 2, "truncated line should be skipped");
 
     // rebuild should succeed on the 2 valid events
-    let count = db
-        .with_write_conn(|conn| rebuild(conn, &events_path))
-            .into_brain_core()
-        .unwrap();
+    let count = rebuild(&db, &events_path).unwrap();
     assert_eq!(count, 2);
     assert_eq!(count_records(&db), 2);
     assert_eq!(get_title(&db, &r1), "Good One");
@@ -567,10 +547,7 @@ fn test_incremental_apply_matches_bulk_rebuild() {
     }
 
     // Rebuild from log in bulk
-    db_bulk
-        .with_write_conn(|conn| rebuild(conn, &events_path))
-            .into_brain_core()
-        .unwrap();
+    rebuild(&db_bulk, &events_path).unwrap();
 
     // Compare final state
     assert_eq!(
@@ -860,9 +837,7 @@ fn test_tag_add_remove_then_rebuild_is_consistent() {
     )
     .unwrap();
 
-    db.with_write_conn(|conn| rebuild(conn, &events_path))
-        .into_brain_core()
-        .unwrap();
+    rebuild(&db, &events_path).unwrap();
     assert_eq!(
         count_tags_for(&db, &rid),
         0,
@@ -962,9 +937,7 @@ fn test_link_add_remove_then_rebuild_is_consistent() {
     )
     .unwrap();
 
-    db.with_write_conn(|conn| rebuild(conn, &events_path))
-        .into_brain_core()
-        .unwrap();
+    rebuild(&db, &events_path).unwrap();
     assert_eq!(
         count_links_for(&db, &rid),
         0,
@@ -1029,9 +1002,7 @@ fn test_object_store_content_hash_matches_record() {
     );
 
     append_event(&events_path, &ev).unwrap();
-    db.with_write_conn(|conn| rebuild(conn, &events_path))
-        .into_brain_core()
-        .unwrap();
+    rebuild(&db, &events_path).unwrap();
 
     // Verify content_hash in SQLite matches the stored blob's hash
     let stored_hash = get_content_hash(&db, &rid);
@@ -1080,9 +1051,7 @@ fn test_object_store_deduplication_with_multiple_records() {
         append_event(&events_path, &ev).unwrap();
     }
 
-    db.with_write_conn(|conn| rebuild(conn, &events_path))
-        .into_brain_core()
-        .unwrap();
+    rebuild(&db, &events_path).unwrap();
     assert_eq!(count_records(&db), 2);
 
     // Both records share the same content hash
