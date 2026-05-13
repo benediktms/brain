@@ -16,10 +16,12 @@
 use std::collections::HashMap;
 
 use brain_core::error::Result;
-// Re-export core trait names so `brain_persistence::ports::ChunkIndexWriter`
-// works alongside the persistence-owned traits below; brain_lib re-exports
-// from both modules transparently.
-pub use brain_core::ports::{
+// Bring core trait names into module scope so the `impl X for Db / Store`
+// blocks below can refer to them unqualified. Not re-exported (no `pub`) —
+// brain_lib's `ports::*` consumer surface imports these from brain_core
+// directly, and no caller relies on the `brain_persistence::ports::X` path
+// for the core traits.
+use brain_core::ports::{
     BrainRegistry, ChunkIndexWriter, FileMetaReader, SchemaMeta, SummaryStoreWriter,
 };
 

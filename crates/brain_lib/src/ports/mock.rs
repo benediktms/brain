@@ -287,13 +287,13 @@ impl TagAliasReader for MockTagAliasReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use brain_core::ports::{ChunkIndexWriter, SchemaMeta};
     use brain_persistence::db::chunks::ChunkRow;
     use brain_persistence::db::fts::FtsResult;
     use brain_persistence::db::summaries::{Episode, SummaryRow};
     use brain_persistence::ports::{
-        ChunkIndexWriter, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, EmbeddingResetter,
-        EpisodeReader, EpisodeWriter, FileMetaWriter, FtsSearcher, SchemaMeta, SummaryReader,
-        SummaryWriter,
+        ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, EmbeddingResetter, EpisodeReader,
+        EpisodeWriter, FileMetaWriter, FtsSearcher, SummaryReader, SummaryWriter,
     };
     use brain_persistence::store::{QueryResult, VectorSearchMode};
 
