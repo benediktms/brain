@@ -452,7 +452,7 @@ fn test_crossbrain_prefix_not_poisoned_by_brain_meta() {
                 ["remote-checkout-id"],
                 |row| row.get(0),
             )
-            .map_err(brain_lib::error::BrainCoreError::from)
+            .map_err(brain_persistence::sql::SqlError::from)
         })
             .into_brain_core()
         .unwrap();
