@@ -11,7 +11,7 @@
 //! All database operations are performed through the [`DerivedSummaryStore`]
 //! port trait so that callers are not coupled to the concrete `Db` type.
 
-use brain_persistence::error::Result;
+use brain_core::error::Result;
 
 use crate::pipeline::job_worker::enqueue_scope_summary;
 use crate::ports::JobQueue;

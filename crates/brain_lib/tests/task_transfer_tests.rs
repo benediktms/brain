@@ -162,7 +162,7 @@ async fn transfer_display_id_collision_resolved() {
                  VALUES ('collision-blocker', ?1, 'blocker', 'open', 4, 'task', 0, 0, ?2)",
                 rusqlite::params![dst_brain, natural_id],
             )
-            .map_err(brain_persistence::error::BrainCoreError::from)?;
+            .map_err(brain_core::error::BrainCoreError::from)?;
             Ok(())
         })
             .into_brain_core()

@@ -217,7 +217,7 @@ pub(super) fn apply_inline_links(
                 })),
             }
         }
-        Ok::<_, brain_persistence::error::BrainCoreError>(())
+        Ok::<_, brain_core::error::BrainCoreError>(())
     }).into_brain_core()
 
     // Surface outer-only failure (e.g. writer mutex unavailable) as failed entries
@@ -273,7 +273,7 @@ pub(super) fn add_entity_link(
             Err(e) => {
                 let msg = e.to_string();
                 link_err = Some(e);
-                Err(brain_persistence::error::BrainCoreError::Database(msg))
+                Err(brain_core::error::BrainCoreError::Database(msg))
             }
         }
     }).into_brain_core()

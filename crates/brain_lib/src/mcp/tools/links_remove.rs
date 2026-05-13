@@ -33,7 +33,7 @@ pub(super) fn remove_entity_link(
 ) -> ToolCallResult {
     let result = ctx.stores.inner_db().with_write_conn(|conn| {
         remove_link(conn, from, to, edge_kind).map_err(|e| match e {
-            LinkError::Database(msg) => brain_persistence::error::BrainCoreError::Database(msg),
+            LinkError::Database(msg) => brain_core::error::BrainCoreError::Database(msg),
             LinkError::Cycle(_) => unreachable!("remove_link never returns Cycle"),
         })
     }).into_brain_core()

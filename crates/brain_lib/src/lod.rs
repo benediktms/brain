@@ -4,7 +4,7 @@
 //! detail levels: L0 (extractive/deterministic), L1 (LLM-summarized), and
 //! L2 (passthrough, never stored).
 
-use brain_persistence::error::Result;
+use brain_core::error::Result;
 
 /// TTL for L1 chunks (days). After this period, the chunk is considered stale
 /// even if the source hash matches, and regeneration is triggered.

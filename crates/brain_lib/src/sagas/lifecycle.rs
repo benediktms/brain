@@ -1,4 +1,4 @@
-use brain_persistence::error::{BrainCoreError, Result};
+use brain_core::error::{BrainCoreError, Result};
 
 use super::status::SagaStatus;
 

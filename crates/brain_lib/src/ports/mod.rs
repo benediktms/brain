@@ -213,7 +213,7 @@ impl DerivedSummaryStore for Db {
 // ---------------------------------------------------------------------------
 
 use crate::lod::{LodChunk, LodChunkStore, LodLevel, LodMethod, UpsertLodChunk};
-use brain_persistence::error::BrainCoreError;
+use brain_core::error::BrainCoreError;
 
 impl LodChunkStore for Db {
     fn upsert_lod_chunk(&self, input: &UpsertLodChunk<'_>) -> Result<String> {

@@ -97,7 +97,7 @@ impl SagaStore {
     /// Create a new saga in `planning` status. Returns the resulting row.
     pub fn create(&self, title: &str, description: Option<&str>, actor: &str) -> Result<SagaRow> {
         if title.trim().is_empty() {
-            return Err(brain_persistence::error::BrainCoreError::Parse(
+            return Err(brain_core::error::BrainCoreError::Parse(
                 "saga title must not be empty".into(),
             ));
         }

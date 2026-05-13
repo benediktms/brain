@@ -532,7 +532,7 @@ mod tests {
                     },
                     None,
                 )
-                .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+                .map_err(|e| brain_core::error::BrainCoreError::Database(e.to_string()))
             })
                 .into_brain_core()
             .expect("for_entity should succeed");
@@ -615,7 +615,7 @@ mod tests {
                     },
                     None,
                 )
-                .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+                .map_err(|e| brain_core::error::BrainCoreError::Database(e.to_string()))
             })
                 .into_brain_core()
             .expect("for_entity (shim) should succeed");
@@ -632,7 +632,7 @@ mod tests {
                     },
                     None,
                 )
-                .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+                .map_err(|e| brain_core::error::BrainCoreError::Database(e.to_string()))
             })
                 .into_brain_core()
             .expect("for_entity (generic) should succeed");
