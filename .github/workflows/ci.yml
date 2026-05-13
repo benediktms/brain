@@ -89,8 +89,10 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: cargo test --workspace
+      - run: cargo nextest run --workspace --profile ci
+      - run: cargo test --doc --workspace
 
   test-perf:
     name: Perf Tests
@@ -99,5 +101,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: ulimit -n 4096 && cargo test -p brain-lib --test perf_tests -- --ignored --test-threads=1
+      - run: ulimit -n 4096 && cargo nextest run -p brain-lib --test perf_tests --run-ignored only --test-threads 1 --profile ci
