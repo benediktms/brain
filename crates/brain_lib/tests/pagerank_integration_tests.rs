@@ -99,7 +99,7 @@ async fn test_pagerank_scores_populated_after_set_db_and_optimize() {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
+            .map_err(brain_persistence::sql::SqlError::from)
         })
         .into_brain_core()
         .unwrap();

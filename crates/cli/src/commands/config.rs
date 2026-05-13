@@ -28,9 +28,11 @@ pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<(
             println!("{fallback}");
             Ok(())
         }
-        other => Err(brain_lib::error::BrainCoreError::Config(format!(
-            "unknown config key: {other}. Known keys: prefix"
-        ))),
+        other => Err(brain_persistence::sql::SqlError::Domain(
+            brain_lib::error::BrainCoreError::Config(format!(
+                "unknown config key: {other}. Known keys: prefix"
+            )),
+        )),
     })
     .into_brain_core()?;
     Ok(())
@@ -61,9 +63,11 @@ pub fn run_config_set(
                         Some(ref v) => {
                             let upper = v.to_ascii_uppercase();
                             if upper.len() != 3 || !upper.chars().all(|c| c.is_ascii_uppercase()) {
-                                return Err(brain_lib::error::BrainCoreError::Config(format!(
-                                    "prefix must be exactly 3 uppercase ASCII letters, got: {v}"
-                                )));
+                                return Err(brain_persistence::sql::SqlError::Domain(
+                                    brain_lib::error::BrainCoreError::Config(format!(
+                                        "prefix must be exactly 3 uppercase ASCII letters, got: {v}"
+                                    )),
+                                ));
                             }
                             upper
                         }

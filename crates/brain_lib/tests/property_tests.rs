@@ -374,7 +374,7 @@ proptest! {
             let count: i64 =
                 conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))?;
             Ok(count)
-        }).into_brain_core().unwrap()
+        }).into_brain_core().unwrap();
 
         prop_assert_eq!(count as usize, n);
     }
@@ -452,7 +452,7 @@ proptest! {
             let open_ids: HashSet<String> = open.iter().map(|r| r.task_id.clone()).collect();
 
             Ok((ready_ids, blocked_ids, open_ids))
-        }).into_brain_core().unwrap()
+        }).into_brain_core().unwrap();
 
         // Invariant 1: ready ∩ blocked = ∅
         prop_assert!(

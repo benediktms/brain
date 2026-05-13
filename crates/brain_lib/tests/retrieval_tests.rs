@@ -987,7 +987,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
         .db_for_tests()
         .with_read_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
-                .map_err(|e| BrainCoreError::Database(e.to_string()))
+                .map_err(brain_persistence::sql::SqlError::from)
         })
         .into_brain_core()
         .unwrap();
@@ -1001,7 +1001,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
         .db_for_tests()
         .with_read_conn(|conn| {
             conn.query_row("SELECT COUNT(*) FROM fts_chunks", [], |row| row.get(0))
-                .map_err(|e| BrainCoreError::Database(e.to_string()))
+                .map_err(brain_persistence::sql::SqlError::from)
         })
         .into_brain_core()
         .unwrap();

@@ -108,7 +108,7 @@ async fn test_link_a_to_b_is_stored_after_indexing() {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
+            .map_err(brain_persistence::sql::SqlError::from)
         })
         .into_brain_core()
         .unwrap();
@@ -124,7 +124,7 @@ async fn test_link_a_to_b_is_stored_after_indexing() {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
+            .map_err(brain_persistence::sql::SqlError::from)
         })
         .into_brain_core()
         .unwrap();
