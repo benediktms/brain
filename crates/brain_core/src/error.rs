@@ -57,12 +57,6 @@ pub enum BrainCoreError {
     InvalidOperation(String),
 }
 
-impl From<rusqlite::Error> for BrainCoreError {
-    fn from(e: rusqlite::Error) -> Self {
-        BrainCoreError::Database(e.to_string())
-    }
-}
-
 impl From<serde_json::Error> for BrainCoreError {
     fn from(e: serde_json::Error) -> Self {
         BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))

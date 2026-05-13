@@ -14,7 +14,3 @@ test-utils = []
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# error.rs has `impl From<rusqlite::Error> for BrainCoreError`. Splitting that
-# adapter into brain_persistence is a future cleanup; for now brain_core
-# carries the dep so the error contract stays in one place.
-rusqlite = { workspace = true }
