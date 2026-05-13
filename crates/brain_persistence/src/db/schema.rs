@@ -16,7 +16,7 @@ use super::migrations::{
     migrate_v50_to_v51, migrate_v51_to_v52, migrate_v52_to_v53, migrate_v53_to_v54,
 };
 use crate::error::BrainCoreError;
-use crate::sql::SqlResult;
+use crate::sql::{SqlError, SqlResult};
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
@@ -500,9 +500,7 @@ pub fn resolve_brain(conn: &Connection, input: &str) -> SqlResult<(String, Strin
         }
     }
 
-    Err(crate::error::BrainCoreError::Database(format!(
-        "brain not found: {input}"
-    )))
+    Err(SqlError::Domain(BrainCoreError::BrainNotFound(input.to_string())))
 }
 
 /// Ensure FTS5 virtual table and sync triggers exist (idempotent).
