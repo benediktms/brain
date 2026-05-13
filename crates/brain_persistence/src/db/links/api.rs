@@ -149,7 +149,8 @@ pub fn add_link_checked(
             to,
             edge_kind,
         }),
-    )?;
+    )
+    .map_err(|e| LinkError::Database(e.to_string()))?;
 
     tx.commit()?;
     Ok(())
@@ -175,7 +176,8 @@ pub fn remove_link(
             to,
             edge_kind,
         },
-    )?;
+    )
+    .map_err(|e| LinkError::Database(e.to_string()))?;
 
     tx.commit()?;
     Ok(removed)

@@ -44,9 +44,9 @@ use crate::sql::{SqlError, SqlResult, SqlResultExt};
 /// ```
 pub fn collect_rows<T>(
     rows: impl Iterator<Item = std::result::Result<T, rusqlite::Error>>,
-) -> Result<Vec<T>> {
+) -> SqlResult<Vec<T>> {
     rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Into::into)
+        .map_err(SqlError::Rusqlite)
 }
 
 /// Number of read-only connections in the pool for on-disk databases.

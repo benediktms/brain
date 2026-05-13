@@ -1,7 +1,8 @@
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::comparator;
-use crate::sql::SqlResult;
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 use super::{ANCESTOR_BLOCKED_CTE, TASK_COLUMNS, TASK_COLUMNS_T, TaskRow, row_to_task};
 
@@ -663,7 +664,8 @@ pub fn task_subtree(conn: &Connection, roots: &[String]) -> SqlResult<Vec<String
     if roots.is_empty() {
         return Ok(Vec::new());
     }
-    let seeds_json = serde_json::to_string(roots)?;
+    let seeds_json = serde_json::to_string(roots)
+        .map_err(|e| SqlError::Domain(BrainCoreError::Parse(e.to_string())))?;
     let sql = "WITH RECURSIVE subtree(task_id) AS (
         SELECT value FROM json_each(?1)
         UNION
