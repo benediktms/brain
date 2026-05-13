@@ -15,7 +15,8 @@ use super::migrations::{
     migrate_v46_to_v47, migrate_v47_to_v48, migrate_v48_to_v49, migrate_v49_to_v50,
     migrate_v50_to_v51, migrate_v51_to_v52, migrate_v52_to_v53, migrate_v53_to_v54,
 };
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::SqlResult;
 
 /// Bump this when the schema changes after release.
 /// Each bump requires a corresponding `migrate_vN_to_vN+1` function.
@@ -27,7 +28,7 @@ pub const SCHEMA_VERSION: i32 = 54;
 /// stamps its own version inside a transaction. This prevents the bug
 /// where bumping `SCHEMA_VERSION` would silently stamp a new version
 /// without running any migration DDL.
-pub fn init_schema(conn: &Connection) -> Result<()> {
+pub fn init_schema(conn: &Connection) -> SqlResult<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
@@ -37,7 +38,8 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     if current > SCHEMA_VERSION {
         return Err(BrainCoreError::SchemaVersion(format!(
             "database schema version {current} is newer than supported version {SCHEMA_VERSION}"
-        )));
+        ))
+        .into());
     }
 
     if current < SCHEMA_VERSION {
@@ -51,7 +53,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 }
 
 /// Run migrations sequentially from `from_version` up to `SCHEMA_VERSION`.
-pub(crate) fn run_migrations(conn: &Connection, from_version: i32) -> Result<()> {
+pub(crate) fn run_migrations(conn: &Connection, from_version: i32) -> SqlResult<()> {
     let mut version = from_version;
     while version < SCHEMA_VERSION {
         match version {
@@ -113,7 +115,8 @@ pub(crate) fn run_migrations(conn: &Connection, from_version: i32) -> Result<()>
                 return Err(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",
                     other + 1
-                )));
+                ))
+                .into());
             }
         }
         version += 1;
@@ -126,7 +129,7 @@ pub(crate) fn run_migrations(conn: &Connection, from_version: i32) -> Result<()>
 /// Called once during bootstrap, before any writes. This replaces the old
 /// `backfill_brain_id()` self-healing approach — with FK constraints on
 /// `brain_id`, every brain must be registered upfront.
-pub fn ensure_brain_registered(conn: &Connection, brain_id: &str, brain_name: &str) -> Result<()> {
+pub fn ensure_brain_registered(conn: &Connection, brain_id: &str, brain_name: &str) -> SqlResult<()> {
     use super::meta::generate_prefix;
 
     // Derive prefix solely from brain_name — never read brain_meta.project_prefix
@@ -184,7 +187,7 @@ pub struct BrainUpsert<'a> {
 ///
 /// Preserves existing prefix via COALESCE — only uses the provided prefix
 /// for new brains (when no row exists). Sets `projected = 1`.
-pub fn upsert_brain(conn: &Connection, input: &BrainUpsert<'_>) -> Result<()> {
+pub fn upsert_brain(conn: &Connection, input: &BrainUpsert<'_>) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO brains (brain_id, name, prefix, roots, notes, aliases, archived, projected, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, strftime('%s','now'))
@@ -212,7 +215,7 @@ pub fn upsert_brain(conn: &Connection, input: &BrainUpsert<'_>) -> Result<()> {
 /// Check whether a brain has been archived.
 ///
 /// Returns `false` when no matching row exists (brain not yet registered).
-pub fn is_brain_archived(conn: &Connection, brain_id: &str) -> Result<bool> {
+pub fn is_brain_archived(conn: &Connection, brain_id: &str) -> SqlResult<bool> {
     use rusqlite::OptionalExtension;
     let archived: Option<i64> = conn
         .query_row(
@@ -228,7 +231,7 @@ pub fn is_brain_archived(conn: &Connection, brain_id: &str) -> Result<bool> {
 ///
 /// When `active_only` is true, returns only projected=1, non-archived brains.
 /// Always excludes the `(unscoped)` sentinel row (brain_id='') from migration v21→v22.
-pub fn list_brains(conn: &Connection, active_only: bool) -> Result<Vec<BrainRow>> {
+pub fn list_brains(conn: &Connection, active_only: bool) -> SqlResult<Vec<BrainRow>> {
     let sql = if active_only {
         "SELECT brain_id, name, prefix, roots, notes, aliases, archived, projected FROM brains WHERE projected = 1 AND archived = 0 AND brain_id != '' ORDER BY name"
     } else {
@@ -251,7 +254,7 @@ pub fn list_brains(conn: &Connection, active_only: bool) -> Result<Vec<BrainRow>
 }
 
 /// Read the prefix for a brain by brain_id.
-pub fn get_brain_prefix(conn: &Connection, brain_id: &str) -> Result<Option<String>> {
+pub fn get_brain_prefix(conn: &Connection, brain_id: &str) -> SqlResult<Option<String>> {
     use rusqlite::OptionalExtension;
     let prefix: Option<String> = conn
         .query_row(
@@ -265,7 +268,7 @@ pub fn get_brain_prefix(conn: &Connection, brain_id: &str) -> Result<Option<Stri
 }
 
 /// Read a full brain row by brain_id.
-pub fn get_brain(conn: &Connection, brain_id: &str) -> Result<Option<BrainRow>> {
+pub fn get_brain(conn: &Connection, brain_id: &str) -> SqlResult<Option<BrainRow>> {
     use rusqlite::OptionalExtension;
     let row = conn
         .query_row(
@@ -289,7 +292,7 @@ pub fn get_brain(conn: &Connection, brain_id: &str) -> Result<Option<BrainRow>> 
 }
 
 /// Read a full brain row by name.
-pub fn get_brain_by_name(conn: &Connection, name: &str) -> Result<Option<BrainRow>> {
+pub fn get_brain_by_name(conn: &Connection, name: &str) -> SqlResult<Option<BrainRow>> {
     use rusqlite::OptionalExtension;
     let row = conn
         .query_row(
@@ -313,7 +316,7 @@ pub fn get_brain_by_name(conn: &Connection, name: &str) -> Result<Option<BrainRo
 }
 
 /// Update the roots JSON for a brain by brain_id.
-pub fn update_brain_roots(conn: &Connection, brain_id: &str, roots_json: &str) -> Result<()> {
+pub fn update_brain_roots(conn: &Connection, brain_id: &str, roots_json: &str) -> SqlResult<()> {
     conn.execute(
         "UPDATE brains SET roots = ?2 WHERE brain_id = ?1",
         rusqlite::params![brain_id, roots_json],
@@ -322,7 +325,7 @@ pub fn update_brain_roots(conn: &Connection, brain_id: &str, roots_json: &str) -
 }
 
 /// Mark a brain as archived in the DB.
-pub fn archive_brain(conn: &Connection, brain_id: &str) -> Result<()> {
+pub fn archive_brain(conn: &Connection, brain_id: &str) -> SqlResult<()> {
     conn.execute(
         "UPDATE brains SET archived = 1 WHERE brain_id = ?1",
         rusqlite::params![brain_id],
@@ -331,7 +334,7 @@ pub fn archive_brain(conn: &Connection, brain_id: &str) -> Result<()> {
 }
 
 /// Atomically archive a brain and clear its roots in a single transaction.
-pub fn archive_and_clear_roots(conn: &Connection, brain_id: &str) -> Result<()> {
+pub fn archive_and_clear_roots(conn: &Connection, brain_id: &str) -> SqlResult<()> {
     conn.execute(
         "UPDATE brains SET archived = 1, roots = '[]' WHERE brain_id = ?1",
         rusqlite::params![brain_id],
@@ -340,7 +343,7 @@ pub fn archive_and_clear_roots(conn: &Connection, brain_id: &str) -> Result<()> 
 }
 
 /// Delete a brain by name from the `brains` table.
-pub fn delete_brain(conn: &Connection, name: &str) -> Result<bool> {
+pub fn delete_brain(conn: &Connection, name: &str) -> SqlResult<bool> {
     let rows = conn.execute("DELETE FROM brains WHERE name = ?1", [name])?;
     Ok(rows > 0)
 }
@@ -353,7 +356,7 @@ pub fn delete_brain(conn: &Connection, name: &str) -> Result<bool> {
 ///
 /// Brains no longer in config are soft-cleared to projected=0 but their
 /// rows (and prefixes) are preserved for historical access.
-pub fn project_config_to_brains(conn: &Connection, brains: &[BrainProjection]) -> Result<()> {
+pub fn project_config_to_brains(conn: &Connection, brains: &[BrainProjection]) -> SqlResult<()> {
     // Alias uniqueness check — first-seen wins, duplicates are logged and skipped.
     let mut alias_owners: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
@@ -426,7 +429,7 @@ pub fn project_config_to_brains(conn: &Connection, brains: &[BrainProjection]) -
 ///
 /// Removed brains (projected=0) remain resolvable by name/ID for historical access
 /// (e.g. cross-brain task queries), but are excluded from alias/root resolution.
-pub fn resolve_brain(conn: &Connection, input: &str) -> Result<(String, String)> {
+pub fn resolve_brain(conn: &Connection, input: &str) -> SqlResult<(String, String)> {
     // 1. Exact name match (all rows — includes removed brains for historical access)
     if let Ok((id, name)) = conn.query_row(
         "SELECT brain_id, name FROM brains WHERE name = ?1",
@@ -506,7 +509,7 @@ pub fn resolve_brain(conn: &Connection, input: &str) -> Result<(String, String)>
 ///
 /// Called on every `init_schema` open, outside the migration transaction,
 /// because FTS5 DDL has SQLite transaction limitations.
-pub fn ensure_fts5(conn: &Connection) -> Result<()> {
+pub fn ensure_fts5(conn: &Connection) -> SqlResult<()> {
     conn.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
             content,
