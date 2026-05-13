@@ -373,7 +373,7 @@ impl OptimizeScheduler {
             } else {
                 match db.with_read_conn(|conn| {
                     conn.query_row("SELECT COUNT(*) FROM links", [], |row| row.get::<_, i64>(0))
-                        .map_err(BrainCoreError::from)
+                        .map_err(Into::into)
                 }) {
                     Ok(count) => {
                         if count >= PAGERANK_MIN_LINKS {

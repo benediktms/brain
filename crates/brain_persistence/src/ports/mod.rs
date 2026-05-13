@@ -26,6 +26,7 @@ use brain_core::ports::{
 };
 
 use crate::db::Db;
+use crate::sql::SqlResultExt;
 use crate::db::chunks::{ChunkPollRow, ChunkRow};
 use crate::db::fts::{FtsResult, FtsSummaryResult};
 use crate::db::summaries::SummaryPollRow;
@@ -203,12 +204,14 @@ pub trait ChunkMetaReader: Send + Sync {
 impl ChunkMetaReader for Db {
     fn get_chunks_by_ids(&self, chunk_ids: &[String]) -> Result<Vec<ChunkRow>> {
         self.with_read_conn(|conn| crate::db::chunks::get_chunks_by_ids(conn, chunk_ids))
+            .into_brain_core()
     }
 
     fn get_ml_summaries_for_chunks(&self, chunk_ids: &[&str]) -> Result<HashMap<String, String>> {
         self.with_read_conn(|conn| {
             crate::db::summaries::get_ml_summaries_for_chunks(conn, chunk_ids)
         })
+            .into_brain_core()
     }
 
     fn get_summary_metadata(
@@ -217,6 +220,7 @@ impl ChunkMetaReader for Db {
     ) -> Result<HashMap<String, crate::db::summaries::SummaryMeta>> {
         let ids = summary_ids.to_vec();
         self.with_read_conn(move |conn| crate::db::summaries::get_summary_metadata(conn, &ids))
+            .into_brain_core()
     }
 }
 
@@ -225,6 +229,7 @@ impl ChunkMetaReader for Db {
 impl FileMetaReader for Db {
     fn get_all_active_paths(&self) -> Result<Vec<(String, String)>> {
         self.with_read_conn(crate::db::files::get_all_active_paths)
+            .into_brain_core()
     }
 
     fn get_active_paths_for_brain(&self, brain_id: &str) -> Result<Vec<(String, String)>> {
@@ -232,24 +237,29 @@ impl FileMetaReader for Db {
         self.with_read_conn(move |conn| {
             crate::db::files::get_active_paths_for_brain(conn, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn get_files_with_hashes(&self) -> Result<Vec<(String, String, Option<String>)>> {
         self.with_read_conn(crate::db::files::get_files_with_hashes)
+            .into_brain_core()
     }
 
     fn find_stuck_files(&self) -> Result<Vec<(String, String)>> {
         self.with_read_conn(crate::db::files::find_stuck_files)
+            .into_brain_core()
     }
 
     fn get_content_hash(&self, file_id: &str) -> Result<Option<String>> {
         let file_id = file_id.to_string();
         self.with_read_conn(move |conn| crate::db::files::get_content_hash(conn, &file_id))
+            .into_brain_core()
     }
 
     fn get_chunker_version(&self, file_id: &str) -> Result<Option<u32>> {
         let file_id = file_id.to_string();
         self.with_read_conn(move |conn| crate::db::files::get_chunker_version(conn, &file_id))
+            .into_brain_core()
     }
 }
 
@@ -300,6 +310,7 @@ impl FtsSearcher for Db {
         self.with_read_conn(move |conn| {
             crate::db::fts::search_fts(conn, &query, limit, brain_ids.as_deref())
         })
+            .into_brain_core()
     }
 
     fn search_summaries_fts(
@@ -313,6 +324,7 @@ impl FtsSearcher for Db {
         self.with_read_conn(move |conn| {
             crate::db::fts::search_summaries_fts(conn, &query, limit, brain_ids.as_deref())
         })
+            .into_brain_core()
     }
 }
 
@@ -377,30 +389,36 @@ impl FileMetaWriter for Db {
         self.with_write_conn(move |conn| {
             crate::db::files::get_or_create_file_id(conn, &path, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn handle_delete(&self, path: &str) -> Result<Option<String>> {
         let path = path.to_string();
         self.with_write_conn(move |conn| crate::db::files::handle_delete(conn, &path))
+            .into_brain_core()
     }
 
     fn handle_rename(&self, file_id: &str, new_path: &str) -> Result<()> {
         let file_id = file_id.to_string();
         let new_path = new_path.to_string();
         self.with_write_conn(move |conn| crate::db::files::handle_rename(conn, &file_id, &new_path))
+            .into_brain_core()
     }
 
     fn purge_deleted_files(&self, older_than_ts: i64) -> Result<Vec<String>> {
         self.with_write_conn(move |conn| crate::db::files::purge_deleted_files(conn, older_than_ts))
+            .into_brain_core()
     }
 
     fn clear_all_content_hashes(&self) -> Result<usize> {
         self.with_write_conn(crate::db::files::clear_all_content_hashes)
+            .into_brain_core()
     }
 
     fn clear_content_hash_by_path(&self, path: &str) -> Result<bool> {
         let path = path.to_string();
         self.with_write_conn(move |conn| crate::db::files::clear_content_hash_by_path(conn, &path))
+            .into_brain_core()
     }
 
     fn set_indexing_state(&self, file_id: &str, state: &str) -> Result<()> {
@@ -409,6 +427,7 @@ impl FileMetaWriter for Db {
         self.with_write_conn(move |conn| {
             crate::db::files::set_indexing_state(conn, &file_id, &state)
         })
+            .into_brain_core()
     }
 
     fn reset_stuck_file_for_reindex(&self, file_id: &str) -> Result<()> {
@@ -416,6 +435,7 @@ impl FileMetaWriter for Db {
         self.with_write_conn(move |conn| {
             crate::db::files::reset_stuck_file_for_reindex(conn, &file_id)
         })
+            .into_brain_core()
     }
 
     fn mark_indexed(
@@ -436,12 +456,14 @@ impl FileMetaWriter for Db {
                 disk_modified_at,
             )
         })
+            .into_brain_core()
     }
 
     fn count_stale_chunker_version(&self, current_version: u32) -> Result<usize> {
         self.with_read_conn(move |conn| {
             crate::db::files::count_stale_chunker_version(conn, current_version)
         })
+            .into_brain_core()
     }
 }
 
@@ -504,11 +526,13 @@ impl ChunkMetaWriter for Db {
         self.with_write_conn(|conn| {
             crate::db::chunks::replace_chunk_metadata(conn, file_id, chunks, brain_id)
         })
+            .into_brain_core()
     }
 
     fn get_chunk_hashes(&self, file_id: &str) -> Result<Vec<String>> {
         let file_id = file_id.to_string();
         self.with_read_conn(move |conn| crate::db::chunks::get_chunk_hashes(conn, &file_id))
+            .into_brain_core()
     }
 
     fn mark_chunks_embedded(&self, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
@@ -517,6 +541,7 @@ impl ChunkMetaWriter for Db {
             let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
             crate::db::chunks::mark_chunks_embedded(conn, &refs, timestamp)
         })
+            .into_brain_core()
     }
 
     fn upsert_task_chunk(
@@ -531,6 +556,7 @@ impl ChunkMetaWriter for Db {
         self.with_write_conn(move |conn| {
             crate::db::chunks::upsert_task_chunk(conn, &task_file_id, &capsule_text, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn upsert_record_chunk(
@@ -545,6 +571,7 @@ impl ChunkMetaWriter for Db {
         self.with_write_conn(move |conn| {
             crate::db::chunks::upsert_record_chunk(conn, &record_file_id, &capsule_text, &brain_id)
         })
+            .into_brain_core()
     }
 }
 
@@ -567,6 +594,7 @@ impl LinkWriter for Db {
         let file_id = file_id.to_string();
         let links = links.to_vec();
         self.with_write_conn(move |conn| crate::db::links::replace_links(conn, &file_id, &links))
+            .into_brain_core()
     }
 }
 
@@ -616,6 +644,7 @@ impl EmbeddingResetter for Db {
             conn.execute_batch("UPDATE tasks SET embedded_at = NULL;")?;
             Ok(())
         })
+            .into_brain_core()
     }
 
     fn reset_chunks_embedded_at(&self) -> Result<()> {
@@ -623,6 +652,7 @@ impl EmbeddingResetter for Db {
             conn.execute_batch("UPDATE chunks SET embedded_at = NULL;")?;
             Ok(())
         })
+            .into_brain_core()
     }
 
     fn reset_records_embedded_at(&self) -> Result<()> {
@@ -630,6 +660,7 @@ impl EmbeddingResetter for Db {
             conn.execute_batch("UPDATE records SET embedded_at = NULL;")?;
             Ok(())
         })
+            .into_brain_core()
     }
 
     fn record_embed_reset(&self) -> Result<()> {
@@ -641,6 +672,7 @@ impl EmbeddingResetter for Db {
                 .as_secs() as i64;
             meta::set_meta(conn, EMBED_RESET_META_KEY, &now.to_string())
         })
+            .into_brain_core()
     }
 
     fn last_embed_reset_before(&self) -> Result<Option<i64>> {
@@ -653,6 +685,7 @@ impl EmbeddingResetter for Db {
             let last = meta::get_meta_i64(conn, EMBED_RESET_META_KEY)?;
             Ok(last.map(|t| now.saturating_sub(t)))
         })
+            .into_brain_core()
     }
 
     fn get_consecutive_resets(&self) -> Result<u32> {
@@ -660,6 +693,7 @@ impl EmbeddingResetter for Db {
         self.with_read_conn(|conn| {
             Ok(meta::get_meta_u32(conn, EMBED_CONSECUTIVE_RESETS_KEY)?.unwrap_or(0))
         })
+            .into_brain_core()
     }
 
     fn set_consecutive_resets(&self, count: u32) -> Result<()> {
@@ -667,6 +701,7 @@ impl EmbeddingResetter for Db {
         self.with_write_conn(move |conn| {
             meta::set_meta(conn, EMBED_CONSECUTIVE_RESETS_KEY, &count.to_string())
         })
+            .into_brain_core()
     }
 }
 
@@ -699,6 +734,7 @@ impl SummaryReader for Db {
         self.with_read_conn(move |conn| {
             crate::db::summaries::find_chunks_lacking_summary(conn, &summarizer, limit)
         })
+            .into_brain_core()
     }
 }
 
@@ -735,6 +771,7 @@ impl SummaryWriter for Db {
         self.with_write_conn(move |conn| {
             crate::db::summaries::store_ml_summary(conn, &chunk_id, &summary_text, &summarizer)
         })
+            .into_brain_core()
     }
 }
 
@@ -774,6 +811,7 @@ impl EpisodeWriter for Db {
                 },
             )
         })
+            .into_brain_core()
     }
 }
 
@@ -815,6 +853,7 @@ impl EpisodeReader for Db {
     ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
         let brain_id = brain_id.to_string();
         self.with_read_conn(move |conn| crate::db::summaries::list_episodes(conn, limit, &brain_id))
+            .into_brain_core()
     }
 
     fn list_episodes_multi_brain(
@@ -826,6 +865,7 @@ impl EpisodeReader for Db {
         self.with_read_conn(move |conn| {
             crate::db::summaries::list_episodes_multi_brain(conn, limit, &brain_ids)
         })
+            .into_brain_core()
     }
 
     fn get_summaries_by_ids(
@@ -834,6 +874,7 @@ impl EpisodeReader for Db {
     ) -> Result<Vec<crate::db::summaries::SummaryRow>> {
         let ids = ids.to_vec();
         self.with_read_conn(move |conn| crate::db::summaries::get_summaries_by_ids(conn, &ids))
+            .into_brain_core()
     }
 }
 
@@ -852,16 +893,20 @@ impl BrainRegistry for Db {
     fn is_brain_archived(&self, brain_id: &str) -> Result<bool> {
         let brain_id = brain_id.to_string();
         self.with_read_conn(move |conn| crate::db::schema::is_brain_archived(conn, &brain_id))
+            .into_brain_core()
     }
 
     fn list_brains(&self, active_only: bool) -> Result<Vec<brain_core::brain::Brain>> {
-        let rows =
-            self.with_read_conn(move |conn| crate::db::schema::list_brains(conn, active_only))?;
+        let rows = self
+            .with_read_conn(move |conn| crate::db::schema::list_brains(conn, active_only))
+            .into_brain_core()?;
         Ok(rows.into_iter().map(brain_row_to_brain).collect())
     }
 
     fn list_brain_keys(&self) -> Result<Vec<(String, String)>> {
-        let rows = self.with_read_conn(|conn| crate::db::schema::list_brains(conn, true))?;
+        let rows = self
+            .with_read_conn(|conn| crate::db::schema::list_brains(conn, true))
+            .into_brain_core()?;
         let mut pairs: Vec<(String, String)> =
             rows.into_iter().map(|r| (r.name, r.brain_id)).collect();
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -905,10 +950,12 @@ pub trait StatusReader: Send + Sync {
 impl StatusReader for Db {
     fn count_stuck_files(&self) -> Result<u64> {
         self.with_read_conn(crate::db::files::count_stuck_indexing)
+            .into_brain_core()
     }
 
     fn stale_hashes_prevented(&self) -> Result<u64> {
         self.with_read_conn(crate::db::meta::stale_hashes_prevented)
+            .into_brain_core()
     }
 }
 
@@ -944,10 +991,12 @@ impl MaintenanceOps for Db {
         let from = from_path.to_string();
         let to = to_path.to_string();
         self.with_write_conn(move |conn| crate::db::files::rename_by_path(conn, &from, &to))
+            .into_brain_core()
     }
 
     fn vacuum_db(&self) -> Result<()> {
         self.with_write_conn(crate::db::files::vacuum)
+            .into_brain_core()
     }
 
     fn reindex_fts(&self) -> Result<()> {
@@ -955,14 +1004,17 @@ impl MaintenanceOps for Db {
             crate::db::fts::reindex_fts(conn)?;
             Ok(())
         })
+            .into_brain_core()
     }
 
     fn fts_consistency(&self) -> Result<(i64, i64)> {
         self.with_read_conn(crate::db::fts::fts_consistency)
+            .into_brain_core()
     }
 
     fn reindex_summaries_fts(&self) -> Result<usize> {
         self.with_write_conn(crate::db::fts::reindex_summaries_fts)
+            .into_brain_core()
     }
 }
 
@@ -1016,6 +1068,7 @@ impl ReflectionWriter for Db {
                 &brain_id,
             )
         })
+            .into_brain_core()
     }
 }
 
@@ -1058,6 +1111,7 @@ impl ProcedureWriter for Db {
                 conn, &title, &steps, &tags, importance, &brain_id,
             )
         })
+            .into_brain_core()
     }
 }
 
@@ -1082,11 +1136,13 @@ impl BrainManager for Db {
     fn archive_brain(&self, brain_id: &str) -> Result<()> {
         let brain_id = brain_id.to_string();
         self.with_write_conn(move |conn| crate::db::schema::archive_brain(conn, &brain_id))
+            .into_brain_core()
     }
 
     fn get_brain(&self, brain_id: &str) -> Result<Option<crate::db::schema::BrainRow>> {
         let brain_id = brain_id.to_string();
         self.with_read_conn(move |conn| crate::db::schema::get_brain(conn, &brain_id))
+            .into_brain_core()
     }
 }
 
@@ -1133,11 +1189,13 @@ impl GraphLinkReader for Db {
     fn get_outlinks(&self, source_file_id: &str) -> Result<Vec<String>> {
         let source_file_id = source_file_id.to_string();
         self.with_read_conn(move |conn| crate::db::links::get_outlinks(conn, &source_file_id))
+            .into_brain_core()
     }
 
     fn get_chunks_by_file_ids(&self, file_ids: &[String]) -> Result<Vec<ChunkRow>> {
         let file_ids = file_ids.to_vec();
         self.with_read_conn(move |conn| crate::db::chunks::get_chunks_by_file_ids(conn, &file_ids))
+            .into_brain_core()
     }
 }
 
@@ -1182,6 +1240,7 @@ impl EmbeddingOps for Db {
         self.with_read_conn(move |conn| {
             crate::db::chunks::find_stale_for_embedding(conn, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn find_stale_summaries_for_embedding(&self, brain_id: &str) -> Result<Vec<SummaryPollRow>> {
@@ -1189,6 +1248,7 @@ impl EmbeddingOps for Db {
         self.with_read_conn(move |conn| {
             crate::db::summaries::find_stale_summaries_for_embedding(conn, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn find_stale_tasks_for_embedding(&self, brain_id: &str) -> Result<Vec<TaskPollRow>> {
@@ -1196,6 +1256,7 @@ impl EmbeddingOps for Db {
         self.with_read_conn(move |conn| {
             crate::db::tasks::queries::find_stale_tasks_for_embedding(conn, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn find_stale_records_for_embedding(
@@ -1206,6 +1267,7 @@ impl EmbeddingOps for Db {
         self.with_read_conn(move |conn| {
             crate::db::records::queries::find_stale_records_for_embedding(conn, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn mark_summaries_embedded(&self, summary_ids: &[&str]) -> Result<()> {
@@ -1214,6 +1276,7 @@ impl EmbeddingOps for Db {
             let refs: Vec<&str> = summary_ids.iter().map(|s| s.as_str()).collect();
             crate::db::summaries::mark_summaries_embedded(conn, &refs)
         })
+            .into_brain_core()
     }
 
     fn mark_tasks_embedded(&self, task_ids: &[&str]) -> Result<()> {
@@ -1222,6 +1285,7 @@ impl EmbeddingOps for Db {
             let refs: Vec<&str> = task_ids.iter().map(|s| s.as_str()).collect();
             crate::db::chunks::mark_tasks_embedded(conn, &refs)
         })
+            .into_brain_core()
     }
 
     fn mark_records_embedded(&self, record_ids: &[&str]) -> Result<()> {
@@ -1230,6 +1294,7 @@ impl EmbeddingOps for Db {
             let refs: Vec<&str> = record_ids.iter().map(|s| s.as_str()).collect();
             crate::db::records::queries::mark_records_embedded(conn, &refs)
         })
+            .into_brain_core()
     }
 }
 
@@ -1262,6 +1327,7 @@ impl JobPersistence for Db {
         self.with_write_conn(move |conn| {
             crate::job_results::persist_scope_summary_result(conn, &summary_id, &result)
         })
+            .into_brain_core()
     }
 
     fn persist_consolidation_result(
@@ -1284,6 +1350,7 @@ impl JobPersistence for Db {
                 &brain_id,
             )
         })
+            .into_brain_core()
     }
 }
 
@@ -1376,11 +1443,13 @@ pub trait JobQueue: Send + Sync {
 impl JobQueue for Db {
     fn claim_ready_jobs(&self, limit: i32) -> Result<Vec<Job>> {
         self.with_write_conn(|conn| crate::db::jobs::claim_ready_jobs(conn, limit))
+            .into_brain_core()
     }
 
     fn advance_to_in_progress(&self, job_id: &str) -> Result<()> {
         let job_id = job_id.to_string();
         self.with_write_conn(move |conn| crate::db::jobs::advance_to_in_progress(conn, &job_id))
+            .into_brain_core()
     }
 
     fn complete_job(&self, job_id: &str, result: Option<&str>) -> Result<()> {
@@ -1389,21 +1458,25 @@ impl JobQueue for Db {
         self.with_write_conn(move |conn| {
             crate::db::jobs::complete_job(conn, &job_id, result.as_deref())
         })
+            .into_brain_core()
     }
 
     fn fail_job(&self, job_id: &str, error_msg: &str) -> Result<()> {
         let job_id = job_id.to_string();
         let error_msg = error_msg.to_string();
         self.with_write_conn(move |conn| crate::db::jobs::fail_job(conn, &job_id, &error_msg))
+            .into_brain_core()
     }
 
     fn reap_stuck_jobs(&self) -> Result<usize> {
         self.with_write_conn(crate::db::jobs::reap_stuck_jobs)
+            .into_brain_core()
     }
 
     fn enqueue_job(&self, input: &EnqueueJobInput) -> Result<String> {
         let input = input.clone();
         self.with_write_conn(move |conn| crate::db::jobs::enqueue_job(conn, &input))
+            .into_brain_core()
     }
 
     fn gc_completed_jobs(&self, age_secs: i64, protected_kinds: &[&str]) -> Result<usize> {
@@ -1412,43 +1485,52 @@ impl JobQueue for Db {
             let refs: Vec<&str> = protected.iter().map(|s| s.as_str()).collect();
             crate::db::jobs::gc_completed_jobs(conn, age_secs, &refs)
         })
+            .into_brain_core()
     }
 
     fn count_jobs_by_status(&self, status: &JobStatus) -> Result<i64> {
         self.with_read_conn(move |conn| crate::db::jobs::count_jobs_by_status(conn, status))
+            .into_brain_core()
     }
 
     fn list_jobs_by_status(&self, status: &JobStatus, limit: i32) -> Result<Vec<Job>> {
         self.with_read_conn(move |conn| crate::db::jobs::list_jobs_by_status(conn, status, limit))
+            .into_brain_core()
     }
 
     fn list_stuck_jobs(&self) -> Result<Vec<Job>> {
         self.with_read_conn(crate::db::jobs::list_stuck_jobs)
+            .into_brain_core()
     }
 
     fn retry_failed_job(&self, job_id: &str) -> Result<bool> {
         let id = job_id.to_string();
         self.with_write_conn(move |conn| crate::db::jobs::retry_failed_job(conn, &id))
+            .into_brain_core()
     }
 
     fn get_job_by_kind(&self, kind: &str) -> Result<Option<Job>> {
         let kind = kind.to_string();
         self.with_read_conn(move |conn| crate::db::jobs::get_job_by_kind(conn, &kind))
+            .into_brain_core()
     }
     fn get_job(&self, job_id: &str) -> Result<Option<Job>> {
         let job_id = job_id.to_string();
         self.with_read_conn(move |conn| crate::db::jobs::get_job(conn, &job_id))
+            .into_brain_core()
     }
 
     fn update_job_status(&self, job_id: &str, status: &JobStatus) -> Result<bool> {
         let job_id = job_id.to_string();
         let status = *status;
         self.with_write_conn(move |conn| crate::db::jobs::update_job_status(conn, &job_id, &status))
+            .into_brain_core()
     }
 
     fn ensure_singleton_job(&self, input: &EnqueueJobInput) -> Result<Option<String>> {
         let input = input.clone();
         self.with_write_conn(move |conn| crate::db::jobs::ensure_singleton_job(conn, &input))
+            .into_brain_core()
     }
 
     fn reschedule_terminal_job(&self, kind: &str, brain_id: Option<&str>) -> Result<bool> {
@@ -1457,16 +1539,19 @@ impl JobQueue for Db {
         self.with_write_conn(move |conn| {
             crate::db::jobs::reschedule_terminal_job(conn, &kind, brain_id.as_deref(), 0)
         })
+            .into_brain_core()
     }
 
     fn enqueue_dedup_job(&self, input: &EnqueueJobInput) -> Result<(String, bool)> {
         let input = input.clone();
         self.with_write_conn(move |conn| crate::db::jobs::enqueue_dedup_job(conn, &input))
+            .into_brain_core()
     }
 
     fn reconcile_singleton_job(&self, input: &EnqueueJobInput) -> Result<()> {
         let input = input.clone();
         self.with_write_conn(move |conn| crate::db::jobs::reconcile_singleton_job(conn, &input))
+            .into_brain_core()
     }
 
     fn reconcile_singleton_job_with_delay(
@@ -1478,11 +1563,13 @@ impl JobQueue for Db {
         self.with_write_conn(move |conn| {
             crate::db::jobs::reconcile_singleton_job_with_delay(conn, &input, delay_secs)
         })
+            .into_brain_core()
     }
 
     fn has_active_lod_job(&self, object_uri: &str) -> Result<bool> {
         let uri = object_uri.to_string();
         self.with_read_conn(move |conn| crate::db::jobs::has_active_lod_job(conn, &uri))
+            .into_brain_core()
     }
 }
 
@@ -1612,6 +1699,7 @@ impl TagAliasReader for Db {
             let raw = crate::db::tags::collect_raw_tags(conn, Some(&brain_id))?;
             Ok(crate::db::tag_aliases::dedupe_by_tag(raw))
         })
+            .into_brain_core()
     }
 
     fn read_alias_snapshot(
@@ -1622,6 +1710,7 @@ impl TagAliasReader for Db {
         self.with_read_conn(move |conn| {
             crate::db::tag_aliases::read_alias_snapshot(conn, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn alias_lookup_for_brain(&self, brain_id: &str) -> Result<HashMap<String, String>> {
@@ -1629,6 +1718,7 @@ impl TagAliasReader for Db {
         self.with_read_conn(move |conn| {
             crate::db::tag_aliases::alias_lookup_for_brain(conn, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn list_aliases_for_brain(
@@ -1652,6 +1742,7 @@ impl TagAliasReader for Db {
                 offset,
             )
         })
+            .into_brain_core()
     }
 
     fn count_aliases_for_brain(
@@ -1662,6 +1753,7 @@ impl TagAliasReader for Db {
         self.with_read_conn(move |conn| {
             crate::db::tag_aliases::count_aliases_for_brain(conn, &brain_id)
         })
+            .into_brain_core()
     }
 
     fn latest_run_for_brain(
@@ -1672,6 +1764,7 @@ impl TagAliasReader for Db {
         self.with_read_conn(move |conn| {
             crate::db::tag_aliases::latest_run_for_brain(conn, &brain_id)
         })
+            .into_brain_core()
     }
 }
 
@@ -1710,6 +1803,7 @@ pub trait TagAliasWriter: Send + Sync {
 impl TagAliasWriter for Db {
     fn insert_run(&self, input: crate::db::tag_aliases::InsertRun) -> Result<()> {
         self.with_write_conn(move |conn| crate::db::tag_aliases::insert_run(conn, &input))
+            .into_brain_core()
     }
 
     fn apply_alias_upserts(
@@ -1725,6 +1819,7 @@ impl TagAliasWriter for Db {
                 conn, &brain_id, &upserts, &stale, &finalize,
             )
         })
+            .into_brain_core()
     }
 
     fn record_run_failure(&self, run_id: &str, finished_at_iso: &str, notes: &str) -> Result<()> {
@@ -1734,5 +1829,6 @@ impl TagAliasWriter for Db {
         self.with_write_conn(move |conn| {
             crate::db::tag_aliases::record_run_failure(conn, &run_id, &finished_at_iso, &notes)
         })
+            .into_brain_core()
     }
 }
