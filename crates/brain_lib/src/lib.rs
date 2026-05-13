@@ -4,7 +4,7 @@ pub mod config;
 pub mod consolidation;
 pub mod dedup;
 pub mod doctor;
-pub mod embedder;
+pub use brain_embedder as embedder;
 pub use brain_persistence::error;
 pub mod fs_permissions;
 pub mod git;

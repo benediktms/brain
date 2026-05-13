@@ -698,6 +698,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "brain-embedder"
+version = "0.4.1"
+dependencies = [
+ "blake3",
+ "brain-core",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "serde_json",
+ "tempfile",
+ "tokenizers",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "brain-lib"
 version = "0.4.1"
 dependencies = [
@@ -705,11 +721,9 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "brain-core",
+ "brain-embedder",
  "brain-lib",
  "brain-persistence",
- "candle-core",
- "candle-nn",
- "candle-transformers",
  "chrono",
  "criterion",
  "dashmap",
@@ -731,7 +745,6 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "thiserror 2.0.18",
- "tokenizers",
  "tokio",
  "tokio-util",
  "toml",

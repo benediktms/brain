@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 default = []
-accelerate = ["candle-core/accelerate"]
+accelerate = ["brain-embedder/accelerate"]
 # Exposes test-only accessors (e.g. BrainStores::db_for_tests) and the
 # matching brain-persistence seed helpers. Enable from integration tests
 # that need direct DB access; not for production use.
@@ -13,17 +13,13 @@ test-utils = ["brain-persistence/test-utils", "brain-core/test-utils"]
 
 [dependencies]
 brain-core = { path = "../brain_core" }
+brain-embedder = { path = "../brain_embedder" }
 brain-persistence = { path = "../brain_persistence" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-# ML inference (embeddings)
-candle-core = "0.9"
-candle-nn = "0.9"
-candle-transformers = "0.9"
-tokenizers = "0.22"
 futures = "0.3"
 serde_json = { workspace = true }
 # Directory traversal (ignore crate respects .gitignore)
@@ -53,10 +49,6 @@ lru = "0.12"
 # of gix-discover but requires an explicit hash-backend feature.
 gix-discover = "0.51"
 gix-hash = { version = "0.25", features = ["sha1"] }
-
-# Enable Accelerate (Apple BLAS) on macOS for ~2x faster embeddings.
-[target.'cfg(target_os = "macos")'.dependencies]
-candle-core = { version = "0.9", features = ["accelerate"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
