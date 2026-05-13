@@ -27,6 +27,7 @@ use std::sync::Arc;
 use brain_persistence::db::tag_aliases::{
     AliasUpsert, DedupedRawTag, ExistingAlias, FinalizeRun, InsertRun,
 };
+#[allow(unused_imports)]
 use brain_persistence::sql::{SqlError, SqlResultExt};
 use tracing::{debug, error, info, warn};
 

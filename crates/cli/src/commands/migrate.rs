@@ -170,7 +170,7 @@ pub fn run(args: MigrateArgs) -> Result<()> {
     println!("Verifying migration…");
     {
         let stats = db
-            .with_read_conn(|conn| count_migration_stats(conn))
+            .with_read_conn(count_migration_stats)
             .into_brain_core()
             .context("failed to collect migration verification stats")?;
 

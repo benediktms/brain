@@ -31,6 +31,7 @@ use brain_persistence::db::chunks::get_chunks_by_ids;
 use brain_persistence::db::fts::search_fts;
 use brain_persistence::db::links::count_backlinks;
 use brain_persistence::db::summaries::{Episode, get_summary, list_episodes, store_episode};
+#[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::Store;
 

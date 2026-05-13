@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use brain_persistence::db::summaries::Episode;
+#[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
 use serde_json::{Map, Value, json};
 

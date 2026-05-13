@@ -12,6 +12,7 @@ use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_lib::uri::SynapseUri;
 use brain_persistence::db::summaries::Episode;
+#[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::StoreReader;
 

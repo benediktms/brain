@@ -30,6 +30,7 @@
 
 use brain_persistence::db::{Db, InjectionAuditEntry};
 use brain_persistence::error::Result;
+#[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
 
 // ---------------------------------------------------------------------------

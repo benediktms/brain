@@ -189,7 +189,7 @@ impl FromStr for SynapseUri {
 /// # Examples
 ///
 /// ```
-/// use brain_lib::uri::resolve_id;
+/// use brain_core::uri::resolve_id;
 ///
 /// assert_eq!(resolve_id("synapse://my-proj/task/BRN-01ABC"), "BRN-01ABC");
 /// assert_eq!(resolve_id("BRN-01ABC"), "BRN-01ABC");

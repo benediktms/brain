@@ -29,6 +29,7 @@ use crate::retrieval::{MemoryKind, SearchResult, derive_kind, pack_minimal};
 use crate::tokens::estimate_tokens;
 use brain_persistence::db::Db;
 use brain_persistence::db::summaries::SummaryRow;
+#[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::VectorSearchMode;
 use brain_persistence::store::{DEFAULT_NPROBES, StoreReader};

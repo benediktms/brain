@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::sagas::compact_saga_id;
+#[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
 
 use crate::mcp::McpContext;

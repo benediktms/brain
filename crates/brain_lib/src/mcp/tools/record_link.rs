@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{EdgeKind, EntityRef, EntityType};
+#[allow(unused_imports)]
 use brain_persistence::sql::{SqlError, SqlResultExt};
 
 use crate::mcp::McpContext;

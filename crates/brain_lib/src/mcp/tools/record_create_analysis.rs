@@ -1,5 +1,6 @@
 #![allow(clippy::items_after_test_module)]
 
+#[allow(unused_imports)]
 use brain_persistence::sql::{SqlError, SqlResultExt};
 use std::future::Future;
 use std::pin::Pin;
