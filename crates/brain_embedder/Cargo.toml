@@ -1,0 +1,28 @@
+[package]
+name = "brain-embedder"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+# Links candle-core against Apple's Accelerate framework for faster matrix
+# ops on macOS.
+accelerate = ["candle-core/accelerate"]
+
+[dependencies]
+brain-core = { path = "../brain_core" }
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+tokenizers = "0.22"
+tokio = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+tracing = { workspace = true }
+
+# Enable Accelerate (Apple BLAS) on macOS for ~2x faster embeddings.
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { version = "0.9", features = ["accelerate"] }
+
+[dev-dependencies]
+tempfile = "3"

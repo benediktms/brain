@@ -1,13 +1,17 @@
+//! `Embed` trait and BGE-small-en-v1.5 implementation.
+//!
+//! Quarantines the candle-core + candle-nn + candle-transformers + tokenizers
+//! compile cost in a dedicated crate so non-ML consumers don't pull it in.
+
 use std::io::Read;
 use std::path::Path;
 
+use brain_core::error::{BrainCoreError, Result};
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config};
 use tokenizers::Tokenizer;
 use tracing::info;
-
-use crate::error::BrainCoreError;
 
 /// User-facing instructions for downloading the embedding model.
 pub const MODEL_DOWNLOAD_HINT: &str = "\
@@ -40,7 +44,7 @@ const EXPECTED_CHECKSUMS: &[(&str, &str)] = &[
 /// Uses streaming reads (64KB buffer) to avoid loading the full ~130MB
 /// safetensors file into memory. Returns `Ok(())` if all checksums match,
 /// or an `Embedding` error with the first mismatch details.
-fn verify_checksums(model_dir: &Path, expected: &[(&str, &str)]) -> crate::error::Result<()> {
+fn verify_checksums(model_dir: &Path, expected: &[(&str, &str)]) -> Result<()> {
     for &(filename, expected_hex) in expected {
         let path = model_dir.join(filename);
         let mut file = std::fs::File::open(&path).map_err(|e| {
@@ -75,7 +79,7 @@ fn verify_checksums(model_dir: &Path, expected: &[(&str, &str)]) -> crate::error
 
 /// Trait for embedding text into vectors.
 pub trait Embed: Send + Sync {
-    fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>>;
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
     fn hidden_size(&self) -> usize;
     /// Identifier of the embedder model + revision in use.
     ///
@@ -107,7 +111,7 @@ impl Embedder {
     /// All files are verified against hardcoded BLAKE3 checksums before
     /// loading. The `model.safetensors` file is memory-mapped via `unsafe`
     /// into the process address space, so integrity verification is critical.
-    pub fn load(model_dir: &Path) -> crate::error::Result<Self> {
+    pub fn load(model_dir: &Path) -> Result<Self> {
         let device = Device::Cpu;
 
         let config_path = model_dir.join("config.json");
@@ -189,7 +193,7 @@ impl Embedder {
     /// Embed a batch of text strings, returning 384-dim L2-normalized vectors.
     /// Internally processes in sub-batches of [`Self::MAX_BATCH_SIZE`] to bound
     /// memory usage and keep debug-build latency manageable.
-    pub fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -213,7 +217,7 @@ impl Embedder {
     }
 
     /// Run a single sub-batch through the model.
-    fn embed_batch_inner(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+    fn embed_batch_inner(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let encodings = self
             .tokenizer
             .encode_batch(texts.to_vec(), true)
@@ -295,7 +299,7 @@ impl Embedder {
 }
 
 impl Embed for Embedder {
-    fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         self.embed_batch(texts)
     }
 
@@ -313,7 +317,7 @@ impl Embed for Embedder {
 pub struct MockEmbedder;
 
 impl Embed for MockEmbedder {
-    fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         Ok(texts.iter().map(|text| mock_embedding(text)).collect())
     }
 
@@ -331,14 +335,14 @@ impl Embed for MockEmbedder {
 pub async fn embed_batch_async(
     embedder: &std::sync::Arc<dyn Embed>,
     texts: Vec<String>,
-) -> crate::error::Result<Vec<Vec<f32>>> {
+) -> Result<Vec<Vec<f32>>> {
     let embedder = std::sync::Arc::clone(embedder);
     tokio::task::spawn_blocking(move || {
         let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
         embedder.embed_batch(&refs)
     })
     .await
-    .map_err(|e| crate::error::BrainCoreError::Embedding(format!("spawn_blocking: {e}")))?
+    .map_err(|e| BrainCoreError::Embedding(format!("spawn_blocking: {e}")))?
 }
 
 /// Generate a deterministic 384-dim unit vector from text content using BLAKE3.
