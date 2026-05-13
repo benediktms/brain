@@ -262,6 +262,12 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             HooksAction::PreToolUse => {
                 commands::hooks::pre_tool_use()?;
             }
+            HooksAction::SessionStart => {
+                commands::hooks::session_start()?;
+            }
+            HooksAction::UserPromptSubmit => {
+                commands::hooks::user_prompt_submit()?;
+            }
         },
         Command::Docs => {
             commands::docs::run()?;
