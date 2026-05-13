@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::sql::SqlResult;
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 pub use super::job::{Job, JobPayload, JobStatus, RetryStrategy};
 
@@ -113,12 +114,12 @@ pub fn enqueue_job(conn: &Connection, input: &EnqueueJobInput) -> SqlResult<Stri
         .unwrap_or_else(|| input.payload.default_stuck_threshold_secs());
 
     let payload_json = serde_json::to_string(&input.payload)
-        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize payload: {e}")))?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Internal(format!("serialize payload: {e}"))))?;
     let retry_json = serde_json::to_string(&retry_config).map_err(|e| {
-        crate::error::BrainCoreError::Internal(format!("serialize retry_config: {e}"))
+        SqlError::Domain(BrainCoreError::Internal(format!("serialize retry_config: {e}")))
     })?;
     let metadata_json = serde_json::to_string(&input.metadata)
-        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize metadata: {e}")))?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Internal(format!("serialize metadata: {e}"))))?;
 
     conn.execute(
         "INSERT INTO jobs (job_id, kind, status, priority, payload,
@@ -517,12 +518,12 @@ pub fn ensure_singleton_job(
         .unwrap_or_else(|| input.payload.default_stuck_threshold_secs());
 
     let payload_json = serde_json::to_string(&input.payload)
-        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize payload: {e}")))?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Internal(format!("serialize payload: {e}"))))?;
     let retry_json = serde_json::to_string(&retry_config).map_err(|e| {
-        crate::error::BrainCoreError::Internal(format!("serialize retry_config: {e}"))
+        SqlError::Domain(BrainCoreError::Internal(format!("serialize retry_config: {e}")))
     })?;
     let metadata_json = serde_json::to_string(&input.metadata)
-        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize metadata: {e}")))?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Internal(format!("serialize metadata: {e}"))))?;
 
     // Use named parameter :brain_scope for the NOT EXISTS subquery so it
     // doesn't depend on the positional parameter count of the INSERT.
@@ -681,12 +682,12 @@ pub fn enqueue_dedup_job(conn: &Connection, input: &EnqueueJobInput) -> SqlResul
         .unwrap_or_else(|| input.payload.default_stuck_threshold_secs());
 
     let payload_json = serde_json::to_string(&input.payload)
-        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize payload: {e}")))?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Internal(format!("serialize payload: {e}"))))?;
     let retry_json = serde_json::to_string(&retry_config).map_err(|e| {
-        crate::error::BrainCoreError::Internal(format!("serialize retry_config: {e}"))
+        SqlError::Domain(BrainCoreError::Internal(format!("serialize retry_config: {e}")))
     })?;
     let metadata_json = serde_json::to_string(&input.metadata)
-        .map_err(|e| crate::error::BrainCoreError::Internal(format!("serialize metadata: {e}")))?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Internal(format!("serialize metadata: {e}"))))?;
 
     let rows = conn.execute(
         "INSERT INTO jobs (job_id, kind, status, priority, payload,

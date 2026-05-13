@@ -1,12 +1,12 @@
 use crate::db::Connection;
-use crate::error::Result;
+use crate::sql::SqlResult;
 use ulid::Ulid;
 
 pub fn persist_scope_summary_result(
     conn: &Connection,
     summary_id: &str,
     result: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     let now = crate::utils::now_ts();
     conn.execute(
         "UPDATE derived_summaries
@@ -23,7 +23,7 @@ pub fn persist_consolidation_result(
     result: &str,
     episode_ids: &[String],
     brain_id: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
     let now = crate::utils::now_ts();
 
