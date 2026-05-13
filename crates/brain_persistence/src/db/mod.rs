@@ -68,7 +68,8 @@ pub struct Db {
 impl Db {
     /// Open (or create) the SQLite database at the given path and initialize the schema.
     pub fn open(path: &Path) -> Result<Self> {
-        let writer = Connection::open(path)?;
+        let writer = Connection::open(path)
+            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
         schema::init_schema(&writer).into_brain_core()?;
 
         let read_flags = OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -76,7 +77,8 @@ impl Db {
             | OpenFlags::SQLITE_OPEN_URI;
         let mut readers = Vec::with_capacity(READ_POOL_SIZE);
         for _ in 0..READ_POOL_SIZE {
-            let r = Connection::open_with_flags(path, read_flags)?;
+            let r = Connection::open_with_flags(path, read_flags)
+                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
             r.pragma_update(None, "query_only", "ON")
                 .map_err(|e| BrainCoreError::Database(format!("set query_only: {e}")))?;
             r.pragma_update(None, "busy_timeout", "5000")
@@ -95,7 +97,8 @@ impl Db {
     ///
     /// Uses 0 readers — `with_read_conn` falls back to the write connection.
     pub fn open_in_memory() -> Result<Self> {
-        let writer = Connection::open_in_memory()?;
+        let writer = Connection::open_in_memory()
+            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
         schema::init_schema(&writer).into_brain_core()?;
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
