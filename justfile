@@ -73,17 +73,24 @@ check:
 
 alias c := check
 
-# Run tests (e.g. just t -p brain-lib, just t -- --nocapture)
+# Run tests via nextest (e.g. just t -p brain-lib, just t --no-fail-fast).
+# Doctests are not executed by nextest — use `just test-doc` for those.
+# Requires cargo-nextest: `cargo install --locked cargo-nextest`.
 
 test *args:
-    cargo test {{args}}
+    cargo nextest run {{args}}
 
 alias t := test
+
+# Run doctests (nextest cannot execute these)
+[group('dev')]
+test-doc *args:
+    cargo test --doc {{args}}
 
 # Run fd-heavy perf tests serially with raised fd limit
 [group('dev')]
 test-perf:
-    ulimit -n 4096 && cargo test -p brain-lib --test perf_tests -- --ignored --test-threads=1
+    ulimit -n 4096 && cargo nextest run -p brain-lib --test perf_tests --run-ignored only --test-threads 1
 
 # Check formatting + run clippy
 [group('dev')]
