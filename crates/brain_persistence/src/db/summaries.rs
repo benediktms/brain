@@ -515,8 +515,7 @@ pub fn list_unconsolidated_brain_ids(conn: &Connection) -> SqlResult<Vec<String>
          ORDER BY brain_id",
     )?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| crate::error::BrainCoreError::Database(e.to_string()))
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 /// List unconsolidated episodes for a specific brain (consolidated_by IS NULL).
