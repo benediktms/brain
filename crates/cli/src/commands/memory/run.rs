@@ -12,6 +12,8 @@ use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_lib::uri::SynapseUri;
 use brain_persistence::db::summaries::Episode;
+#[allow(unused_imports)]
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::StoreReader;
 
 use crate::markdown_table::MarkdownTable;
@@ -786,6 +788,7 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
 
 #[cfg(test)]
 mod retrieve_tests {
+    use brain_persistence::sql::SqlResultExt;
     use std::sync::Arc;
 
     use brain_lib::embedder::{Embed, MockEmbedder};
@@ -978,6 +981,7 @@ mod retrieve_tests {
                 let id: String = stmt.query_row([&brain_id], |row| row.get(0))?;
                 Ok(id)
             })
+            .into_brain_core()
             .expect("get chunk_id from DB");
 
         let uri = format!("synapse://test-brain/memory/{chunk_id}");

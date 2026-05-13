@@ -3,7 +3,8 @@ use rusqlite::Connection;
 use crate::db::links::{
     EdgeKind, EntityRef, LinkCreatedPayload, LinkEvent, LinkRemovedPayload, apply_link_event,
 };
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 use super::events::{
     LinkPayload, PayloadEvictedPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
@@ -19,20 +20,24 @@ fn searchable_for_kind(kind: &str) -> bool {
 ///
 /// Exactly one of `task_id` / `chunk_id` must be non-null. Both null or both
 /// non-null are invalid; an error is returned.
-fn link_payload_to_entity_ref(p: &LinkPayload) -> Result<EntityRef> {
+fn link_payload_to_entity_ref(p: &LinkPayload) -> SqlResult<EntityRef> {
     match (&p.task_id, &p.chunk_id) {
         (Some(tid), None) => EntityRef::task(tid).map_err(|_| {
-            BrainCoreError::RecordEvent("link payload task_id must not be empty".into())
+            SqlError::Domain(BrainCoreError::RecordEvent(
+                "link payload task_id must not be empty".into(),
+            ))
         }),
         (None, Some(cid)) => EntityRef::chunk(cid).map_err(|_| {
-            BrainCoreError::RecordEvent("link payload chunk_id must not be empty".into())
+            SqlError::Domain(BrainCoreError::RecordEvent(
+                "link payload chunk_id must not be empty".into(),
+            ))
         }),
-        (None, None) => Err(BrainCoreError::RecordEvent(
+        (None, None) => Err(SqlError::Domain(BrainCoreError::RecordEvent(
             "link payload must have exactly one of task_id or chunk_id, got neither".into(),
-        )),
-        (Some(_), Some(_)) => Err(BrainCoreError::RecordEvent(
+        ))),
+        (Some(_), Some(_)) => Err(SqlError::Domain(BrainCoreError::RecordEvent(
             "link payload must have exactly one of task_id or chunk_id, got both".into(),
-        )),
+        ))),
     }
 }
 
@@ -44,19 +49,21 @@ fn link_payload_to_entity_ref(p: &LinkPayload) -> Result<EntityRef> {
 ///
 /// The projection mutation and event INSERT are wrapped in an explicit
 /// transaction for atomicity.
-pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
+pub fn apply_event(conn: &Connection, event: &RecordEvent, brain_id: &str) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
     apply_event_inner(&tx, event, brain_id)?;
     tx.commit()?;
     Ok(())
 }
 
-fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> Result<()> {
+fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> SqlResult<()> {
     match event.event_type {
         RecordEventType::RecordCreated => {
             let p: RecordCreatedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad RecordCreated payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad RecordCreated payload: {e}"
+                    )))
                 })?;
 
             let original_size = p.content_ref.original_size.unwrap_or(p.content_ref.size) as i64;
@@ -105,7 +112,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 
             let p: RecordUpdatedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad RecordUpdated payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad RecordUpdated payload: {e}"
+                    )))
                 })?;
 
             let mut set_cols: Vec<&str> = Vec::new();
@@ -141,7 +150,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         RecordEventType::RecordArchived => {
             let _p: RecordArchivedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad RecordArchived payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad RecordArchived payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -151,8 +162,11 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         }
 
         RecordEventType::TagAdded => {
-            let p: TagPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::RecordEvent(format!("bad TagAdded payload: {e}")))?;
+            let p: TagPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                    "bad TagAdded payload: {e}"
+                )))
+            })?;
 
             conn.execute(
                 "INSERT OR IGNORE INTO record_tags (record_id, tag) VALUES (?1, ?2)",
@@ -161,8 +175,11 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         }
 
         RecordEventType::TagRemoved => {
-            let p: TagPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::RecordEvent(format!("bad TagRemoved payload: {e}")))?;
+            let p: TagPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                    "bad TagRemoved payload: {e}"
+                )))
+            })?;
 
             conn.execute(
                 "DELETE FROM record_tags WHERE record_id = ?1 AND tag = ?2",
@@ -171,13 +188,18 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         }
 
         RecordEventType::LinkAdded => {
-            let p: LinkPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::RecordEvent(format!("bad LinkAdded payload: {e}")))?;
+            let p: LinkPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                    "bad LinkAdded payload: {e}"
+                )))
+            })?;
 
             // Validate before any writes — ensures rollback is clean on error.
             let to = link_payload_to_entity_ref(&p)?;
             let from = EntityRef::record(&event.record_id).map_err(|_| {
-                BrainCoreError::RecordEvent("LinkAdded: record_id must not be empty".into())
+                SqlError::Domain(BrainCoreError::RecordEvent(
+                    "LinkAdded: record_id must not be empty".into(),
+                ))
             })?;
 
             conn.execute(
@@ -198,13 +220,17 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 
         RecordEventType::LinkRemoved => {
             let p: LinkPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
-                BrainCoreError::RecordEvent(format!("bad LinkRemoved payload: {e}"))
+                SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                    "bad LinkRemoved payload: {e}"
+                )))
             })?;
 
             // Validate before any writes — ensures rollback is clean on error.
             let to = link_payload_to_entity_ref(&p)?;
             let from = EntityRef::record(&event.record_id).map_err(|_| {
-                BrainCoreError::RecordEvent("LinkRemoved: record_id must not be empty".into())
+                SqlError::Domain(BrainCoreError::RecordEvent(
+                    "LinkRemoved: record_id must not be empty".into(),
+                ))
             })?;
 
             conn.execute(
@@ -228,7 +254,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         RecordEventType::PayloadEvicted => {
             let _p: PayloadEvictedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad PayloadEvicted payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad PayloadEvicted payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -240,7 +268,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         RecordEventType::RetentionClassSet => {
             let p: RetentionClassSetPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad RetentionClassSet payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad RetentionClassSet payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -294,7 +324,7 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 ///
 /// The rebuild is fully deterministic: the same event sequence always produces
 /// the same projection state.
-pub fn rebuild_from_events(conn: &Connection, events: &[RecordEvent]) -> Result<usize> {
+pub fn rebuild_from_events(conn: &Connection, events: &[RecordEvent]) -> SqlResult<usize> {
     let tx = conn.unchecked_transaction()?;
 
     // Clear in FK-safe order (child tables before parent)

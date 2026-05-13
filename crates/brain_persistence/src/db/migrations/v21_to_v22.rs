@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v21 → v22: Add FK constraint `brain_id → brains(brain_id)` on tasks, records, record_events.
 ///
@@ -12,7 +12,7 @@ use crate::error::Result;
 ///
 /// FTS5 triggers on `tasks` are dropped before the table recreation — `ensure_fts5()` recreates
 /// them idempotently after the migration completes.
-pub fn migrate_v21_to_v22(conn: &Connection) -> Result<()> {
+pub fn migrate_v21_to_v22(conn: &Connection) -> SqlResult<()> {
     // ── Phase 1: data healing (Rust logic) ──────────────────────────────────
 
     // Register a sentinel brain for unscoped rows (brain_id = '').

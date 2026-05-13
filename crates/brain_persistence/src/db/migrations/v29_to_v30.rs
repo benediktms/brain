@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v29 → v30: Add `derived_summaries` table for directory and tag scope aggregation.
 ///
@@ -21,7 +21,7 @@ use crate::error::Result;
 /// );
 /// CREATE INDEX idx_derived_scope ON derived_summaries(scope_type, scope_value);
 /// ```
-pub fn migrate_v29_to_v30(conn: &Connection) -> Result<()> {
+pub fn migrate_v29_to_v30(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS derived_summaries (
              id           TEXT    PRIMARY KEY,

@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Migration v34 → v35: source lineage + staleness detection.
 ///
@@ -14,7 +14,7 @@ use crate::error::Result;
 /// 3. `derived_summaries.source_content_hash` — blake3 hash of source content
 ///    at generation time. Enables cheap "has content actually changed?" check
 ///    during the stale sweep, avoiding unnecessary LLM calls.
-pub fn migrate_v34_to_v35(conn: &Connection) -> Result<()> {
+pub fn migrate_v34_to_v35(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         PRAGMA foreign_keys = OFF;

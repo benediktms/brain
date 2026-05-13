@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v38 → v39: Add `disk_modified_at` column to the `files` table.
 ///
@@ -10,7 +10,7 @@ use crate::error::Result;
 ///
 /// The column is nullable: existing rows default to NULL and the query
 /// pipeline falls back to `last_indexed_at` when `disk_modified_at` is NULL.
-pub fn migrate_v38_to_v39(conn: &Connection) -> Result<()> {
+pub fn migrate_v38_to_v39(conn: &Connection) -> SqlResult<()> {
     conn.execute("ALTER TABLE files ADD COLUMN disk_modified_at INTEGER", [])?;
 
     conn.execute("PRAGMA user_version = 39", [])?;

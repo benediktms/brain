@@ -7,8 +7,8 @@ use rusqlite::Connection;
 use ulid::Ulid;
 
 use crate::db::collect_rows;
-use crate::error::Result;
 use crate::links::Link;
+use crate::sql::SqlResult;
 
 /// Resolve a link's `target_path` to a `file_id` using Obsidian-style disambiguation.
 ///
@@ -73,7 +73,7 @@ fn has_target_file_id_column(conn: &Connection) -> bool {
 /// Deletes existing links for the `source_file_id`, then inserts the new set.
 /// When the schema is at v15+, resolves `target_file_id` for wiki/markdown links
 /// at insert time. Falls back to the v14 INSERT when the column is absent.
-pub fn replace_links(conn: &Connection, source_file_id: &str, links: &[Link]) -> Result<()> {
+pub fn replace_links(conn: &Connection, source_file_id: &str, links: &[Link]) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute(
@@ -122,7 +122,7 @@ pub fn replace_links(conn: &Connection, source_file_id: &str, links: &[Link]) ->
 /// Get all files that link to the given target path.
 ///
 /// Returns `(source_file_id, link_text)` pairs.
-pub fn get_backlinks(conn: &Connection, target_path: &str) -> Result<Vec<(String, String)>> {
+pub fn get_backlinks(conn: &Connection, target_path: &str) -> SqlResult<Vec<(String, String)>> {
     let mut stmt =
         conn.prepare("SELECT source_file_id, link_text FROM links WHERE target_path = ?1")?;
     let rows = stmt.query_map([target_path], |row| Ok((row.get(0)?, row.get(1)?)))?;
@@ -139,7 +139,7 @@ pub fn get_backlinks(conn: &Connection, target_path: &str) -> Result<Vec<(String
 /// using Obsidian-style nearest-match logic.
 ///
 /// External links and links whose target cannot be resolved are excluded.
-pub fn get_outlinks(conn: &Connection, source_file_id: &str) -> Result<Vec<String>> {
+pub fn get_outlinks(conn: &Connection, source_file_id: &str) -> SqlResult<Vec<String>> {
     // Collect all outgoing links for this source file. We first gather all rows
     // into memory, then resolve target_file_id for unresolved entries afterwards.
     // This avoids re-entering the connection while a cursor is still open.
@@ -178,7 +178,7 @@ pub fn get_outlinks(conn: &Connection, source_file_id: &str) -> Result<Vec<Strin
 }
 
 /// Count backlinks for a given target path.
-pub fn count_backlinks(conn: &Connection, target_path: &str) -> Result<usize> {
+pub fn count_backlinks(conn: &Connection, target_path: &str) -> SqlResult<usize> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM links WHERE target_path = ?1",
         [target_path],

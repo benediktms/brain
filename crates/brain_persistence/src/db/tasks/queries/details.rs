@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::comparator;
 use crate::db::tasks::events::TaskStatus;
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 use super::ANCESTOR_BLOCKED_CTE;
 
@@ -33,7 +33,7 @@ pub struct DependencySummary {
 /// counted separately in `external_blocker_unresolved_count`. Resolved
 /// blockers don't appear here at all — fetch `get_external_blockers` for
 /// the resolved-history view.
-pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> Result<DependencySummary> {
+pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> SqlResult<DependencySummary> {
     let mut stmt = conn.prepare(
         "SELECT el.to_id, t.status
          FROM entity_links el
@@ -87,7 +87,7 @@ pub struct TaskNoteLink {
 }
 
 /// Get note links for a task, resolving chunk_id to file_path.
-pub fn get_task_note_links(conn: &Connection, task_id: &str) -> Result<Vec<TaskNoteLink>> {
+pub fn get_task_note_links(conn: &Connection, task_id: &str) -> SqlResult<Vec<TaskNoteLink>> {
     let mut stmt = conn.prepare(
         "SELECT l.chunk_id, COALESCE(f.path, '') as file_path
          FROM task_note_links l
@@ -123,7 +123,7 @@ impl StatusCounts {
 }
 
 /// Count tasks grouped by status.
-pub fn count_by_status(conn: &Connection) -> Result<StatusCounts> {
+pub fn count_by_status(conn: &Connection) -> SqlResult<StatusCounts> {
     let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -151,7 +151,7 @@ pub fn count_by_status(conn: &Connection) -> Result<StatusCounts> {
 /// dep entries (depends_on references a missing task) count as blocking. The
 /// external-blocker NOT EXISTS clause matches the listing queries so the
 /// counts agree with `list_ready` / `list_blocked` row counts.
-pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<(usize, usize)> {
+pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> SqlResult<(usize, usize)> {
     let new_result = count_ready_blocked_via_entity_links(conn, brain_id)?;
     if comparator::comparator_enabled() {
         let (legacy_ready, legacy_blocked) = comparator_legacy_count_ready_blocked(conn, brain_id)?;
@@ -176,7 +176,7 @@ pub fn count_ready_blocked(conn: &Connection, brain_id: Option<&str>) -> Result<
 fn count_ready_blocked_via_entity_links(
     conn: &Connection,
     brain_id: Option<&str>,
-) -> Result<(usize, usize)> {
+) -> SqlResult<(usize, usize)> {
     let (brain_clause, brain_params) = super::listing::brain_id_filter(brain_id);
     let ready_sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
@@ -250,7 +250,7 @@ fn count_ready_blocked_via_entity_links(
 fn comparator_legacy_count_ready_blocked(
     conn: &Connection,
     brain_id: Option<&str>,
-) -> Result<(usize, usize)> {
+) -> SqlResult<(usize, usize)> {
     const LEGACY_ANCESTOR_BLOCKED_CTE: &str = "\
 WITH RECURSIVE ancestor_chain(tid, ancestor_id) AS (
     SELECT task_id, parent_task_id FROM tasks WHERE parent_task_id IS NOT NULL
@@ -364,7 +364,7 @@ pub struct ExternalIdRow {
 ///
 /// Returns ALL `task_external_ids` rows (both metadata-only and blocking).
 /// Callers wanting only the blocker subset should use `get_external_blockers`.
-pub fn get_external_ids(conn: &Connection, task_id: &str) -> Result<Vec<ExternalIdRow>> {
+pub fn get_external_ids(conn: &Connection, task_id: &str) -> SqlResult<Vec<ExternalIdRow>> {
     let mut stmt = conn.prepare(
         "SELECT task_id, source, external_id, external_url, imported_at, blocking, resolved_at
          FROM task_external_ids WHERE task_id = ?1 ORDER BY source, external_id",
@@ -389,7 +389,7 @@ pub fn get_external_ids(conn: &Connection, task_id: &str) -> Result<Vec<External
 /// blockers so callers can render history. The `tasks.get` MCP response
 /// surfaces this list as `external_blockers`, distinct from `external_ids`
 /// which still includes pure-metadata rows.
-pub fn get_external_blockers(conn: &Connection, task_id: &str) -> Result<Vec<ExternalIdRow>> {
+pub fn get_external_blockers(conn: &Connection, task_id: &str) -> SqlResult<Vec<ExternalIdRow>> {
     let mut stmt = conn.prepare(
         "SELECT task_id, source, external_id, external_url, imported_at, blocking, resolved_at
          FROM task_external_ids
@@ -415,7 +415,7 @@ pub fn resolve_external_id(
     conn: &Connection,
     source: &str,
     external_id: &str,
-) -> Result<Option<String>> {
+) -> SqlResult<Option<String>> {
     let result = conn
         .query_row(
             "SELECT task_id FROM task_external_ids WHERE source = ?1 AND external_id = ?2",
@@ -437,7 +437,7 @@ pub struct TaskComment {
 }
 
 /// Get comments for a task, ordered by creation time.
-pub fn get_task_comments(conn: &Connection, task_id: &str) -> Result<Vec<TaskComment>> {
+pub fn get_task_comments(conn: &Connection, task_id: &str) -> SqlResult<Vec<TaskComment>> {
     let mut stmt = conn.prepare(
         "SELECT comment_id, author, body, created_at, updated_at
          FROM task_comments WHERE task_id = ?1 ORDER BY created_at ASC",
@@ -462,7 +462,7 @@ pub struct TaskDep {
 }
 
 /// List all dependency edges (bulk load for export).
-pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
+pub fn list_all_deps(conn: &Connection) -> SqlResult<Vec<TaskDep>> {
     let mut stmt = conn.prepare(
         "SELECT from_id, to_id FROM entity_links
          WHERE from_type='TASK' AND to_type='TASK' AND edge_kind='blocks'",
@@ -477,7 +477,7 @@ pub fn list_all_deps(conn: &Connection) -> Result<Vec<TaskDep>> {
 }
 
 /// Get all dependency targets for a task (what it depends on).
-pub fn get_deps_for_task(conn: &Connection, task_id: &str) -> Result<Vec<String>> {
+pub fn get_deps_for_task(conn: &Connection, task_id: &str) -> SqlResult<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT to_id FROM entity_links
          WHERE from_type='TASK' AND from_id=?1 AND to_type='TASK' AND edge_kind='blocks'",

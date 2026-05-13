@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v14 → v15: Add `summarizer` and `chunk_id` columns to the `summaries` table.
 ///
@@ -9,7 +9,7 @@ use crate::error::Result;
 /// - `chunk_id TEXT`: foreign key to the chunk that was summarized (for kind='summary').
 /// - Partial unique index on `(chunk_id, summarizer) WHERE kind = 'summary'` to prevent
 ///   duplicate ML summaries per chunk per backend.
-pub fn migrate_v14_to_v15(conn: &Connection) -> Result<()> {
+pub fn migrate_v14_to_v15(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute(

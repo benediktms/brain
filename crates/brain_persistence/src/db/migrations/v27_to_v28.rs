@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v27 → v28: Loosen `summaries.kind` CHECK constraint to allow 'procedure'.
 ///
@@ -13,7 +13,7 @@ use crate::error::Result;
 /// 5. Recreate all indexes.
 ///
 /// New CHECK: `kind IN ('episode','reflection','summary','procedure')`
-pub fn migrate_v27_to_v28(conn: &Connection) -> Result<()> {
+pub fn migrate_v27_to_v28(conn: &Connection) -> SqlResult<()> {
     // FTS5 content tables create internal references that block ALTER TABLE RENAME.
     // Drop triggers and FTS5 virtual table individually before the batch.
     // (ensure_fts5 recreates them post-migration.)

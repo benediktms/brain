@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v43 → v44: Add `brain_id TEXT NOT NULL` to `tag_cluster_runs` and rebuild
 /// `tag_aliases` under composite PK `(brain_id, raw_tag)`.
@@ -13,7 +13,7 @@ use crate::error::Result;
 ///
 /// DROP order respects FK direction: `tag_aliases` (FK child) before
 /// `tag_cluster_runs` (FK parent). CREATE order is reversed.
-pub fn migrate_v43_to_v44(conn: &Connection) -> Result<()> {
+pub fn migrate_v43_to_v44(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "BEGIN;
 

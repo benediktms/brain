@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use rusqlite::{Connection, params};
 
 use crate::db::tags::RawTag;
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 /// Per-tag fold of `RawTag` rows across the (Records, Tasks) sources for a
 /// single brain. Sums reference counts and takes max of last-seen
@@ -98,7 +99,7 @@ pub struct FinalizeRun {
 pub fn read_alias_snapshot(
     conn: &Connection,
     brain_id: &str,
-) -> Result<HashMap<String, ExistingAlias>> {
+) -> SqlResult<HashMap<String, ExistingAlias>> {
     let mut stmt = conn.prepare(
         "SELECT raw_tag, canonical_tag, cluster_id, last_run_id,
                 embedding, embedder_version, updated_at
@@ -153,7 +154,7 @@ pub fn read_alias_snapshot(
 pub fn alias_lookup_for_brain(
     conn: &Connection,
     brain_id: &str,
-) -> Result<HashMap<String, String>> {
+) -> SqlResult<HashMap<String, String>> {
     let started = std::time::Instant::now();
     let mut stmt = conn.prepare(
         "SELECT raw_tag, canonical_tag
@@ -182,7 +183,7 @@ pub fn alias_lookup_for_brain(
 
 /// Tx-1: insert a `tag_cluster_runs` row with `finished_at = NULL` so the
 /// `tag_aliases.last_run_id` FK can resolve when Tx-2 runs.
-pub fn insert_run(conn: &Connection, input: &InsertRun) -> Result<()> {
+pub fn insert_run(conn: &Connection, input: &InsertRun) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO tag_cluster_runs
              (run_id, brain_id, started_at, finished_at, source_count, cluster_count,
@@ -218,7 +219,7 @@ pub fn apply_alias_upserts(
     upserts: &[AliasUpsert],
     stale: &[String],
     finalize: &FinalizeRun,
-) -> Result<()> {
+) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
     {
         let mut stmt = tx.prepare(
@@ -276,7 +277,7 @@ pub fn record_run_failure(
     run_id: &str,
     finished_at_iso: &str,
     notes: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     conn.execute(
         "UPDATE tag_cluster_runs
          SET finished_at = ?1, notes = ?2
@@ -305,12 +306,12 @@ pub(crate) fn encode_embedding(v: &[f32]) -> Vec<u8> {
 /// Decode a `tag_aliases.embedding` BLOB back into a `Vec<f32>`. Errors if
 /// the length is not a multiple of 4 (defensive — only triggers on a row
 /// hand-edited or written by a different codec).
-pub(crate) fn decode_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
+pub(crate) fn decode_embedding(bytes: &[u8]) -> SqlResult<Vec<f32>> {
     if !bytes.len().is_multiple_of(4) {
-        return Err(BrainCoreError::Database(format!(
+        return Err(SqlError::Domain(BrainCoreError::Database(format!(
             "tag_aliases.embedding length {} is not a multiple of 4",
             bytes.len()
-        )));
+        ))));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
     for chunk in bytes.chunks_exact(4) {
@@ -339,7 +340,7 @@ pub struct TagClusterRunRow {
     pub notes: Option<String>,
 }
 
-pub fn get_run(conn: &Connection, run_id: &str) -> Result<Option<TagClusterRunRow>> {
+pub fn get_run(conn: &Connection, run_id: &str) -> SqlResult<Option<TagClusterRunRow>> {
     let mut stmt = conn.prepare(
         "SELECT run_id, started_at, finished_at, source_count, cluster_count,
                 embedder_version, threshold, triggered_by, notes
@@ -365,7 +366,10 @@ pub fn get_run(conn: &Connection, run_id: &str) -> Result<Option<TagClusterRunRo
 
 /// Most recent `tag_cluster_runs` row for a brain, ordered by `started_at`
 /// DESC. Returns `None` for brains that have never been reclustered.
-pub fn latest_run_for_brain(conn: &Connection, brain_id: &str) -> Result<Option<TagClusterRunRow>> {
+pub fn latest_run_for_brain(
+    conn: &Connection,
+    brain_id: &str,
+) -> SqlResult<Option<TagClusterRunRow>> {
     let mut stmt = conn.prepare(
         "SELECT run_id, started_at, finished_at, source_count, cluster_count,
                 embedder_version, threshold, triggered_by, notes
@@ -414,7 +418,7 @@ pub fn list_aliases_for_brain(
     cluster_id: Option<&str>,
     limit: i64,
     offset: i64,
-) -> Result<Vec<AliasRow>> {
+) -> SqlResult<Vec<AliasRow>> {
     // Build SQL with explicit numbered placeholders so the bind order is
     // unambiguous regardless of which optional filters are present. Mixing
     // numbered (`?1`) and bare (`?`) placeholders works in rusqlite but is
@@ -480,7 +484,7 @@ pub struct AliasCounts {
 
 /// Aggregate counts over `tag_aliases` for a brain. Returns zeros for
 /// brains that have never been reclustered.
-pub fn count_aliases_for_brain(conn: &Connection, brain_id: &str) -> Result<AliasCounts> {
+pub fn count_aliases_for_brain(conn: &Connection, brain_id: &str) -> SqlResult<AliasCounts> {
     conn.query_row(
         "SELECT COUNT(*),
                 COUNT(DISTINCT canonical_tag),
@@ -495,7 +499,7 @@ pub fn count_aliases_for_brain(conn: &Connection, brain_id: &str) -> Result<Alia
             })
         },
     )
-    .map_err(BrainCoreError::from)
+    .map_err(Into::into)
 }
 
 // ---------------------------------------------------------------------------
@@ -506,7 +510,7 @@ pub fn count_aliases_for_brain(conn: &Connection, brain_id: &str) -> Result<Alia
 /// by tests that want to inspect run state without knowing the run_id
 /// (e.g. the failure path).
 #[cfg(any(test, feature = "test-utils"))]
-pub fn list_runs(conn: &Connection) -> Result<Vec<TagClusterRunRow>> {
+pub fn list_runs(conn: &Connection) -> SqlResult<Vec<TagClusterRunRow>> {
     let mut stmt = conn.prepare(
         "SELECT run_id, started_at, finished_at, source_count, cluster_count,
                 embedder_version, threshold, triggered_by, notes
@@ -541,7 +545,7 @@ pub fn seed_record_with_tags(
     brain_id: &str,
     updated_at: i64,
     tags: &[&str],
-) -> Result<()> {
+) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO records (
              record_id, title, kind, status, description, content_hash,
@@ -579,7 +583,7 @@ pub fn seed_task_with_labels(
     brain_id: &str,
     updated_at: i64,
     labels: &[&str],
-) -> Result<()> {
+) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO tasks (task_id, title, status, priority, task_type,
                             brain_id, created_at, updated_at)
@@ -599,12 +603,12 @@ pub fn seed_task_with_labels(
 /// `tag_aliases` row so the next `run_recluster` sees the cache as stale
 /// and re-embeds. Used by the cache-invalidation test.
 #[cfg(any(test, feature = "test-utils"))]
-pub fn override_alias_embedder_version(conn: &Connection, version: &str) -> Result<usize> {
+pub fn override_alias_embedder_version(conn: &Connection, version: &str) -> SqlResult<usize> {
     conn.execute(
         "UPDATE tag_aliases SET embedder_version = ?1",
         params![version],
     )
-    .map_err(BrainCoreError::from)
+    .map_err(Into::into)
 }
 
 /// Seed `tag_aliases` rows for a single brain in tests. Inserts a stub
@@ -620,7 +624,7 @@ pub fn seed_tag_aliases(
     conn: &Connection,
     brain_id: &str,
     rows: &[(&str, &str, &str)],
-) -> Result<()> {
+) -> SqlResult<()> {
     let run_id = format!("test-run-{brain_id}");
     let updated_at = "1970-01-01T00:00:00Z";
     conn.execute(

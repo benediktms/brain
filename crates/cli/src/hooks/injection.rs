@@ -30,6 +30,8 @@
 
 use brain_persistence::db::{Db, InjectionAuditEntry};
 use brain_persistence::error::Result;
+#[allow(unused_imports)]
+use brain_persistence::sql::SqlResultExt;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -740,6 +742,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM injection_audit", [], |row| row.get(0))
                     .unwrap_or(0))
             })
+            .into_brain_core()
             .expect("count");
         assert_eq!(count, 1);
     }

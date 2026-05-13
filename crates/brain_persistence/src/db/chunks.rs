@@ -1,6 +1,6 @@
 use rusqlite::{Connection, types::ToSql};
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// A chunk's metadata for SQLite bookkeeping.
 pub struct ChunkMeta {
@@ -23,7 +23,7 @@ pub fn replace_chunk_metadata(
     file_id: &str,
     chunks: &[ChunkMeta],
     brain_id: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute("DELETE FROM chunks WHERE file_id = ?1", [file_id])?;
@@ -79,7 +79,7 @@ pub struct ChunkRow {
 }
 
 /// Look up chunks by their IDs, joining with the files table for path, timestamp, and pagerank.
-pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<ChunkRow>> {
+pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> SqlResult<Vec<ChunkRow>> {
     if chunk_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -132,7 +132,7 @@ pub fn get_chunks_by_ids(conn: &Connection, chunk_ids: &[String]) -> Result<Vec<
 /// Look up all chunks for a set of file IDs, joining with the files table.
 ///
 /// Used by graph expansion to fetch linked-file chunks after 1-hop link traversal.
-pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> Result<Vec<ChunkRow>> {
+pub fn get_chunks_by_file_ids(conn: &Connection, file_ids: &[String]) -> SqlResult<Vec<ChunkRow>> {
     if file_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -189,7 +189,7 @@ pub fn upsert_task_chunk(
     task_file_id: &str, // e.g. "task:BRN-01KK" or "task-outcome:BRN-01KK"
     capsule_text: &str,
     brain_id: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     // Ensure a synthetic files row exists; update brain_id if currently empty.
     conn.execute(
         "INSERT INTO files (file_id, path, indexing_state, brain_id) VALUES (?1, ?1, 'idle', ?2)
@@ -230,7 +230,7 @@ pub fn upsert_record_chunk(
     record_file_id: &str, // e.g. "record:BRN-01ABC"
     capsule_text: &str,
     brain_id: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     // Ensure a synthetic files row exists; update brain_id if currently empty.
     conn.execute(
         "INSERT INTO files (file_id, path, indexing_state, brain_id) VALUES (?1, ?1, 'idle', ?2)
@@ -263,7 +263,11 @@ pub fn upsert_record_chunk(
 /// Set `embedded_at` on a batch of chunks, marking them as current in LanceDB.
 ///
 /// `chunk_ids` must be non-empty. Skips gracefully if the slice is empty.
-pub fn mark_chunks_embedded(conn: &Connection, chunk_ids: &[&str], timestamp: i64) -> Result<()> {
+pub fn mark_chunks_embedded(
+    conn: &Connection,
+    chunk_ids: &[&str],
+    timestamp: i64,
+) -> SqlResult<()> {
     if chunk_ids.is_empty() {
         return Ok(());
     }
@@ -283,7 +287,7 @@ pub fn mark_chunks_embedded(conn: &Connection, chunk_ids: &[&str], timestamp: i6
 }
 
 /// Get ordered chunk hashes for a file (by chunk_ord).
-pub fn get_chunk_hashes(conn: &Connection, file_id: &str) -> Result<Vec<String>> {
+pub fn get_chunk_hashes(conn: &Connection, file_id: &str) -> SqlResult<Vec<String>> {
     let mut stmt =
         conn.prepare("SELECT chunk_hash FROM chunks WHERE file_id = ?1 ORDER BY chunk_ord")?;
     let rows = stmt.query_map([file_id], |row| row.get::<_, String>(0))?;
@@ -409,7 +413,7 @@ pub struct ChunkPollRow {
 ///
 /// `brain_id` — when non-empty, filters chunks to this brain only; when empty,
 /// processes all chunks.
-pub fn find_stale_for_embedding(conn: &Connection, brain_id: &str) -> Result<Vec<ChunkPollRow>> {
+pub fn find_stale_for_embedding(conn: &Connection, brain_id: &str) -> SqlResult<Vec<ChunkPollRow>> {
     let base = "SELECT c.chunk_id, c.file_id, COALESCE(f.path, c.file_id), c.chunk_ord, c.content
                 FROM chunks c
                 LEFT JOIN files f ON f.file_id = c.file_id
@@ -440,7 +444,7 @@ pub fn find_stale_for_embedding(conn: &Connection, brain_id: &str) -> Result<Vec
 }
 
 /// Set `embedded_at = now()` on a batch of tasks.
-pub fn mark_tasks_embedded(conn: &Connection, task_ids: &[&str]) -> Result<()> {
+pub fn mark_tasks_embedded(conn: &Connection, task_ids: &[&str]) -> SqlResult<()> {
     if task_ids.is_empty() {
         return Ok(());
     }

@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add performance indexes for common task queries.
 /// Stamp version 5.
-pub fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
+pub fn migrate_v4_to_v5(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

@@ -2,7 +2,8 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::links::projections::{LinkEvent, apply_link_event};
 use crate::db::links::{EdgeKind, EntityRef, LinkCreatedPayload, LinkRemovedPayload};
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 use super::events::{
     CommentPayload, CommentUpdatedPayload, DependencyPayload, EventType,
@@ -22,11 +23,15 @@ pub(crate) fn apply_event_inner(
     conn: &Connection,
     event: &TaskEvent,
     brain_id: &str,
-) -> Result<()> {
+) -> SqlResult<()> {
     match event.event_type {
         EventType::TaskCreated => {
-            let p: TaskCreatedPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}")))?;
+            let p: TaskCreatedPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad TaskCreated payload: {e}"
+                    )))
+                })?;
 
             let child_seq = p
                 .parent_task_id
@@ -78,9 +83,9 @@ pub(crate) fn apply_event_inner(
                         // UNIQUE constraint on (brain_id, display_id) — extend hash and retry
                         hash_len += 1;
                         if hash_len > full_hex.len() {
-                            return Err(BrainCoreError::TaskEvent(
+                            return Err(SqlError::Domain(BrainCoreError::TaskEvent(
                                 "short hash collision exhausted all 64 hex chars".into(),
-                            ));
+                            )));
                         }
                     }
                     Err(e) => return Err(e.into()),
@@ -110,8 +115,12 @@ pub(crate) fn apply_event_inner(
         EventType::TaskUpdated => {
             use rusqlite::types::Value as SqlValue;
 
-            let p: TaskUpdatedPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad TaskUpdated payload: {e}")))?;
+            let p: TaskUpdatedPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad TaskUpdated payload: {e}"
+                    )))
+                })?;
 
             let mut set_cols: Vec<&str> = Vec::new();
             let mut params: Vec<SqlValue> = Vec::new();
@@ -170,7 +179,9 @@ pub(crate) fn apply_event_inner(
         EventType::StatusChanged => {
             let p: StatusChangedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad StatusChanged payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad StatusChanged payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -182,7 +193,9 @@ pub(crate) fn apply_event_inner(
         EventType::DependencyAdded => {
             let p: DependencyPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad DependencyAdded payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad DependencyAdded payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -209,7 +222,9 @@ pub(crate) fn apply_event_inner(
         EventType::DependencyRemoved => {
             let p: DependencyPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad DependencyRemoved payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad DependencyRemoved payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -234,8 +249,12 @@ pub(crate) fn apply_event_inner(
         }
 
         EventType::NoteLinked => {
-            let p: NoteLinkPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad NoteLinked payload: {e}")))?;
+            let p: NoteLinkPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad NoteLinked payload: {e}"
+                    )))
+                })?;
 
             conn.execute(
                 "INSERT OR IGNORE INTO task_note_links (task_id, chunk_id) VALUES (?1, ?2)",
@@ -244,8 +263,12 @@ pub(crate) fn apply_event_inner(
         }
 
         EventType::NoteUnlinked => {
-            let p: NoteLinkPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad NoteUnlinked payload: {e}")))?;
+            let p: NoteLinkPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad NoteUnlinked payload: {e}"
+                    )))
+                })?;
 
             conn.execute(
                 "DELETE FROM task_note_links WHERE task_id = ?1 AND chunk_id = ?2",
@@ -254,8 +277,11 @@ pub(crate) fn apply_event_inner(
         }
 
         EventType::LabelAdded => {
-            let p: LabelPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad LabelAdded payload: {e}")))?;
+            let p: LabelPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                    "bad LabelAdded payload: {e}"
+                )))
+            })?;
 
             conn.execute(
                 "INSERT OR IGNORE INTO task_labels (task_id, label) VALUES (?1, ?2)",
@@ -264,8 +290,11 @@ pub(crate) fn apply_event_inner(
         }
 
         EventType::LabelRemoved => {
-            let p: LabelPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad LabelRemoved payload: {e}")))?;
+            let p: LabelPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                    "bad LabelRemoved payload: {e}"
+                )))
+            })?;
 
             conn.execute(
                 "DELETE FROM task_labels WHERE task_id = ?1 AND label = ?2",
@@ -274,8 +303,11 @@ pub(crate) fn apply_event_inner(
         }
 
         EventType::CommentAdded => {
-            let p: CommentPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad CommentAdded payload: {e}")))?;
+            let p: CommentPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                    "bad CommentAdded payload: {e}"
+                )))
+            })?;
 
             conn.execute(
                 "INSERT INTO task_comments (comment_id, task_id, author, body, created_at)
@@ -293,7 +325,9 @@ pub(crate) fn apply_event_inner(
         EventType::CommentUpdated => {
             let p: CommentUpdatedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad CommentUpdated payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad CommentUpdated payload: {e}"
+                    )))
                 })?;
 
             let rows_affected = conn.execute(
@@ -302,16 +336,20 @@ pub(crate) fn apply_event_inner(
                 rusqlite::params![p.body, event.timestamp, p.comment_id, event.task_id],
             )?;
             if rows_affected == 0 {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "comment_id '{}' not found for task '{}'",
                     p.comment_id, event.task_id
-                )));
+                ))));
             }
         }
 
         EventType::ParentSet => {
-            let p: ParentSetPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}")))?;
+            let p: ParentSetPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad ParentSet payload: {e}"
+                    )))
+                })?;
 
             let child_seq = p
                 .parent_task_id
@@ -378,7 +416,9 @@ pub(crate) fn apply_event_inner(
         EventType::ExternalIdAdded => {
             let p: ExternalIdPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad ExternalIdAdded payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad ExternalIdAdded payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -391,7 +431,9 @@ pub(crate) fn apply_event_inner(
         EventType::ExternalIdRemoved => {
             let p: ExternalIdPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad ExternalIdRemoved payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad ExternalIdRemoved payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -407,7 +449,9 @@ pub(crate) fn apply_event_inner(
             // event-log replay reaches the right state.
             let p: ExternalBlockerAddedPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad ExternalBlockerAdded payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad ExternalBlockerAdded payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -434,7 +478,9 @@ pub(crate) fn apply_event_inner(
             // here is for event-log replay consistency.
             let p: TaskTransferredPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad TaskTransferred payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad TaskTransferred payload: {e}"
+                    )))
                 })?;
             conn.execute(
                 "UPDATE tasks SET brain_id = ?1, display_id = ?2, updated_at = ?3 WHERE task_id = ?4",
@@ -450,7 +496,9 @@ pub(crate) fn apply_event_inner(
             // replay), or fresh resolution (the happy path).
             let p: ExternalBlockerResolvedPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| {
-                BrainCoreError::TaskEvent(format!("bad ExternalBlockerResolved payload: {e}"))
+                SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                    "bad ExternalBlockerResolved payload: {e}"
+                )))
             })?;
             let resolved_at = p.resolved_at.unwrap_or(event.timestamp);
 
@@ -536,7 +584,7 @@ pub(crate) fn apply_event_inner(
 ///
 /// The projection mutation and event INSERT are wrapped in an explicit
 /// transaction for atomicity.
-pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
+pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
     apply_event_inner(&tx, event, brain_id)?;
     tx.commit()?;
@@ -551,7 +599,7 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Resu
 /// - `DependencyAdded`: both tasks must exist, no cycle
 /// - `ParentSet`: task must exist; parent must exist and not be self
 /// - Others: task must exist
-pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) -> Result<()> {
+pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) -> SqlResult<()> {
     use super::cycle;
     use super::queries::task_exists;
 
@@ -561,75 +609,85 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
     match event.event_type {
         EventType::TaskCreated => {
             if task_exists(&tx, &event.task_id)? {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "task already exists: {}",
                     event.task_id
-                )));
+                ))));
             }
             let payload: TaskCreatedPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad TaskCreated payload: {e}")))?;
+                .map_err(|e| {
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad TaskCreated payload: {e}"
+                    )))
+                })?;
             if let Some(ref parent_id) = payload.parent_task_id {
                 if parent_id == &event.task_id {
-                    return Err(BrainCoreError::TaskEvent(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(
                         "task cannot be its own parent".to_string(),
-                    ));
+                    )));
                 }
                 if !task_exists(&tx, parent_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                         "parent task not found: {parent_id}"
-                    )));
+                    ))));
                 }
             }
         }
 
         EventType::TaskUpdated | EventType::StatusChanged => {
             if !task_exists(&tx, &event.task_id)? {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",
                     event.task_id
-                )));
+                ))));
             }
         }
 
         EventType::DependencyAdded => {
             if !task_exists(&tx, &event.task_id)? {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",
                     event.task_id
-                )));
+                ))));
             }
             let payload: DependencyPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("bad DependencyAdded payload: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad DependencyAdded payload: {e}"
+                    )))
                 })?;
             if !task_exists(&tx, &payload.depends_on_task_id)? {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "dependency target not found: {}",
                     payload.depends_on_task_id
-                )));
+                ))));
             }
             cycle::check_cycle(&tx, &event.task_id, &payload.depends_on_task_id)?;
         }
 
         EventType::ParentSet => {
             if !task_exists(&tx, &event.task_id)? {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",
                     event.task_id
-                )));
+                ))));
             }
-            let payload: ParentSetPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::TaskEvent(format!("bad ParentSet payload: {e}")))?;
+            let payload: ParentSetPayload =
+                serde_json::from_value(event.payload.clone()).map_err(|e| {
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                        "bad ParentSet payload: {e}"
+                    )))
+                })?;
             if let Some(ref parent_id) = payload.parent_task_id {
                 if parent_id == &event.task_id {
-                    return Err(BrainCoreError::TaskEvent(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(
                         "task cannot be its own parent".to_string(),
-                    ));
+                    )));
                 }
                 if !task_exists(&tx, parent_id)? {
-                    return Err(BrainCoreError::TaskEvent(format!(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                         "parent task not found: {parent_id}"
-                    )));
+                    ))));
                 }
             }
         }
@@ -647,10 +705,10 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
         | EventType::ExternalBlockerResolved
         | EventType::TaskTransferred => {
             if !task_exists(&tx, &event.task_id)? {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "task not found: {}",
                     event.task_id
-                )));
+                ))));
             }
         }
     }
@@ -666,7 +724,7 @@ pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) 
 /// Drops FTS task triggers before the bulk delete to avoid content-sync
 /// deletes on a potentially corrupt index, then rebuilds the FTS index
 /// and re-creates triggers after commit.
-pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> Result<()> {
+pub fn rebuild(conn: &Connection, events: &[TaskEvent]) -> SqlResult<()> {
     // Drop FTS triggers to avoid content-sync deletes on potentially corrupt index
     conn.execute_batch(
         "DROP TRIGGER IF EXISTS tasks_fts_insert;

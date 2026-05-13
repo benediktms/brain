@@ -15,6 +15,7 @@ use brain_lib::metrics::Metrics;
 use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::tag_aliases as ta;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::{Store, StoreReader};
 use serde_json::{Value, json};
 
@@ -57,6 +58,7 @@ async fn tags_mcp_surface_round_trip() {
                 ta::seed_task_with_labels(conn, "t1", &bid, 4000, &["docs"])?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
     }
 

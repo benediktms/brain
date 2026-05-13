@@ -11,6 +11,7 @@ use brain_lib::tasks::TaskStore;
 use brain_lib::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, TaskTransferredPayload};
 use brain_persistence::db::Db;
 use brain_persistence::db::tasks::projections::apply_event;
+use brain_persistence::sql::SqlResultExt;
 use serde_json::json;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ async fn transfer_happy_path_all_tables_updated() {
             )
             .map_err(Into::into)
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(updated_brain_id, dst_brain);
 
@@ -91,6 +93,7 @@ async fn transfer_happy_path_all_tables_updated() {
             )
             .map_err(Into::into)
         })
+            .into_brain_core()
         .unwrap();
     assert_eq!(event_count, 1, "task_transferred event must be recorded");
 }
@@ -117,6 +120,7 @@ async fn transfer_same_brain_is_no_op() {
             )
             .map_err(Into::into)
         })
+            .into_brain_core()
         .unwrap();
     assert_eq!(event_count, 0);
 }
@@ -158,9 +162,10 @@ async fn transfer_display_id_collision_resolved() {
                  VALUES ('collision-blocker', ?1, 'blocker', 'open', 4, 'task', 0, 0, ?2)",
                 rusqlite::params![dst_brain, natural_id],
             )
-            .map_err(brain_persistence::error::BrainCoreError::from)?;
+            .map_err(brain_persistence::sql::SqlError::from)?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
 
     let result = store
@@ -253,6 +258,7 @@ async fn transfer_records_brain_id_moves_with_task() {
             )
             .map_err(Into::into)
         })
+            .into_brain_core()
         .unwrap();
 
     store
@@ -270,6 +276,7 @@ async fn transfer_records_brain_id_moves_with_task() {
             )
             .map_err(Into::into)
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         record_brain_id, dst_brain,
@@ -298,6 +305,7 @@ async fn transfer_event_payload_self_contained_for_replay() {
             )
             .map_err(Into::into)
         })
+            .into_brain_core()
         .unwrap();
 
     let payload: TaskTransferredPayload =
@@ -336,6 +344,7 @@ async fn transfer_event_payload_self_contained_for_replay() {
     );
     fresh_db
         .with_write_conn(|conn| apply_event(conn, &create_ev, &src_brain))
+        .into_brain_core()
         .unwrap();
 
     // Now replay the transfer event.
@@ -351,6 +360,7 @@ async fn transfer_event_payload_self_contained_for_replay() {
     );
     fresh_db
         .with_write_conn(|conn| apply_event(conn, &transfer_ev, &src_brain))
+        .into_brain_core()
         .unwrap();
 
     // After replay the task should be in dst_brain.
@@ -363,6 +373,7 @@ async fn transfer_event_payload_self_contained_for_replay() {
             )
             .map_err(Into::into)
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         replayed_brain_id, dst_brain,
@@ -378,6 +389,7 @@ async fn transfer_event_payload_self_contained_for_replay() {
             )
             .map_err(Into::into)
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(replayed_display_id, result.to_display_id);
 }

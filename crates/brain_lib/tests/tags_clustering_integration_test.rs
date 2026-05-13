@@ -22,6 +22,7 @@ use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_lib::{ClusterParams, run_recluster};
 use brain_persistence::db::tag_aliases as ta;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::{Store, StoreReader};
 use mcp_test_harness::ControlledEmbedder;
 use serde_json::{Value, json};
@@ -67,6 +68,7 @@ async fn tag_clustering_end_to_end() {
                 ta::seed_task_with_labels(conn, "t2", &bid, 8000, &["chore"])?;
                 Ok(())
             })
+            .into_brain_core()
             .expect("seed records and tasks");
     }
 
@@ -103,6 +105,7 @@ async fn tag_clustering_end_to_end() {
         .stores
         .db_for_tests()
         .with_read_conn(|conn| ta::read_alias_snapshot(conn, &brain_id))
+        .into_brain_core()
         .expect("alias snapshot");
     let canonical = |t: &str| {
         snapshot
@@ -267,5 +270,6 @@ fn snapshot_tag_rows(ctx: &McpContext) -> (BTreeSet<(String, String)>, BTreeSet<
 
             Ok((rt, tl))
         })
+        .into_brain_core()
         .expect("snapshot tag rows")
 }

@@ -1,5 +1,7 @@
 #![allow(clippy::items_after_test_module)]
 
+#[allow(unused_imports)]
+use brain_persistence::sql::{SqlError, SqlResultExt};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -198,6 +200,7 @@ impl RecordCreateDocument {
 
 #[cfg(test)]
 mod tests {
+    use brain_persistence::sql::{SqlError, SqlResultExt};
     use serde_json::{Value, json};
 
     use super::super::ToolRegistry;
@@ -241,8 +244,11 @@ mod tests {
                     [&record_file_id],
                     |row| row.get(0),
                 )
-                .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+                .map_err(|e| {
+                    SqlError::Domain(brain_core::error::BrainCoreError::Database(e.to_string()))
+                })
             })
+            .into_brain_core()
             .expect("chunk query should succeed");
         assert_eq!(chunk_count, 1, "document record should write one FTS chunk");
 

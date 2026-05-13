@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use brain_persistence::db::links::{
     EdgeKind, EntityRef, LinkError, edge_kind_from_str, remove_link,
 };
+use brain_persistence::sql::{SqlError, SqlResultExt};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -30,12 +31,18 @@ pub(super) fn remove_entity_link(
     edge_kind: EdgeKind,
     ctx: &McpContext,
 ) -> ToolCallResult {
-    let result = ctx.stores.inner_db().with_write_conn(|conn| {
-        remove_link(conn, from, to, edge_kind).map_err(|e| match e {
-            LinkError::Database(msg) => brain_persistence::error::BrainCoreError::Database(msg),
-            LinkError::Cycle(_) => unreachable!("remove_link never returns Cycle"),
+    let result = ctx
+        .stores
+        .inner_db()
+        .with_write_conn(|conn| {
+            remove_link(conn, from, to, edge_kind).map_err(|e| match e {
+                LinkError::Database(msg) => {
+                    SqlError::Domain(brain_core::error::BrainCoreError::Database(msg))
+                }
+                LinkError::Cycle(_) => unreachable!("remove_link never returns Cycle"),
+            })
         })
-    });
+        .into_brain_core();
 
     match result {
         Ok(removed) => json_response(&json!({ "removed": removed })),

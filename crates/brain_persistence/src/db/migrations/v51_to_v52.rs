@@ -5,9 +5,9 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
-pub fn migrate_v51_to_v52(conn: &Connection) -> Result<()> {
+pub fn migrate_v51_to_v52(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     // Idempotent: only add if the column does not already exist.

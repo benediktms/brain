@@ -20,6 +20,8 @@ use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
 use brain_persistence::db::chunks::ChunkPollRow;
 use brain_persistence::db::summaries::SummaryPollRow;
+#[allow(unused_imports)]
+use brain_persistence::sql::SqlResultExt;
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 

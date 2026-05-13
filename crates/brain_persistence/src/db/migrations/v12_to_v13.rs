@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v12 → v13: Add storage lifecycle columns to the `records` table.
 ///
@@ -12,7 +12,7 @@ use crate::error::Result;
 /// - `payload_available`   — 1 if the object-store blob is present, 0 if evicted
 /// - `content_encoding`    — content-encoding of the stored blob (e.g. "gzip", "identity")
 /// - `original_size`       — byte length of the payload before encoding
-pub fn migrate_v12_to_v13(conn: &Connection) -> Result<()> {
+pub fn migrate_v12_to_v13(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

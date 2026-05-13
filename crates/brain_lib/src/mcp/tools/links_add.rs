@@ -8,6 +8,7 @@ use brain_persistence::db::links::{
     EdgeKind, EntityRef, LinkError, add_link_checked, edge_kind_from_str, entity_type_from_str,
     entity_type_str,
 };
+use brain_persistence::sql::{SqlError, SqlResultExt};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -197,27 +198,31 @@ pub(super) fn apply_inline_links(
     }
 
     // Acquire the writer once for the whole batch.
-    let outer_result = ctx.stores.inner_db().with_write_conn(|conn| {
-        for r in &resolved {
-            match add_link_checked(conn, r.from.clone(), r.to.clone(), r.edge_kind) {
-                Ok(()) => succeeded.push(json!({
-                    "to": { "type": r.to_type_wire, "id": r.to_id_wire },
-                    "edge_kind": r.edge_kind_wire
-                })),
-                Err(LinkError::Cycle(_)) => failed.push(json!({
-                    "to": { "type": r.to_type_wire, "id": r.to_id_wire },
-                    "edge_kind": r.edge_kind_wire,
-                    "error": format!("would create a cycle in {} graph", r.edge_kind_wire)
-                })),
-                Err(e) => failed.push(json!({
-                    "to": { "type": r.to_type_wire, "id": r.to_id_wire },
-                    "edge_kind": r.edge_kind_wire,
-                    "error": e.to_string()
-                })),
+    let outer_result = ctx
+        .stores
+        .inner_db()
+        .with_write_conn(|conn| {
+            for r in &resolved {
+                match add_link_checked(conn, r.from.clone(), r.to.clone(), r.edge_kind) {
+                    Ok(()) => succeeded.push(json!({
+                        "to": { "type": r.to_type_wire, "id": r.to_id_wire },
+                        "edge_kind": r.edge_kind_wire
+                    })),
+                    Err(LinkError::Cycle(_)) => failed.push(json!({
+                        "to": { "type": r.to_type_wire, "id": r.to_id_wire },
+                        "edge_kind": r.edge_kind_wire,
+                        "error": format!("would create a cycle in {} graph", r.edge_kind_wire)
+                    })),
+                    Err(e) => failed.push(json!({
+                        "to": { "type": r.to_type_wire, "id": r.to_id_wire },
+                        "edge_kind": r.edge_kind_wire,
+                        "error": e.to_string()
+                    })),
+                }
             }
-        }
-        Ok::<_, brain_persistence::error::BrainCoreError>(())
-    });
+            Ok::<_, SqlError>(())
+        })
+        .into_brain_core();
 
     // Surface outer-only failure (e.g. writer mutex unavailable) as failed entries
     // for every link that was not yet attempted.
@@ -266,16 +271,20 @@ pub(super) fn add_entity_link(
     let to_id = to.id.clone();
 
     let mut link_err: Option<LinkError> = None;
-    let outer_result = ctx.stores.inner_db().with_write_conn(|conn| {
-        match add_link_checked(conn, from, to, edge_kind) {
+    let outer_result = ctx
+        .stores
+        .inner_db()
+        .with_write_conn(|conn| match add_link_checked(conn, from, to, edge_kind) {
             Ok(()) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();
                 link_err = Some(e);
-                Err(brain_persistence::error::BrainCoreError::Database(msg))
+                Err(SqlError::Domain(
+                    brain_core::error::BrainCoreError::Database(msg),
+                ))
             }
-        }
-    });
+        })
+        .into_brain_core();
 
     // Three-way dispatch mirrors try_add_entity_link:
     //   (Ok, _)        — success; build the synthesised edge id.

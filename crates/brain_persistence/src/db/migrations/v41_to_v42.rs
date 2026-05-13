@@ -1,9 +1,9 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v41 → v42: Normalize free-form record kinds and re-derive searchable.
-pub fn migrate_v41_to_v42(conn: &Connection) -> Result<()> {
+pub fn migrate_v41_to_v42(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "BEGIN;
          UPDATE records SET kind = 'document' WHERE kind = 'dispatch-brief';

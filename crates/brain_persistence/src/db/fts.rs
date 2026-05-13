@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Sanitize user input for FTS5 MATCH queries by quoting unquoted tokens.
 ///
@@ -155,7 +155,7 @@ pub fn search_fts(
     query: &str,
     limit: usize,
     brain_ids: Option<&[String]>,
-) -> Result<Vec<FtsResult>> {
+) -> SqlResult<Vec<FtsResult>> {
     let query = sanitize_fts_query(query);
     if query.is_empty() {
         return Ok(Vec::new());
@@ -209,7 +209,7 @@ pub fn search_fts(
 ///
 /// Use this for doctor/repair operations when the FTS5 index may be
 /// out of sync with the chunks table.
-pub fn reindex_fts(conn: &Connection) -> Result<()> {
+pub fn reindex_fts(conn: &Connection) -> SqlResult<()> {
     conn.execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')", [])?;
     Ok(())
 }
@@ -565,7 +565,7 @@ pub fn search_summaries_fts(
     query: &str,
     limit: usize,
     brain_ids: Option<&[String]>,
-) -> Result<Vec<FtsSummaryResult>> {
+) -> SqlResult<Vec<FtsSummaryResult>> {
     let query = sanitize_fts_query(query);
     if query.is_empty() {
         return Ok(Vec::new());
@@ -612,7 +612,7 @@ pub fn search_summaries_fts(
 }
 
 /// Check FTS5 consistency: return (chunk_count, fts_count).
-pub fn fts_consistency(conn: &Connection) -> Result<(i64, i64)> {
+pub fn fts_consistency(conn: &Connection) -> SqlResult<(i64, i64)> {
     let chunk_count: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
     let fts_count: i64 = conn.query_row("SELECT COUNT(*) FROM fts_chunks", [], |row| row.get(0))?;
     Ok((chunk_count, fts_count))
@@ -622,7 +622,7 @@ pub fn fts_consistency(conn: &Connection) -> Result<(i64, i64)> {
 ///
 /// Use this for doctor/repair operations when the FTS5 index may be
 /// out of sync with the summaries table. Returns the count of summaries indexed.
-pub fn reindex_summaries_fts(conn: &Connection) -> Result<usize> {
+pub fn reindex_summaries_fts(conn: &Connection) -> SqlResult<usize> {
     conn.execute(
         "INSERT INTO fts_summaries(fts_summaries) VALUES('rebuild')",
         [],

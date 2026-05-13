@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use brain_persistence::db::sagas::events::SagaCancelledPayload;
 use brain_persistence::db::tasks::events::TaskStatus;
+use brain_persistence::sql::{SqlError, SqlResultExt};
 
 use brain_persistence::db::Db;
 use brain_persistence::db::sagas::SagaListFilter;
@@ -10,7 +11,7 @@ use brain_persistence::db::sagas::events::{
 };
 use brain_persistence::db::sagas::queries::{
     self, LabelCount, SagaEventInsert, SagaMemberStub, SagaRow, SagaStatsRow, close_saga,
-    list_saga_member_stubs, list_saga_task_ids, saga_members_in,
+    list_saga_member_stubs, list_saga_task_ids, saga_members_in, start_saga,
 };
 use brain_persistence::db::sagas::reopen_saga;
 use brain_persistence::db::sagas::{compact_saga_id, resolve_saga_id};
@@ -81,55 +82,60 @@ impl SagaStore {
     /// read connection is sufficient.
     pub fn resolve_short(&self, input: &str) -> Result<(String, String)> {
         let input = input.to_string();
-        self.db.with_read_conn(move |conn| {
-            let canonical = resolve_saga_id(conn, &input)?;
-            let row = queries::get_saga(conn, &canonical)?.ok_or_else(|| {
-                crate::error::BrainCoreError::Internal(format!(
-                    "saga {canonical} disappeared between resolve and fetch"
-                ))
-            })?;
-            Ok((canonical, compact_saga_id(&row.display_id)))
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let canonical = resolve_saga_id(conn, &input)?;
+                let row = queries::get_saga(conn, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(crate::error::BrainCoreError::Internal(format!(
+                        "saga {canonical} disappeared between resolve and fetch"
+                    )))
+                })?;
+                Ok((canonical, compact_saga_id(&row.display_id)))
+            })
+            .into_brain_core()
     }
 
     /// Create a new saga in `planning` status. Returns the resulting row.
     pub fn create(&self, title: &str, description: Option<&str>, actor: &str) -> Result<SagaRow> {
         if title.trim().is_empty() {
-            return Err(brain_persistence::error::BrainCoreError::Parse(
+            return Err(brain_core::error::BrainCoreError::Parse(
                 "saga title must not be empty".into(),
             ));
         }
         let saga_id = new_saga_id();
-        let row = self.db.with_write_conn(|conn| {
-            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
-            // H1: wrap projection write + event insert in one SQLite tx so a failure
-            // between the two cannot leave the projection mutated without a corresponding
-            // saga_events row. Mirrors every other verb in this file.
-            let tx = conn.unchecked_transaction()?;
+        let row = self
+            .db
+            .with_write_conn(|conn| {
+                // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
+                // H1: wrap projection write + event insert in one SQLite tx so a failure
+                // between the two cannot leave the projection mutated without a corresponding
+                // saga_events row. Mirrors every other verb in this file.
+                let tx = conn.unchecked_transaction()?;
 
-            let row = queries::insert_saga(&tx, &saga_id, title, description)?;
+                let row = queries::insert_saga(&tx, &saga_id, title, description)?;
 
-            let event = SagaEvent::new(
-                &saga_id,
-                actor,
-                SagaEventType::SagaCreated,
-                &serde_json::json!({ "title": title, "description": description }),
-            );
-            queries::insert_saga_event(
-                &tx,
-                &SagaEventInsert {
-                    event_id: &event.event_id,
-                    saga_id: &event.saga_id,
-                    event_type: event.event_type.as_column_str(),
-                    timestamp: event.timestamp,
-                    actor: &event.actor,
-                    payload: &serde_json::to_string(&event.payload)?,
-                },
-            )?;
+                let event = SagaEvent::new(
+                    &saga_id,
+                    actor,
+                    SagaEventType::SagaCreated,
+                    &serde_json::json!({ "title": title, "description": description }),
+                );
+                queries::insert_saga_event(
+                    &tx,
+                    &SagaEventInsert {
+                        event_id: &event.event_id,
+                        saga_id: &event.saga_id,
+                        event_type: event.event_type.as_column_str(),
+                        timestamp: event.timestamp,
+                        actor: &event.actor,
+                        payload: &serde_json::to_string(&event.payload)?,
+                    },
+                )?;
 
-            tx.commit()?;
-            Ok(row)
-        })?;
+                tx.commit()?;
+                Ok(row)
+            })
+            .into_brain_core()?;
         Ok(row)
     }
 
@@ -169,36 +175,39 @@ impl SagaStore {
             other => other,
         });
 
-        let row = self.db.with_write_conn(|conn| {
-            // H1: wrap projection write + event insert in one SQLite tx so a
-            // failure between the two cannot leave the projection mutated
-            // without a corresponding saga_events row. `with_write_conn` only
-            // locks the writer mutex; it does NOT open a transaction.
-            let tx = conn.unchecked_transaction()?;
-            let canonical = resolve_saga_id(&tx, saga_id)?;
+        let row = self
+            .db
+            .with_write_conn(|conn| {
+                // H1: wrap projection write + event insert in one SQLite tx so a
+                // failure between the two cannot leave the projection mutated
+                // without a corresponding saga_events row. `with_write_conn` only
+                // locks the writer mutex; it does NOT open a transaction.
+                let tx = conn.unchecked_transaction()?;
+                let canonical = resolve_saga_id(&tx, saga_id)?;
 
-            let row = queries::update_saga(&tx, &canonical, title, description)?;
+                let row = queries::update_saga(&tx, &canonical, title, description)?;
 
-            let payload = SagaUpdatedPayload {
-                title: title.map(|t| t.to_string()),
-                description: description.map(|d| d.map(|s| s.to_string())),
-            };
-            let event = SagaEvent::new(&canonical, actor, SagaEventType::SagaUpdated, &payload);
-            queries::insert_saga_event(
-                &tx,
-                &SagaEventInsert {
-                    event_id: &event.event_id,
-                    saga_id: &event.saga_id,
-                    event_type: event.event_type.as_column_str(),
-                    timestamp: event.timestamp,
-                    actor: &event.actor,
-                    payload: &serde_json::to_string(&event.payload)?,
-                },
-            )?;
+                let payload = SagaUpdatedPayload {
+                    title: title.map(|t| t.to_string()),
+                    description: description.map(|d| d.map(|s| s.to_string())),
+                };
+                let event = SagaEvent::new(&canonical, actor, SagaEventType::SagaUpdated, &payload);
+                queries::insert_saga_event(
+                    &tx,
+                    &SagaEventInsert {
+                        event_id: &event.event_id,
+                        saga_id: &event.saga_id,
+                        event_type: event.event_type.as_column_str(),
+                        timestamp: event.timestamp,
+                        actor: &event.actor,
+                        payload: &serde_json::to_string(&event.payload)?,
+                    },
+                )?;
 
-            tx.commit()?;
-            Ok(row)
-        })?;
+                tx.commit()?;
+                Ok(row)
+            })
+            .into_brain_core()?;
         Ok(row)
     }
 
@@ -219,50 +228,57 @@ impl SagaStore {
         actor: &str,
     ) -> Result<(SagaRow, Vec<CascadeResult>)> {
         let actor_owned = actor.to_string();
-        self.db.with_write_conn(|conn| {
-            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
-            let tx = conn.unchecked_transaction()?;
-            let canonical = resolve_saga_id(&tx, saga_id)?;
+        self.db
+            .with_write_conn(|conn| {
+                // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
+                let tx = conn.unchecked_transaction()?;
+                let canonical = resolve_saga_id(&tx, saga_id)?;
 
-            let current = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
-            })?;
+                let current = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
+                })?;
 
-            let from: SagaStatus = current.status.parse().map_err(|_| {
-                BrainCoreError::Parse(format!("unknown saga status: {}", current.status))
-            })?;
+                let from: SagaStatus = current.status.parse().map_err(|_| {
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        current.status
+                    )))
+                })?;
 
-            validate_transition(from, SagaStatus::Closed)?;
+                validate_transition(from, SagaStatus::Closed).map_err(SqlError::Domain)?;
 
-            let row = close_saga(&tx, &canonical)?;
+                let row = close_saga(&tx, &canonical)?;
 
-            let event = SagaEvent::new(
-                &canonical,
-                &actor_owned,
-                SagaEventType::SagaClosed,
-                &SagaClosedPayload { cascade },
-            );
-            queries::insert_saga_event(
-                &tx,
-                &SagaEventInsert {
-                    event_id: &event.event_id,
-                    saga_id: &event.saga_id,
-                    event_type: event.event_type.as_column_str(),
-                    timestamp: event.timestamp,
-                    actor: &event.actor,
-                    payload: &serde_json::to_string(&event.payload)?,
-                },
-            )?;
+                let event = SagaEvent::new(
+                    &canonical,
+                    &actor_owned,
+                    SagaEventType::SagaClosed,
+                    &SagaClosedPayload { cascade },
+                );
+                queries::insert_saga_event(
+                    &tx,
+                    &SagaEventInsert {
+                        event_id: &event.event_id,
+                        saga_id: &event.saga_id,
+                        event_type: event.event_type.as_column_str(),
+                        timestamp: event.timestamp,
+                        actor: &event.actor,
+                        payload: &serde_json::to_string(&event.payload)?,
+                    },
+                )?;
 
-            let cascade_results = if cascade {
-                queries::cascade_member_tasks(&tx, &canonical, &actor_owned, TaskStatus::Done)?
-            } else {
-                vec![]
-            };
+                let cascade_results = if cascade {
+                    queries::cascade_member_tasks(&tx, &canonical, &actor_owned, TaskStatus::Done)?
+                } else {
+                    vec![]
+                };
 
-            tx.commit()?;
-            Ok((row, cascade_results))
-        })
+                tx.commit()?;
+                Ok((row, cascade_results))
+            })
+            .into_brain_core()
     }
 
     /// Fetch a saga by ID. Returns None if not found.
@@ -273,72 +289,79 @@ impl SagaStore {
     /// as a null result, not as an error.
     pub fn get(&self, saga_id: &str) -> Result<Option<SagaRow>> {
         let saga_id = saga_id.to_string();
-        self.db.with_read_conn(move |conn| {
-            let canonical = match resolve_saga_id(conn, &saga_id) {
-                Ok(c) => c,
-                Err(BrainCoreError::SagaNotFound(_)) => return Ok(None),
-                Err(e) => return Err(e),
-            };
-            queries::get_saga(conn, &canonical)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let canonical = match resolve_saga_id(conn, &saga_id) {
+                    Ok(c) => c,
+                    Err(SqlError::Domain(BrainCoreError::SagaNotFound(_))) => return Ok(None),
+                    Err(e) => return Err(e),
+                };
+                queries::get_saga(conn, &canonical)
+            })
+            .into_brain_core()
     }
 
     /// List sagas with optional filters.
     pub fn list(&self, filter: SagaListFilter) -> Result<Vec<SagaRow>> {
         self.db
             .with_read_conn(move |conn| queries::list_sagas(conn, &filter))
+            .into_brain_core()
     }
 
     /// Transition a saga from `planning` to `open`. Emits `SagaStarted`.
     pub fn start(&self, saga_id: &str, actor: &str) -> Result<SagaRow> {
-        self.db.with_write_conn(|conn| {
-            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
-            let tx = conn.unchecked_transaction()?;
-            let canonical = resolve_saga_id(&tx, saga_id)?;
+        self.db
+            .with_write_conn(|conn| {
+                // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
+                let tx = conn.unchecked_transaction()?;
+                let canonical = resolve_saga_id(&tx, saga_id)?;
 
-            let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
-            })?;
+                let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
+                })?;
 
-            let from: SagaStatus = row.status.parse().map_err(|_| {
-                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
-            })?;
+                let from: SagaStatus = row.status.parse().map_err(|_| {
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        row.status
+                    )))
+                })?;
 
-            validate_transition(from, SagaStatus::Open)?;
+                validate_transition(from, SagaStatus::Open).map_err(SqlError::Domain)?;
 
-            // L4: use the canonical now_ts() helper instead of an inline
-            // SystemTime::now().unwrap_or(0) which would silently write
-            // epoch-zero on a clock anomaly.
-            let now = crate::utils::now_ts();
-            #[allow(clippy::disallowed_macros)]
-            tx.execute(
-                "UPDATE sagas SET status = 'open', updated_at = ?1 WHERE saga_id = ?2",
-                rusqlite::params![now, canonical],
-            )?;
+                // L4: use the canonical now_ts() helper instead of an inline
+                // SystemTime::now().unwrap_or(0) which would silently write
+                // epoch-zero on a clock anomaly.
+                let now = crate::utils::now_ts();
+                start_saga(&tx, &canonical, now)?;
 
-            let event = SagaEvent::new(
-                &canonical,
-                actor,
-                SagaEventType::SagaStarted,
-                &serde_json::json!({}),
-            );
-            queries::insert_saga_event(
-                &tx,
-                &SagaEventInsert {
-                    event_id: &event.event_id,
-                    saga_id: &event.saga_id,
-                    event_type: event.event_type.as_column_str(),
-                    timestamp: event.timestamp,
-                    actor: &event.actor,
-                    payload: &serde_json::to_string(&event.payload)?,
-                },
-            )?;
+                let event = SagaEvent::new(
+                    &canonical,
+                    actor,
+                    SagaEventType::SagaStarted,
+                    &serde_json::json!({}),
+                );
+                queries::insert_saga_event(
+                    &tx,
+                    &SagaEventInsert {
+                        event_id: &event.event_id,
+                        saga_id: &event.saga_id,
+                        event_type: event.event_type.as_column_str(),
+                        timestamp: event.timestamp,
+                        actor: &event.actor,
+                        payload: &serde_json::to_string(&event.payload)?,
+                    },
+                )?;
 
-            let result = queries::get_saga(&tx, &canonical)?
-                .ok_or_else(|| BrainCoreError::Parse("saga disappeared after start".into()))?;
-            tx.commit()?;
-            Ok(result)
-        })
+                let result = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(BrainCoreError::Parse("saga disappeared after start".into()))
+                })?;
+                tx.commit()?;
+                Ok(result)
+            })
+            .into_brain_core()
     }
 
     /// Return the distinct set of brains that have member tasks in this saga.
@@ -346,48 +369,54 @@ impl SagaStore {
     /// Derived at read time — no denormalized table. Empty vec when saga has no members.
     pub fn brains_for_saga(&self, saga_id: &str) -> Result<Vec<BrainSummary>> {
         let saga_id = saga_id.to_string();
-        self.db.with_read_conn(move |conn| {
-            let canonical = resolve_saga_id(conn, &saga_id)?;
-            queries::brains_for_saga(conn, &canonical)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let canonical = resolve_saga_id(conn, &saga_id)?;
+                queries::brains_for_saga(conn, &canonical)
+            })
+            .into_brain_core()
     }
 
     /// Return ready-actionable member tasks (same rules as `tasks next`) plus
     /// the brains those tasks belong to. Empty for planning/closed/cancelled sagas.
     pub fn frontier(&self, saga_id: &str) -> Result<SagaFrontier> {
         let saga_id = saga_id.to_string();
-        self.db.with_read_conn(move |conn| {
-            let canonical = resolve_saga_id(conn, &saga_id)?;
-            // Spec invariant: only `open` sagas can have a non-empty frontier.
-            // Without this guard the result is empty only by accident (no ready
-            // member tasks); the contract should be explicit.
-            let row = queries::get_saga(conn, &canonical)?.ok_or_else(|| {
-                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
-            })?;
-            let status: SagaStatus = row.status.parse().map_err(|_| {
-                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
-            })?;
-            if !matches!(status, SagaStatus::Open) {
-                return Ok(SagaFrontier {
-                    tasks: vec![],
-                    brains: vec![],
+        self.db
+            .with_read_conn(move |conn| {
+                let canonical = resolve_saga_id(conn, &saga_id)?;
+                // Spec invariant: only `open` sagas can have a non-empty frontier.
+                // Without this guard the result is empty only by accident (no ready
+                // member tasks); the contract should be explicit.
+                let row = queries::get_saga(conn, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
+                })?;
+                let status: SagaStatus = row.status.parse().map_err(|_| {
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        row.status
+                    )))
+                })?;
+                if !matches!(status, SagaStatus::Open) {
+                    return Ok(SagaFrontier {
+                        tasks: vec![],
+                        brains: vec![],
+                        status,
+                    });
+                }
+
+                let task_ids: Vec<String> = list_saga_task_ids(conn, &canonical)?;
+
+                let tasks = list_ready_actionable_for_tasks(conn, &task_ids)?;
+                let brains = queries::brains_for_saga(conn, &canonical)?;
+                Ok(SagaFrontier {
+                    tasks,
+                    brains,
                     status,
-                });
-            }
-
-            let mut stmt = conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1")?;
-            let task_ids: Vec<String> = stmt
-                .query_map([&canonical], |row| row.get(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-
-            let tasks = list_ready_actionable_for_tasks(conn, &task_ids)?;
-            let brains = queries::brains_for_saga(conn, &canonical)?;
-            Ok(SagaFrontier {
-                tasks,
-                brains,
-                status,
+                })
             })
-        })
+            .into_brain_core()
     }
 
     /// Return saga member task stubs (task_id, brain_id, title, status, task_type)
@@ -398,10 +427,12 @@ impl SagaStore {
     /// is the only place these get filtered.
     pub fn list_member_stubs(&self, saga_id: &str) -> Result<Vec<SagaMemberStub>> {
         let saga_id = saga_id.to_string();
-        self.db.with_read_conn(move |conn| {
-            let canonical = resolve_saga_id(conn, &saga_id)?;
-            list_saga_member_stubs(conn, &canonical)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let canonical = resolve_saga_id(conn, &saga_id)?;
+                list_saga_member_stubs(conn, &canonical)
+            })
+            .into_brain_core()
     }
 
     /// Return raw task IDs for saga membership without joining `tasks`.
@@ -409,26 +440,30 @@ impl SagaStore {
     /// need orphan IDs for cleanup.
     pub fn list_members(&self, saga_id: &str) -> Result<Vec<String>> {
         let saga_id = saga_id.to_string();
-        self.db.with_read_conn(move |conn| {
-            let canonical = resolve_saga_id(conn, &saga_id)?;
-            list_saga_task_ids(conn, &canonical)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let canonical = resolve_saga_id(conn, &saga_id)?;
+                list_saga_task_ids(conn, &canonical)
+            })
+            .into_brain_core()
     }
 
     /// Aggregate counts, completion %, label histogram, and brains for a saga.
     pub fn stats(&self, saga_id: &str) -> Result<SagaStats> {
         let saga_id = saga_id.to_string();
-        self.db.with_read_conn(move |conn| {
-            let canonical = resolve_saga_id(conn, &saga_id)?;
-            let counts = queries::saga_stats(conn, &canonical)?;
-            let label_histogram = queries::saga_label_histogram(conn, &canonical)?;
-            let brains = queries::brains_for_saga(conn, &canonical)?;
-            Ok(SagaStats {
-                counts,
-                label_histogram,
-                brains,
+        self.db
+            .with_read_conn(move |conn| {
+                let canonical = resolve_saga_id(conn, &saga_id)?;
+                let counts = queries::saga_stats(conn, &canonical)?;
+                let label_histogram = queries::saga_label_histogram(conn, &canonical)?;
+                let brains = queries::brains_for_saga(conn, &canonical)?;
+                Ok(SagaStats {
+                    counts,
+                    label_histogram,
+                    brains,
+                })
             })
-        })
+            .into_brain_core()
     }
 
     /// Cancel a saga, optionally cascade-cancelling non-terminal member tasks.
@@ -446,64 +481,79 @@ impl SagaStore {
         actor: &str,
     ) -> Result<(SagaRow, Vec<CascadeResult>)> {
         let actor_owned = actor.to_string();
-        self.db.with_write_conn(|conn| {
-            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
-            let tx = conn.unchecked_transaction()?;
-            let canonical = resolve_saga_id(&tx, saga_id)?;
+        self.db
+            .with_write_conn(|conn| {
+                // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
+                let tx = conn.unchecked_transaction()?;
+                let canonical = resolve_saga_id(&tx, saga_id)?;
 
-            let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
-            })?;
+                let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
+                })?;
 
-            let from: SagaStatus = row.status.parse().map_err(|_| {
-                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
-            })?;
-            // Pre-checks for friendlier error messages — `validate_transition`
-            // would still reject these, but with a generic "invalid transition"
-            // string. Spec: cancel applies only to active states.
-            if matches!(from, SagaStatus::Cancelled) {
-                return Err(BrainCoreError::Parse(format!(
-                    "saga '{saga_id}' is already cancelled"
-                )));
-            }
-            if matches!(from, SagaStatus::Closed) {
-                return Err(BrainCoreError::Parse(format!(
-                    "saga '{saga_id}' is closed; reopen it before cancelling"
-                )));
-            }
-            validate_transition(from, SagaStatus::Cancelled)?;
+                let from: SagaStatus = row.status.parse().map_err(|_| {
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        row.status
+                    )))
+                })?;
+                // Pre-checks for friendlier error messages — `validate_transition`
+                // would still reject these, but with a generic "invalid transition"
+                // string. Spec: cancel applies only to active states.
+                if matches!(from, SagaStatus::Cancelled) {
+                    return Err(SqlError::Domain(BrainCoreError::Parse(format!(
+                        "saga '{saga_id}' is already cancelled"
+                    ))));
+                }
+                if matches!(from, SagaStatus::Closed) {
+                    return Err(SqlError::Domain(BrainCoreError::Parse(format!(
+                        "saga '{saga_id}' is closed; reopen it before cancelling"
+                    ))));
+                }
+                validate_transition(from, SagaStatus::Cancelled).map_err(SqlError::Domain)?;
 
-            queries::cancel_saga(&tx, &canonical)?;
+                queries::cancel_saga(&tx, &canonical)?;
 
-            let event = SagaEvent::new(
-                &canonical,
-                &actor_owned,
-                SagaEventType::SagaCancelled,
-                &SagaCancelledPayload { cascade },
-            );
-            queries::insert_saga_event(
-                &tx,
-                &SagaEventInsert {
-                    event_id: &event.event_id,
-                    saga_id: &event.saga_id,
-                    event_type: event.event_type.as_column_str(),
-                    timestamp: event.timestamp,
-                    actor: &event.actor,
-                    payload: &serde_json::to_string(&event.payload)?,
-                },
-            )?;
+                let event = SagaEvent::new(
+                    &canonical,
+                    &actor_owned,
+                    SagaEventType::SagaCancelled,
+                    &SagaCancelledPayload { cascade },
+                );
+                queries::insert_saga_event(
+                    &tx,
+                    &SagaEventInsert {
+                        event_id: &event.event_id,
+                        saga_id: &event.saga_id,
+                        event_type: event.event_type.as_column_str(),
+                        timestamp: event.timestamp,
+                        actor: &event.actor,
+                        payload: &serde_json::to_string(&event.payload)?,
+                    },
+                )?;
 
-            let cascade_results = if cascade {
-                queries::cascade_member_tasks(&tx, &canonical, &actor_owned, TaskStatus::Cancelled)?
-            } else {
-                vec![]
-            };
+                let cascade_results = if cascade {
+                    queries::cascade_member_tasks(
+                        &tx,
+                        &canonical,
+                        &actor_owned,
+                        TaskStatus::Cancelled,
+                    )?
+                } else {
+                    vec![]
+                };
 
-            let updated = queries::get_saga(&tx, &canonical)?
-                .ok_or_else(|| BrainCoreError::Database("saga disappeared after cancel".into()))?;
-            tx.commit()?;
-            Ok((updated, cascade_results))
-        })
+                let updated = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(BrainCoreError::Database(
+                        "saga disappeared after cancel".into(),
+                    ))
+                })?;
+                tx.commit()?;
+                Ok((updated, cascade_results))
+            })
+            .into_brain_core()
     }
 
     #[cfg(test)]
@@ -544,16 +594,16 @@ impl SagaStore {
 
             // Verify the saga exists and is not in a terminal state.
             let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+                SqlError::Domain(BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}")))
             })?;
             let status: SagaStatus = row.status.parse().map_err(|_| {
-                BrainCoreError::TaskEvent(format!("saga '{saga_id}' has unrecognised status"))
+                SqlError::Domain(BrainCoreError::TaskEvent(format!("saga '{saga_id}' has unrecognised status")))
             })?;
             match status {
                 SagaStatus::Closed | SagaStatus::Cancelled => {
-                    return Err(BrainCoreError::TaskEvent(format!(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                         "saga '{saga_id}' is {status}; reopen it before adding tasks"
-                    )));
+                    ))));
                 }
                 _ => {}
             }
@@ -562,7 +612,7 @@ impl SagaStore {
             let mut seeds: Vec<String> = Vec::with_capacity(task_ids.len());
             for raw_id in task_ids {
                 let full_id = resolve_task_id_scoped(&tx, raw_id, None).map_err(|e| {
-                    BrainCoreError::TaskEvent(format!("task '{raw_id}' could not be resolved: {e}"))
+                    SqlError::Domain(BrainCoreError::TaskEvent(format!("task '{raw_id}' could not be resolved: {e}")))
                 })?;
                 seeds.push(full_id);
             }
@@ -575,11 +625,11 @@ impl SagaStore {
             let candidates = if cascade {
                 let expanded = task_subtree(&tx, &seeds)?;
                 if expanded.len() > MAX_EXPANDED_BATCH {
-                    return Err(BrainCoreError::TaskEvent(format!(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                         "cascade expansion of {} tasks exceeds MAX_EXPANDED_BATCH ({}); narrow the seed set",
                         expanded.len(),
                         MAX_EXPANDED_BATCH
-                    )));
+                    ))));
                 }
                 expanded
             } else {
@@ -639,6 +689,7 @@ impl SagaStore {
             tx.commit()?;
             Ok(to_insert)
         })
+            .into_brain_core()
     }
 
     /// Remove tasks from a saga. Idempotent: missing memberships are no-ops.
@@ -671,15 +722,15 @@ impl SagaStore {
 
             // Reject closed/cancelled sagas — same guard as `add_tasks`.
             let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
+                SqlError::Domain(BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}")))
             })?;
             let saga_status: SagaStatus = row.status.parse().map_err(|_| {
-                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
+                SqlError::Domain(BrainCoreError::Parse(format!("unknown saga status: {}", row.status)))
             })?;
             if matches!(saga_status, SagaStatus::Closed | SagaStatus::Cancelled) {
-                return Err(BrainCoreError::Parse(format!(
+                return Err(SqlError::Domain(BrainCoreError::Parse(format!(
                     "cannot remove tasks from saga in '{saga_status}' status; reopen it before modifying"
-                )));
+                ))));
             }
 
             // Resolve each input ID. The lenient (typo-tolerant) path is the
@@ -692,9 +743,9 @@ impl SagaStore {
                 let mut out = Vec::with_capacity(task_ids.len());
                 for raw in &task_ids {
                     let full = resolve_task_id_scoped(&tx, raw, None).map_err(|e| {
-                        BrainCoreError::TaskEvent(format!(
+                        SqlError::Domain(BrainCoreError::TaskEvent(format!(
                             "task '{raw}' could not be resolved (cascade=true requires resolvable seeds): {e}"
-                        ))
+                        )))
                     })?;
                     out.push(full);
                 }
@@ -716,11 +767,11 @@ impl SagaStore {
             let resolved: Vec<String> = if cascade {
                 let expanded = task_subtree(&tx, &seeds)?;
                 if expanded.len() > MAX_EXPANDED_BATCH {
-                    return Err(BrainCoreError::TaskEvent(format!(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                         "cascade expansion of {} tasks exceeds MAX_EXPANDED_BATCH ({}); narrow the seed set",
                         expanded.len(),
                         MAX_EXPANDED_BATCH
-                    )));
+                    ))));
                 }
                 expanded
             } else {
@@ -764,6 +815,7 @@ impl SagaStore {
             tx.commit()?;
             Ok(present)
         })
+            .into_brain_core()
     }
 
     /// Reopen a closed or cancelled saga, setting status back to `open`.
@@ -771,52 +823,59 @@ impl SagaStore {
     pub fn reopen(&self, saga_id: &str, actor: &str) -> Result<SagaRow> {
         let actor = actor.to_string();
         let saga_id = saga_id.to_string();
-        self.db.with_write_conn(move |conn| {
-            // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
-            let tx = conn.unchecked_transaction()?;
-            let canonical = resolve_saga_id(&tx, &saga_id)?;
+        self.db
+            .with_write_conn(move |conn| {
+                // unchecked_ ok: with_write_conn holds the writer mutex, single writer guaranteed.
+                let tx = conn.unchecked_transaction()?;
+                let canonical = resolve_saga_id(&tx, &saga_id)?;
 
-            let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}"))
-            })?;
+                let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
+                })?;
 
-            let from: SagaStatus = row.status.parse().map_err(|_| {
-                BrainCoreError::Parse(format!("unknown saga status: {}", row.status))
-            })?;
+                let from: SagaStatus = row.status.parse().map_err(|_| {
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        row.status
+                    )))
+                })?;
 
-            // Reopen is only valid from terminal states; planning→open is `start`, not `reopen`.
-            match from {
-                SagaStatus::Closed | SagaStatus::Cancelled => {}
-                other => {
-                    return Err(BrainCoreError::Parse(format!(
-                        "cannot reopen saga in '{other}' status; allowed: closed, cancelled"
-                    )));
+                // Reopen is only valid from terminal states; planning→open is `start`, not `reopen`.
+                match from {
+                    SagaStatus::Closed | SagaStatus::Cancelled => {}
+                    other => {
+                        return Err(SqlError::Domain(BrainCoreError::Parse(format!(
+                            "cannot reopen saga in '{other}' status; allowed: closed, cancelled"
+                        ))));
+                    }
                 }
-            }
 
-            let updated = reopen_saga(&tx, &canonical)?;
+                let updated = reopen_saga(&tx, &canonical)?;
 
-            let event = SagaEvent::new(
-                &canonical,
-                &actor,
-                SagaEventType::SagaReopened,
-                &serde_json::json!({}),
-            );
-            queries::insert_saga_event(
-                &tx,
-                &SagaEventInsert {
-                    event_id: &event.event_id,
-                    saga_id: &event.saga_id,
-                    event_type: event.event_type.as_column_str(),
-                    timestamp: event.timestamp,
-                    actor: &event.actor,
-                    payload: &serde_json::to_string(&event.payload)?,
-                },
-            )?;
+                let event = SagaEvent::new(
+                    &canonical,
+                    &actor,
+                    SagaEventType::SagaReopened,
+                    &serde_json::json!({}),
+                );
+                queries::insert_saga_event(
+                    &tx,
+                    &SagaEventInsert {
+                        event_id: &event.event_id,
+                        saga_id: &event.saga_id,
+                        event_type: event.event_type.as_column_str(),
+                        timestamp: event.timestamp,
+                        actor: &event.actor,
+                        payload: &serde_json::to_string(&event.payload)?,
+                    },
+                )?;
 
-            tx.commit()?;
-            Ok(updated)
-        })
+                tx.commit()?;
+                Ok(updated)
+            })
+            .into_brain_core()
     }
 
     /// Force a saga's status directly (test-only).
@@ -829,15 +888,17 @@ impl SagaStore {
         let saga_id = saga_id.to_string();
         let status_str = status.as_str();
         let ts = crate::utils::now_ts();
-        self.db.with_write_conn(move |conn| {
-            let canonical = resolve_saga_id(conn, &saga_id)?;
-            #[allow(clippy::disallowed_macros)]
-            conn.execute(
-                "UPDATE sagas SET status = ?1, updated_at = ?2 WHERE saga_id = ?3",
-                rusqlite::params![status_str, ts, canonical],
-            )?;
-            Ok(())
-        })
+        self.db
+            .with_write_conn(move |conn| {
+                let canonical = resolve_saga_id(conn, &saga_id)?;
+                #[allow(clippy::disallowed_macros)]
+                conn.execute(
+                    "UPDATE sagas SET status = ?1, updated_at = ?2 WHERE saga_id = ?3",
+                    rusqlite::params![status_str, ts, canonical],
+                )?;
+                Ok(())
+            })
+            .into_brain_core()
     }
 
     /// Backdate a saga's `updated_at` directly (test-only).
@@ -848,15 +909,17 @@ impl SagaStore {
     #[cfg(test)]
     pub fn force_updated_at_for_test(&self, saga_id: &str, ts: i64) -> Result<()> {
         let saga_id = saga_id.to_string();
-        self.db.with_write_conn(move |conn| {
-            let canonical = resolve_saga_id(conn, &saga_id)?;
-            #[allow(clippy::disallowed_macros)]
-            conn.execute(
-                "UPDATE sagas SET updated_at = ?1, created_at = ?1 WHERE saga_id = ?2",
-                rusqlite::params![ts, canonical],
-            )?;
-            Ok(())
-        })
+        self.db
+            .with_write_conn(move |conn| {
+                let canonical = resolve_saga_id(conn, &saga_id)?;
+                #[allow(clippy::disallowed_macros)]
+                conn.execute(
+                    "UPDATE sagas SET updated_at = ?1, created_at = ?1 WHERE saga_id = ?2",
+                    rusqlite::params![ts, canonical],
+                )?;
+                Ok(())
+            })
+            .into_brain_core()
     }
 }
 
@@ -930,6 +993,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert!(event_type.contains("saga_created"), "got: {event_type}");
         assert_eq!(actor, "actor");
@@ -959,6 +1023,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
         let count: i64 = store
             .db
@@ -970,6 +1035,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(
             count, 1,
@@ -993,6 +1059,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let rows = store.list(SagaListFilter::default()).unwrap();
@@ -1014,6 +1081,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let rows = store
@@ -1097,6 +1165,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let rows = store
@@ -1124,6 +1193,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let rows = store.list(SagaListFilter::default()).unwrap();
@@ -1146,6 +1216,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let rows = store
@@ -1174,6 +1245,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
     }
 
@@ -1188,6 +1260,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
     }
 
@@ -1278,6 +1351,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         // Without include_closed: only open saga returned.
@@ -1326,6 +1400,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
         let updated = store
             .update(&row.saga_id, Some("Closed but renamed"), None, "actor")
@@ -1367,6 +1442,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert!(event_type.contains("saga_updated"), "got: {event_type}");
         assert!(
@@ -1448,6 +1524,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(count, 0, "rolled-back task must not appear in saga_tasks");
     }
@@ -1468,6 +1545,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let err = store
@@ -1501,6 +1579,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let err = store
@@ -1549,6 +1628,7 @@ mod tests {
                     .unwrap();
                 Ok(ids)
             })
+            .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"brain-a-task01".to_string()));
         assert!(ids.contains(&"brain-b-task01".to_string()));
@@ -1588,6 +1668,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(
             event_count, 3,
@@ -1680,7 +1761,7 @@ mod tests {
                 rusqlite::params![saga.saga_id],
             )?;
             Ok(())
-        }).unwrap();
+        }).into_brain_core().unwrap();
 
         let brains = store.brains_for_saga(&saga.saga_id).unwrap();
         assert_eq!(brains.len(), 2);
@@ -1720,7 +1801,7 @@ mod tests {
                 rusqlite::params![saga.saga_id],
             )?;
             Ok(())
-        }).unwrap();
+        }).into_brain_core().unwrap();
 
         let brains = store.brains_for_saga(&saga.saga_id).unwrap();
         assert_eq!(
@@ -1766,6 +1847,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(member_count, 1, "should be exactly 1 saga_tasks row");
 
@@ -1780,6 +1862,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(event_count, 1, "should emit exactly 1 SagaTaskAdded event");
     }
@@ -1824,6 +1907,7 @@ mod tests {
                     .unwrap();
                 Ok(ids)
             })
+            .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"idem-task01".to_string()));
         assert!(ids.contains(&"idem-task02".to_string()));
@@ -1841,6 +1925,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(event_count, 2);
     }
@@ -1861,6 +1946,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
     }
 
@@ -1876,6 +1962,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap() as usize
     }
 
@@ -1918,6 +2005,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(event_count, 4);
     }
@@ -1980,6 +2068,7 @@ mod tests {
                     .unwrap();
                 Ok(ids)
             })
+            .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"xb-parent".to_string()));
         assert!(ids.contains(&"yb-child".to_string()));
@@ -2039,6 +2128,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(removed_events, 3);
     }
@@ -2190,6 +2280,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(
             count, 1,
@@ -2277,6 +2368,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(count, 1, "expected exactly 1 saga_reopened event");
         assert_eq!(actor, "actor-x");

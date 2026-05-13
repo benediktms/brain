@@ -6,7 +6,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::tasks::display_id::compute_display_id_for_target;
 use crate::db::tasks::events::{TaskEvent, TaskTransferredPayload};
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 /// Result of a successful task transfer.
 #[derive(Debug, Clone)]
@@ -41,7 +42,7 @@ pub fn transfer_task_inner(
     conn: &Connection,
     task_id: &str,
     target_brain_id: &str,
-) -> Result<TaskTransferResult> {
+) -> SqlResult<TaskTransferResult> {
     // 1. Read current state.
     let current: Option<(String, Option<String>)> = conn
         .query_row(
@@ -51,8 +52,8 @@ pub fn transfer_task_inner(
         )
         .optional()?;
 
-    let (from_brain_id, from_display_id_opt) =
-        current.ok_or_else(|| BrainCoreError::TaskNotFound(task_id.to_string()))?;
+    let (from_brain_id, from_display_id_opt) = current
+        .ok_or_else(|| SqlError::Domain(BrainCoreError::TaskNotFound(task_id.to_string())))?;
 
     let from_display_id = from_display_id_opt.unwrap_or_default();
 
@@ -80,12 +81,14 @@ pub fn transfer_task_inner(
         .optional()?
         .unwrap_or(false);
     if !target_exists {
-        return Err(BrainCoreError::BrainNotFound(target_brain_id.to_string()));
+        return Err(SqlError::Domain(BrainCoreError::BrainNotFound(
+            target_brain_id.to_string(),
+        )));
     }
 
     conn.execute_batch("BEGIN IMMEDIATE")?;
 
-    let result = (|| -> Result<TaskTransferResult> {
+    let result = (|| -> SqlResult<TaskTransferResult> {
         // 3. Compute collision-safe display_id for target brain.
         let to_display_id = compute_display_id_for_target(conn, task_id, target_brain_id)?;
 
@@ -97,8 +100,8 @@ pub fn transfer_task_inner(
             params![target_brain_id, to_display_id, task_id, from_brain_id],
         )?;
         if rows != 1 {
-            return Err(BrainCoreError::TaskTransferCasFailed(format!(
-                "task {task_id}: concurrent transfer detected — retry"
+            return Err(SqlError::Domain(BrainCoreError::TaskTransferCasFailed(
+                format!("task {task_id}: concurrent transfer detected — retry"),
             )));
         }
 
@@ -134,8 +137,11 @@ pub fn transfer_task_inner(
         // ev.payload is already a serde_json::Value; serializing it to a JSON
         // string is infallible in practice, but we propagate errors explicitly
         // rather than silently corrupting the event row with "{}".
-        let payload_json = serde_json::to_string(&ev.payload)
-            .map_err(|e| BrainCoreError::TaskEvent(format!("payload serialize failed: {e}")))?;
+        let payload_json = serde_json::to_string(&ev.payload).map_err(|e| {
+            SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                "payload serialize failed: {e}"
+            )))
+        })?;
         conn.execute(
             "INSERT INTO task_events \
              (event_id, task_id, event_type, timestamp, actor, payload) \

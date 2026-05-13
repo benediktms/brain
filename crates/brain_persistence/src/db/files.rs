@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use ulid::Ulid;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Get or create a file_id for the given path. Returns (file_id, is_new).
 ///
@@ -11,7 +11,7 @@ pub fn get_or_create_file_id(
     conn: &Connection,
     path: &str,
     brain_id: &str,
-) -> Result<(String, bool)> {
+) -> SqlResult<(String, bool)> {
     // Try to find existing (including soft-deleted — resurrect it)
     // When brain_id is provided, match both path and brain_id for consistency.
     let existing: Option<(String, Option<i64>)> = if brain_id.is_empty() {
@@ -52,7 +52,7 @@ pub fn get_or_create_file_id(
 }
 
 /// Get the stored content hash for a file.
-pub fn get_content_hash(conn: &Connection, file_id: &str) -> Result<Option<String>> {
+pub fn get_content_hash(conn: &Connection, file_id: &str) -> SqlResult<Option<String>> {
     Ok(conn
         .query_row(
             "SELECT content_hash FROM files WHERE file_id = ?1",
@@ -64,7 +64,7 @@ pub fn get_content_hash(conn: &Connection, file_id: &str) -> Result<Option<Strin
 }
 
 /// Get the stored chunker version for a file.
-pub fn get_chunker_version(conn: &Connection, file_id: &str) -> Result<Option<u32>> {
+pub fn get_chunker_version(conn: &Connection, file_id: &str) -> SqlResult<Option<u32>> {
     Ok(conn
         .query_row(
             "SELECT chunker_version FROM files WHERE file_id = ?1",
@@ -76,7 +76,7 @@ pub fn get_chunker_version(conn: &Connection, file_id: &str) -> Result<Option<u3
 }
 
 /// Count files where chunker_version doesn't match the current version (stale or NULL).
-pub fn count_stale_chunker_version(conn: &Connection, current_version: u32) -> Result<usize> {
+pub fn count_stale_chunker_version(conn: &Connection, current_version: u32) -> SqlResult<usize> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM files WHERE deleted_at IS NULL AND (chunker_version IS NULL OR chunker_version != ?1)",
         [current_version],
@@ -86,7 +86,7 @@ pub fn count_stale_chunker_version(conn: &Connection, current_version: u32) -> R
 }
 
 /// Set the indexing state for a file (idle | indexing_started | indexed).
-pub fn set_indexing_state(conn: &Connection, file_id: &str, state: &str) -> Result<()> {
+pub fn set_indexing_state(conn: &Connection, file_id: &str, state: &str) -> SqlResult<()> {
     conn.execute(
         "UPDATE files SET indexing_state = ?1 WHERE file_id = ?2",
         rusqlite::params![state, file_id],
@@ -94,7 +94,7 @@ pub fn set_indexing_state(conn: &Connection, file_id: &str, state: &str) -> Resu
     Ok(())
 }
 
-pub fn reset_stuck_file_for_reindex(conn: &Connection, file_id: &str) -> Result<()> {
+pub fn reset_stuck_file_for_reindex(conn: &Connection, file_id: &str) -> SqlResult<()> {
     set_indexing_state(conn, file_id, "idle")?;
     conn.execute(
         "UPDATE files SET content_hash = NULL WHERE file_id = ?1",
@@ -114,7 +114,7 @@ pub fn mark_indexed(
     content_hash: &str,
     chunker_version: u32,
     disk_modified_at: Option<i64>,
-) -> Result<()> {
+) -> SqlResult<()> {
     let now = crate::utils::now_ts();
     conn.execute(
         "UPDATE files SET content_hash = ?1, last_indexed_at = ?2, indexing_state = 'indexed', chunker_version = ?3, disk_modified_at = ?4 WHERE file_id = ?5",
@@ -132,7 +132,7 @@ pub fn update_file_frontmatter(
     file_id: &str,
     tags_json: &str,
     importance: f64,
-) -> Result<()> {
+) -> SqlResult<()> {
     conn.execute(
         "UPDATE files SET tags = ?1, importance = ?2 WHERE file_id = ?3",
         rusqlite::params![tags_json, importance, file_id],
@@ -141,7 +141,7 @@ pub fn update_file_frontmatter(
 }
 
 /// Update the path for a renamed file.
-pub fn handle_rename(conn: &Connection, file_id: &str, new_path: &str) -> Result<()> {
+pub fn handle_rename(conn: &Connection, file_id: &str, new_path: &str) -> SqlResult<()> {
     conn.execute(
         "UPDATE files SET path = ?1 WHERE file_id = ?2",
         rusqlite::params![new_path, file_id],
@@ -150,7 +150,7 @@ pub fn handle_rename(conn: &Connection, file_id: &str, new_path: &str) -> Result
 }
 
 /// Soft-delete a file by path. Returns the file_id if found.
-pub fn handle_delete(conn: &Connection, path: &str) -> Result<Option<String>> {
+pub fn handle_delete(conn: &Connection, path: &str) -> SqlResult<Option<String>> {
     let file_id: Option<String> = conn
         .query_row(
             "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",
@@ -175,7 +175,7 @@ pub fn handle_delete(conn: &Connection, path: &str) -> Result<Option<String>> {
 }
 
 /// Find files stuck in 'indexing_started' state (crash recovery).
-pub fn find_stuck_files(conn: &Connection) -> Result<Vec<(String, String)>> {
+pub fn find_stuck_files(conn: &Connection) -> SqlResult<Vec<(String, String)>> {
     let mut stmt = conn.prepare(
         "SELECT file_id, path FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
     )?;
@@ -184,7 +184,7 @@ pub fn find_stuck_files(conn: &Connection) -> Result<Vec<(String, String)>> {
 }
 
 /// Get all active (non-deleted) file paths for startup deletion detection.
-pub fn get_all_active_paths(conn: &Connection) -> Result<Vec<(String, String)>> {
+pub fn get_all_active_paths(conn: &Connection) -> SqlResult<Vec<(String, String)>> {
     let mut stmt = conn.prepare("SELECT file_id, path FROM files WHERE deleted_at IS NULL")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
     super::collect_rows(rows)
@@ -196,7 +196,7 @@ pub fn get_all_active_paths(conn: &Connection) -> Result<Vec<(String, String)>> 
 pub fn get_active_paths_for_brain(
     conn: &Connection,
     brain_id: &str,
-) -> Result<Vec<(String, String)>> {
+) -> SqlResult<Vec<(String, String)>> {
     if brain_id.is_empty() {
         return get_all_active_paths(conn);
     }
@@ -207,7 +207,7 @@ pub fn get_active_paths_for_brain(
 }
 
 /// Clear all content hashes and chunker versions (forces full re-index on next scan).
-pub fn clear_all_content_hashes(conn: &Connection) -> Result<usize> {
+pub fn clear_all_content_hashes(conn: &Connection) -> SqlResult<usize> {
     let count = conn.execute(
         "UPDATE files SET content_hash = NULL, chunker_version = NULL, indexing_state = 'idle' WHERE deleted_at IS NULL",
         [],
@@ -216,7 +216,7 @@ pub fn clear_all_content_hashes(conn: &Connection) -> Result<usize> {
 }
 
 /// Clear content hash and chunker version for a specific file path (forces re-index of that file).
-pub fn clear_content_hash_by_path(conn: &Connection, path: &str) -> Result<bool> {
+pub fn clear_content_hash_by_path(conn: &Connection, path: &str) -> SqlResult<bool> {
     let count = conn.execute(
         "UPDATE files SET content_hash = NULL, chunker_version = NULL, indexing_state = 'idle' WHERE path = ?1 AND deleted_at IS NULL",
         [path],
@@ -226,7 +226,7 @@ pub fn clear_content_hash_by_path(conn: &Connection, path: &str) -> Result<bool>
 
 /// Hard-delete files where `deleted_at` is older than the given threshold (Unix seconds).
 /// Returns the list of file_ids that were purged.
-pub fn purge_deleted_files(conn: &Connection, older_than_ts: i64) -> Result<Vec<String>> {
+pub fn purge_deleted_files(conn: &Connection, older_than_ts: i64) -> SqlResult<Vec<String>> {
     let mut stmt =
         conn.prepare("SELECT file_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < ?1")?;
     let rows = stmt.query_map([older_than_ts], |row| row.get::<_, String>(0))?;
@@ -243,7 +243,9 @@ pub fn purge_deleted_files(conn: &Connection, older_than_ts: i64) -> Result<Vec<
 }
 
 /// Get all active file_ids with their content hashes for doctor verification.
-pub fn get_files_with_hashes(conn: &Connection) -> Result<Vec<(String, String, Option<String>)>> {
+pub fn get_files_with_hashes(
+    conn: &Connection,
+) -> SqlResult<Vec<(String, String, Option<String>)>> {
     let mut stmt =
         conn.prepare("SELECT file_id, path, content_hash FROM files WHERE deleted_at IS NULL")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
@@ -255,7 +257,7 @@ pub fn get_files_with_hashes(conn: &Connection) -> Result<Vec<(String, String, O
 // ---------------------------------------------------------------------------
 
 /// Count files stuck in `indexing_started` state.
-pub fn count_stuck_indexing(conn: &Connection) -> Result<u64> {
+pub fn count_stuck_indexing(conn: &Connection) -> SqlResult<u64> {
     let count: u64 = conn
         .query_row(
             "SELECT COUNT(*) FROM files WHERE indexing_state = 'indexing_started' AND deleted_at IS NULL",
@@ -268,7 +270,11 @@ pub fn count_stuck_indexing(conn: &Connection) -> Result<u64> {
 }
 
 /// Look up a file by path, rename it, and return its file_id.
-pub fn rename_by_path(conn: &Connection, from_path: &str, to_path: &str) -> Result<Option<String>> {
+pub fn rename_by_path(
+    conn: &Connection,
+    from_path: &str,
+    to_path: &str,
+) -> SqlResult<Option<String>> {
     let file_id: Option<String> = conn
         .query_row(
             "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",
@@ -284,7 +290,7 @@ pub fn rename_by_path(conn: &Connection, from_path: &str, to_path: &str) -> Resu
 }
 
 /// Run SQLite VACUUM.
-pub fn vacuum(conn: &Connection) -> Result<()> {
+pub fn vacuum(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch("VACUUM")?;
     Ok(())
 }

@@ -23,6 +23,7 @@ use brain_lib::pipeline::IndexPipeline;
 use brain_lib::query_pipeline::{FederatedPipeline, SearchParams};
 use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::{Store, StoreReader};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -409,6 +410,7 @@ async fn uri_mode_returns_uri_direct() {
             let id: String = stmt.query_row([&brain_id], |row| row.get(0))?;
             Ok(id)
         })
+        .into_brain_core()
         .expect("get chunk_id from DB");
 
     // Build the synapse:// URI with the memory domain: synapse://<brain>/memory/<chunk_id>
@@ -581,6 +583,7 @@ async fn federated_dedup_prefers_lex_smaller_brain_on_tie() {
         )?;
         Ok(())
     })
+    .into_brain_core()
     .unwrap();
 
     let make_searcher = || SingleChunkSearcher {

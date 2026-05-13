@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::comparator;
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 /// Minimum ULID prefix length (after project prefix + separator).
 const MIN_ULID_PREFIX_LEN: usize = 4;
@@ -96,7 +97,7 @@ fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<RecordRow> {
 // -- Query functions --
 
 /// Get a single record by exact ID.
-pub fn get_record(conn: &Connection, record_id: &str) -> Result<Option<RecordRow>> {
+pub fn get_record(conn: &Connection, record_id: &str) -> SqlResult<Option<RecordRow>> {
     let sql = format!("SELECT {RECORD_COLUMNS} FROM records WHERE record_id = ?1");
     let result = conn
         .query_row(&sql, [record_id], row_to_record)
@@ -105,7 +106,7 @@ pub fn get_record(conn: &Connection, record_id: &str) -> Result<Option<RecordRow
 }
 
 /// List records with optional filters.
-pub fn list_records(conn: &Connection, filter: &RecordFilter) -> Result<Vec<RecordRow>> {
+pub fn list_records(conn: &Connection, filter: &RecordFilter) -> SqlResult<Vec<RecordRow>> {
     let mut conditions: Vec<&str> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
@@ -167,7 +168,7 @@ pub fn list_records(conn: &Connection, filter: &RecordFilter) -> Result<Vec<Reco
 }
 
 /// Get all tags for a record.
-pub fn get_record_tags(conn: &Connection, record_id: &str) -> Result<Vec<String>> {
+pub fn get_record_tags(conn: &Connection, record_id: &str) -> SqlResult<Vec<String>> {
     let mut stmt =
         conn.prepare("SELECT tag FROM record_tags WHERE record_id = ?1 ORDER BY tag ASC")?;
     let rows = stmt.query_map([record_id], |row| row.get::<_, String>(0))?;
@@ -178,7 +179,7 @@ pub fn get_record_tags(conn: &Connection, record_id: &str) -> Result<Vec<String>
 ///
 /// Reads from `entity_links` (covers edges originating from this record).
 /// `record_links` is kept as a dual-write legacy projection until Wave 7 drops it.
-pub fn get_record_links(conn: &Connection, record_id: &str) -> Result<Vec<RecordLink>> {
+pub fn get_record_links(conn: &Connection, record_id: &str) -> SqlResult<Vec<RecordLink>> {
     let new_result = get_record_links_via_entity_links(conn, record_id)?;
     if comparator::comparator_enabled() {
         let legacy_ids = comparator_legacy_get_record_links(conn, record_id)?;
@@ -202,7 +203,7 @@ pub fn get_record_links(conn: &Connection, record_id: &str) -> Result<Vec<Record
 fn get_record_links_via_entity_links(
     conn: &Connection,
     record_id: &str,
-) -> Result<Vec<RecordLink>> {
+) -> SqlResult<Vec<RecordLink>> {
     let mut stmt = conn.prepare(
         "SELECT
              from_id                                               AS record_id,
@@ -232,7 +233,10 @@ fn get_record_links_via_entity_links(
 // Wave 7 deletes this block alongside the comparator wrap.
 // ---------------------------------------------------------------------------
 
-fn comparator_legacy_get_record_links(conn: &Connection, record_id: &str) -> Result<Vec<String>> {
+fn comparator_legacy_get_record_links(
+    conn: &Connection,
+    record_id: &str,
+) -> SqlResult<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT task_id, chunk_id FROM record_links WHERE record_id = ?1 ORDER BY created_at ASC",
     )?;
@@ -251,7 +255,7 @@ fn comparator_legacy_get_record_links(conn: &Connection, record_id: &str) -> Res
 }
 
 /// Check if a record exists in the projection.
-pub fn record_exists(conn: &Connection, record_id: &str) -> Result<bool> {
+pub fn record_exists(conn: &Connection, record_id: &str) -> SqlResult<bool> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM records WHERE record_id = ?1",
         [record_id],
@@ -268,7 +272,7 @@ pub fn record_exists(conn: &Connection, record_id: &str) -> Result<bool> {
 /// - Handle bare ULID prefix (auto-prepend project prefix from brains.prefix)
 /// - Range scan on PRIMARY KEY
 /// - Error on ambiguous/not-found
-pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> Result<String> {
+pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> SqlResult<String> {
     // Fast path: exact match
     if record_exists(conn, input)? {
         return Ok(input.to_string());
@@ -281,10 +285,10 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> Resu
             // Looks like a project prefix (1-4 chars before dash), e.g. "BRN-01JPH..."
             let ulid_part = &normalized[dash_pos + 1..];
             if ulid_part.len() < MIN_ULID_PREFIX_LEN {
-                return Err(BrainCoreError::RecordEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::RecordEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters after '{}'",
                     &normalized[..=dash_pos]
-                )));
+                ))));
             }
             normalized
         }
@@ -295,10 +299,10 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> Resu
         None => {
             // No dash — bare ULID prefix, auto-prepend project prefix
             if normalized.len() < MIN_ULID_PREFIX_LEN {
-                return Err(BrainCoreError::RecordEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::RecordEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters, got {}",
                     normalized.len()
-                )));
+                ))));
             }
             let prefix = if !brain_id.is_empty() {
                 conn.query_row(
@@ -328,25 +332,25 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> Resu
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     match matches.len() {
-        0 => Err(BrainCoreError::RecordEvent(format!(
+        0 => Err(SqlError::Domain(BrainCoreError::RecordEvent(format!(
             "no record found matching prefix: {input}"
-        ))),
+        )))),
         1 => Ok(matches.into_iter().next().unwrap().0),
         n => {
             let candidates: Vec<String> = matches
                 .iter()
                 .map(|(id, title)| format!("  {id} — {title}"))
                 .collect();
-            Err(BrainCoreError::RecordEvent(format!(
+            Err(SqlError::Domain(BrainCoreError::RecordEvent(format!(
                 "ambiguous prefix '{input}': matches {n} records:\n{}",
                 candidates.join("\n")
-            )))
+            ))))
         }
     }
 }
 
 /// Compute the shortest unique prefix for a single record ID.
-pub fn compact_record_id(conn: &Connection, record_id: &str) -> Result<String> {
+pub fn compact_record_id(conn: &Connection, record_id: &str) -> SqlResult<String> {
     let prev: Option<String> = conn
         .query_row(
             "SELECT record_id FROM records WHERE record_id < ?1 ORDER BY record_id DESC LIMIT 1",
@@ -380,7 +384,7 @@ pub fn compact_record_id(conn: &Connection, record_id: &str) -> Result<String> {
 }
 
 /// Compute compact display IDs for all records (batch, for list display).
-pub fn compact_record_ids(conn: &Connection) -> Result<HashMap<String, String>> {
+pub fn compact_record_ids(conn: &Connection) -> SqlResult<HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT record_id FROM records ORDER BY record_id")?;
     let ids: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
@@ -415,7 +419,7 @@ pub fn compact_record_ids(conn: &Connection) -> Result<HashMap<String, String>> 
 }
 
 /// Get all content references (record_id, content_hash, payload_available) for integrity checks.
-pub fn get_all_content_refs(conn: &Connection) -> Result<Vec<(String, String, bool)>> {
+pub fn get_all_content_refs(conn: &Connection) -> SqlResult<Vec<(String, String, bool)>> {
     let mut stmt =
         conn.prepare("SELECT record_id, content_hash, payload_available FROM records")?;
     let rows = stmt.query_map([], |row| {
@@ -433,7 +437,7 @@ pub fn count_payload_refs(
     conn: &Connection,
     content_hash: &str,
     exclude_record_id: &str,
-) -> Result<i64> {
+) -> SqlResult<i64> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM records WHERE content_hash = ?1 AND payload_available = 1 AND record_id != ?2",
         rusqlite::params![content_hash, exclude_record_id],
@@ -461,7 +465,7 @@ pub struct RecordPollRow {
 pub fn find_stale_records_for_embedding(
     conn: &Connection,
     brain_id: &str,
-) -> Result<Vec<RecordPollRow>> {
+) -> SqlResult<Vec<RecordPollRow>> {
     let mut stmt = conn.prepare(
         "SELECT record_id, title, kind, description
          FROM records
@@ -488,7 +492,7 @@ pub fn find_stale_records_for_embedding(
 }
 
 /// Set `embedded_at = now()` on a batch of records.
-pub fn mark_records_embedded(conn: &Connection, record_ids: &[&str]) -> Result<()> {
+pub fn mark_records_embedded(conn: &Connection, record_ids: &[&str]) -> SqlResult<()> {
     if record_ids.is_empty() {
         return Ok(());
     }
@@ -509,7 +513,7 @@ pub fn mark_records_embedded(conn: &Connection, record_ids: &[&str]) -> Result<(
 pub fn get_tags_for_records(
     conn: &Connection,
     record_ids: &[&str],
-) -> Result<HashMap<String, Vec<String>>> {
+) -> SqlResult<HashMap<String, Vec<String>>> {
     if record_ids.is_empty() {
         return Ok(HashMap::new());
     }

@@ -15,6 +15,7 @@ use brain_lib::pipeline::IndexPipeline;
 use brain_lib::watcher::{FileEvent, coalesce_events};
 use brain_persistence::db::Db;
 use brain_persistence::db::files;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::{Store, StoreReader};
 
 use tempfile::TempDir;
@@ -104,6 +105,7 @@ async fn test_batch_vs_single_equivalence() {
                 .unwrap();
             Ok(c)
         })
+        .into_brain_core()
         .unwrap();
 
     let count_b: i64 = pipeline_b
@@ -114,6 +116,7 @@ async fn test_batch_vs_single_equivalence() {
                 .unwrap();
             Ok(c)
         })
+        .into_brain_core()
         .unwrap();
 
     assert_eq!(count_a, count_b);
@@ -160,6 +163,7 @@ async fn test_backpressure_no_dropped_events() {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths.len())
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(active_count, 150);
 
@@ -171,6 +175,7 @@ async fn test_backpressure_no_dropped_events() {
                 .unwrap();
             Ok(c)
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(chunk_count, 300);
 }
@@ -282,6 +287,7 @@ async fn test_concurrent_read_write_no_deadlocks() {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths.len())
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(total_files, 50);
 }
@@ -410,6 +416,7 @@ async fn test_scan_watcher_race_idempotent() {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths.len())
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(active_count, 30);
 
@@ -422,6 +429,7 @@ async fn test_scan_watcher_race_idempotent() {
                 .unwrap();
             Ok(c)
         })
+        .into_brain_core()
         .unwrap();
     assert_eq!(chunk_count, 60);
 

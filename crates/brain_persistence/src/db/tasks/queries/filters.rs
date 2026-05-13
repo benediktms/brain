@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use crate::db::fts::sanitize_fts_query;
 use crate::db::tasks::events::TaskType;
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 use super::TaskRow;
 
@@ -81,7 +81,7 @@ pub fn apply_filters(
 
 /// Full-text search on task title and description via FTS5.
 /// Returns matching task_ids ordered by relevance.
-pub fn search_tasks_fts(conn: &Connection, query: &str, limit: usize) -> Result<Vec<String>> {
+pub fn search_tasks_fts(conn: &Connection, query: &str, limit: usize) -> SqlResult<Vec<String>> {
     let query = sanitize_fts_query(query);
     if query.is_empty() {
         return Ok(Vec::new());

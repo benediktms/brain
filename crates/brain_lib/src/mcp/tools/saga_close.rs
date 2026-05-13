@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::sagas::compact_saga_id;
+#[allow(unused_imports)]
+use brain_persistence::sql::SqlResultExt;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -122,6 +124,7 @@ impl McpTool for SagaClose {
 
 #[cfg(test)]
 mod tests {
+    use brain_persistence::sql::SqlResultExt;
     use serde_json::{Value, json};
 
     use super::super::tests::create_test_context;
@@ -159,6 +162,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
         saga_id
     }
@@ -271,6 +275,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let result = call_close(json!({ "saga_id": &saga_id, "cascade": true }), &ctx).await;

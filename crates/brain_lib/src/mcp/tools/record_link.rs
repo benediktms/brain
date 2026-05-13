@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{EdgeKind, EntityRef, EntityType};
+#[allow(unused_imports)]
+use brain_persistence::sql::{SqlError, SqlResultExt};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -265,6 +267,7 @@ impl McpTool for RecordLinkRemove {
 
 #[cfg(test)]
 mod tests {
+    use brain_persistence::sql::{SqlError, SqlResultExt};
     use serde_json::json;
 
     use super::super::ToolRegistry;
@@ -389,6 +392,7 @@ mod tests {
             .with_read_conn(|conn| {
                 brain_persistence::db::records::queries::get_record_links(conn, &record_id)
             })
+            .into_brain_core()
             .expect("get_record_links should succeed after add");
         assert_eq!(links.len(), 1, "exactly one link expected after add");
         assert_eq!(
@@ -424,6 +428,7 @@ mod tests {
             .with_read_conn(|conn| {
                 brain_persistence::db::records::queries::get_record_links(conn, &record_id)
             })
+            .into_brain_core()
             .expect("get_record_links should succeed after remove");
         assert!(links_after.is_empty(), "links must be empty after remove");
     }
@@ -503,6 +508,7 @@ mod tests {
             .with_read_conn(|conn| {
                 brain_persistence::db::records::queries::get_record_links(conn, &record_id)
             })
+            .into_brain_core()
             .expect("get_record_links should succeed");
         assert_eq!(
             links.len(),
@@ -528,8 +534,11 @@ mod tests {
                     },
                     None,
                 )
-                .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+                .map_err(|e| {
+                    SqlError::Domain(brain_core::error::BrainCoreError::Database(e.to_string()))
+                })
             })
+            .into_brain_core()
             .expect("for_entity should succeed");
         let covers_edge = entity_links.iter().find(|l| {
             l.to.id == task_id
@@ -610,8 +619,11 @@ mod tests {
                     },
                     None,
                 )
-                .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+                .map_err(|e| {
+                    SqlError::Domain(brain_core::error::BrainCoreError::Database(e.to_string()))
+                })
             })
+            .into_brain_core()
             .expect("for_entity (shim) should succeed");
 
         let generic_links = ctx
@@ -626,8 +638,11 @@ mod tests {
                     },
                     None,
                 )
-                .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
+                .map_err(|e| {
+                    SqlError::Domain(brain_core::error::BrainCoreError::Database(e.to_string()))
+                })
             })
+            .into_brain_core()
             .expect("for_entity (generic) should succeed");
 
         let shim_edge = shim_links

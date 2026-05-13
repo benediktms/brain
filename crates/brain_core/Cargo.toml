@@ -1,0 +1,16 @@
+[package]
+name = "brain-core"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+# Exposes the `ports::mock` module so other crates can pull in the
+# in-memory mock impls without enabling their own test cfg. Mirrors
+# the same gate in `brain-persistence`.
+test-utils = []
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -5,6 +5,7 @@ use brain_lib::config::{
     save_global_config,
 };
 use brain_persistence::db::schema::BrainUpsert;
+use brain_persistence::sql::SqlResultExt;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -482,7 +483,8 @@ fn seed_project_prefix_if_missing(db_path: &Path, seed_name: &str) -> Result<()>
             brain_persistence::db::meta::set_meta(conn, "project_prefix", &prefix)?;
         }
         Ok(())
-    })?;
+    })
+    .into_brain_core()?;
     Ok(())
 }
 
@@ -1171,6 +1173,7 @@ mod tests {
         let db = brain_persistence::db::Db::open(&db_path).unwrap();
         let stored = db
             .with_read_conn(|conn| brain_persistence::db::meta::get_meta(conn, "project_prefix"))
+            .into_brain_core()
             .unwrap()
             .unwrap();
         assert_eq!(stored, "MCP");
@@ -1186,12 +1189,14 @@ mod tests {
         db.with_write_conn(|conn| {
             brain_persistence::db::meta::set_meta(conn, "project_prefix", "XYZ")
         })
+        .into_brain_core()
         .unwrap();
 
         seed_project_prefix_if_missing(&db_path, "beta-service").unwrap();
 
         let stored = db
             .with_read_conn(|conn| brain_persistence::db::meta::get_meta(conn, "project_prefix"))
+            .into_brain_core()
             .unwrap()
             .unwrap();
         assert_eq!(stored, "XYZ");

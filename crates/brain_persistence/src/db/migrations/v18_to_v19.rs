@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v18 → v19: Schema hardening — FK constraints, dead-column drops, CHECK and NOT NULL additions.
 ///
@@ -18,7 +18,7 @@ use crate::error::Result;
 ///
 /// FTS5 triggers on `chunks` (chunks_fts_insert / chunks_fts_delete / chunks_fts_update) are
 /// dropped before rebuilding `chunks`. `ensure_fts5()` recreates them idempotently after migration.
-pub fn migrate_v18_to_v19(conn: &Connection) -> Result<()> {
+pub fn migrate_v18_to_v19(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         PRAGMA foreign_keys = OFF;

@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::sagas::{SagaListFilter, compact_saga_id};
+#[allow(unused_imports)]
+use brain_persistence::sql::SqlResultExt;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -120,6 +122,7 @@ impl McpTool for SagaList {
 
 #[cfg(test)]
 mod tests {
+    use brain_persistence::sql::SqlResultExt;
     use serde_json::{Value, json};
 
     use super::super::tests::create_test_context;
@@ -168,6 +171,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let result = call(json!({}), &ctx).await;
@@ -194,6 +198,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
 
         let result = call(json!({ "all": true }), &ctx).await;
@@ -219,6 +224,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+            .into_brain_core()
             .unwrap();
         create.call(json!({ "title": "Open" }), &ctx).await;
 
@@ -272,7 +278,7 @@ mod tests {
                 [&saga_b],
             )?;
             Ok(())
-        }).unwrap();
+        }).into_brain_core().unwrap();
 
         let result = call(json!({ "containing_brain": "brain-x" }), &ctx).await;
         let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -330,7 +336,7 @@ mod tests {
                 [&saga_a],
             )?;
             Ok(())
-        }).unwrap();
+        }).into_brain_core().unwrap();
 
         // Filtering by the brain's name (not brain_id) must not match.
         let result = call(json!({ "containing_brain": "human-name" }), &ctx).await;

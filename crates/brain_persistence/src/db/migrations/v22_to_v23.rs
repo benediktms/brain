@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 
 use crate::db::meta::generate_prefix;
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v22 → v23: Add `prefix` column to `brains` table + rewrite stale BRX- IDs.
 ///
@@ -10,7 +10,7 @@ use crate::error::Result;
 /// 3. Rewrite `BRX-` prefixed IDs to the correct brain-specific prefix.
 ///    Brains whose name legitimately derives to `BRX` keep their IDs unchanged.
 /// 4. Unscoped rows (brain_id = '') are left untouched.
-pub fn migrate_v22_to_v23(conn: &Connection) -> Result<()> {
+pub fn migrate_v22_to_v23(conn: &Connection) -> SqlResult<()> {
     // ── Phase 1: add prefix column ──────────────────────────────────────────
     conn.execute_batch("ALTER TABLE brains ADD COLUMN prefix TEXT")?;
 
@@ -63,7 +63,7 @@ pub fn migrate_v22_to_v23(conn: &Connection) -> Result<()> {
 }
 
 /// Rewrite all BRX- prefixed IDs for a single brain to its correct prefix.
-fn rewrite_brain_ids(conn: &Connection, brain_id: &str, correct_prefix: &str) -> Result<()> {
+fn rewrite_brain_ids(conn: &Connection, brain_id: &str, correct_prefix: &str) -> SqlResult<()> {
     let new_prefix = format!("{correct_prefix}-");
     let old_prefix = "BRX-";
 

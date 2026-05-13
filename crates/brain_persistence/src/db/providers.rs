@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, params};
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// A provider row as returned from queries.
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ fn now_secs() -> i64 {
 }
 
 /// Insert a new provider. Returns the generated ID.
-pub fn insert_provider(conn: &Connection, input: &InsertProvider) -> Result<String> {
+pub fn insert_provider(conn: &Connection, input: &InsertProvider) -> SqlResult<String> {
     let id = ulid::Ulid::new().to_string();
     let now = now_secs();
     conn.execute(
@@ -51,7 +51,7 @@ pub fn insert_provider(conn: &Connection, input: &InsertProvider) -> Result<Stri
 }
 
 /// Get a provider by ID.
-pub fn get_provider(conn: &Connection, id: &str) -> Result<Option<ProviderRow>> {
+pub fn get_provider(conn: &Connection, id: &str) -> SqlResult<Option<ProviderRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, api_key, api_key_hash, created_at, updated_at
          FROM providers WHERE id = ?1",
@@ -65,7 +65,7 @@ pub fn get_provider(conn: &Connection, id: &str) -> Result<Option<ProviderRow>> 
 
 /// Get the first provider matching a given name (e.g. 'anthropic').
 /// Returns the most recently updated entry if multiple exist.
-pub fn get_provider_by_name(conn: &Connection, name: &str) -> Result<Option<ProviderRow>> {
+pub fn get_provider_by_name(conn: &Connection, name: &str) -> SqlResult<Option<ProviderRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, api_key, api_key_hash, created_at, updated_at
          FROM providers WHERE name = ?1
@@ -81,7 +81,7 @@ pub fn get_provider_by_name(conn: &Connection, name: &str) -> Result<Option<Prov
 
 /// List all providers (id and name only — keys are not included in the output
 /// for safety; use `get_provider` to fetch the encrypted key when needed).
-pub fn list_providers(conn: &Connection) -> Result<Vec<ProviderRow>> {
+pub fn list_providers(conn: &Connection) -> SqlResult<Vec<ProviderRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, api_key, api_key_hash, created_at, updated_at
          FROM providers ORDER BY name, updated_at DESC",
@@ -93,19 +93,19 @@ pub fn list_providers(conn: &Connection) -> Result<Vec<ProviderRow>> {
 }
 
 /// Delete a provider by ID. Returns true if a row was deleted.
-pub fn delete_provider(conn: &Connection, id: &str) -> Result<bool> {
+pub fn delete_provider(conn: &Connection, id: &str) -> SqlResult<bool> {
     let rows = conn.execute("DELETE FROM providers WHERE id = ?1", params![id])?;
     Ok(rows > 0)
 }
 
 /// Delete a provider by name. Returns the number of rows deleted.
-pub fn delete_provider_by_name(conn: &Connection, name: &str) -> Result<usize> {
+pub fn delete_provider_by_name(conn: &Connection, name: &str) -> SqlResult<usize> {
     let rows = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
     Ok(rows)
 }
 
 /// Check if a provider with the given name and key hash already exists.
-pub fn provider_exists(conn: &Connection, name: &str, api_key_hash: &str) -> Result<bool> {
+pub fn provider_exists(conn: &Connection, name: &str, api_key_hash: &str) -> SqlResult<bool> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM providers WHERE name = ?1 AND api_key_hash = ?2",
         params![name, api_key_hash],
@@ -120,7 +120,7 @@ pub fn update_provider_key(
     id: &str,
     api_key_encrypted: &str,
     api_key_hash: &str,
-) -> Result<bool> {
+) -> SqlResult<bool> {
     let now = now_secs();
     let rows = conn.execute(
         "UPDATE providers SET api_key = ?1, api_key_hash = ?2, updated_at = ?3

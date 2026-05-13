@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use brain_persistence::error::BrainCoreError;
+use brain_core::error::BrainCoreError;
 
 /// Typed representation of a saga's lifecycle state.
 ///

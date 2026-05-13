@@ -689,12 +689,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "brain-core"
+version = "0.4.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "brain-lib"
 version = "0.4.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "blake3",
+ "brain-core",
  "brain-lib",
  "brain-persistence",
  "candle-core",
@@ -742,6 +752,7 @@ dependencies = [
  "arrow-schema",
  "base64 0.22.1",
  "blake3",
+ "brain-core",
  "chrono",
  "futures",
  "lancedb",

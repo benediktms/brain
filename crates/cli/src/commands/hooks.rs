@@ -1,6 +1,3 @@
-// Pre-existing technical debt: raw rusqlite usage in test setup below.
-#![allow(clippy::disallowed_macros)]
-
 use std::fs;
 use std::io::Read as _;
 use std::path::Path;
@@ -8,6 +5,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use brain_persistence::db::summaries::Episode;
+#[allow(unused_imports)]
+use brain_persistence::sql::SqlResultExt;
 use serde_json::{Map, Value, json};
 
 /// Soft deadline for the SessionStart render path.
@@ -1220,6 +1219,7 @@ mod tests {
 
         let summary_id = db
             .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &episode))
+            .into_brain_core()
             .unwrap();
 
         assert!(!summary_id.is_empty());
@@ -1231,6 +1231,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM summaries", [], |row| row.get(0))
                     .unwrap_or(0))
             })
+            .into_brain_core()
             .unwrap();
         assert_eq!(count, 1);
     }
@@ -1295,6 +1296,7 @@ mod tests {
 
         let id = db
             .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
+            .into_brain_core()
             .unwrap();
         assert!(!id.is_empty());
     }
@@ -1337,6 +1339,7 @@ mod tests {
 
         let id = db
             .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
+            .into_brain_core()
             .unwrap();
         assert!(!id.is_empty());
     }
@@ -1400,6 +1403,7 @@ mod tests {
         };
         let id = db
             .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
+            .into_brain_core()
             .unwrap();
 
         // Untrusted summary must not be returned.
@@ -1413,12 +1417,9 @@ mod tests {
 
         // Mark it trusted.
         db.with_write_conn(|conn| {
-            conn.execute(
-                "UPDATE summaries SET trust = 'trusted' WHERE summary_id = ?1",
-                rusqlite::params![id],
-            )?;
-            Ok(())
+            brain_persistence::db::summaries::mark_summary_trusted(conn, &id)
         })
+        .into_brain_core()
         .unwrap();
 
         let results = db

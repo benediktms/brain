@@ -13,7 +13,8 @@ use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
 use rand::RngCore;
 
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 /// Expected file permission bits for the master key file.
 const KEY_FILE_MODE: u32 = 0o600;
@@ -30,7 +31,7 @@ pub fn master_key_path(brain_home: &Path) -> PathBuf {
 }
 
 /// Load the master key from disk, generating it if it doesn't exist.
-pub fn load_or_create_master_key(brain_home: &Path) -> Result<[u8; KEY_LEN]> {
+pub fn load_or_create_master_key(brain_home: &Path) -> SqlResult<[u8; KEY_LEN]> {
     let path = master_key_path(brain_home);
     if path.exists() {
         load_master_key(&path)
@@ -40,28 +41,28 @@ pub fn load_or_create_master_key(brain_home: &Path) -> Result<[u8; KEY_LEN]> {
 }
 
 /// Load an existing master key, validating permissions.
-fn load_master_key(path: &Path) -> Result<[u8; KEY_LEN]> {
+fn load_master_key(path: &Path) -> SqlResult<[u8; KEY_LEN]> {
     // Verify permissions aren't too open
-    let meta = fs::metadata(path).map_err(BrainCoreError::Io)?;
+    let meta = fs::metadata(path).map_err(|e| SqlError::Domain(BrainCoreError::Io(e)))?;
     let mode = meta.permissions().mode() & 0o777;
     if mode & 0o077 != 0 {
-        return Err(BrainCoreError::Config(format!(
+        return Err(SqlError::Domain(BrainCoreError::Config(format!(
             "master key file {} has overly broad permissions ({:#o}). \
              Fix with: chmod 600 {}",
             path.display(),
             mode,
             path.display()
-        )));
+        ))));
     }
 
-    let bytes = fs::read(path).map_err(BrainCoreError::Io)?;
+    let bytes = fs::read(path).map_err(|e| SqlError::Domain(BrainCoreError::Io(e)))?;
     if bytes.len() != KEY_LEN {
-        return Err(BrainCoreError::Config(format!(
+        return Err(SqlError::Domain(BrainCoreError::Config(format!(
             "master key file {} has invalid length ({} bytes, expected {})",
             path.display(),
             bytes.len(),
             KEY_LEN,
-        )));
+        ))));
     }
 
     let mut key = [0u8; KEY_LEN];
@@ -70,27 +71,28 @@ fn load_master_key(path: &Path) -> Result<[u8; KEY_LEN]> {
 }
 
 /// Generate a new random master key and write it with `0600` permissions.
-fn generate_master_key(path: &Path) -> Result<[u8; KEY_LEN]> {
+fn generate_master_key(path: &Path) -> SqlResult<[u8; KEY_LEN]> {
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(BrainCoreError::Io)?;
+        fs::create_dir_all(parent).map_err(|e| SqlError::Domain(BrainCoreError::Io(e)))?;
     }
 
     let mut key = [0u8; KEY_LEN];
     OsRng.fill_bytes(&mut key);
 
-    fs::write(path, key).map_err(BrainCoreError::Io)?;
+    fs::write(path, key).map_err(|e| SqlError::Domain(BrainCoreError::Io(e)))?;
     fs::set_permissions(path, fs::Permissions::from_mode(KEY_FILE_MODE))
-        .map_err(BrainCoreError::Io)?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Io(e)))?;
 
     Ok(key)
 }
 
 /// Encrypt plaintext with AES-256-GCM.  Returns `nonce || ciphertext` encoded
 /// as base64.
-pub fn encrypt(master_key: &[u8; KEY_LEN], plaintext: &str) -> Result<String> {
-    let cipher = Aes256Gcm::new_from_slice(master_key)
-        .map_err(|e| BrainCoreError::Config(format!("invalid master key: {e}")))?;
+pub fn encrypt(master_key: &[u8; KEY_LEN], plaintext: &str) -> SqlResult<String> {
+    let cipher = Aes256Gcm::new_from_slice(master_key).map_err(|e| {
+        SqlError::Domain(BrainCoreError::Config(format!("invalid master key: {e}")))
+    })?;
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -98,7 +100,7 @@ pub fn encrypt(master_key: &[u8; KEY_LEN], plaintext: &str) -> Result<String> {
 
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_bytes())
-        .map_err(|e| BrainCoreError::Config(format!("encryption failed: {e}")))?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Config(format!("encryption failed: {e}"))))?;
 
     // Prepend nonce to ciphertext
     let mut combined = Vec::with_capacity(NONCE_LEN + ciphertext.len());
@@ -112,28 +114,34 @@ pub fn encrypt(master_key: &[u8; KEY_LEN], plaintext: &str) -> Result<String> {
 }
 
 /// Decrypt a base64-encoded `nonce || ciphertext` back to plaintext.
-pub fn decrypt(master_key: &[u8; KEY_LEN], encoded: &str) -> Result<String> {
+pub fn decrypt(master_key: &[u8; KEY_LEN], encoded: &str) -> SqlResult<String> {
     let combined = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-        .map_err(|e| BrainCoreError::Config(format!("base64 decode failed: {e}")))?;
+        .map_err(|e| {
+            SqlError::Domain(BrainCoreError::Config(format!("base64 decode failed: {e}")))
+        })?;
 
     if combined.len() < NONCE_LEN + 1 {
-        return Err(BrainCoreError::Config(
+        return Err(SqlError::Domain(BrainCoreError::Config(
             "encrypted data too short".to_string(),
-        ));
+        )));
     }
 
     let (nonce_bytes, ciphertext) = combined.split_at(NONCE_LEN);
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    let cipher = Aes256Gcm::new_from_slice(master_key)
-        .map_err(|e| BrainCoreError::Config(format!("invalid master key: {e}")))?;
+    let cipher = Aes256Gcm::new_from_slice(master_key).map_err(|e| {
+        SqlError::Domain(BrainCoreError::Config(format!("invalid master key: {e}")))
+    })?;
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
-        .map_err(|e| BrainCoreError::Config(format!("decryption failed: {e}")))?;
+        .map_err(|e| SqlError::Domain(BrainCoreError::Config(format!("decryption failed: {e}"))))?;
 
-    String::from_utf8(plaintext)
-        .map_err(|e| BrainCoreError::Config(format!("decrypted data is not valid UTF-8: {e}")))
+    String::from_utf8(plaintext).map_err(|e| {
+        SqlError::Domain(BrainCoreError::Config(format!(
+            "decrypted data is not valid UTF-8: {e}"
+        )))
+    })
 }
 
 /// Hash an API key with blake3 for uniqueness enforcement.

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 const DAMPING: f64 = 0.85;
 const MAX_ITER: usize = 50;
@@ -13,7 +13,7 @@ const CONVERGENCE_THRESHOLD: f64 = 1e-6;
 /// Returns a map of `file_id -> normalized_score` (min-max normalized to [0.0, 1.0]).
 /// Files not present in the link graph receive the base score `(1 - d) / N`.
 /// Returns an empty map if there are no nodes.
-pub fn compute_pagerank(conn: &Connection) -> Result<HashMap<String, f64>> {
+pub fn compute_pagerank(conn: &Connection) -> SqlResult<HashMap<String, f64>> {
     // Build adjacency list from links with resolved target_file_id
     let mut out_edges: HashMap<String, Vec<String>> = HashMap::new();
     let mut in_edges: HashMap<String, Vec<String>> = HashMap::new();
@@ -125,7 +125,7 @@ pub fn compute_pagerank(conn: &Connection) -> Result<HashMap<String, f64>> {
 ///
 /// Files not in the link graph are assigned the median of computed scores (or 0.5 for an empty
 /// graph). Scores are written in a single transaction.
-pub fn compute_and_store_pagerank(conn: &Connection) -> Result<()> {
+pub fn compute_and_store_pagerank(conn: &Connection) -> SqlResult<()> {
     let scores = compute_pagerank(conn)?;
 
     if scores.is_empty() {

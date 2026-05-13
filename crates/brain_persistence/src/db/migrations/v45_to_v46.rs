@@ -40,11 +40,11 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add `trust` and `source_tool` columns to `records` and `summaries`.
 /// Backfill existing rows to `trusted`. Stamp version 46.
-pub fn migrate_v45_to_v46(conn: &Connection) -> Result<()> {
+pub fn migrate_v45_to_v46(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     // ── records ──────────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ pub fn migrate_v45_to_v46(conn: &Connection) -> Result<()> {
 }
 
 /// Check whether `table.column` exists in the given connection.
-fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+fn column_exists(conn: &Connection, table: &str, column: &str) -> SqlResult<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let exists = stmt
         .query_map([], |row| row.get::<_, String>(1))?

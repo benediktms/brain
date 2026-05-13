@@ -37,11 +37,11 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add `blocking` and `resolved_at` columns to `task_external_ids` so that
 /// rows can act as first-class blockers when callers opt in. Stamp version 45.
-pub fn migrate_v44_to_v45(conn: &Connection) -> Result<()> {
+pub fn migrate_v44_to_v45(conn: &Connection) -> SqlResult<()> {
     // Idempotent: check whether the columns already exist before adding.
     let has_blocking = column_exists(conn, "task_external_ids", "blocking")?;
     let has_resolved_at = column_exists(conn, "task_external_ids", "resolved_at")?;
@@ -77,7 +77,7 @@ pub fn migrate_v44_to_v45(conn: &Connection) -> Result<()> {
 }
 
 /// Helper: check whether `table.column` exists.
-fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+fn column_exists(conn: &Connection, table: &str, column: &str) -> SqlResult<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let exists = stmt
         .query_map([], |row| row.get::<_, String>(1))?

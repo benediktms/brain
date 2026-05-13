@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v37 → v38: Fix `reflection_sources` FK references pointing to stale
 /// `summaries_v27` table.
@@ -20,7 +20,7 @@ use crate::error::Result;
 /// Fix: detect and recreate `reflection_sources` with correct FK references
 /// pointing to `summaries`.  This is a no-op on databases where the FKs are
 /// already correct.
-pub fn migrate_v37_to_v38(conn: &Connection) -> Result<()> {
+pub fn migrate_v37_to_v38(conn: &Connection) -> SqlResult<()> {
     // Check whether remediation is needed by inspecting the stored DDL.
     let needs_fix: bool = conn
         .query_row(

@@ -1,13 +1,13 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v20 → v21: Add `embedded_at` column to `tasks` and `chunks` tables.
 ///
 /// Both columns are nullable `INTEGER` (Unix timestamp, seconds since epoch).
 /// All existing rows start as NULL — the daemon will embed them on first run
 /// after this migration.
-pub fn migrate_v20_to_v21(conn: &Connection) -> Result<()> {
+pub fn migrate_v20_to_v21(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         PRAGMA foreign_keys = OFF;

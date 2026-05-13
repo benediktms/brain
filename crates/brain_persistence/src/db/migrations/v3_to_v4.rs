@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add parent_task_id column for task hierarchy (parent-child relationships).
 /// Stamp version 4.
-pub fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
+pub fn migrate_v3_to_v4(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

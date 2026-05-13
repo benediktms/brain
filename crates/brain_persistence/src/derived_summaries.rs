@@ -1,6 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 #[derive(Debug, Clone)]
 pub struct DerivedSummaryRow {
@@ -34,7 +35,7 @@ pub fn generate_scope_summary(
     conn: &Connection,
     scope_type: &str,
     scope_value: &str,
-) -> Result<GeneratedScopeSummaryRow> {
+) -> SqlResult<GeneratedScopeSummaryRow> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // Mirrors brain_lib::records::RecordKind::policy().summarize and must stay in sync.
@@ -56,10 +57,8 @@ pub fn generate_scope_summary(
                     row.get::<_, String>(1)?,
                     "chunk".to_string(),
                 ))
-            })
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
         }
         "tag" => {
             let pattern = format!("%{}%", scope_value);
@@ -95,15 +94,13 @@ pub fn generate_scope_summary(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                 ))
-            })
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
         }
         other => {
-            return Err(BrainCoreError::Parse(format!(
+            return Err(SqlError::Domain(BrainCoreError::Parse(format!(
                 "unknown derived summary scope_type: {other}"
-            )));
+            ))));
         }
     };
 
@@ -127,17 +124,14 @@ pub fn generate_scope_summary(
             "UPDATE derived_summaries SET stale = 0
              WHERE scope_type = ?1 AND scope_value = ?2 AND source_content_hash = ?3",
             params![scope_type, scope_value, new_hash],
-        )
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+        )?;
 
-        let id: String = conn
-            .query_row(
-                "SELECT id FROM derived_summaries
+        let id: String = conn.query_row(
+            "SELECT id FROM derived_summaries
                  WHERE scope_type = ?1 AND scope_value = ?2",
-                params![scope_type, scope_value],
-                |row| row.get(0),
-            )
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            params![scope_type, scope_value],
+            |row| row.get(0),
+        )?;
 
         return Ok(GeneratedScopeSummaryRow {
             id,
@@ -168,18 +162,14 @@ pub fn generate_scope_summary(
 
     let id = existing_id.unwrap_or_else(|| ulid::Ulid::new().to_string());
 
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+    let tx = conn.unchecked_transaction()?;
 
-    let updated = tx
-        .execute(
-            "UPDATE derived_summaries
+    let updated = tx.execute(
+        "UPDATE derived_summaries
              SET content = ?1, stale = 0, generated_at = ?2, source_content_hash = ?3
              WHERE id = ?4",
-            params![summary_content, now, new_hash, id],
-        )
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+        params![summary_content, now, new_hash, id],
+    )?;
 
     if updated == 0 {
         tx.execute(
@@ -187,31 +177,25 @@ pub fn generate_scope_summary(
                  (id, scope_type, scope_value, content, stale, generated_at, source_content_hash)
              VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
             params![id, scope_type, scope_value, summary_content, now, new_hash],
-        )
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+        )?;
     }
 
     tx.execute(
         "DELETE FROM summary_sources WHERE summary_id = ?1",
         params![id],
-    )
-    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+    )?;
 
     {
-        let mut stmt = tx
-            .prepare_cached(
-                "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
                  VALUES (?1, ?2, ?3, ?4)",
-            )
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+        )?;
         for (src_id, _, source_type) in &sources {
-            stmt.execute(params![id, src_id, source_type, now])
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            stmt.execute(params![id, src_id, source_type, now])?;
         }
     }
 
-    tx.commit()
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+    tx.commit()?;
 
     Ok(GeneratedScopeSummaryRow {
         id,
@@ -224,32 +208,32 @@ pub fn get_scope_summary(
     conn: &Connection,
     scope_type: &str,
     scope_value: &str,
-) -> Result<Option<DerivedSummaryRow>> {
+) -> SqlResult<Option<DerivedSummaryRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, scope_type, scope_value, content, stale, generated_at
          FROM derived_summaries
          WHERE scope_type = ?1 AND scope_value = ?2",
     )?;
 
-    let mut rows = stmt
-        .query_map(params![scope_type, scope_value], map_row)
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+    let mut rows = stmt.query_map(params![scope_type, scope_value], map_row)?;
 
     match rows.next() {
         Some(Ok(summary)) => Ok(Some(summary)),
-        Some(Err(e)) => Err(BrainCoreError::Database(e.to_string())),
+        Some(Err(e)) => Err(e.into()),
         None => Ok(None),
     }
 }
 
-pub fn mark_scope_stale(conn: &Connection, scope_type: &str, scope_value: &str) -> Result<usize> {
-    let n = conn
-        .execute(
-            "UPDATE derived_summaries SET stale = 1
+pub fn mark_scope_stale(
+    conn: &Connection,
+    scope_type: &str,
+    scope_value: &str,
+) -> SqlResult<usize> {
+    let n = conn.execute(
+        "UPDATE derived_summaries SET stale = 1
              WHERE scope_type = ?1 AND scope_value = ?2",
-            params![scope_type, scope_value],
-        )
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+        params![scope_type, scope_value],
+    )?;
     Ok(n)
 }
 
@@ -257,7 +241,7 @@ pub fn search_derived_summaries(
     conn: &Connection,
     query: &str,
     limit: usize,
-) -> Result<Vec<DerivedSummaryRow>> {
+) -> SqlResult<Vec<DerivedSummaryRow>> {
     let fts_exists: bool = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master
@@ -278,10 +262,8 @@ pub fn search_derived_summaries(
              LIMIT ?2",
         )?;
         let summaries = stmt
-            .query_map(params![query, limit as i64], map_row)
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?
-            .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            .query_map(params![query, limit as i64], map_row)?
+            .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()?;
         Ok(summaries)
     } else {
         let pattern = format!("%{}%", query);
@@ -292,15 +274,13 @@ pub fn search_derived_summaries(
              LIMIT ?2",
         )?;
         let summaries = stmt
-            .query_map(params![pattern, limit as i64], map_row)
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?
-            .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            .query_map(params![pattern, limit as i64], map_row)?
+            .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()?;
         Ok(summaries)
     }
 }
 
-pub fn list_stale_summaries(conn: &Connection, limit: usize) -> Result<Vec<DerivedSummaryRow>> {
+pub fn list_stale_summaries(conn: &Connection, limit: usize) -> SqlResult<Vec<DerivedSummaryRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, scope_type, scope_value, content, stale, generated_at
          FROM derived_summaries
@@ -309,10 +289,8 @@ pub fn list_stale_summaries(conn: &Connection, limit: usize) -> Result<Vec<Deriv
          LIMIT ?1",
     )?;
     let summaries = stmt
-        .query_map(params![limit as i64], map_row)
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?
-        .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()
-        .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+        .query_map(params![limit as i64], map_row)?
+        .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()?;
     Ok(summaries)
 }
 

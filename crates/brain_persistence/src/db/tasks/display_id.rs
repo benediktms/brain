@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use rusqlite::Connection;
 
 use crate::db::short_id::{blake3_short_hex, pick_unique_prefix};
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Compute a collision-safe `display_id` for `task_id` in `target_brain_id`.
 ///
@@ -14,7 +14,7 @@ pub fn compute_display_id_for_target(
     conn: &Connection,
     task_id: &str,
     target_brain_id: &str,
-) -> Result<String> {
+) -> SqlResult<String> {
     let used: HashSet<String> = {
         let mut stmt = conn.prepare_cached(
             "SELECT display_id FROM tasks WHERE brain_id = ?1 AND display_id IS NOT NULL",

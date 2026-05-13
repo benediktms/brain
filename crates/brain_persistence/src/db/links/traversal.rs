@@ -12,7 +12,8 @@ use tracing::warn;
 
 use crate::db::links::{EdgeKind, EntityLink, EntityRef, EntityType, for_entity};
 use crate::db::summaries::{SummaryRow, get_summaries_by_ids};
-use crate::error::Result;
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 /// Edge kinds traversed by [`collect_linked_episode_set`] (consolidation cohort).
 ///
@@ -103,7 +104,7 @@ pub fn collect_linked_episode_set(
     conn: &Connection,
     seed_episode_id: &str,
     max_depth: u32,
-) -> Result<Vec<String>> {
+) -> SqlResult<Vec<String>> {
     let (rows, _truncated) =
         collect_episode_set_inner(conn, seed_episode_id, max_depth, &TRAVERSAL_EDGE_KINDS)?;
     Ok(rows.into_iter().map(|r| r.summary_id).collect())
@@ -122,7 +123,7 @@ pub fn collect_thread_episode_rows(
     conn: &Connection,
     seed_episode_id: &str,
     max_depth: u32,
-) -> Result<ThreadResult> {
+) -> SqlResult<ThreadResult> {
     let (rows, truncated) =
         collect_episode_set_inner(conn, seed_episode_id, max_depth, &THREAD_EDGE_KINDS)?;
     Ok(ThreadResult { rows, truncated })
@@ -142,7 +143,7 @@ fn collect_episode_set_inner(
     seed_episode_id: &str,
     max_depth: u32,
     edge_kinds: &[EdgeKind],
-) -> Result<(Vec<SummaryRow>, bool)> {
+) -> SqlResult<(Vec<SummaryRow>, bool)> {
     let mut visited: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
     let mut truncated = false;
@@ -160,7 +161,8 @@ fn collect_episode_set_inner(
             id: current.clone(),
         };
 
-        let edges = for_entity(conn, &entity, Some(edge_kinds))?;
+        let edges = for_entity(conn, &entity, Some(edge_kinds))
+            .map_err(|e| SqlError::Domain(BrainCoreError::Database(e.to_string())))?;
 
         for link in edges {
             extend_with_neighbour(&link, &current, depth, &mut visited, &mut queue);

@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v11 → v12: Add records domain projection tables.
 ///
@@ -11,7 +11,7 @@ use crate::error::Result;
 /// - `record_events` — full event audit log for queryable replay
 ///
 /// The projection is fully rebuildable from `records/events.jsonl`.
-pub fn migrate_v11_to_v12(conn: &Connection) -> Result<()> {
+pub fn migrate_v11_to_v12(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

@@ -9,7 +9,8 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::error::{BrainCoreError, Result};
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 /// Format a saga `display_id` for user-facing emission as `saga-<hex>`.
 ///
@@ -42,9 +43,11 @@ pub fn parse_short_form(input: &str) -> Option<&str> {
 /// a partial prefix would resolve unambiguously to a single saga without
 /// also matching its predecessor exactly. The simpler two-case resolver
 /// is therefore complete.
-pub fn resolve_saga_id(conn: &Connection, input: &str) -> Result<String> {
+pub fn resolve_saga_id(conn: &Connection, input: &str) -> SqlResult<String> {
     if input.is_empty() {
-        return Err(BrainCoreError::Parse("empty saga id".into()));
+        return Err(SqlError::Domain(BrainCoreError::Parse(
+            "empty saga id".into(),
+        )));
     }
 
     // 1. Exact ULID match.
@@ -60,16 +63,16 @@ pub fn resolve_saga_id(conn: &Connection, input: &str) -> Result<String> {
     }
 
     // 2. Exact display_id match — input must be `saga-<lowercase hex>`.
-    let hex =
-        parse_short_form(input).ok_or_else(|| BrainCoreError::SagaNotFound(input.to_string()))?;
+    let hex = parse_short_form(input)
+        .ok_or_else(|| SqlError::Domain(BrainCoreError::SagaNotFound(input.to_string())))?;
     if hex.is_empty()
         || !hex
             .chars()
             .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
     {
-        return Err(BrainCoreError::Parse(format!(
+        return Err(SqlError::Domain(BrainCoreError::Parse(format!(
             "saga short id must be `saga-<lowercase hex>`, got `{input}`"
-        )));
+        ))));
     }
     conn.query_row(
         "SELECT saga_id FROM sagas WHERE display_id = ?1",
@@ -77,13 +80,13 @@ pub fn resolve_saga_id(conn: &Connection, input: &str) -> Result<String> {
         |row| row.get::<_, String>(0),
     )
     .optional()?
-    .ok_or_else(|| BrainCoreError::SagaNotFound(input.to_string()))
+    .ok_or_else(|| SqlError::Domain(BrainCoreError::SagaNotFound(input.to_string())))
 }
 
 /// Batch-load short IDs for all sagas. Returns a `saga_id (ULID) → saga-<hex>`
 /// map suitable for CLI table rendering where many rows need their short
 /// form without a round-trip per row.
-pub fn compact_saga_ids(conn: &Connection) -> Result<HashMap<String, String>> {
+pub fn compact_saga_ids(conn: &Connection) -> SqlResult<HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT saga_id, display_id FROM sagas")?;
     let mut out = HashMap::new();
     for row in stmt.query_map([], |row| {
@@ -99,6 +102,7 @@ pub fn compact_saga_ids(conn: &Connection) -> Result<HashMap<String, String>> {
 mod tests {
     use super::*;
     use crate::db::migrations::{migrate_v52_to_v53, migrate_v53_to_v54};
+    use crate::sql::SqlError;
 
     fn fresh_v54(conn: &Connection) {
         conn.execute_batch(
@@ -158,7 +162,10 @@ mod tests {
         fresh_v54(&conn);
 
         let err = resolve_saga_id(&conn, "saga-deadbeef").unwrap_err();
-        assert!(matches!(err, BrainCoreError::SagaNotFound(_)));
+        assert!(matches!(
+            err,
+            SqlError::Domain(BrainCoreError::SagaNotFound(_))
+        ));
     }
 
     #[test]
@@ -168,15 +175,15 @@ mod tests {
 
         // Uppercase is not valid hex per our convention.
         let err = resolve_saga_id(&conn, "saga-ABC").unwrap_err();
-        assert!(matches!(err, BrainCoreError::Parse(_)));
+        assert!(matches!(err, SqlError::Domain(BrainCoreError::Parse(_))));
 
         // Non-hex characters rejected.
         let err = resolve_saga_id(&conn, "saga-xyz").unwrap_err();
-        assert!(matches!(err, BrainCoreError::Parse(_)));
+        assert!(matches!(err, SqlError::Domain(BrainCoreError::Parse(_))));
 
         // Empty after prefix.
         let err = resolve_saga_id(&conn, "saga-").unwrap_err();
-        assert!(matches!(err, BrainCoreError::Parse(_)));
+        assert!(matches!(err, SqlError::Domain(BrainCoreError::Parse(_))));
     }
 
     #[test]

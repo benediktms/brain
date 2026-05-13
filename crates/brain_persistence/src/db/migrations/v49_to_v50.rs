@@ -15,10 +15,10 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Drop the two dead partial indexes on `entity_links` and stamp version 50.
-pub fn migrate_v49_to_v50(conn: &Connection) -> Result<()> {
+pub fn migrate_v49_to_v50(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute_batch(

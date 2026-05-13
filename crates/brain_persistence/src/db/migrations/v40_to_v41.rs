@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v40 → v41: Add `tags` and `importance` columns to the `files` table.
 ///
@@ -13,7 +13,7 @@ use crate::error::Result;
 /// - `importance`: float [0.0, 1.0], default 0.5 per the Retrieve+ ADR
 ///
 /// Existing files get defaults until re-indexed with `brain scan --force`.
-pub fn migrate_v40_to_v41(conn: &Connection) -> Result<()> {
+pub fn migrate_v40_to_v41(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "BEGIN;
          ALTER TABLE files ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';

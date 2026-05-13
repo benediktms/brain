@@ -1,12 +1,12 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v9 → v10: Add composite index on tasks(status, priority, task_type).
 ///
 /// Speeds up all filtered+sorted list queries that filter by status
 /// and ORDER BY priority with epic CASE expression.
-pub fn migrate_v9_to_v10(conn: &Connection) -> Result<()> {
+pub fn migrate_v9_to_v10(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v23 → v24: Add `archived` column to `brains` table.
 ///
@@ -9,7 +9,7 @@ use crate::error::Result;
 /// The column stores a boolean flag (0 = active, 1 = archived) indicating
 /// whether the brain has been archived. SQLite's ALTER TABLE requires a
 /// DEFAULT value for NOT NULL columns added to existing tables.
-pub fn migrate_v23_to_v24(conn: &Connection) -> Result<()> {
+pub fn migrate_v23_to_v24(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "ALTER TABLE brains ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
          PRAGMA user_version = 24;",

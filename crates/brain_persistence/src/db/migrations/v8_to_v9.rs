@@ -1,12 +1,12 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v8 → v9: Add chunker_version to files table.
 ///
 /// Tracks which chunker algorithm version was used to chunk each file.
 /// NULL means "unknown" → forces re-chunking on next scan.
-pub fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+pub fn migrate_v8_to_v9(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

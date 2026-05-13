@@ -11,9 +11,9 @@ use std::collections::HashSet;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::short_id::{blake3_short_hex, pick_unique_prefix};
-use crate::error::Result;
+use crate::sql::SqlResult;
 
-pub fn migrate_v53_to_v54(conn: &Connection) -> Result<()> {
+pub fn migrate_v53_to_v54(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     // Idempotency guard: SQLite's `ALTER TABLE ADD COLUMN` has no

@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::Result;
 use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 use tracing;
 
 // -- Domain types --
@@ -496,20 +497,22 @@ impl RecordStore {
         }
         let brain_id = self.brain_id.clone();
         let mut imported = 0usize;
-        self.db.with_write_conn(|conn| {
-            for event in &all_events {
-                match projections::apply_event(conn, event, &brain_id) {
-                    Ok(()) => imported += 1,
-                    Err(e) => {
-                        tracing::debug!(
-                            event_id = %event.event_id,
-                            "skipping record event during import: {e}"
-                        );
+        self.db
+            .with_write_conn(|conn| {
+                for event in &all_events {
+                    match projections::apply_event(conn, event, &brain_id) {
+                        Ok(()) => imported += 1,
+                        Err(e) => {
+                            tracing::debug!(
+                                event_id = %event.event_id,
+                                "skipping record event during import: {e}"
+                            );
+                        }
                     }
                 }
-            }
-            Ok(())
-        })?;
+                Ok(())
+            })
+            .into_brain_core()?;
         Ok(imported)
     }
 
@@ -518,6 +521,7 @@ impl RecordStore {
         let brain_id = self.brain_id.clone();
         self.db
             .with_write_conn(|conn| projections::apply_event(conn, event, &brain_id))
+            .into_brain_core()
     }
 
     // -- Query methods --
@@ -525,6 +529,7 @@ impl RecordStore {
     pub fn get_record(&self, record_id: &str) -> Result<Option<queries::RecordRow>> {
         self.db
             .with_read_conn(|conn| queries::get_record(conn, record_id))
+            .into_brain_core()
     }
 
     /// Return `Some(brain_id)` when this store is scoped to a specific brain,
@@ -548,31 +553,38 @@ impl RecordStore {
         };
         self.db
             .with_read_conn(|conn| queries::list_records(conn, &scoped))
+            .into_brain_core()
     }
 
     pub fn get_record_tags(&self, record_id: &str) -> Result<Vec<String>> {
         self.db
             .with_read_conn(|conn| queries::get_record_tags(conn, record_id))
+            .into_brain_core()
     }
 
     pub fn get_record_links(&self, record_id: &str) -> Result<Vec<queries::RecordLink>> {
         self.db
             .with_read_conn(|conn| queries::get_record_links(conn, record_id))
+            .into_brain_core()
     }
 
     pub fn resolve_record_id(&self, input: &str) -> Result<String> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(|conn| queries::resolve_record_id(conn, input, &brain_id))
+            .into_brain_core()
     }
 
     pub fn compact_record_id(&self, record_id: &str) -> Result<String> {
         self.db
             .with_read_conn(|conn| queries::compact_record_id(conn, record_id))
+            .into_brain_core()
     }
 
     pub fn compact_record_ids(&self) -> Result<std::collections::HashMap<String, String>> {
-        self.db.with_read_conn(queries::compact_record_ids)
+        self.db
+            .with_read_conn(queries::compact_record_ids)
+            .into_brain_core()
     }
 
     /// Get the project prefix for record ID generation.
@@ -582,17 +594,20 @@ impl RecordStore {
     pub fn get_project_prefix(&self) -> Result<String> {
         if !self.brain_id.is_empty() {
             let brain_id = self.brain_id.clone();
-            let result = self.db.with_read_conn(|conn| {
-                let prefix: Option<String> = conn
-                    .query_row(
-                        "SELECT prefix FROM brains WHERE brain_id = ?1",
-                        [&brain_id],
-                        |row| row.get::<_, Option<String>>(0),
-                    )
-                    .ok()
-                    .flatten();
-                Ok(prefix)
-            })?;
+            let result = self
+                .db
+                .with_read_conn(|conn| {
+                    let prefix: Option<String> = conn
+                        .query_row(
+                            "SELECT prefix FROM brains WHERE brain_id = ?1",
+                            [&brain_id],
+                            |row| row.get::<_, Option<String>>(0),
+                        )
+                        .ok()
+                        .flatten();
+                    Ok(prefix)
+                })
+                .into_brain_core()?;
             if let Some(ref prefix) =
                 result.filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
             {
@@ -603,19 +618,28 @@ impl RecordStore {
             ));
         }
         // Unscoped/legacy mode: fall back to brain_meta
-        self.db.with_write_conn(|conn| {
-            brain_persistence::db::meta::get_or_init_project_prefix(conn, std::path::Path::new("."))
-        })
+        self.db
+            .with_write_conn(|conn| {
+                brain_persistence::db::meta::get_or_init_project_prefix(
+                    conn,
+                    std::path::Path::new("."),
+                )
+            })
+            .into_brain_core()
     }
 
     pub fn get_all_content_refs(&self) -> Result<Vec<(String, String, bool)>> {
-        self.db.with_read_conn(queries::get_all_content_refs)
+        self.db
+            .with_read_conn(queries::get_all_content_refs)
+            .into_brain_core()
     }
 
     pub fn count_payload_refs(&self, content_hash: &str, exclude_record_id: &str) -> Result<i64> {
-        self.db.with_read_conn(|conn| {
-            queries::count_payload_refs(conn, content_hash, exclude_record_id)
-        })
+        self.db
+            .with_read_conn(|conn| {
+                queries::count_payload_refs(conn, content_hash, exclude_record_id)
+            })
+            .into_brain_core()
     }
 
     // -- Eviction, pinning, and retention class methods --
