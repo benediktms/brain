@@ -4,7 +4,7 @@ use crate::db::links::{
     EdgeKind, EntityRef, LinkCreatedPayload, LinkEvent, LinkRemovedPayload, apply_link_event,
 };
 use crate::error::BrainCoreError;
-use crate::sql::SqlResult;
+use crate::sql::{SqlError, SqlResult};
 
 use super::events::{
     LinkPayload, PayloadEvictedPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
@@ -23,19 +23,17 @@ fn searchable_for_kind(kind: &str) -> bool {
 fn link_payload_to_entity_ref(p: &LinkPayload) -> SqlResult<EntityRef> {
     match (&p.task_id, &p.chunk_id) {
         (Some(tid), None) => EntityRef::task(tid).map_err(|_| {
-            BrainCoreError::RecordEvent("link payload task_id must not be empty".into()).into()
+            SqlError::Domain(BrainCoreError::RecordEvent("link payload task_id must not be empty".into()))
         }),
         (None, Some(cid)) => EntityRef::chunk(cid).map_err(|_| {
-            BrainCoreError::RecordEvent("link payload chunk_id must not be empty".into()).into()
+            SqlError::Domain(BrainCoreError::RecordEvent("link payload chunk_id must not be empty".into()))
         }),
-        (None, None) => Err(BrainCoreError::RecordEvent(
+        (None, None) => Err(SqlError::Domain(BrainCoreError::RecordEvent(
             "link payload must have exactly one of task_id or chunk_id, got neither".into(),
-        )
-        .into()),
-        (Some(_), Some(_)) => Err(BrainCoreError::RecordEvent(
+        ))),
+        (Some(_), Some(_)) => Err(SqlError::Domain(BrainCoreError::RecordEvent(
             "link payload must have exactly one of task_id or chunk_id, got both".into(),
-        )
-        .into()),
+        ))),
     }
 }
 
