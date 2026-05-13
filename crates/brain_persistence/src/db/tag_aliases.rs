@@ -10,7 +10,7 @@ use rusqlite::{Connection, params};
 
 use crate::db::tags::RawTag;
 use crate::error::BrainCoreError;
-use crate::sql::SqlResult;
+use crate::sql::{SqlError, SqlResult};
 
 /// Per-tag fold of `RawTag` rows across the (Records, Tasks) sources for a
 /// single brain. Sums reference counts and takes max of last-seen
@@ -308,10 +308,10 @@ pub(crate) fn encode_embedding(v: &[f32]) -> Vec<u8> {
 /// hand-edited or written by a different codec).
 pub(crate) fn decode_embedding(bytes: &[u8]) -> SqlResult<Vec<f32>> {
     if !bytes.len().is_multiple_of(4) {
-        return Err(BrainCoreError::Database(format!(
+        return Err(SqlError::Domain(BrainCoreError::Database(format!(
             "tag_aliases.embedding length {} is not a multiple of 4",
             bytes.len()
-        )).into());
+        ))));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
     for chunk in bytes.chunks_exact(4) {
