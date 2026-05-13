@@ -3,10 +3,10 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::embedder::Embed;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::ToolCallResult;
 use crate::sagas::{CascadeOutcome, CascadeResult};
+use brain_core::ports::Embed;
 use brain_persistence::store::StoreReader;
 
 #[derive(Serialize, Debug, Clone)]

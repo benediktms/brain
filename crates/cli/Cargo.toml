@@ -10,8 +10,22 @@ homepage = "https://github.com/benediktms/brain"
 name = "brain"
 path = "src/main.rs"
 
+[features]
+default = ["embed"]
+# Surfaces the embed-dependent subcommands (`watch`, `backfill-tasks`,
+# `memory`, `tags recluster`) and links the candle embedder. Disabling
+# `embed` (via `--no-default-features`) drops those subcommands entirely —
+# `brain --help` won't list them and `brain watch` errors with
+# "unrecognized subcommand". Mirrors the gate in `brain-lib`.
+embed = ["brain-lib/embed"]
+# `accelerate` implies `embed` for the same reason it does in brain-lib:
+# Apple's BLAS only meaningfully accelerates the BGE-small candle path, and
+# without `embed` the cli would forward accelerate to brain-lib but never
+# register the subcommands that actually use it.
+accelerate = ["embed", "brain-lib/accelerate"]
+
 [dependencies]
-brain-lib = { path = "../brain_lib" }
+brain-lib = { path = "../brain_lib", default-features = false }
 brain-persistence = { path = "../brain_persistence" }
 tokio = { workspace = true, features = ["signal", "net"] }
 tokio-util = { workspace = true }

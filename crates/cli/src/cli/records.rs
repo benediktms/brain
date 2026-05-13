@@ -39,6 +39,7 @@ pub(crate) enum RecordsAction {
     },
 
     /// Search records using semantic + keyword hybrid retrieval
+    #[cfg(feature = "embed")]
     Search {
         /// Natural-language search query
         query: String,

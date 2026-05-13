@@ -1,12 +1,18 @@
-//! `Embed` trait and BGE-small-en-v1.5 implementation.
+//! BGE-small-en-v1.5 candle implementation of [`brain_core::ports::Embed`].
 //!
 //! Quarantines the candle-core + candle-nn + candle-transformers + tokenizers
-//! compile cost in a dedicated crate so non-ML consumers don't pull it in.
+//! compile cost in a dedicated adapter crate so non-ML consumers depend only on
+//! the framework-free trait in `brain_core`.
 
 use std::io::Read;
 use std::path::Path;
 
 use brain_core::error::{BrainCoreError, Result};
+// Re-export the `Embed` trait so consumers can keep using
+// `brain_embedder::Embed` (and the `brain_lib::embedder::Embed` alias path).
+// The trait itself lives in `brain_core::ports` to keep `brain_embedder` a
+// pure adapter that depends on core, never the other way around.
+pub use brain_core::ports::Embed;
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config};
@@ -75,18 +81,6 @@ fn verify_checksums(model_dir: &Path, expected: &[(&str, &str)]) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Trait for embedding text into vectors.
-pub trait Embed: Send + Sync {
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
-    fn hidden_size(&self) -> usize;
-    /// Identifier of the embedder model + revision in use.
-    ///
-    /// Stamped onto cached embeddings (`tag_aliases.embedder_version`) and
-    /// audit rows (`tag_cluster_runs.embedder_version`) so consumers can
-    /// invalidate cached vectors when the underlying model changes.
-    fn version(&self) -> &str;
 }
 
 pub struct Embedder {
@@ -312,24 +306,6 @@ impl Embed for Embedder {
     }
 }
 
-/// A mock embedder that produces deterministic hash-based 384-dim vectors.
-/// Avoids requiring model weights in CI/tests.
-pub struct MockEmbedder;
-
-impl Embed for MockEmbedder {
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        Ok(texts.iter().map(|text| mock_embedding(text)).collect())
-    }
-
-    fn hidden_size(&self) -> usize {
-        384
-    }
-
-    fn version(&self) -> &str {
-        "mock-v1"
-    }
-}
-
 /// Async wrapper for `Embed::embed_batch` — runs on `spawn_blocking` to
 /// avoid blocking the Tokio runtime with CPU-intensive embedding work.
 pub async fn embed_batch_async(
@@ -343,29 +319,6 @@ pub async fn embed_batch_async(
     })
     .await
     .map_err(|e| BrainCoreError::Embedding(format!("spawn_blocking: {e}")))?
-}
-
-/// Generate a deterministic 384-dim unit vector from text content using BLAKE3.
-fn mock_embedding(text: &str) -> Vec<f32> {
-    let hash = blake3::hash(text.as_bytes());
-    let bytes = hash.as_bytes();
-
-    let mut embedding = Vec::with_capacity(384);
-    for i in 0..384 {
-        // Use hash bytes cyclically to fill 384 dimensions
-        let byte = bytes[i % 32];
-        embedding.push((byte as f32 / 255.0) - 0.5);
-    }
-
-    // L2 normalize
-    let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for v in &mut embedding {
-            *v /= norm;
-        }
-    }
-
-    embedding
 }
 
 #[cfg(test)]

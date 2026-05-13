@@ -15,7 +15,6 @@ use tracing::{instrument, warn};
 use std::sync::atomic::Ordering;
 
 use crate::capsule::generate_stub_capsule;
-use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
 use crate::metrics::Metrics;
 use crate::ports::{
@@ -27,6 +26,7 @@ use crate::ranking::{
 };
 use crate::retrieval::{MemoryKind, SearchResult, derive_kind, pack_minimal};
 use crate::tokens::estimate_tokens;
+use brain_core::ports::Embed;
 use brain_persistence::db::Db;
 use brain_persistence::db::summaries::SummaryRow;
 #[allow(unused_imports)]
@@ -932,7 +932,7 @@ where
     /// initialised — that brain is skipped for vector search with a warning.
     pub brains: Vec<(String, String, Option<S>)>,
     /// Shared embedder — query is embedded once, used across all brains.
-    pub embedder: &'a Arc<dyn crate::embedder::Embed>,
+    pub embedder: &'a Arc<dyn brain_core::ports::Embed>,
     /// Shared metrics handle.
     pub metrics: &'a Arc<crate::metrics::Metrics>,
 }
@@ -1219,9 +1219,11 @@ mod tests {
     // expansion built above.
     // ───────────────────────────────────────────────────────────────────────
 
-    use crate::embedder::{Embed, MockEmbedder};
+    use brain_core::ports::Embed;
+
     use crate::metrics::Metrics;
     use crate::ports::mock::MockChunkSearcher;
+    use crate::ports::mock::MockEmbedder;
     use brain_persistence::db::Db;
     use brain_persistence::db::tag_aliases::seed_tag_aliases;
     use brain_persistence::store::QueryResult;

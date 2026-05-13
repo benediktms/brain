@@ -103,6 +103,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_watch() {
         let cli = Cli::try_parse_from(["brain", "watch", "./notes"]).unwrap();
@@ -357,6 +358,7 @@ mod tests {
         assert!(matches!(cli.command, Command::Index { .. }));
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn alias_w() {
         let cli = Cli::try_parse_from(["brain", "w", "./notes"]).unwrap();

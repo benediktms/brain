@@ -945,10 +945,18 @@ async fn init_brain_instance(
     )?;
     let metrics = Arc::clone(pipeline.metrics());
 
-    let search = Some(brain_lib::search_service::SearchService {
-        store: brain_persistence::store::StoreReader::from_store(pipeline.store()),
-        embedder: Arc::clone(pipeline.embedder()),
-    });
+    // Mirror `McpContext::bootstrap`'s soft-gate: when the pipeline has no
+    // embedder configured, the search layer is unavailable and tools fall
+    // back to tasks-only mode. Compiles under `embed` only (this file is
+    // feature-gated) but written defensively so the runtime gate composes
+    // with `IndexPipeline::tasks_only` if that constructor ever gets wired
+    // in here.
+    let search = pipeline
+        .embedder()
+        .map(|e| brain_lib::search_service::SearchService {
+            store: brain_persistence::store::StoreReader::from_store(pipeline.store()),
+            embedder: Arc::clone(e),
+        });
 
     let mcp_context = McpContext::from_stores(stores, search, None, metrics);
 

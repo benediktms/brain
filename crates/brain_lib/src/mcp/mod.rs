@@ -13,11 +13,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::embedder::{Embed, Embedder};
+#[cfg(feature = "embed")]
+use crate::embedder::Embedder;
 use crate::ipc::client::IpcClient;
 use crate::metrics::Metrics;
 use crate::search_service::SearchService;
 use crate::stores::BrainStores;
+use brain_core::ports::Embed;
 use brain_persistence::db::Db;
 use brain_persistence::store::{Store, StoreReader};
 
@@ -171,6 +173,7 @@ impl McpContext {
     ///
     /// Returns all three on success. Any error causes the entire search
     /// layer to be skipped — we don't want a partially-loaded state.
+    #[cfg(feature = "embed")]
     async fn try_load_search_layer(
         model_dir: &Path,
         lance_db: &Path,
@@ -196,6 +199,23 @@ impl McpContext {
 
         let store_reader = StoreReader::from_store(&store);
         Ok((store, store_reader, embedder))
+    }
+
+    /// Compile-time stub when the `embed` feature is disabled.
+    ///
+    /// Returns `Err` unconditionally so the `bootstrap` match falls through
+    /// to the existing `info!("embedding model unavailable...")` branch and
+    /// the server starts in tasks-only mode. The signature mirrors the real
+    /// implementation so the caller does not need its own `#[cfg]` gates.
+    #[cfg(not(feature = "embed"))]
+    async fn try_load_search_layer(
+        _model_dir: &Path,
+        _lance_db: &Path,
+        _db: &Db,
+    ) -> crate::error::Result<(Store, StoreReader, Arc<dyn Embed>)> {
+        Err(crate::error::BrainCoreError::Embedding(
+            "embed feature disabled at compile time".into(),
+        ))
     }
 
     /// Resolve a brain name or ID to a `(brain_id, brain_name)` pair via the DB.

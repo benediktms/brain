@@ -21,6 +21,9 @@
 use crate::brain::Brain;
 use crate::error::Result;
 
+pub mod embed;
+pub use embed::Embed;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 

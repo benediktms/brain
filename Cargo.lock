@@ -692,6 +692,7 @@ dependencies = [
 name = "brain-core"
 version = "0.4.1"
 dependencies = [
+ "blake3",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

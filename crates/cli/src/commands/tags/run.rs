@@ -1,13 +1,16 @@
 //! `brain tags …` — manual recluster trigger and alias inspection.
 
 use std::path::Path;
+#[cfg(feature = "embed")]
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::json;
 
+#[cfg(feature = "embed")]
 use brain_lib::embedder::{Embed, Embedder};
 use brain_lib::stores::BrainStores;
+#[cfg(feature = "embed")]
 use brain_lib::{ClusterParams, run_recluster};
 
 use crate::markdown_table::MarkdownTable;
@@ -34,6 +37,7 @@ impl TagsCtx {
 // recluster
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "embed")]
 pub async fn recluster(ctx: &TagsCtx, model_dir: &Path, threshold: f32) -> Result<()> {
     let embedder: Arc<dyn Embed> =
         Arc::new(Embedder::load(model_dir).context("Failed to load embedder model")?);
@@ -132,7 +136,8 @@ pub fn status(ctx: &TagsCtx, model_dir: Option<&Path>) -> Result<()> {
     // on stderr so an operator troubleshooting "why didn't the new model
     // load?" sees the actual failure reason rather than a silent
     // "(not loaded)".
-    let current_embedder_version = match model_dir {
+    #[cfg(feature = "embed")]
+    let current_embedder_version: Option<String> = match model_dir {
         Some(dir) => match Embedder::load(dir) {
             Ok(e) => Some(e.version().to_string()),
             Err(err) => {
@@ -144,6 +149,14 @@ pub fn status(ctx: &TagsCtx, model_dir: Option<&Path>) -> Result<()> {
             }
         },
         None => None,
+    };
+    // Under `--no-default-features`, the candle embedder isn't linked in;
+    // report a `null` version unconditionally. The `model_dir` argument is
+    // accepted but unused so the CLI surface stays stable across builds.
+    #[cfg(not(feature = "embed"))]
+    let current_embedder_version: Option<String> = {
+        let _ = model_dir;
+        None
     };
 
     let ratio = if counts.raw_count > 0 {

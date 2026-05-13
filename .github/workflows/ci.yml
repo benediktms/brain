@@ -57,6 +57,21 @@ jobs:
       - run: cargo check --workspace
       - run: cargo check --workspace --tests
 
+  check-no-defaults:
+    # Verifies that `cargo check --workspace --no-default-features` succeeds —
+    # ensures the `embed` feature gate actually compiles cleanly without the
+    # candle stack. Prevents feature-gate rot: anyone adding a new unconditional
+    # reference to brain-embedder or `crate::embedder::` items will fail here.
+    name: Check (no-default-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo check --workspace --no-default-features
+      - run: cargo check --workspace --no-default-features --tests
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

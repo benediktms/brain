@@ -335,7 +335,7 @@ pub(crate) mod tests {
             .await
             .expect("checked in test assertions");
         let store_reader = brain_persistence::store::StoreReader::from_store(&store);
-        let embedder = Arc::new(crate::embedder::MockEmbedder);
+        let embedder = Arc::new(crate::ports::mock::MockEmbedder);
 
         (
             tmp,

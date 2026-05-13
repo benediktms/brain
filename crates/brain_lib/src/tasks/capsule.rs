@@ -113,10 +113,13 @@ pub struct TaskCapsuleParams<'a> {
 /// Build, embed, and store a task capsule into LanceDB + SQLite.
 ///
 /// Standalone version of the embedding logic (no `McpContext` dependency).
-/// Both stores use upsert semantics — safe to call repeatedly.
+/// Both stores use upsert semantics — safe to call repeatedly. When
+/// `embedder` is `None`, the LanceDB vector upsert is skipped but the
+/// SQLite-side stores (`store_task_capsule`, `upsert_task_lod_l0`) still
+/// run so the capsule remains FTS-searchable in tasks-only mode.
 pub async fn embed_task_capsule(
     store: &Store,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     db: &Db,
     params: TaskCapsuleParams<'_>,
     brain_id: &str,
@@ -129,16 +132,18 @@ pub async fn embed_task_capsule(
     );
     let file_id = format!("task:{}", params.task_id);
 
-    let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
-    store
-        .upsert_chunks(
-            &file_id,
-            params.title,
-            brain_id,
-            &[(0, &capsule_text)],
-            &embeddings,
-        )
-        .await?;
+    if let Some(embedder) = embedder {
+        let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
+        store
+            .upsert_chunks(
+                &file_id,
+                params.title,
+                brain_id,
+                &[(0, &capsule_text)],
+                &embeddings,
+            )
+            .await?;
+    }
 
     store_task_capsule(db, &file_id, &capsule_text, brain_id)?;
     upsert_task_lod_l0(db, &file_id, &capsule_text, brain_id);
@@ -148,10 +153,11 @@ pub async fn embed_task_capsule(
 /// Build, embed, and store an outcome capsule into LanceDB + SQLite.
 ///
 /// Standalone version of the embedding logic (no `McpContext` dependency).
-/// Both stores use upsert semantics — safe to call repeatedly.
+/// Both stores use upsert semantics — safe to call repeatedly. See
+/// [`embed_task_capsule`] for the `None` (tasks-only) semantics.
 pub async fn embed_outcome_capsule(
     store: &Store,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     db: &Db,
     task_id: &str,
     title: &str,
@@ -161,16 +167,18 @@ pub async fn embed_outcome_capsule(
     let capsule_text = build_outcome_capsule(title, completion_reason);
     let file_id = format!("task-outcome:{task_id}");
 
-    let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
-    store
-        .upsert_chunks(
-            &file_id,
-            title,
-            brain_id,
-            &[(0, &capsule_text)],
-            &embeddings,
-        )
-        .await?;
+    if let Some(embedder) = embedder {
+        let embeddings = embed_batch_async(embedder, vec![capsule_text.clone()]).await?;
+        store
+            .upsert_chunks(
+                &file_id,
+                title,
+                brain_id,
+                &[(0, &capsule_text)],
+                &embeddings,
+            )
+            .await?;
+    }
 
     store_task_capsule(db, &file_id, &capsule_text, brain_id)?;
     upsert_task_lod_l0(db, &file_id, &capsule_text, brain_id);

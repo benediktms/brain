@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
-use crate::embedder::{Embed, embed_batch_async};
+use brain_core::ports::Embed;
+
+use crate::embedder::embed_batch_async;
 use crate::l0_generate::{generate_episode_l0, generate_procedure_l0};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingOps, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
@@ -37,9 +39,13 @@ use brain_persistence::sql::SqlResultExt;
 pub async fn poll_stale_tasks(
     db: &Db,
     store: &impl ChunkIndexWriter,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     brain_id: &str,
 ) -> usize {
+    let Some(embedder) = embedder else {
+        debug!("embed_poll: tasks-only mode \u{2014} skipping stale-task sweep");
+        return 0;
+    };
     debug!("embed_poll: scanning stale tasks");
 
     // ── 1. Fetch stale task rows ─────────────────────────────────────────
@@ -197,9 +203,13 @@ pub async fn poll_stale_tasks(
 pub async fn poll_stale_chunks(
     db: &Db,
     store: &impl ChunkIndexWriter,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     brain_id: &str,
 ) -> usize {
+    let Some(embedder) = embedder else {
+        debug!("embed_poll: tasks-only mode \u{2014} skipping stale-chunk sweep");
+        return 0;
+    };
     debug!("embed_poll: scanning stale chunks");
     let rows: Vec<ChunkPollRow> = match db.find_stale_chunks_for_embedding(brain_id) {
         Ok(r) => r,
@@ -312,9 +322,13 @@ pub async fn poll_stale_chunks(
 pub async fn poll_stale_records(
     db: &Db,
     store: &impl ChunkIndexWriter,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     brain_id: &str,
 ) -> usize {
+    let Some(embedder) = embedder else {
+        debug!("embed_poll: tasks-only mode \u{2014} skipping stale-record sweep");
+        return 0;
+    };
     debug!("embed_poll: scanning stale records");
 
     let rows = match db.find_stale_records_for_embedding(brain_id) {
@@ -481,7 +495,7 @@ pub fn upsert_domain_lod_l0(
 pub async fn poll_stale_summaries<D>(
     db: &D,
     store: &impl crate::ports::SummaryStoreWriter,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     brain_id: &str,
 ) -> usize
 where
@@ -491,6 +505,10 @@ where
         + Send
         + Sync,
 {
+    let Some(embedder) = embedder else {
+        debug!("embed_poll: tasks-only mode \u{2014} skipping stale-summary sweep");
+        return 0;
+    };
     debug!("embed_poll: scanning stale summaries");
 
     let rows: Vec<SummaryPollRow> = match db.find_stale_summaries_for_embedding(brain_id) {

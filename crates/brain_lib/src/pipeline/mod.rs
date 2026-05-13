@@ -10,10 +10,12 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use crate::embedder::{Embed, Embedder};
+#[cfg(feature = "embed")]
+use crate::embedder::Embedder;
 use crate::metrics::Metrics;
 use crate::ports::{ChunkIndexWriter, SchemaMeta};
 use crate::summarizer::Summarize;
+use brain_core::ports::Embed;
 use brain_persistence::db::Db;
 use brain_persistence::db::meta;
 use brain_persistence::sql::SqlResultExt;
@@ -53,7 +55,12 @@ where
     pub(crate) db: Db,
     /// LanceDB store — abstracted via port traits; defaults to [`Store`].
     pub(crate) store: S,
-    pub(crate) embedder: Arc<dyn Embed>,
+    /// Runtime soft-gate: `None` means tasks-only mode — chunks are written
+    /// to SQLite + FTS but skip the LanceDB vector upsert and the stale
+    /// embed-poll daemon short-circuits. Mirrors the read-side gate at
+    /// [`crate::mcp::McpContext::embedder`] (which has been `Option` since
+    /// the McpContext bootstrap soft-gate was introduced).
+    pub(crate) embedder: Option<Arc<dyn Embed>>,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) summarizer: Option<Arc<dyn Summarize>>,
     /// Brain ID used to stamp files and chunks created during indexing.
@@ -128,6 +135,7 @@ pub async fn ensure_schema_version(
 
 impl IndexPipeline<Store> {
     /// Create a new pipeline, opening SQLite, LanceDB, and loading the embedder.
+    #[cfg(feature = "embed")]
     pub async fn new(
         model_dir: &Path,
         lance_path: &Path,
@@ -157,7 +165,7 @@ impl IndexPipeline<Store> {
         Ok(Self {
             db,
             store,
-            embedder: Arc::new(embedder),
+            embedder: Some(Arc::new(embedder)),
             metrics: Arc::new(Metrics::new()),
             summarizer: None,
             brain_id: String::new(),
@@ -178,7 +186,7 @@ impl IndexPipeline<Store> {
         Ok(Self {
             db,
             store,
-            embedder,
+            embedder: Some(embedder),
             metrics: Arc::new(Metrics::new()),
             summarizer: None,
             brain_id: String::new(),
@@ -204,7 +212,31 @@ where
         Ok(Self {
             db,
             store,
-            embedder,
+            embedder: Some(embedder),
+            metrics: Arc::new(Metrics::new()),
+            summarizer: None,
+            brain_id: String::new(),
+        })
+    }
+
+    /// Create a pipeline without an embedder — tasks-only mode.
+    ///
+    /// Chunks are still written to SQLite and FTS-indexed, but the LanceDB
+    /// vector upsert is skipped and the stale embed-poll daemon short-circuits
+    /// for any [`crate::pipeline::embed_poll`] sweep that receives this
+    /// pipeline's [`Self::embedder`].
+    ///
+    /// Mirrors the read-side soft-gate at
+    /// [`crate::mcp::McpContext::bootstrap`] which produces
+    /// [`crate::mcp::McpContext`] with `search: None` when the embedder model
+    /// is unavailable.
+    pub async fn tasks_only(db: Db, mut store: S) -> crate::error::Result<Self> {
+        ensure_schema_version(&db, &mut store).await?;
+
+        Ok(Self {
+            db,
+            store,
+            embedder: None,
             metrics: Arc::new(Metrics::new()),
             summarizer: None,
             brain_id: String::new(),
@@ -253,9 +285,14 @@ where
         &mut self.store
     }
 
-    /// Get a reference to the embedder.
-    pub fn embedder(&self) -> &Arc<dyn Embed> {
-        &self.embedder
+    /// Get a reference to the embedder, if one is configured.
+    ///
+    /// Returns `None` when the pipeline was constructed via
+    /// [`Self::tasks_only`] — in that mode, callers that depend on an embedder
+    /// (e.g. [`crate::pipeline::embed_poll::poll_stale_chunks`]) should
+    /// short-circuit rather than attempt to embed.
+    pub fn embedder(&self) -> Option<&Arc<dyn Embed>> {
+        self.embedder.as_ref()
     }
 
     /// Get a reference to the metrics.

@@ -392,7 +392,7 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::embedder::MockEmbedder;
+    use crate::ports::mock::MockEmbedder;
     use brain_persistence::db::tag_aliases as ta;
 
     /// Seed three records and two tasks producing distinct raw tags

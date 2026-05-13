@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::embedder::Embed;
+use brain_core::ports::Embed;
 use brain_persistence::store::StoreReader;
 
 /// Read-side search components.

@@ -17,11 +17,11 @@ use std::fs::OpenOptions;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
-use brain_lib::embedder::MockEmbedder;
 use brain_lib::mcp::McpContext;
 use brain_lib::mcp::protocol::ToolCallResult;
 use brain_lib::mcp::tools::ToolRegistry;
 use brain_lib::metrics::Metrics;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_lib::records::events::{
     ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
     RecordEventType, RecordUpdatedPayload, TagPayload, append_event, new_record_id,

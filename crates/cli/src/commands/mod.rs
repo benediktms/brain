@@ -2,6 +2,7 @@ pub mod agent_schema;
 pub mod alias;
 pub mod analyses;
 pub mod artifacts;
+#[cfg(feature = "embed")]
 pub mod backfill_tasks;
 pub mod config;
 pub mod documents;
@@ -19,6 +20,7 @@ pub mod jobs;
 pub mod link;
 pub mod mcp;
 pub mod mcp_setup;
+#[cfg(feature = "embed")]
 pub mod memory;
 pub mod migrate;
 pub mod plans;
@@ -33,4 +35,5 @@ pub mod status;
 pub mod tags;
 pub mod tasks;
 pub mod vacuum;
+#[cfg(feature = "embed")]
 pub mod watch;

@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use brain_lib::embedder::MockEmbedder;
 use brain_lib::metrics::Metrics;
 use brain_lib::pipeline::IndexPipeline;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_lib::query_pipeline::{FederatedPipeline, SearchParams};
 use brain_persistence::store::{Store, StoreReader};
 use tempfile::TempDir;
@@ -36,7 +36,7 @@ async fn setup_brain(notes: &[(&str, &str)]) -> BrainFixture {
 
     let db = brain_persistence::db::Db::open(&sqlite_path).unwrap();
     let store = Store::open_or_create(&lance_path).await.unwrap();
-    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
+    let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(MockEmbedder);
     let pipeline = IndexPipeline::with_embedder(db, store, embedder)
         .await
         .unwrap();
@@ -71,7 +71,7 @@ async fn test_federated_search_merges_results_from_multiple_brains() {
     )])
     .await;
 
-    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
+    let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
     // brain_a's Db is the shared Db (FTS covers brain_a content).
@@ -155,7 +155,7 @@ async fn test_federated_search_brain_attribution() {
     )])
     .await;
 
-    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
+    let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
     let pipeline = FederatedPipeline {
@@ -222,7 +222,7 @@ async fn test_federated_search_single_brain_fallback() {
     )])
     .await;
 
-    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
+    let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
     // Only the local brain — no remotes
@@ -313,7 +313,7 @@ async fn test_federated_search_respects_budget() {
 
     let brain_b = setup_brain(&brain_b_refs).await;
 
-    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
+    let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
     let tight_budget = 200; // Very tight budget
@@ -362,7 +362,7 @@ async fn test_federated_search_skips_brain_without_lancedb() {
     )])
     .await;
 
-    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
+    let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
     let pipeline = FederatedPipeline {
@@ -439,7 +439,7 @@ async fn test_federated_search_ranks_by_hybrid_score() {
     )])
     .await;
 
-    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(MockEmbedder);
+    let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(MockEmbedder);
     let metrics = Arc::new(Metrics::new());
 
     let pipeline = FederatedPipeline {

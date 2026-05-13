@@ -215,7 +215,8 @@ mod tests {
             .await
             .expect("lance store");
         let store_reader = brain_persistence::store::StoreReader::from_store(&store);
-        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(crate::embedder::MockEmbedder);
+        let embedder: Arc<dyn brain_core::ports::Embed> =
+            Arc::new(crate::ports::mock::MockEmbedder);
         let ctx = McpContext {
             stores,
             search: Some(crate::search_service::SearchService {

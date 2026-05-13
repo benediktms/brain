@@ -152,6 +152,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Index { notes_path } => {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
+        #[cfg(feature = "embed")]
         Command::Watch { notes_path } => {
             let outcome =
                 commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
@@ -163,6 +164,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Daemon { action } => {
             let daemon = commands::daemon::Daemon::new()?;
             match action {
+                #[cfg(feature = "embed")]
                 DaemonAction::Start { notes_path, .. } => {
                     // Child process after fork — run watch directly.
                     // Log init already done in daemon.rs::start() post-fork.
@@ -176,6 +178,14 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     if !outcome.clean {
                         std::process::exit(1);
                     }
+                }
+                #[cfg(not(feature = "embed"))]
+                DaemonAction::Start { .. } => {
+                    anyhow::bail!(
+                        "`brain daemon start` requires the `embed` feature \u{2014} \
+                         this binary was built with `--no-default-features` and has no \
+                         indexer. Rebuild with `cargo install brain --features embed`."
+                    );
                 }
                 DaemonAction::Stop => daemon.stop()?,
                 DaemonAction::Status => {
@@ -223,6 +233,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Vacuum { older_than } => {
             commands::vacuum::run(cli.model_dir, cli.lance_db, cli.sqlite_db, older_than).await?
         }
+        #[cfg(feature = "embed")]
         Command::BackfillTasks { dry_run } => {
             commands::backfill_tasks::run(cli.model_dir, cli.lance_db, cli.sqlite_db, dry_run)
                 .await?
@@ -936,6 +947,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             use commands::tags::run::{AliasesListParams, TagsCtx};
             let ctx = TagsCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
             match action {
+                #[cfg(feature = "embed")]
                 TagsAction::Recluster { threshold } => {
                     commands::tags::run::recluster(&ctx, &cli.model_dir, threshold).await?;
                 }
@@ -977,6 +989,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             use commands::records::RecordsCtx;
 
             match action {
+                #[cfg(feature = "embed")]
                 RecordsAction::Search {
                     query,
                     k,
@@ -1018,11 +1031,13 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         RecordsAction::Unpin { id } => {
                             commands::records::unpin(&ctx, &id)?;
                         }
+                        #[cfg(feature = "embed")]
                         RecordsAction::Search { .. } => unreachable!(),
                     }
                 }
             }
         }
+        #[cfg(feature = "embed")]
         Command::Memory { json, action } => {
             use commands::memory::run::{
                 MemoryCtx, ReflectCommitParams, ReflectPrepareParams, RetrieveParams,

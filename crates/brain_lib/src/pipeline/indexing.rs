@@ -1,6 +1,9 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use tracing::{info, instrument, warn};
+
+use brain_core::ports::Embed;
 
 use crate::chunker::{CHUNKER_VERSION, Chunk, chunk_document};
 use crate::hash_gate::HashGate;
@@ -18,6 +21,31 @@ use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::sql::SqlResultExt;
 
 use super::{IndexPipeline, ScanStats};
+
+/// Embed `texts` only when the pipeline has an embedder configured at runtime.
+///
+/// Returns `Ok(None)` in tasks-only mode — callers must skip vector writes
+/// when the result is `None` but still stamp `mark_chunks_embedded` so the
+/// stale-poll queue drains. See [`super::IndexPipeline::tasks_only`].
+///
+/// Under `--no-default-features`, the field is always `None` at the soft-gate
+/// (because the only `Some(...)`-producing constructor, `IndexPipeline::new`,
+/// is feature-gated), so this helper short-circuits before reaching the stub
+/// `crate::embedder::embed_batch_async`.
+async fn embed_wave_if_possible(
+    embedder: Option<&Arc<dyn Embed>>,
+    texts: Vec<String>,
+) -> crate::error::Result<Option<Vec<Vec<f32>>>> {
+    let chunk_count = texts.len();
+    let Some(embedder) = embedder else {
+        info!(chunk_count, "skipping wave embed (tasks-only)");
+        return Ok(None);
+    };
+    info!(chunk_count, "embedding wave\u{2026}");
+    let res = crate::embedder::embed_batch_async(embedder, texts).await?;
+    info!("embedding wave complete");
+    Ok(Some(res))
+}
 
 /// Mark all ancestor directory scopes as stale for a given file path.
 /// This ensures that when a file changes, any directory-scoped summaries
@@ -272,24 +300,31 @@ where
             return Ok(true);
         }
 
-        // Embed (in blocking task since it's CPU-intensive)
+        // Embed + LanceDB upsert: skipped in tasks-only mode (embedder=None)
+        // or when compiled without the `embed` feature. Chunks remain
+        // FTS-searchable in SQLite either way; `mark_chunks_embedded` below
+        // runs regardless so the stale-poll daemon stops re-queueing them.
         let texts_owned: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
-        let embeddings = crate::embedder::embed_batch_async(&self.embedder, texts_owned).await?;
+        if let Some(embeddings) =
+            embed_wave_if_possible(self.embedder.as_ref(), texts_owned).await?
+        {
+            let chunk_pairs: Vec<(usize, &str)> =
+                chunks.iter().map(|c| (c.ord, c.content.as_str())).collect();
+            self.store
+                .upsert_chunks(
+                    &verdict.file_id,
+                    &path_str,
+                    &self.brain_id,
+                    &chunk_pairs,
+                    &embeddings,
+                )
+                .await?;
+        }
 
-        // LanceDB: upsert
-        let chunk_pairs: Vec<(usize, &str)> =
-            chunks.iter().map(|c| (c.ord, c.content.as_str())).collect();
-        self.store
-            .upsert_chunks(
-                &verdict.file_id,
-                &path_str,
-                &self.brain_id,
-                &chunk_pairs,
-                &embeddings,
-            )
-            .await?;
-
-        // Stamp embedded_at now that LanceDB has the vectors.
+        // Stamp embedded_at unconditionally — drains the stale queue whether
+        // or not vectors were written. Chunks are FTS-indexed in SQLite either
+        // way; the read-side `McpContext` soft-gate already prevents vector
+        // searches when no embedder is loaded.
         let ts = now_ts();
         let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
         self.db.mark_chunks_embedded(&ids, ts)?;
@@ -516,16 +551,20 @@ where
             offsets.push((start, pf.chunks.len()));
         }
 
-        info!(chunk_count = all_texts.len(), "embedding wave\u{2026}");
-        let all_embeddings = crate::embedder::embed_batch_async(&self.embedder, all_texts).await?;
-        info!("embedding wave complete");
+        // Wave embed: `None` when the pipeline is in tasks-only mode (or the
+        // `embed` feature is off at compile time). Per-file upserts below
+        // become Option-typed and are skipped when this is None.
+        let all_embeddings: Option<Vec<Vec<f32>>> =
+            embed_wave_if_possible(self.embedder.as_ref(), all_texts).await?;
 
         let gate = HashGate::new(&self.db, &self.db);
         let drained: Vec<PendingFile> = std::mem::take(pending);
 
         for (pf, &(offset_start, chunk_count)) in drained.iter().zip(offsets.iter()) {
             let file_start = std::time::Instant::now();
-            let file_embeddings = &all_embeddings[offset_start..offset_start + chunk_count];
+            let file_embeddings: Option<&[Vec<f32>]> = all_embeddings
+                .as_ref()
+                .map(|e| &e[offset_start..offset_start + chunk_count]);
 
             let chunk_metas = build_chunk_metas(&pf.file_id, &pf.chunks);
             let l0_inputs = build_l0_inputs(&pf.chunks, &chunk_metas, &self.brain_id);
@@ -563,22 +602,26 @@ where
                     })
                     .into_brain_core()?;
 
-                let chunk_pairs: Vec<(usize, &str)> = pf
-                    .chunks
-                    .iter()
-                    .map(|c| (c.ord, c.content.as_str()))
-                    .collect();
-                self.store
-                    .upsert_chunks(
-                        file_id,
-                        path_str,
-                        &self.brain_id,
-                        &chunk_pairs,
-                        file_embeddings,
-                    )
-                    .await?;
+                // Skip the LanceDB upsert in tasks-only mode. mark_chunks_embedded
+                // still runs below so the stale-poll queue drains regardless.
+                if let Some(file_embeddings) = file_embeddings {
+                    let chunk_pairs: Vec<(usize, &str)> = pf
+                        .chunks
+                        .iter()
+                        .map(|c| (c.ord, c.content.as_str()))
+                        .collect();
+                    self.store
+                        .upsert_chunks(
+                            file_id,
+                            path_str,
+                            &self.brain_id,
+                            &chunk_pairs,
+                            file_embeddings,
+                        )
+                        .await?;
+                }
 
-                // Stamp embedded_at now that LanceDB has the vectors.
+                // Stamp embedded_at unconditionally — see `index_file` comment.
                 let ts = now_ts();
                 let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
                 self.db.mark_chunks_embedded(&ids, ts)?;
