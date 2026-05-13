@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub use injection_audit::InjectionAuditEntry;
-pub use rusqlite::Connection;
+pub(crate) use rusqlite::Connection;
 use rusqlite::OpenFlags;
 
 use crate::error::{BrainCoreError, Result};
@@ -115,7 +115,7 @@ impl Db {
         let conn = self
             .writer
             .lock()
-            .map_err(|e| SqlError::BrainCore(BrainCoreError::Database(format!("writer mutex poisoned: {e}"))))?;
+            .map_err(|e| SqlError::MutexPoisoned(format!("writer mutex poisoned: {e}")))?;
         f(&conn)
     }
 
@@ -133,7 +133,7 @@ impl Db {
         let idx = self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len();
         let conn = self.readers[idx]
             .lock()
-            .map_err(|e| SqlError::BrainCore(BrainCoreError::Database(format!("reader mutex poisoned: {e}"))))?;
+            .map_err(|e| SqlError::MutexPoisoned(format!("reader mutex poisoned: {e}")))?;
         f(&conn)
     }
 
