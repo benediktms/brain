@@ -76,7 +76,7 @@ fn would_create_cycle(
     from: &EntityRef,
     to: &EntityRef,
     edge_kind: EdgeKind,
-) -> SqlResult<bool, LinkError> {
+) -> Result<bool, LinkError> {
     // Walk all nodes reachable from `to` via outgoing same-kind edges.
     // If `from.id` appears in the reachable set, inserting from→to creates a cycle.
     //
@@ -131,7 +131,7 @@ pub fn add_link_checked(
     from: EntityRef,
     to: EntityRef,
     edge_kind: EdgeKind,
-) -> SqlResult<(), LinkError> {
+) -> Result<(), LinkError> {
     if from.id == to.id && edge_kind.requires_dag() {
         return Err(LinkError::Cycle(edge_kind));
     }
@@ -165,7 +165,7 @@ pub fn remove_link(
     from: EntityRef,
     to: EntityRef,
     edge_kind: EdgeKind,
-) -> SqlResult<bool, LinkError> {
+) -> Result<bool, LinkError> {
     let tx = conn.unchecked_transaction()?;
 
     let removed = apply_link_remove(
@@ -197,7 +197,7 @@ pub fn for_entity(
     conn: &Connection,
     entity: &EntityRef,
     kinds: Option<&[EdgeKind]>,
-) -> SqlResult<Vec<EntityLink>, LinkError> {
+) -> Result<Vec<EntityLink>, LinkError> {
     let entity_type = entity_type_str(entity.kind);
 
     let rows: Vec<EntityLink> = if let Some(ks) = kinds {
