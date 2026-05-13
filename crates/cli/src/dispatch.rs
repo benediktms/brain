@@ -149,6 +149,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
     let _ = brain_lib::config::check_brain_home_permissions();
 
     match cli.command {
+        #[cfg(feature = "embed")]
         Command::Index { notes_path } => {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
@@ -214,6 +215,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 }
             }
         }
+        #[cfg(feature = "embed")]
         Command::Reindex { full, file } => match (full, file) {
             (Some(notes_path), None) => {
                 commands::reindex::run_full(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
@@ -230,6 +232,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 anyhow::bail!("Must specify either --full <path> or --file <path>");
             }
         },
+        #[cfg(feature = "embed")]
         Command::Vacuum { older_than } => {
             commands::vacuum::run(cli.model_dir, cli.lance_db, cli.sqlite_db, older_than).await?
         }
@@ -238,6 +241,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             commands::backfill_tasks::run(cli.model_dir, cli.lance_db, cli.sqlite_db, dry_run)
                 .await?
         }
+        #[cfg(feature = "embed")]
         Command::Doctor { notes_path } => {
             commands::doctor::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }

@@ -10,10 +10,12 @@ pub mod documents;
 pub mod daemon;
 pub mod daemon_service;
 pub mod docs;
+#[cfg(feature = "embed")]
 pub mod doctor;
 pub mod hooks;
 pub mod id;
 pub mod import_beads;
+#[cfg(feature = "embed")]
 pub mod index;
 pub mod init;
 pub mod jobs;
@@ -28,12 +30,14 @@ pub mod plugin;
 pub mod provider;
 pub mod records;
 pub mod registry;
+#[cfg(feature = "embed")]
 pub mod reindex;
 pub mod sagas;
 pub mod snapshots;
 pub mod status;
 pub mod tags;
 pub mod tasks;
+#[cfg(feature = "embed")]
 pub mod vacuum;
 #[cfg(feature = "embed")]
 pub mod watch;

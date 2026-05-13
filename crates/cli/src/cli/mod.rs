@@ -156,6 +156,7 @@ pub(crate) enum Command {
             Files that haven't changed since the last run (detected via content \
             hash) are skipped automatically."
     )]
+    #[cfg(feature = "embed")]
     Index {
         /// Path to the notes directory
         #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
@@ -215,6 +216,7 @@ pub(crate) enum Command {
     },
 
     /// Force re-index files (clears content hashes, re-embeds everything)
+    #[cfg(feature = "embed")]
     Reindex {
         /// Re-index all files in this directory
         #[arg(long, value_hint = ValueHint::DirPath)]
@@ -226,6 +228,7 @@ pub(crate) enum Command {
     },
 
     /// Compact and reclaim space (SQLite VACUUM + LanceDB optimize + purge deleted)
+    #[cfg(feature = "embed")]
     Vacuum {
         /// Purge soft-deleted files older than this many days
         #[arg(long, default_value = "30")]
@@ -253,6 +256,7 @@ pub(crate) enum Command {
     },
 
     /// Run health checks on the index
+    #[cfg(feature = "embed")]
     Doctor {
         /// Path to the notes directory
         #[arg(default_value = ".", value_hint = ValueHint::DirPath)]

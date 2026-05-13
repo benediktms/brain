@@ -5,6 +5,7 @@ mod maintenance;
 pub mod recurring_jobs;
 mod scan;
 
+#[cfg(feature = "embed")]
 use std::path::Path;
 use std::sync::Arc;
 
