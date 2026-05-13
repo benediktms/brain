@@ -96,7 +96,7 @@ impl FromStr for Trust {
             "untrusted" => Ok(Trust::Untrusted),
             "vetted" => Ok(Trust::Vetted),
             "trusted" => Ok(Trust::Trusted),
-            other => Err(BrainCoreError::Database(format!(
+            other => Err(BrainCoreError::Parse(format!(
                 "unknown trust value: '{other}'; expected untrusted | vetted | trusted"
             ))),
         }
@@ -173,7 +173,7 @@ impl FromStr for SourceTool {
             "bash" => Ok(SourceTool::Bash),
             "read" => Ok(SourceTool::Read),
             "user" => Ok(SourceTool::User),
-            other => Err(BrainCoreError::Database(format!(
+            other => Err(BrainCoreError::Parse(format!(
                 "unknown source_tool value: '{other}'; \
                  expected transcript | git | web_fetch | bash | read | user"
             ))),
