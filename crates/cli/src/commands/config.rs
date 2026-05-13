@@ -1,26 +1,9 @@
 use std::path::Path;
+use brain_persistence::db::schema::{read_brain_prefix_by_name, update_brain_prefix_by_name};
 use brain_persistence::sql::SqlResultExt;
 
 use anyhow::Result;
 use brain_lib::config::{load_global_config, save_global_config};
-
-/// Try to read the prefix from `brains.prefix` for the named brain.
-/// Returns `None` if no match or column is NULL.
-#[allow(clippy::disallowed_types)]
-fn read_brain_prefix(
-    conn: &rusqlite::Connection,
-    brain_name: &str,
-) -> brain_lib::error::Result<Option<String>> {
-    let prefix: Option<String> = conn
-        .query_row(
-            "SELECT prefix FROM brains WHERE name = ?1",
-            [brain_name],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .ok()
-        .flatten();
-    Ok(prefix)
-}
 
 /// Get a configuration value by key and print it to stdout.
 ///
@@ -30,7 +13,7 @@ pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<(
     let db = brain_persistence::db::Db::open(sqlite_db)?;
     db.with_write_conn(|conn| match key {
         "prefix" => {
-            if let Some(prefix) = read_brain_prefix(conn, brain_name)?
+            if let Some(prefix) = read_brain_prefix_by_name(conn, brain_name)?
                 .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
             {
                 println!("{prefix}");
@@ -58,7 +41,6 @@ pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<(
 ///
 /// `brain_name` must be provided explicitly — it can no longer be derived
 /// from `sqlite_db` now that the DB is unified (`~/.brain/brain.db`).
-#[allow(clippy::disallowed_macros)]
 pub fn run_config_set(
     sqlite_db: &Path,
     brain_name: &str,
@@ -69,7 +51,7 @@ pub fn run_config_set(
         "prefix" => {
             let db = brain_persistence::db::Db::open(sqlite_db)?;
             let (old_prefix, new_prefix) = db.with_write_conn(|conn| {
-                let old = read_brain_prefix(conn, brain_name)?
+                let old = read_brain_prefix_by_name(conn, brain_name)?
                     .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
                     .unwrap_or_else(|| "BRN".to_string());
 
@@ -87,10 +69,7 @@ pub fn run_config_set(
                 };
 
                 // Write to brains.prefix
-                conn.execute(
-                    "UPDATE brains SET prefix = ?1 WHERE name = ?2",
-                    rusqlite::params![new, brain_name],
-                )?;
+                update_brain_prefix_by_name(conn, &new, brain_name)?;
 
                 Ok((old, new))
             }).into_brain_core()?;
