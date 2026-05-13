@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use super::listing::{get_task, task_exists};
 use crate::db::meta;
 use crate::error::BrainCoreError;
-use crate::sql::SqlResult;
+use crate::sql::{SqlError, SqlResult};
 
 /// Minimum ULID prefix length (after project prefix + separator).
 const MIN_ULID_PREFIX_LEN: usize = 4;
@@ -167,11 +167,10 @@ pub fn resolve_task_id_scoped(
                         .iter()
                         .map(|(id, title)| format!("  {id} — {title}"))
                         .collect();
-                    return Err(BrainCoreError::TaskEvent(format!(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                         "ambiguous short hash '{input}': matches {n} tasks:\n{}",
                         candidates.join("\n")
-                    ))
-                    .into());
+                    ))));
                 }
                 _ => {} // 0 matches — fall through to prefix path
             }
@@ -205,11 +204,10 @@ pub fn resolve_task_id_scoped(
                         .iter()
                         .map(|(id, title)| format!("  {id} — {title}"))
                         .collect();
-                    return Err(BrainCoreError::TaskEvent(format!(
+                    return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                         "ambiguous short hash '{input}': matches {n} tasks:\n{}",
                         candidates.join("\n")
-                    ))
-                    .into());
+                    ))));
                 }
                 _ => {} // 0 matches — fall through to ULID path
             }
@@ -225,11 +223,10 @@ pub fn resolve_task_id_scoped(
             // Looks like a project prefix (1-4 chars before dash), e.g. "BRN-01JPH..."
             let ulid_part = &normalized[dash_pos + 1..];
             if ulid_part.len() < MIN_ULID_PREFIX_LEN {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters after '{}'",
                     &normalized[..=dash_pos]
-                ))
-                .into());
+                ))));
             }
             normalized
         }
@@ -240,11 +237,10 @@ pub fn resolve_task_id_scoped(
         None => {
             // No dash — bare ULID prefix, auto-prepend project prefix
             if normalized.len() < MIN_ULID_PREFIX_LEN {
-                return Err(BrainCoreError::TaskEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters, got {}",
                     normalized.len()
-                ))
-                .into());
+                ))));
             }
             let prefix =
                 meta::get_meta(conn, "project_prefix")?.unwrap_or_else(|| "BRN".to_string());
@@ -276,7 +272,7 @@ pub fn resolve_task_id_scoped(
 
     match matches.len() {
         0 => {
-            Err(BrainCoreError::TaskEvent(format!("no task found matching prefix: {input}")).into())
+            Err(SqlError::Domain(BrainCoreError::TaskEvent(format!("no task found matching prefix: {input}"))))
         }
         1 => Ok(matches.into_iter().next().unwrap().0),
         n => {
@@ -284,11 +280,10 @@ pub fn resolve_task_id_scoped(
                 .iter()
                 .map(|(id, title)| format!("  {id} — {title}"))
                 .collect();
-            Err(BrainCoreError::TaskEvent(format!(
+            Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
                 "ambiguous prefix '{input}': matches {n} tasks:\n{}",
                 candidates.join("\n")
-            ))
-            .into())
+            ))))
         }
     }
 }

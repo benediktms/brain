@@ -4,7 +4,7 @@ use crate::db::sagas::events::{SagaEvent, SagaEventType, SagaTaskCascadedPayload
 use crate::db::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
 use crate::db::tasks::projections::apply_event_inner;
 use crate::error::BrainCoreError;
-use crate::sql::SqlResult;
+use crate::sql::{SqlError, SqlResult};
 use crate::utils::now_ts;
 
 /// A saga event row for insertion.
@@ -119,9 +119,9 @@ pub fn insert_saga(
             Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
                 hash_len += 1;
                 if hash_len > full_hex.len() {
-                    return Err(crate::error::BrainCoreError::Internal(
+                    return Err(SqlError::Domain(crate::error::BrainCoreError::Internal(
                         "saga short-hash collision exhausted all 64 hex chars".into(),
-                    ));
+                    )));
                 }
             }
             Err(e) => return Err(e.into()),
@@ -129,7 +129,9 @@ pub fn insert_saga(
     }
 
     get_saga(conn, saga_id)?.ok_or_else(|| {
-        crate::error::BrainCoreError::Internal("saga disappeared after insert".into())
+        SqlError::Domain(crate::error::BrainCoreError::Internal(
+            "saga disappeared after insert".into(),
+        ))
     })
 }
 
@@ -232,13 +234,13 @@ pub fn update_saga(
             )?;
         }
         (None, None) => {
-            return Err(crate::error::BrainCoreError::InvalidOperation(
+            return Err(SqlError::Domain(crate::error::BrainCoreError::InvalidOperation(
                 "update_saga: at least one field must be provided".into(),
-            ));
+            )));
         }
     }
     get_saga(conn, saga_id)?
-        .ok_or_else(|| crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()))
+        .ok_or_else(|| SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())))
 }
 
 /// Close a saga: set status = 'closed', closed_at = now, bump updated_at.
@@ -254,15 +256,15 @@ pub fn close_saga(conn: &Connection, saga_id: &str) -> SqlResult<SagaRow> {
     if rows_changed == 0 {
         let existing = get_saga(conn, saga_id)?;
         return Err(match existing {
-            None => crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()),
-            Some(row) => crate::error::BrainCoreError::Parse(format!(
+            None => SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())),
+            Some(row) => SqlError::Domain(crate::error::BrainCoreError::Parse(format!(
                 "saga cannot be closed from status '{}'; only 'open' sagas can be closed",
                 row.status
-            )),
+            ))),
         });
     }
     get_saga(conn, saga_id)?
-        .ok_or_else(|| crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()))
+        .ok_or_else(|| SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())))
 }
 
 /// Fetch a saga row by ID.
@@ -430,7 +432,9 @@ pub fn reopen_saga(conn: &Connection, saga_id: &str) -> SqlResult<SagaRow> {
         params![ts, saga_id],
     )?;
     get_saga(conn, saga_id)?.ok_or_else(|| {
-        crate::error::BrainCoreError::Internal("saga disappeared after reopen".into())
+        SqlError::Domain(crate::error::BrainCoreError::Internal(
+            "saga disappeared after reopen".into(),
+        ))
     })
 }
 
@@ -546,11 +550,11 @@ pub fn cancel_saga(conn: &Connection, saga_id: &str) -> SqlResult<()> {
     if rows_changed == 0 {
         let existing = get_saga(conn, saga_id)?;
         return Err(match existing {
-            None => crate::error::BrainCoreError::SagaNotFound(saga_id.to_string()),
-            Some(row) => crate::error::BrainCoreError::Parse(format!(
+            None => SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())),
+            Some(row) => SqlError::Domain(crate::error::BrainCoreError::Parse(format!(
                 "saga already in terminal status '{}'",
                 row.status
-            )),
+            ))),
         });
     }
     Ok(())
@@ -607,10 +611,9 @@ pub fn cascade_member_tasks(
         // Other statuses don't make sense as a cascade target; the call
         // sites only pass Done or Cancelled.
         _ => {
-            return Err(BrainCoreError::Parse(format!(
+            return Err(SqlError::Domain(BrainCoreError::Parse(format!(
                 "cascade_member_tasks: unsupported target status {target_status:?}"
-            ))
-            .into());
+            ))));
         }
     };
     let task_ids = list_saga_task_ids(conn, saga_id)?;
@@ -725,6 +728,7 @@ mod tests {
     use super::*;
     use crate::db::Db;
     use crate::error::BrainCoreError;
+    use crate::sql::SqlError;
 
     /// Open an in-memory DB and register one brain so tasks have a valid FK target.
     fn setup_db() -> Db {
@@ -856,16 +860,16 @@ mod tests {
             insert_saga_row(conn, "s_plan", "planning");
             let err = close_saga(conn, "s_plan").unwrap_err();
             match err {
-                BrainCoreError::Parse(msg) => {
+                SqlError::Domain(BrainCoreError::Parse(msg)) => {
                     assert!(msg.contains("planning"), "expected planning in: {msg}");
                     assert!(
                         msg.contains("only 'open'"),
                         "expected 'only open' in: {msg}"
                     );
                 }
-                other => panic!("expected Parse error, got {other:?}"),
+                other => panic!("expected Domain(Parse) error, got {other:?}"),
             }
-            Ok::<_, BrainCoreError>(())
+            Ok(())
         })
         .unwrap();
     }
@@ -876,10 +880,10 @@ mod tests {
         db.with_write_conn(|conn| {
             let err = cancel_saga(conn, "no_such_saga").unwrap_err();
             match err {
-                BrainCoreError::SagaNotFound(id) => assert_eq!(id, "no_such_saga"),
-                other => panic!("expected SagaNotFound, got {other:?}"),
+                SqlError::Domain(BrainCoreError::SagaNotFound(id)) => assert_eq!(id, "no_such_saga"),
+                other => panic!("expected Domain(SagaNotFound), got {other:?}"),
             }
-            Ok::<_, BrainCoreError>(())
+            Ok(())
         })
         .unwrap();
     }
@@ -891,13 +895,13 @@ mod tests {
             insert_saga_row(conn, "s_done", "cancelled");
             let err = cancel_saga(conn, "s_done").unwrap_err();
             match err {
-                BrainCoreError::Parse(msg) => assert!(
+                SqlError::Domain(BrainCoreError::Parse(msg)) => assert!(
                     msg.contains("terminal status 'cancelled'"),
                     "unexpected message: {msg}"
                 ),
-                other => panic!("expected Parse, got {other:?}"),
+                other => panic!("expected Domain(Parse), got {other:?}"),
             }
-            Ok::<_, BrainCoreError>(())
+            Ok(())
         })
         .unwrap();
     }
@@ -947,7 +951,7 @@ mod tests {
                 msg.to_lowercase().contains("check") || msg.to_lowercase().contains("constraint"),
                 "expected CHECK constraint failure, got: {msg}"
             );
-            Ok::<_, BrainCoreError>(())
+            Ok(())
         })
         .unwrap();
     }
@@ -969,7 +973,7 @@ mod tests {
                 msg.to_lowercase().contains("check") || msg.to_lowercase().contains("constraint"),
                 "expected CHECK constraint failure, got: {msg}"
             );
-            Ok::<_, BrainCoreError>(())
+            Ok(())
         })
         .unwrap();
     }

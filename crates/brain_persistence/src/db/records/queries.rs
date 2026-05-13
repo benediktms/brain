@@ -4,7 +4,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::comparator;
 use crate::error::BrainCoreError;
-use crate::sql::SqlResult;
+use crate::sql::{SqlError, SqlResult};
 
 /// Minimum ULID prefix length (after project prefix + separator).
 const MIN_ULID_PREFIX_LEN: usize = 4;
@@ -285,11 +285,10 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> SqlR
             // Looks like a project prefix (1-4 chars before dash), e.g. "BRN-01JPH..."
             let ulid_part = &normalized[dash_pos + 1..];
             if ulid_part.len() < MIN_ULID_PREFIX_LEN {
-                return Err(BrainCoreError::RecordEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::RecordEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters after '{}'",
                     &normalized[..=dash_pos]
-                ))
-                .into());
+                ))));
             }
             normalized
         }
@@ -300,11 +299,10 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> SqlR
         None => {
             // No dash — bare ULID prefix, auto-prepend project prefix
             if normalized.len() < MIN_ULID_PREFIX_LEN {
-                return Err(BrainCoreError::RecordEvent(format!(
+                return Err(SqlError::Domain(BrainCoreError::RecordEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters, got {}",
                     normalized.len()
-                ))
-                .into());
+                ))));
             }
             let prefix = if !brain_id.is_empty() {
                 conn.query_row(
@@ -334,20 +332,19 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> SqlR
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     match matches.len() {
-        0 => Err(
-            BrainCoreError::RecordEvent(format!("no record found matching prefix: {input}")).into(),
-        ),
+        0 => Err(SqlError::Domain(BrainCoreError::RecordEvent(format!(
+            "no record found matching prefix: {input}"
+        )))),
         1 => Ok(matches.into_iter().next().unwrap().0),
         n => {
             let candidates: Vec<String> = matches
                 .iter()
                 .map(|(id, title)| format!("  {id} — {title}"))
                 .collect();
-            Err(BrainCoreError::RecordEvent(format!(
+            Err(SqlError::Domain(BrainCoreError::RecordEvent(format!(
                 "ambiguous prefix '{input}': matches {n} records:\n{}",
                 candidates.join("\n")
-            ))
-            .into())
+            ))))
         }
     }
 }

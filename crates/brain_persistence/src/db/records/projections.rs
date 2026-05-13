@@ -61,7 +61,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         RecordEventType::RecordCreated => {
             let p: RecordCreatedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad RecordCreated payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad RecordCreated payload: {e}"
+                    )))
                 })?;
 
             let original_size = p.content_ref.original_size.unwrap_or(p.content_ref.size) as i64;
@@ -110,7 +112,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 
             let p: RecordUpdatedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad RecordUpdated payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad RecordUpdated payload: {e}"
+                    )))
                 })?;
 
             let mut set_cols: Vec<&str> = Vec::new();
@@ -146,7 +150,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         RecordEventType::RecordArchived => {
             let _p: RecordArchivedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad RecordArchived payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad RecordArchived payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -157,7 +163,7 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 
         RecordEventType::TagAdded => {
             let p: TagPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::RecordEvent(format!("bad TagAdded payload: {e}")))?;
+                .map_err(|e| SqlError::Domain(BrainCoreError::RecordEvent(format!("bad TagAdded payload: {e}"))))?;
 
             conn.execute(
                 "INSERT OR IGNORE INTO record_tags (record_id, tag) VALUES (?1, ?2)",
@@ -167,7 +173,7 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 
         RecordEventType::TagRemoved => {
             let p: TagPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::RecordEvent(format!("bad TagRemoved payload: {e}")))?;
+                .map_err(|e| SqlError::Domain(BrainCoreError::RecordEvent(format!("bad TagRemoved payload: {e}"))))?;
 
             conn.execute(
                 "DELETE FROM record_tags WHERE record_id = ?1 AND tag = ?2",
@@ -177,12 +183,14 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 
         RecordEventType::LinkAdded => {
             let p: LinkPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| BrainCoreError::RecordEvent(format!("bad LinkAdded payload: {e}")))?;
+                .map_err(|e| SqlError::Domain(BrainCoreError::RecordEvent(format!("bad LinkAdded payload: {e}"))))?;
 
             // Validate before any writes — ensures rollback is clean on error.
             let to = link_payload_to_entity_ref(&p)?;
             let from = EntityRef::record(&event.record_id).map_err(|_| {
-                BrainCoreError::RecordEvent("LinkAdded: record_id must not be empty".into())
+                SqlError::Domain(BrainCoreError::RecordEvent(
+                    "LinkAdded: record_id must not be empty".into(),
+                ))
             })?;
 
             conn.execute(
@@ -203,13 +211,17 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
 
         RecordEventType::LinkRemoved => {
             let p: LinkPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
-                BrainCoreError::RecordEvent(format!("bad LinkRemoved payload: {e}"))
+                SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                    "bad LinkRemoved payload: {e}"
+                )))
             })?;
 
             // Validate before any writes — ensures rollback is clean on error.
             let to = link_payload_to_entity_ref(&p)?;
             let from = EntityRef::record(&event.record_id).map_err(|_| {
-                BrainCoreError::RecordEvent("LinkRemoved: record_id must not be empty".into())
+                SqlError::Domain(BrainCoreError::RecordEvent(
+                    "LinkRemoved: record_id must not be empty".into(),
+                ))
             })?;
 
             conn.execute(
@@ -233,7 +245,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         RecordEventType::PayloadEvicted => {
             let _p: PayloadEvictedPayload =
                 serde_json::from_value(event.payload.clone()).map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad PayloadEvicted payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad PayloadEvicted payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
@@ -245,7 +259,9 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         RecordEventType::RetentionClassSet => {
             let p: RetentionClassSetPayload = serde_json::from_value(event.payload.clone())
                 .map_err(|e| {
-                    BrainCoreError::RecordEvent(format!("bad RetentionClassSet payload: {e}"))
+                    SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                        "bad RetentionClassSet payload: {e}"
+                    )))
                 })?;
 
             conn.execute(
