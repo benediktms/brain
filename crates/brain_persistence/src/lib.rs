@@ -5,6 +5,7 @@ pub mod job_results;
 pub mod links;
 pub mod pagerank;
 pub mod ports;
+pub mod sql;
 pub mod store;
 pub(crate) mod tokens;
 pub mod trust;
