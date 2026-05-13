@@ -32,6 +32,7 @@ pub use rusqlite::Connection;
 use rusqlite::OpenFlags;
 
 use crate::error::{BrainCoreError, Result};
+use crate::sql::{SqlError, SqlResult, SqlResultExt};
 
 /// Collect all rows from a `query_map` result into a `Vec`.
 ///
@@ -68,7 +69,7 @@ impl Db {
     /// Open (or create) the SQLite database at the given path and initialize the schema.
     pub fn open(path: &Path) -> Result<Self> {
         let writer = Connection::open(path)?;
-        schema::init_schema(&writer)?;
+        schema::init_schema(&writer).into_brain_core()?;
 
         let read_flags = OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
@@ -95,7 +96,7 @@ impl Db {
     /// Uses 0 readers — `with_read_conn` falls back to the write connection.
     pub fn open_in_memory() -> Result<Self> {
         let writer = Connection::open_in_memory()?;
-        schema::init_schema(&writer)?;
+        schema::init_schema(&writer).into_brain_core()?;
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
             readers: Arc::new(Vec::new()),
@@ -104,14 +105,14 @@ impl Db {
     }
 
     /// Execute a closure with a reference to the write connection.
-    pub fn with_write_conn<F, T>(&self, f: F) -> Result<T>
+    pub fn with_write_conn<F, T>(&self, f: F) -> SqlResult<T>
     where
-        F: FnOnce(&Connection) -> Result<T>,
+        F: FnOnce(&Connection) -> SqlResult<T>,
     {
         let conn = self
             .writer
             .lock()
-            .map_err(|e| BrainCoreError::Database(format!("writer mutex poisoned: {e}")))?;
+            .map_err(|e| SqlError::BrainCore(BrainCoreError::Database(format!("writer mutex poisoned: {e}"))))?;
         f(&conn)
     }
 
@@ -119,9 +120,9 @@ impl Db {
     ///
     /// Round-robins across the read pool. Falls back to the write connection
     /// when no readers are available (in-memory databases).
-    pub fn with_read_conn<F, T>(&self, f: F) -> Result<T>
+    pub fn with_read_conn<F, T>(&self, f: F) -> SqlResult<T>
     where
-        F: FnOnce(&Connection) -> Result<T>,
+        F: FnOnce(&Connection) -> SqlResult<T>,
     {
         if self.readers.is_empty() {
             return self.with_write_conn(f);
@@ -129,7 +130,7 @@ impl Db {
         let idx = self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len();
         let conn = self.readers[idx]
             .lock()
-            .map_err(|e| BrainCoreError::Database(format!("reader mutex poisoned: {e}")))?;
+            .map_err(|e| SqlError::BrainCore(BrainCoreError::Database(format!("reader mutex poisoned: {e}"))))?;
         f(&conn)
     }
 
@@ -138,6 +139,7 @@ impl Db {
     /// Must be called before writing tasks/records with FK-constrained `brain_id`.
     pub fn ensure_brain_registered(&self, brain_id: &str, brain_name: &str) -> Result<()> {
         self.with_write_conn(|conn| schema::ensure_brain_registered(conn, brain_id, brain_name))
+            .into_brain_core()
     }
 
     /// Project state_projection.toml brain entries into the brains table.
@@ -146,6 +148,7 @@ impl Db {
     /// in config) are cleared to projected=0. Preserves existing prefix values.
     pub fn project_config_to_brains(&self, brains: &[schema::BrainProjection]) -> Result<()> {
         self.with_write_conn(|conn| schema::project_config_to_brains(conn, brains))
+            .into_brain_core()
     }
 
     /// Resolve a brain by name, brain_id, alias, or root path.
@@ -153,11 +156,13 @@ impl Db {
     /// Returns `(brain_id, name)`. Resolution order: name → id → alias → root path.
     pub fn resolve_brain(&self, input: &str) -> Result<(String, String)> {
         self.with_read_conn(|conn| schema::resolve_brain(conn, input))
+            .into_brain_core()
     }
 
     /// Upsert a brain entry. Preserves existing prefix via COALESCE.
     pub fn upsert_brain(&self, input: &schema::BrainUpsert<'_>) -> Result<()> {
         self.with_write_conn(|conn| schema::upsert_brain(conn, input))
+            .into_brain_core()
     }
 
     /// Check whether a brain has been archived.
@@ -166,46 +171,55 @@ impl Db {
     pub fn is_brain_archived(&self, brain_id: &str) -> Result<bool> {
         let brain_id = brain_id.to_string();
         self.with_read_conn(move |conn| schema::is_brain_archived(conn, &brain_id))
+            .into_brain_core()
     }
 
     /// List all brain rows, optionally filtered to active-only.
     pub fn list_brains(&self, active_only: bool) -> Result<Vec<schema::BrainRow>> {
         self.with_read_conn(|conn| schema::list_brains(conn, active_only))
+            .into_brain_core()
     }
 
     /// Read prefix for a brain by brain_id.
     pub fn get_brain_prefix(&self, brain_id: &str) -> Result<Option<String>> {
         self.with_read_conn(|conn| schema::get_brain_prefix(conn, brain_id))
+            .into_brain_core()
     }
 
     /// Read a full brain row by brain_id.
     pub fn get_brain(&self, brain_id: &str) -> Result<Option<schema::BrainRow>> {
         self.with_read_conn(|conn| schema::get_brain(conn, brain_id))
+            .into_brain_core()
     }
 
     /// Read a full brain row by name.
     pub fn get_brain_by_name(&self, name: &str) -> Result<Option<schema::BrainRow>> {
         self.with_read_conn(|conn| schema::get_brain_by_name(conn, name))
+            .into_brain_core()
     }
 
     /// Update roots JSON for a brain.
     pub fn update_brain_roots(&self, brain_id: &str, roots_json: &str) -> Result<()> {
         self.with_write_conn(|conn| schema::update_brain_roots(conn, brain_id, roots_json))
+            .into_brain_core()
     }
 
     /// Mark a brain as archived.
     pub fn archive_brain(&self, brain_id: &str) -> Result<()> {
         self.with_write_conn(|conn| schema::archive_brain(conn, brain_id))
+            .into_brain_core()
     }
 
     /// Atomically archive a brain and clear its roots.
     pub fn archive_and_clear_roots(&self, brain_id: &str) -> Result<()> {
         self.with_write_conn(|conn| schema::archive_and_clear_roots(conn, brain_id))
+            .into_brain_core()
     }
 
     /// Delete a brain by name.
     pub fn delete_brain(&self, name: &str) -> Result<bool> {
         self.with_write_conn(|conn| schema::delete_brain(conn, name))
+            .into_brain_core()
     }
 
     // ── Vetted episode write ────────────────────────────────────────────
@@ -219,6 +233,7 @@ impl Db {
     /// but algorithmically curated from a known-local origin.
     pub fn store_vetted_episode(&self, episode: &summaries::Episode) -> Result<String> {
         self.with_write_conn(|conn| summaries::store_episode_with_trust(conn, episode, "vetted"))
+            .into_brain_core()
     }
 
     // ── Injection audit ────────────────────────────────────────────────
@@ -233,6 +248,7 @@ impl Db {
         entry: &injection_audit::InjectionAuditEntry<'_>,
     ) -> Result<()> {
         self.with_write_conn(|conn| injection_audit::insert(conn, entry))
+            .into_brain_core()
     }
 
     // ── PreToolUse throttle ────────────────────────────────────────────
@@ -253,6 +269,7 @@ impl Db {
             )?;
             Ok(count > 0)
         })
+            .into_brain_core()
     }
 
     /// Record `(session_id, file_path)` as seen by the PreToolUse hook.
@@ -273,6 +290,7 @@ impl Db {
             )?;
             Ok(())
         })
+            .into_brain_core()
     }
 
     // ── File-scoped memory retrieval ────────────────────────────────────
@@ -313,6 +331,7 @@ impl Db {
                 })?;
             collect_rows(rows)
         })
+            .into_brain_core()
     }
 
     /// Full-text search summaries filtered to the trustworthy band
@@ -367,12 +386,14 @@ impl Db {
             })?;
             collect_rows(rows)
         })
+            .into_brain_core()
     }
 
     // ── LOD Chunks ─────────────────────────────────────────────────────
 
     pub fn upsert_lod_chunk(&self, input: &lod_chunks::InsertLodChunk) -> Result<()> {
         self.with_write_conn(|conn| lod_chunks::upsert_lod_chunk(conn, input))
+            .into_brain_core()
     }
 
     pub fn get_lod_chunk(
@@ -383,16 +404,19 @@ impl Db {
         let object_uri = object_uri.to_string();
         let lod_level = lod_level.to_string();
         self.with_read_conn(move |conn| lod_chunks::get_lod_chunk(conn, &object_uri, &lod_level))
+            .into_brain_core()
     }
 
     pub fn get_lod_chunks_for_uri(&self, object_uri: &str) -> Result<Vec<lod_chunks::LodChunkRow>> {
         let object_uri = object_uri.to_string();
         self.with_read_conn(move |conn| lod_chunks::get_lod_chunks_for_uri(conn, &object_uri))
+            .into_brain_core()
     }
 
     pub fn delete_lod_chunks_for_uri(&self, object_uri: &str) -> Result<usize> {
         let object_uri = object_uri.to_string();
         self.with_write_conn(move |conn| lod_chunks::delete_lod_chunks_for_uri(conn, &object_uri))
+            .into_brain_core()
     }
 
     /// Fetch a single summary row by its ID.
@@ -401,11 +425,13 @@ impl Db {
     pub fn get_summary_by_id(&self, summary_id: &str) -> Result<Option<summaries::SummaryRow>> {
         let id = summary_id.to_string();
         self.with_read_conn(move |conn| summaries::get_summary(conn, &id))
+            .into_brain_core()
     }
 
     pub fn delete_expired_lod_chunks(&self, now_iso: &str) -> Result<usize> {
         let now_iso = now_iso.to_string();
         self.with_write_conn(move |conn| lod_chunks::delete_expired_lod_chunks(conn, &now_iso))
+            .into_brain_core()
     }
 
     pub fn delete_lod_chunks_by_uri_pattern(&self, uri_pattern: &str) -> Result<usize> {
@@ -413,6 +439,7 @@ impl Db {
         self.with_write_conn(move |conn| {
             lod_chunks::delete_lod_chunks_by_uri_pattern(conn, &uri_pattern)
         })
+            .into_brain_core()
     }
 
     pub fn count_lod_chunks_by_brain(
@@ -425,6 +452,7 @@ impl Db {
         self.with_read_conn(move |conn| {
             lod_chunks::count_lod_chunks_by_brain(conn, &brain_id, lod_level.as_deref())
         })
+            .into_brain_core()
     }
 
     pub fn list_lod_chunks_by_brain(
@@ -437,6 +465,7 @@ impl Db {
         self.with_read_conn(move |conn| {
             lod_chunks::list_lod_chunks_by_brain(conn, &brain_id, limit, offset)
         })
+            .into_brain_core()
     }
 
     // ── Provider CRUD ──────────────────────────────────────────────────
@@ -444,32 +473,38 @@ impl Db {
     /// Insert a new provider. Returns the generated ID.
     pub fn insert_provider(&self, input: &providers::InsertProvider) -> Result<String> {
         self.with_write_conn(|conn| providers::insert_provider(conn, input))
+            .into_brain_core()
     }
 
     /// Get a provider by ID.
     pub fn get_provider(&self, id: &str) -> Result<Option<providers::ProviderRow>> {
         self.with_read_conn(|conn| providers::get_provider(conn, id))
+            .into_brain_core()
     }
 
     /// Get the most recently updated provider for a given name.
     pub fn get_provider_by_name(&self, name: &str) -> Result<Option<providers::ProviderRow>> {
         self.with_read_conn(|conn| providers::get_provider_by_name(conn, name))
+            .into_brain_core()
     }
 
     /// List all providers.
     pub fn list_providers(&self) -> Result<Vec<providers::ProviderRow>> {
         self.with_read_conn(providers::list_providers)
+            .into_brain_core()
     }
 
     /// Delete a provider by ID.
     pub fn delete_provider(&self, id: &str) -> Result<bool> {
         let id = id.to_string();
         self.with_write_conn(move |conn| providers::delete_provider(conn, &id))
+            .into_brain_core()
     }
 
     /// Check if a provider with the given name and key hash exists.
     pub fn provider_exists(&self, name: &str, api_key_hash: &str) -> Result<bool> {
         self.with_read_conn(|conn| providers::provider_exists(conn, name, api_key_hash))
+            .into_brain_core()
     }
 
     /// Flush the WAL file to the main database and truncate it.
@@ -481,6 +516,7 @@ impl Db {
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
             Ok(())
         })
+            .into_brain_core()
     }
 }
 
@@ -526,7 +562,7 @@ mod tests {
         // Read connections should reject INSERT statements
         let result = db.with_read_conn(|conn| {
             conn.execute("CREATE TABLE test_rw (id INTEGER PRIMARY KEY)", [])
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
             Ok(())
         });
         assert!(result.is_err(), "write via read connection should fail");
@@ -540,9 +576,9 @@ mod tests {
         // with_read_conn should fall back to writer and succeed
         db.with_write_conn(|conn| {
             conn.execute("CREATE TABLE fallback_test (id INTEGER PRIMARY KEY)", [])
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
             conn.execute("INSERT INTO fallback_test (id) VALUES (1)", [])
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
             Ok(())
         })
         .unwrap();
@@ -570,13 +606,13 @@ mod tests {
                 "CREATE TABLE IF NOT EXISTS conc (id INTEGER PRIMARY KEY, val TEXT)",
                 [],
             )
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
             for i in 0..100 {
                 conn.execute(
                     "INSERT INTO conc (id, val) VALUES (?1, ?2)",
                     rusqlite::params![i, format!("v{i}")],
                 )
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
             }
             Ok(())
         })
@@ -591,7 +627,7 @@ mod tests {
                         "INSERT INTO conc (id, val) VALUES (?1, ?2)",
                         rusqlite::params![i, format!("v{i}")],
                     )
-                    .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                    .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
                     Ok(())
                 })
                 .unwrap();
@@ -643,9 +679,9 @@ mod tests {
                 "CREATE TABLE ckpt_test (id INTEGER PRIMARY KEY, val TEXT)",
                 [],
             )
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+            .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
             conn.execute("INSERT INTO ckpt_test (id, val) VALUES (1, 'hello')", [])
-                .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
             Ok(())
         })
         .unwrap();
