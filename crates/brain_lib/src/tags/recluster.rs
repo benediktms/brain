@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use brain_persistence::db::tag_aliases::{
-use brain_persistence::sql::SqlResultExt;
+use brain_persistence::sql::{SqlError, SqlResultExt};
     AliasUpsert, DedupedRawTag, ExistingAlias, FinalizeRun, InsertRun,
 };
 use tracing::{debug, error, info, warn};
@@ -650,7 +650,7 @@ mod tests {
                 let mut stmt = conn.prepare("SELECT DISTINCT brain_id FROM tag_aliases")?;
                 let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()
-                    .map_err(crate::error::BrainCoreError::from)
+                    .map_err(SqlError::from)
             })
                 .into_brain_core()
             .unwrap();
@@ -827,7 +827,7 @@ mod tests {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()
-                    .map_err(crate::error::BrainCoreError::from)
+                    .map_err(SqlError::from)
             })
                 .into_brain_core()
             .unwrap();

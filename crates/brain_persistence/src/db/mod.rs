@@ -565,7 +565,7 @@ mod tests {
         // Read connections should reject INSERT statements
         let result = db.with_read_conn(|conn| {
             conn.execute("CREATE TABLE test_rw (id INTEGER PRIMARY KEY)", [])
-                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
+                .map_err(SqlError::from)?;
             Ok(())
         });
         assert!(result.is_err(), "write via read connection should fail");
@@ -579,9 +579,9 @@ mod tests {
         // with_read_conn should fall back to writer and succeed
         db.with_write_conn(|conn| {
             conn.execute("CREATE TABLE fallback_test (id INTEGER PRIMARY KEY)", [])
-                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
+                .map_err(SqlError::from)?;
             conn.execute("INSERT INTO fallback_test (id) VALUES (1)", [])
-                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
+                .map_err(SqlError::from)?;
             Ok(())
         })
         .unwrap();
@@ -609,13 +609,13 @@ mod tests {
                 "CREATE TABLE IF NOT EXISTS conc (id INTEGER PRIMARY KEY, val TEXT)",
                 [],
             )
-            .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
+            .map_err(SqlError::from)?;
             for i in 0..100 {
                 conn.execute(
                     "INSERT INTO conc (id, val) VALUES (?1, ?2)",
                     rusqlite::params![i, format!("v{i}")],
                 )
-                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
+                .map_err(SqlError::from)?;
             }
             Ok(())
         })
@@ -630,7 +630,7 @@ mod tests {
                         "INSERT INTO conc (id, val) VALUES (?1, ?2)",
                         rusqlite::params![i, format!("v{i}")],
                     )
-                    .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
+                    .map_err(SqlError::from)?;
                     Ok(())
                 })
                 .unwrap();
@@ -682,9 +682,9 @@ mod tests {
                 "CREATE TABLE ckpt_test (id INTEGER PRIMARY KEY, val TEXT)",
                 [],
             )
-            .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
+            .map_err(SqlError::from)?;
             conn.execute("INSERT INTO ckpt_test (id, val) VALUES (1, 'hello')", [])
-                .map_err(|e| BrainCoreError::Database(e.to_string()).into())?;
+                .map_err(SqlError::from)?;
             Ok(())
         })
         .unwrap();
