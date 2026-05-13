@@ -72,6 +72,24 @@ jobs:
       - run: cargo check --workspace --no-default-features
       - run: cargo check --workspace --no-default-features --tests
 
+  test-tasks-only:
+    # Exercises the runtime tasks-only soft-gate by running tests that
+    # construct `IndexPipeline::tasks_only` under `--no-default-features
+    # --features test-utils`. Catches regressions where the embedder Option
+    # gate is bypassed and `crate::embedder::embed_batch_async` stub is hit
+    # at runtime (would surface as a test failure rather than a silent
+    # behavioural change). Faster than the full Test job because it only
+    # runs the `tasks_only_smoke` integration test.
+    name: Test (tasks-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo nextest run -p brain-lib --no-default-features --features test-utils --test tasks_only_smoke --profile ci
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
