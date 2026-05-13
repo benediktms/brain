@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use brain_persistence::db::tag_aliases::{
+use brain_persistence::sql::SqlResultExt;
     AliasUpsert, DedupedRawTag, ExistingAlias, FinalizeRun, InsertRun,
 };
 use tracing::{debug, error, info, warn};
@@ -407,6 +408,7 @@ mod tests {
                 ta::seed_task_with_labels(conn, "t2", &brain_id, 4000, &["performance"])?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
     }
 
@@ -447,6 +449,7 @@ mod tests {
         let run = stores
             .db_for_tests()
             .with_read_conn(|conn| ta::get_run(conn, &report.run_id))
+                .into_brain_core()
             .unwrap()
             .expect("run row should exist");
         assert!(run.finished_at.is_some());
@@ -590,7 +593,7 @@ mod tests {
             "Tx-2 never opened, tag_aliases should be empty: {snapshot:?}",
         );
 
-        let runs = stores.db_for_tests().with_read_conn(ta::list_runs).unwrap();
+        let runs = stores.db_for_tests().with_read_conn(ta::list_runs).into_brain_core().unwrap()
         assert_eq!(runs.len(), 1, "exactly one tag_cluster_runs row");
         let run = &runs[0];
         assert!(run.finished_at.is_some(), "Tx-3 must set finished_at");
@@ -617,6 +620,7 @@ mod tests {
                 ta::seed_record_with_tags(conn, "rb", "brain-b", 1000, &["beta"])?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
@@ -648,6 +652,7 @@ mod tests {
                 rows.collect::<rusqlite::Result<Vec<_>>>()
                     .map_err(crate::error::BrainCoreError::from)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(global_brains, vec!["brain-a".to_string()]);
     }
@@ -664,6 +669,7 @@ mod tests {
                 ta::seed_record_with_tags(conn, "r-gamma", &brain_id, 1000, &["gamma"])?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
@@ -693,6 +699,7 @@ mod tests {
                 conn.execute("DELETE FROM records WHERE record_id = 'r-gamma'", [])?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let r2 = run_recluster(&stores, &embedder, ClusterParams::default())
@@ -728,6 +735,7 @@ mod tests {
                 ta::seed_record_with_tags(conn, "rb", "brain-b", 1000, &["beta"])?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let stores_b = stores_a.with_brain_id("brain-b", "brain-b").unwrap();
@@ -767,6 +775,7 @@ mod tests {
                 conn.execute("DELETE FROM records WHERE record_id = 'rb'", [])?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let r = run_recluster(&stores_a, &embedder, ClusterParams::default())
@@ -795,6 +804,7 @@ mod tests {
                 ta::seed_record_with_tags(conn, "rb", "brain-b", 1000, &["python"])?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let stores_b = stores_a.with_brain_id("brain-b", "brain-b").unwrap();
@@ -819,6 +829,7 @@ mod tests {
                 rows.collect::<rusqlite::Result<Vec<_>>>()
                     .map_err(crate::error::BrainCoreError::from)
             })
+                .into_brain_core()
             .unwrap();
 
         assert_eq!(

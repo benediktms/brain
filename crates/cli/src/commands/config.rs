@@ -1,4 +1,5 @@
 use std::path::Path;
+use brain_persistence::sql::SqlResultExt;
 
 use anyhow::Result;
 use brain_lib::config::{load_global_config, save_global_config};
@@ -47,7 +48,7 @@ pub fn run_config_get(sqlite_db: &Path, brain_name: &str, key: &str) -> Result<(
         other => Err(brain_lib::error::BrainCoreError::Config(format!(
             "unknown config key: {other}. Known keys: prefix"
         ))),
-    })?;
+    }).into_brain_core()?;
     Ok(())
 }
 
@@ -92,7 +93,7 @@ pub fn run_config_set(
                 )?;
 
                 Ok((old, new))
-            })?;
+            }).into_brain_core()?;
             drop(db);
 
             if old_prefix == new_prefix {

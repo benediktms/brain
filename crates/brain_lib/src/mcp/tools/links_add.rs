@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{
+use brain_persistence::sql::SqlResultExt;
     EdgeKind, EntityRef, LinkError, add_link_checked, edge_kind_from_str, entity_type_from_str,
     entity_type_str,
 };
@@ -217,7 +218,7 @@ pub(super) fn apply_inline_links(
             }
         }
         Ok::<_, brain_persistence::error::BrainCoreError>(())
-    });
+    }).into_brain_core()
 
     // Surface outer-only failure (e.g. writer mutex unavailable) as failed entries
     // for every link that was not yet attempted.
@@ -275,7 +276,7 @@ pub(super) fn add_entity_link(
                 Err(brain_persistence::error::BrainCoreError::Database(msg))
             }
         }
-    });
+    }).into_brain_core()
 
     // Three-way dispatch mirrors try_add_entity_link:
     //   (Ok, _)        — success; build the synthesised edge id.

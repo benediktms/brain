@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{
+use brain_persistence::sql::SqlResultExt;
     EntityRef, LinkError, edge_kind_str, entity_type_str, for_entity,
 };
 
@@ -53,7 +54,7 @@ impl LinksForEntity {
                 LinkError::Database(msg) => brain_persistence::error::BrainCoreError::Database(msg),
                 LinkError::Cycle(_) => unreachable!("for_entity never returns Cycle"),
             })
-        });
+        }).into_brain_core()
 
         match links {
             Err(e) => ToolCallResult::error(format!("Internal error: {e}")),

@@ -12,6 +12,7 @@ use crate::error::Result;
 use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::store::Store;
 
@@ -97,6 +98,7 @@ pub fn store_task_capsule(
     db.with_write_conn(|conn| {
         brain_persistence::db::chunks::upsert_task_chunk(conn, file_id, capsule_text, brain_id)
     })
+        .into_brain_core()
 }
 
 /// Metadata required to build and embed a task capsule.

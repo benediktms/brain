@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use tracing::warn;
 
 use brain_persistence::db::links::collect_thread_episode_rows;
+use brain_persistence::sql::SqlResultExt;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};

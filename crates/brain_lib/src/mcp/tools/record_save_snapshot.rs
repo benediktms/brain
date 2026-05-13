@@ -1,6 +1,7 @@
 #![allow(clippy::items_after_test_module)]
 
 use std::future::Future;
+use brain_persistence::sql::SqlResultExt;
 use std::pin::Pin;
 
 use base64::Engine as _;
@@ -250,6 +251,7 @@ mod tests {
                 )
                 .map_err(|e| brain_persistence::error::BrainCoreError::Database(e.to_string()))
             })
+                .into_brain_core()
             .expect("chunk query should succeed");
         assert_eq!(
             chunk_count, 0,

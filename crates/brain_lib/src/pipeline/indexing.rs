@@ -12,6 +12,7 @@ use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use crate::utils::now_ts;
 use brain_persistence::db::chunks::ChunkMeta;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::chunks::replace_chunk_metadata;
 use brain_persistence::db::links::replace_links;
 use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
@@ -210,7 +211,7 @@ where
                     &tags_json,
                     importance,
                 )
-            })?;
+            }).into_brain_core()?;
             gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             return Ok(true);
         }
@@ -244,7 +245,7 @@ where
                 )?;
             }
             Ok(())
-        })?;
+        }).into_brain_core()?;
 
         if chunks_match_stored(&chunks, &stored_hashes) {
             // Chunks already in LanceDB — still stamp embedded_at so the daemon
@@ -259,7 +260,7 @@ where
                     &tags_json,
                     importance,
                 )
-            })?;
+            }).into_brain_core()?;
             gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             self.metrics.record_index_latency(start.elapsed());
             return Ok(true);
@@ -295,7 +296,7 @@ where
                 &tags_json,
                 importance,
             )
-        })?;
+        }).into_brain_core()?;
         gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
 
         // Content changed — mark ancestor directory scopes stale.
@@ -370,7 +371,7 @@ where
                     replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
                     replace_links(conn, &verdict.file_id, &[])?;
                     Ok(())
-                })?;
+                }).into_brain_core()?;
                 self.db.with_write_conn(|conn| {
                     brain_persistence::db::files::update_file_frontmatter(
                         conn,
@@ -378,7 +379,7 @@ where
                         &tags_json,
                         importance,
                     )
-                })?;
+                }).into_brain_core()?;
                 gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
@@ -417,7 +418,7 @@ where
                     let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
                     brain_persistence::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
                     Ok(())
-                })?;
+                }).into_brain_core()?;
                 self.db.with_write_conn(|conn| {
                     brain_persistence::db::files::update_file_frontmatter(
                         conn,
@@ -425,7 +426,7 @@ where
                         &tags_json,
                         importance,
                     )
-                })?;
+                }).into_brain_core()?;
                 gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
@@ -536,7 +537,7 @@ where
                         )?;
                     }
                     Ok(())
-                })?;
+                }).into_brain_core()?;
 
                 let chunk_pairs: Vec<(usize, &str)> = pf
                     .chunks
@@ -565,7 +566,7 @@ where
                         &pf.tags_json,
                         pf.importance,
                     )
-                })?;
+                }).into_brain_core()?;
                 gate.mark_passed(file_id, &pf.hash, pf.disk_mtime)?;
                 Ok::<(), crate::error::BrainCoreError>(())
             }

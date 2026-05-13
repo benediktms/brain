@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use brain_persistence::db::sagas::events::SagaCancelledPayload;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::tasks::events::TaskStatus;
 
 use brain_persistence::db::Db;
@@ -90,6 +91,7 @@ impl SagaStore {
             })?;
             Ok((canonical, compact_saga_id(&row.display_id)))
         })
+            .into_brain_core()
     }
 
     /// Create a new saga in `planning` status. Returns the resulting row.
@@ -129,7 +131,7 @@ impl SagaStore {
 
             tx.commit()?;
             Ok(row)
-        })?;
+        }).into_brain_core()?;
         Ok(row)
     }
 
@@ -198,7 +200,7 @@ impl SagaStore {
 
             tx.commit()?;
             Ok(row)
-        })?;
+        }).into_brain_core()?;
         Ok(row)
     }
 
@@ -263,6 +265,7 @@ impl SagaStore {
             tx.commit()?;
             Ok((row, cascade_results))
         })
+            .into_brain_core()
     }
 
     /// Fetch a saga by ID. Returns None if not found.
@@ -281,12 +284,14 @@ impl SagaStore {
             };
             queries::get_saga(conn, &canonical)
         })
+            .into_brain_core()
     }
 
     /// List sagas with optional filters.
     pub fn list(&self, filter: SagaListFilter) -> Result<Vec<SagaRow>> {
         self.db
             .with_read_conn(move |conn| queries::list_sagas(conn, &filter))
+                .into_brain_core()
     }
 
     /// Transition a saga from `planning` to `open`. Emits `SagaStarted`.
@@ -339,6 +344,7 @@ impl SagaStore {
             tx.commit()?;
             Ok(result)
         })
+            .into_brain_core()
     }
 
     /// Return the distinct set of brains that have member tasks in this saga.
@@ -350,6 +356,7 @@ impl SagaStore {
             let canonical = resolve_saga_id(conn, &saga_id)?;
             queries::brains_for_saga(conn, &canonical)
         })
+            .into_brain_core()
     }
 
     /// Return ready-actionable member tasks (same rules as `tasks next`) plus
@@ -388,6 +395,7 @@ impl SagaStore {
                 status,
             })
         })
+            .into_brain_core()
     }
 
     /// Return saga member task stubs (task_id, brain_id, title, status, task_type)
@@ -402,6 +410,7 @@ impl SagaStore {
             let canonical = resolve_saga_id(conn, &saga_id)?;
             list_saga_member_stubs(conn, &canonical)
         })
+            .into_brain_core()
     }
 
     /// Return raw task IDs for saga membership without joining `tasks`.
@@ -413,6 +422,7 @@ impl SagaStore {
             let canonical = resolve_saga_id(conn, &saga_id)?;
             list_saga_task_ids(conn, &canonical)
         })
+            .into_brain_core()
     }
 
     /// Aggregate counts, completion %, label histogram, and brains for a saga.
@@ -429,6 +439,7 @@ impl SagaStore {
                 brains,
             })
         })
+            .into_brain_core()
     }
 
     /// Cancel a saga, optionally cascade-cancelling non-terminal member tasks.
@@ -504,6 +515,7 @@ impl SagaStore {
             tx.commit()?;
             Ok((updated, cascade_results))
         })
+            .into_brain_core()
     }
 
     #[cfg(test)]
@@ -639,6 +651,7 @@ impl SagaStore {
             tx.commit()?;
             Ok(to_insert)
         })
+            .into_brain_core()
     }
 
     /// Remove tasks from a saga. Idempotent: missing memberships are no-ops.
@@ -764,6 +777,7 @@ impl SagaStore {
             tx.commit()?;
             Ok(present)
         })
+            .into_brain_core()
     }
 
     /// Reopen a closed or cancelled saga, setting status back to `open`.
@@ -817,6 +831,7 @@ impl SagaStore {
             tx.commit()?;
             Ok(updated)
         })
+            .into_brain_core()
     }
 
     /// Force a saga's status directly (test-only).
@@ -838,6 +853,7 @@ impl SagaStore {
             )?;
             Ok(())
         })
+            .into_brain_core()
     }
 
     /// Backdate a saga's `updated_at` directly (test-only).
@@ -857,6 +873,7 @@ impl SagaStore {
             )?;
             Ok(())
         })
+            .into_brain_core()
     }
 }
 
@@ -930,6 +947,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert!(event_type.contains("saga_created"), "got: {event_type}");
         assert_eq!(actor, "actor");
@@ -959,6 +977,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
         let count: i64 = store
             .db
@@ -970,6 +989,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(
             count, 1,
@@ -993,6 +1013,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let rows = store.list(SagaListFilter::default()).unwrap();
@@ -1014,6 +1035,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let rows = store
@@ -1097,6 +1119,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let rows = store
@@ -1124,6 +1147,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let rows = store.list(SagaListFilter::default()).unwrap();
@@ -1146,6 +1170,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let rows = store
@@ -1174,6 +1199,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
     }
 
@@ -1188,6 +1214,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
     }
 
@@ -1278,6 +1305,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         // Without include_closed: only open saga returned.
@@ -1326,6 +1354,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
         let updated = store
             .update(&row.saga_id, Some("Closed but renamed"), None, "actor")
@@ -1367,6 +1396,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert!(event_type.contains("saga_updated"), "got: {event_type}");
         assert!(
@@ -1448,6 +1478,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(count, 0, "rolled-back task must not appear in saga_tasks");
     }
@@ -1468,6 +1499,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let err = store
@@ -1501,6 +1533,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
 
         let err = store
@@ -1549,6 +1582,7 @@ mod tests {
                     .unwrap();
                 Ok(ids)
             })
+                .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"brain-a-task01".to_string()));
         assert!(ids.contains(&"brain-b-task01".to_string()));
@@ -1588,6 +1622,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(
             event_count, 3,
@@ -1680,7 +1715,7 @@ mod tests {
                 rusqlite::params![saga.saga_id],
             )?;
             Ok(())
-        }).unwrap();
+        }).into_brain_core().unwrap()
 
         let brains = store.brains_for_saga(&saga.saga_id).unwrap();
         assert_eq!(brains.len(), 2);
@@ -1720,7 +1755,7 @@ mod tests {
                 rusqlite::params![saga.saga_id],
             )?;
             Ok(())
-        }).unwrap();
+        }).into_brain_core().unwrap()
 
         let brains = store.brains_for_saga(&saga.saga_id).unwrap();
         assert_eq!(
@@ -1766,6 +1801,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(member_count, 1, "should be exactly 1 saga_tasks row");
 
@@ -1780,6 +1816,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(event_count, 1, "should emit exactly 1 SagaTaskAdded event");
     }
@@ -1824,6 +1861,7 @@ mod tests {
                     .unwrap();
                 Ok(ids)
             })
+                .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"idem-task01".to_string()));
         assert!(ids.contains(&"idem-task02".to_string()));
@@ -1841,6 +1879,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(event_count, 2);
     }
@@ -1861,6 +1900,7 @@ mod tests {
                 )?;
                 Ok(())
             })
+                .into_brain_core()
             .unwrap();
     }
 
@@ -1876,6 +1916,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap() as usize
     }
 
@@ -1918,6 +1959,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(event_count, 4);
     }
@@ -1980,6 +2022,7 @@ mod tests {
                     .unwrap();
                 Ok(ids)
             })
+                .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"xb-parent".to_string()));
         assert!(ids.contains(&"yb-child".to_string()));
@@ -2039,6 +2082,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(removed_events, 3);
     }
@@ -2190,6 +2234,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(
             count, 1,
@@ -2277,6 +2322,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(count, 1, "expected exactly 1 saga_reopened event");
         assert_eq!(actor, "actor-x");

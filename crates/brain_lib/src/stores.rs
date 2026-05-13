@@ -14,6 +14,7 @@ use crate::records::objects::ObjectStore;
 use crate::sagas::SagaStore;
 use crate::tasks::TaskStore;
 use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 
 /// Unified access to all brain stores.
 ///
@@ -497,6 +498,7 @@ impl BrainStores {
     ) -> Result<Vec<brain_persistence::db::job::Job>> {
         self.db
             .with_read_conn(move |conn| brain_persistence::db::jobs::list_jobs(conn, status, limit))
+                .into_brain_core()
     }
 
     // -- LinkWriter --

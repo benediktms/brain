@@ -33,6 +33,7 @@ use brain_lib::records::{RecordStatus, RecordStore};
 use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::{Store, StoreReader};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -97,6 +98,7 @@ fn count_records(db: &Db) -> i64 {
         conn.query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
             .map_err(Into::into)
     })
+        .into_brain_core()
     .unwrap()
 }
 
@@ -109,6 +111,7 @@ fn count_tags_for(db: &Db, record_id: &str) -> i64 {
         )
         .map_err(Into::into)
     })
+        .into_brain_core()
     .unwrap()
 }
 
@@ -121,6 +124,7 @@ fn count_links_for(db: &Db, record_id: &str) -> i64 {
         )
         .map_err(Into::into)
     })
+        .into_brain_core()
     .unwrap()
 }
 
@@ -133,6 +137,7 @@ fn get_status(db: &Db, record_id: &str) -> String {
         )
         .map_err(Into::into)
     })
+        .into_brain_core()
     .unwrap()
 }
 
@@ -145,6 +150,7 @@ fn get_title(db: &Db, record_id: &str) -> String {
         )
         .map_err(Into::into)
     })
+        .into_brain_core()
     .unwrap()
 }
 
@@ -158,6 +164,7 @@ fn tag_exists(db: &Db, record_id: &str, tag: &str) -> bool {
             )
             .map_err(Into::into)
         })
+            .into_brain_core()
         .unwrap();
     count > 0
 }
@@ -172,6 +179,7 @@ fn link_task_exists(db: &Db, record_id: &str, task_id: &str) -> bool {
             )
             .map_err(Into::into)
         })
+            .into_brain_core()
         .unwrap();
     count > 0
 }
@@ -185,6 +193,7 @@ fn get_content_hash(db: &Db, record_id: &str) -> String {
         )
         .map_err(Into::into)
     })
+        .into_brain_core()
     .unwrap()
 }
 
@@ -248,6 +257,7 @@ fn test_rebuild_creates_all_records_with_tags_and_links() {
 
     let event_count = db
         .with_write_conn(|conn| rebuild(conn, &events_path))
+            .into_brain_core()
         .unwrap();
     assert_eq!(event_count, 4);
 
@@ -312,6 +322,7 @@ fn test_rebuild_event_count_matches() {
     let total_events = read_all_events(&events_path).unwrap().len();
     let rebuild_count = db
         .with_write_conn(|conn| rebuild(conn, &events_path))
+            .into_brain_core()
         .unwrap();
 
     assert_eq!(rebuild_count, total_events);
@@ -354,6 +365,7 @@ fn test_rebuild_twice_is_idempotent() {
 
     let count1 = db
         .with_write_conn(|conn| rebuild(conn, &events_path))
+            .into_brain_core()
         .unwrap();
     let records_after_first = count_records(&db);
     let tags_after_first = count_tags_for(&db, &r1);
@@ -362,6 +374,7 @@ fn test_rebuild_twice_is_idempotent() {
 
     let count2 = db
         .with_write_conn(|conn| rebuild(conn, &events_path))
+            .into_brain_core()
         .unwrap();
     let records_after_second = count_records(&db);
     let tags_after_second = count_tags_for(&db, &r1);
@@ -396,6 +409,7 @@ fn test_rebuild_recovers_when_sqlite_is_behind_event_log() {
     let ev1 = make_created_event(&r1, "Record One", "report");
     append_event(&events_path, &ev1).unwrap();
     db.with_write_conn(|conn| apply_event(conn, &ev1, ""))
+        .into_brain_core()
         .unwrap();
 
     // Write r2 to the log but DO NOT project it (simulates crash before projection)
@@ -408,6 +422,7 @@ fn test_rebuild_recovers_when_sqlite_is_behind_event_log() {
     // Rebuild recovers to full consistent state
     let recovered = db
         .with_write_conn(|conn| rebuild(conn, &events_path))
+            .into_brain_core()
         .unwrap();
     assert_eq!(recovered, 2);
     assert_eq!(count_records(&db), 2);
@@ -427,6 +442,7 @@ fn test_rebuild_recovers_when_more_events_logged_than_projected() {
     let ev_create = make_created_event(&rid, "My Record", "document");
     append_event(&events_path, &ev_create).unwrap();
     db.with_write_conn(|conn| apply_event(conn, &ev_create, ""))
+        .into_brain_core()
         .unwrap();
 
     // Log additional events but don't project them (simulates crash mid-sequence)
@@ -454,6 +470,7 @@ fn test_rebuild_recovers_when_more_events_logged_than_projected() {
 
     // Rebuild recovers the full state
     db.with_write_conn(|conn| rebuild(conn, &events_path))
+        .into_brain_core()
         .unwrap();
 
     assert_eq!(get_status(&db, &rid), "archived");
@@ -491,6 +508,7 @@ fn test_rebuild_skips_truncated_last_line_and_recovers() {
     // rebuild should succeed on the 2 valid events
     let count = db
         .with_write_conn(|conn| rebuild(conn, &events_path))
+            .into_brain_core()
         .unwrap();
     assert_eq!(count, 2);
     assert_eq!(count_records(&db), 2);
@@ -543,6 +561,7 @@ fn test_incremental_apply_matches_bulk_rebuild() {
     for ev in &events_to_apply {
         db_incremental
             .with_write_conn(|conn| apply_event(conn, ev, ""))
+                .into_brain_core()
             .unwrap();
         append_event(&events_path, ev).unwrap();
     }
@@ -550,6 +569,7 @@ fn test_incremental_apply_matches_bulk_rebuild() {
     // Rebuild from log in bulk
     db_bulk
         .with_write_conn(|conn| rebuild(conn, &events_path))
+            .into_brain_core()
         .unwrap();
 
     // Compare final state
@@ -591,6 +611,7 @@ fn test_incremental_state_after_each_event() {
     // Event 1: create → record active, no tags
     let ev1 = make_created_event(&rid, "Initial", "analysis");
     db.with_write_conn(|conn| apply_event(conn, &ev1, ""))
+        .into_brain_core()
         .unwrap();
     assert_eq!(count_records(&db), 1);
     assert_eq!(get_status(&db, &rid), "active");
@@ -606,6 +627,7 @@ fn test_incremental_state_after_each_event() {
         },
     );
     db.with_write_conn(|conn| apply_event(conn, &ev2, ""))
+        .into_brain_core()
         .unwrap();
     assert_eq!(count_tags_for(&db, &rid), 1);
     assert!(tag_exists(&db, &rid, "new-tag"));
@@ -620,12 +642,14 @@ fn test_incremental_state_after_each_event() {
         },
     );
     db.with_write_conn(|conn| apply_event(conn, &ev3, ""))
+        .into_brain_core()
         .unwrap();
     assert_eq!(get_title(&db, &rid), "Updated Title");
 
     // Event 4: archive
     let ev4 = RecordEvent::from_payload(&rid, "agent", RecordArchivedPayload { reason: None });
     db.with_write_conn(|conn| apply_event(conn, &ev4, ""))
+        .into_brain_core()
         .unwrap();
     assert_eq!(get_status(&db, &rid), "archived");
 }
@@ -640,6 +664,7 @@ fn test_status_transition_active_to_archived() {
     db.with_write_conn(|conn| {
         apply_event(conn, &make_created_event(&rid, "My Record", "export"), "")
     })
+        .into_brain_core()
     .unwrap();
     assert_eq!(get_status(&db, &rid), "active");
 
@@ -656,6 +681,7 @@ fn test_status_transition_active_to_archived() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
     assert_eq!(get_status(&db, &rid), "archived");
 }
@@ -669,10 +695,12 @@ fn test_multiple_records_have_independent_status() {
     db.with_write_conn(|conn| {
         apply_event(conn, &make_created_event(&r1, "Active One", "report"), "")
     })
+        .into_brain_core()
     .unwrap();
     db.with_write_conn(|conn| {
         apply_event(conn, &make_created_event(&r2, "Active Two", "diff"), "")
     })
+        .into_brain_core()
     .unwrap();
 
     // Archive only r2
@@ -683,6 +711,7 @@ fn test_multiple_records_have_independent_status() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
 
     assert_eq!(get_status(&db, &r1), "active");
@@ -703,6 +732,7 @@ fn test_tag_add_then_remove_leaves_no_tag() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
 
     db.with_write_conn(|conn| {
@@ -719,6 +749,7 @@ fn test_tag_add_then_remove_leaves_no_tag() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
     assert!(tag_exists(&db, &rid, "temporary"));
 
@@ -736,6 +767,7 @@ fn test_tag_add_then_remove_leaves_no_tag() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
 
     assert!(
@@ -766,6 +798,7 @@ fn test_multiple_tags_add_remove_selectively() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
 
     db.with_write_conn(|conn| {
@@ -782,6 +815,7 @@ fn test_multiple_tags_add_remove_selectively() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
 
     assert!(tag_exists(&db, &rid, "keep-a"));
@@ -827,6 +861,7 @@ fn test_tag_add_remove_then_rebuild_is_consistent() {
     .unwrap();
 
     db.with_write_conn(|conn| rebuild(conn, &events_path))
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         count_tags_for(&db, &rid),
@@ -845,6 +880,7 @@ fn test_link_add_then_remove_leaves_no_link() {
     db.with_write_conn(|conn| {
         apply_event(conn, &make_created_event(&rid, "Linked Record", "diff"), "")
     })
+        .into_brain_core()
     .unwrap();
 
     db.with_write_conn(|conn| {
@@ -862,6 +898,7 @@ fn test_link_add_then_remove_leaves_no_link() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
     assert!(link_task_exists(&db, &rid, "TASK-99"));
 
@@ -880,6 +917,7 @@ fn test_link_add_then_remove_leaves_no_link() {
             "",
         )
     })
+        .into_brain_core()
     .unwrap();
 
     assert!(
@@ -925,6 +963,7 @@ fn test_link_add_remove_then_rebuild_is_consistent() {
     .unwrap();
 
     db.with_write_conn(|conn| rebuild(conn, &events_path))
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         count_links_for(&db, &rid),
@@ -991,6 +1030,7 @@ fn test_object_store_content_hash_matches_record() {
 
     append_event(&events_path, &ev).unwrap();
     db.with_write_conn(|conn| rebuild(conn, &events_path))
+        .into_brain_core()
         .unwrap();
 
     // Verify content_hash in SQLite matches the stored blob's hash
@@ -1041,6 +1081,7 @@ fn test_object_store_deduplication_with_multiple_records() {
     }
 
     db.with_write_conn(|conn| rebuild(conn, &events_path))
+        .into_brain_core()
         .unwrap();
     assert_eq!(count_records(&db), 2);
 
@@ -1057,6 +1098,7 @@ fn test_object_store_deduplication_with_multiple_records() {
                 .collect();
             Ok(v)
         })
+            .into_brain_core()
         .unwrap()
     };
     assert_eq!(hashes.len(), 2);
@@ -1114,6 +1156,7 @@ fn test_record_store_apply_multiple_events() {
             conn.query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
                 .map_err(Into::into)
         })
+            .into_brain_core()
         .unwrap();
     assert_eq!(total, 2);
 
@@ -1126,6 +1169,7 @@ fn test_record_store_apply_multiple_events() {
             )
             .map_err(Into::into)
         })
+            .into_brain_core()
         .unwrap();
     assert_eq!(tag_count, 1);
 }

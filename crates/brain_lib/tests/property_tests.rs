@@ -17,6 +17,7 @@ use brain_lib::tasks::events::*;
 use brain_lib::tasks::projections::apply_event;
 use brain_lib::tasks::queries::{list_blocked, list_open, list_ready};
 use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 use proptest::prelude::*;
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -373,7 +374,7 @@ proptest! {
             let count: i64 =
                 conn.query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))?;
             Ok(count)
-        }).unwrap();
+        }).into_brain_core().unwrap()
 
         prop_assert_eq!(count as usize, n);
     }
@@ -451,7 +452,7 @@ proptest! {
             let open_ids: HashSet<String> = open.iter().map(|r| r.task_id.clone()).collect();
 
             Ok((ready_ids, blocked_ids, open_ids))
-        }).unwrap();
+        }).into_brain_core().unwrap()
 
         // Invariant 1: ready ∩ blocked = ∅
         prop_assert!(

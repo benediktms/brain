@@ -15,6 +15,7 @@ use crate::metrics::Metrics;
 use crate::ports::{ChunkIndexWriter, SchemaMeta};
 use crate::summarizer::Summarize;
 use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::meta;
 use brain_persistence::store::Store;
 
@@ -72,9 +73,9 @@ pub async fn ensure_schema_version(
     let expected = brain_persistence::store::LANCE_SCHEMA_VERSION;
 
     let raw: Option<String> =
-        db.with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))?;
+        db.with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version")).into_brain_core()?;
     let parsed: Option<u32> =
-        db.with_read_conn(|conn| meta::get_meta_u32(conn, "lancedb_schema_version"))?;
+        db.with_read_conn(|conn| meta::get_meta_u32(conn, "lancedb_schema_version")).into_brain_core()?;
 
     match (raw.is_some(), parsed) {
         // First run — no key at all. Stamp without rebuilding.
@@ -82,7 +83,7 @@ pub async fn ensure_schema_version(
             info!("First run: stamping LanceDB schema version {expected}");
             db.with_write_conn(|conn| {
                 meta::set_meta(conn, "lancedb_schema_version", &expected.to_string())
-            })?;
+            }).into_brain_core()?;
         }
         // Key exists and parses to the expected version — all good.
         (true, Some(v)) if v == expected => {
@@ -109,11 +110,11 @@ pub async fn ensure_schema_version(
             }
             store.drop_and_recreate_table().await?;
             let cleared =
-                db.with_write_conn(brain_persistence::db::files::clear_all_content_hashes)?;
+                db.with_write_conn(brain_persistence::db::files::clear_all_content_hashes).into_brain_core()?;
             info!(cleared, "cleared content hashes to trigger full re-index");
             db.with_write_conn(|conn| {
                 meta::set_meta(conn, "lancedb_schema_version", &expected.to_string())
-            })?;
+            }).into_brain_core()?;
         }
     }
 
@@ -288,6 +289,7 @@ where
     pub fn find_stuck_files(&self) -> crate::error::Result<Vec<(String, String)>> {
         self.db
             .with_read_conn(brain_persistence::db::files::find_stuck_files)
+                .into_brain_core()
     }
 
     /// View the underlying `Db` as a `&dyn JobQueue`. Use to pass the

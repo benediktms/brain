@@ -14,6 +14,7 @@ use brain_lib::tasks::projections::{apply_event, rebuild};
 use brain_lib::tasks::queries::{list_all_deps, list_all_labels, list_blocked, list_ready};
 use brain_lib::utils::content_hash;
 use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 use serde::{Deserialize, Serialize};
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -427,6 +428,7 @@ fn golden_generate() {
 
             Ok((tasks_out, dep_list, ready_ids, blocked_ids, label_map))
         })
+            .into_brain_core()
         .unwrap();
 
     save_golden(
@@ -582,6 +584,7 @@ fn golden_task_replay() {
 
             Ok((tasks, dep_list, ready_ids, blocked_ids, label_map))
         })
+            .into_brain_core()
         .unwrap();
 
     assert_eq!(actual_tasks, expected.tasks);
@@ -627,6 +630,7 @@ fn golden_task_replay_idempotent() {
             let labels = list_all_labels(conn)?;
             Ok((count, ready, deps_len, labels))
         })
+            .into_brain_core()
         .unwrap();
 
     let (count2, ready2, deps2_len, labels2) = db
@@ -641,6 +645,7 @@ fn golden_task_replay_idempotent() {
             let labels = list_all_labels(conn)?;
             Ok((count, ready, deps_len, labels))
         })
+            .into_brain_core()
         .unwrap();
 
     assert_eq!(count1, count2);

@@ -28,6 +28,7 @@ use crate::ranking::{
 use crate::retrieval::{MemoryKind, SearchResult, derive_kind, pack_minimal};
 use crate::tokens::estimate_tokens;
 use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::summaries::SummaryRow;
 use brain_persistence::store::VectorSearchMode;
 use brain_persistence::store::{DEFAULT_NPROBES, StoreReader};
@@ -1243,6 +1244,7 @@ mod tests {
             )?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
         (db, "f1:0".to_string())
     }
@@ -1308,6 +1310,7 @@ mod tests {
             )?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
         let surviving = run_filter(&db, &chunk_id, brain_id, &[String::from("bug")], &[]).await;
         assert!(
@@ -1328,6 +1331,7 @@ mod tests {
             )?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
         let surviving = run_filter(&db, &chunk_id, brain_id, &[], &[String::from("bug")]).await;
         assert!(
@@ -1347,6 +1351,7 @@ mod tests {
             seed_tag_aliases(conn, brain_id, &[("Bug", "Bugs", "c1")])?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
         let surviving = run_filter(&db, &chunk_id, brain_id, &[String::from("BUG")], &[]).await;
         assert!(
@@ -1400,6 +1405,7 @@ mod tests {
             )?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
 
         // Content snapshot, not just count — protects against a
@@ -1417,6 +1423,7 @@ mod tests {
                     let s: String = conn.query_row(&sql, [], |r| r.get(0))?;
                     Ok(s)
                 })
+                    .into_brain_core()
                 .unwrap()
             };
         let before_record_tags = snapshot("record_tags", "record_id", "tag");
@@ -1468,6 +1475,7 @@ mod tests {
             )?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
     }
 
@@ -1506,6 +1514,7 @@ mod tests {
             )?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
 
         let store_a = mock_searcher_for_chunk("fa:0", "fa", "/a.md");
@@ -1577,6 +1586,7 @@ mod tests {
             // brain-c: NO alias rows — degenerate "never-reclustered" brain.
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
 
         let store_a = mock_searcher_for_chunk("fa:0", "fa", "/a.md");
@@ -1653,6 +1663,7 @@ mod tests {
             )?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
 
         let store_a = mock_searcher_for_chunk("fa:0", "fa", "/a.md");
@@ -1719,6 +1730,7 @@ mod tests {
             )?;
             Ok(())
         })
+            .into_brain_core()
         .unwrap();
 
         // brain_id="" — Some("") should behave like None: no alias path.

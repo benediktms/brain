@@ -322,6 +322,7 @@ fn migrate_one_brain(
         )?;
         Ok(())
     })
+        .into_brain_core()
     .with_context(|| format!("failed to register brain '{name}' ({brain_id})"))?;
 
     // Replay task JSONL sources.
@@ -482,6 +483,7 @@ mod tests {
     use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
     use brain_lib::tasks::events::TaskCreatedPayload;
     use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 
     /// Write task events to a JSONL file and migrate via JSONL replay.
     #[test]
@@ -553,6 +555,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(count, 1);
 
@@ -566,6 +569,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(task_count, 1);
 
@@ -579,6 +583,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(rec_count, 1);
     }
@@ -632,6 +637,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(brain_count, 1, "brain should appear exactly once");
 
@@ -644,6 +650,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(task_count, 1, "task should appear exactly once");
     }
@@ -695,6 +702,7 @@ mod tests {
                 )
                 .map_err(Into::into)
             })
+                .into_brain_core()
             .unwrap();
         assert_eq!(task_count, 1, "gateway task should be imported from JSONL");
     }

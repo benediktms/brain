@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{
+use brain_persistence::sql::SqlResultExt;
     EdgeKind, EntityRef, LinkError, edge_kind_from_str, remove_link,
 };
 
@@ -35,7 +36,7 @@ pub(super) fn remove_entity_link(
             LinkError::Database(msg) => brain_persistence::error::BrainCoreError::Database(msg),
             LinkError::Cycle(_) => unreachable!("remove_link never returns Cycle"),
         })
-    });
+    }).into_brain_core()
 
     match result {
         Ok(removed) => json_response(&json!({ "removed": removed })),
