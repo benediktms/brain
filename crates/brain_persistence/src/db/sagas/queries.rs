@@ -399,6 +399,18 @@ pub fn remove_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) 
     Ok(changed)
 }
 
+/// Transition a saga from `planning` to `open`: set `status = 'open'` and
+/// bump `updated_at`. Caller is responsible for validating the prior status
+/// before calling this (i.e. confirming `validate_transition(from,
+/// SagaStatus::Open)` succeeds).
+pub fn start_saga(conn: &Connection, saga_id: &str, now: i64) -> SqlResult<()> {
+    conn.execute(
+        "UPDATE sagas SET status = 'open', updated_at = ?1 WHERE saga_id = ?2",
+        params![now, saga_id],
+    )?;
+    Ok(())
+}
+
 /// Reopen a saga: set status = 'open', closed_at = NULL, updated_at = now.
 /// Returns the updated row. Caller is responsible for validating the prior
 /// status before calling this.
