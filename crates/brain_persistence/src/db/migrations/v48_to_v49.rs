@@ -37,10 +37,10 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Create the `entity_links` polymorphic edge table and its indexes, then stamp version 49.
-pub fn migrate_v48_to_v49(conn: &Connection) -> Result<()> {
+pub fn migrate_v48_to_v49(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute_batch(

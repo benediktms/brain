@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add `task_external_ids` table for multi-source import tracking.
 /// Stamp version 7.
-pub fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
+pub fn migrate_v6_to_v7(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

@@ -1,13 +1,13 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v13 → v14: Add cross-brain task references table.
 ///
 /// Creates `task_cross_refs` for advisory references to tasks in other brain
 /// instances. These references are metadata-only — they do NOT affect readiness,
 /// blocking, cycle detection, or priority sorting.
-pub fn migrate_v13_to_v14(conn: &Connection) -> Result<()> {
+pub fn migrate_v13_to_v14(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

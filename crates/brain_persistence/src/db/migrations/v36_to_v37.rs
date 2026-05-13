@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add `brain_id` column to `files` and `chunks` tables for FTS scoping.
 ///
@@ -13,7 +13,7 @@ use crate::error::Result;
 /// 1. Match file paths against registered brain roots (from `brains` table).
 /// 2. Propagate file brain_id to chunks.
 /// 3. Match synthetic task/record files to their owning brain.
-pub fn migrate_v36_to_v37(conn: &Connection) -> Result<()> {
+pub fn migrate_v36_to_v37(conn: &Connection) -> SqlResult<()> {
     // -- DDL: add columns + indexes ------------------------------------------
     conn.execute_batch(
         "ALTER TABLE files ADD COLUMN brain_id TEXT NOT NULL DEFAULT '';
@@ -80,7 +80,7 @@ pub fn migrate_v36_to_v37(conn: &Connection) -> Result<()> {
 /// For each brain row with non-empty roots JSON, parse the roots array and
 /// update files whose path starts with that root.  Uses longest-prefix-wins
 /// ordering (longer roots matched first) to handle nested roots correctly.
-fn backfill_files_from_brain_roots(conn: &Connection) -> Result<()> {
+fn backfill_files_from_brain_roots(conn: &Connection) -> SqlResult<()> {
     // Load all brains with their roots.  Each entry is (brain_id, single_root).
     let mut stmt = conn
         .prepare("SELECT brain_id, roots FROM brains WHERE brain_id != '' AND roots IS NOT NULL")?;

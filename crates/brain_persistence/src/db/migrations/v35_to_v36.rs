@@ -1,8 +1,8 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
-pub fn migrate_v35_to_v36(conn: &Connection) -> Result<()> {
+pub fn migrate_v35_to_v36(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "ALTER TABLE summaries ADD COLUMN embedded_at INTEGER;
          PRAGMA user_version = 36;",

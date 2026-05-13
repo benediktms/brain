@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v25 → v26: Add `roots`, `aliases`, `notes`, and `projected` columns to `brains` table.
 ///
@@ -12,7 +12,7 @@ use crate::error::Result;
 ///
 /// All new columns are nullable except `projected` (which defaults to 0 for existing rows).
 /// `ensure_brain_registered` does not populate roots/aliases/notes/projected.
-pub fn migrate_v25_to_v26(conn: &Connection) -> Result<()> {
+pub fn migrate_v25_to_v26(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "ALTER TABLE brains ADD COLUMN roots TEXT;
          ALTER TABLE brains ADD COLUMN aliases TEXT;

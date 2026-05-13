@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v24 → v25: Add `brain_id` column to `summaries` table plus Phase 4 foundations.
 ///
@@ -11,7 +11,7 @@ use crate::error::Result;
 /// - `confidence REAL NOT NULL DEFAULT 1.0` — confidence decay (Phase 4, inert until activated)
 ///
 /// Also activates the dormant `valid_from` column by backfilling it from `created_at`.
-pub fn migrate_v24_to_v25(conn: &Connection) -> Result<()> {
+pub fn migrate_v24_to_v25(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "PRAGMA foreign_keys = OFF;
 

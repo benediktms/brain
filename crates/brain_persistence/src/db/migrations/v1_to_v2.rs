@@ -1,9 +1,9 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add task tables and stamp version 2.
-pub fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
+pub fn migrate_v1_to_v2(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

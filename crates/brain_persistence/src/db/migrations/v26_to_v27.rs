@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v26 → v27: Add `searchable` and `embedded_at` columns to `records` table.
 ///
@@ -13,7 +13,7 @@ use crate::error::Result;
 /// Backfill:
 /// - Existing snapshot and dispatch-brief records are set to `searchable = 0`
 ///   (operational debris, not knowledge artifacts).
-pub fn migrate_v26_to_v27(conn: &Connection) -> Result<()> {
+pub fn migrate_v26_to_v27(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "ALTER TABLE records ADD COLUMN searchable INTEGER NOT NULL DEFAULT 1;
          ALTER TABLE records ADD COLUMN embedded_at INTEGER;

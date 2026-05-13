@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v17 → v18: Workspace unified storage — add brain_id columns and brains registry.
 ///
@@ -15,7 +15,7 @@ use crate::error::Result;
 ///
 /// The DEFAULT '' is temporary. The data migration tool (step 2) populates
 /// brain_id values from per-brain databases before workspace mode is activated.
-pub fn migrate_v17_to_v18(conn: &Connection) -> Result<()> {
+pub fn migrate_v17_to_v18(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

@@ -30,10 +30,10 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Create the `injection_audit` table and stamp version 47.
-pub fn migrate_v46_to_v47(conn: &Connection) -> Result<()> {
+pub fn migrate_v46_to_v47(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute_batch(

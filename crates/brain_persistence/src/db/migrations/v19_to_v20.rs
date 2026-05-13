@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v19 → v20: Self-healing migration for corrupted task_events/record_events schema.
 ///
@@ -22,7 +22,7 @@ use crate::error::Result;
 /// If not found → clean path; no DDL changes.
 ///
 /// Both paths stamp `PRAGMA user_version = 20` inside the transaction.
-pub fn migrate_v19_to_v20(conn: &Connection) -> Result<()> {
+pub fn migrate_v19_to_v20(conn: &Connection) -> SqlResult<()> {
     // Detect corruption: check if task_events has a `created_at` column.
     let is_corrupted: bool = {
         let mut stmt = conn.prepare("PRAGMA table_info(task_events)")?;

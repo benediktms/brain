@@ -1,12 +1,12 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v16 → v17: B2 transition marker.
 ///
 /// No schema changes. This version marks the transition to SQLite-as-truth.
 /// Event logs are now audit trails, not the source of truth.
-pub fn migrate_v16_to_v17(conn: &Connection) -> Result<()> {
+pub fn migrate_v16_to_v17(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch("PRAGMA user_version = 17;")?;
     Ok(())
 }

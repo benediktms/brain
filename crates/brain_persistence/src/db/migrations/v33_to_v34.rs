@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Migration v33 → v34: add `providers` table for LLM API key storage.
 ///
@@ -8,7 +8,7 @@ use crate::error::Result;
 /// The `api_key` column holds AES-256-GCM encrypted bytes (base64-encoded).
 /// The `api_key_hash` column holds a blake3 hash of the plaintext key for
 /// deduplication without exposing the key.
-pub fn migrate_v33_to_v34(conn: &Connection) -> Result<()> {
+pub fn migrate_v33_to_v34(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         PRAGMA foreign_keys = OFF;

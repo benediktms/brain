@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 
 use crate::db::links::resolve_target_file_id;
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v15 → v16: Add `target_file_id` to `links` and `pagerank_score` to `files`.
 ///
@@ -14,7 +14,7 @@ use crate::error::Result;
 /// (e.g. `/brain/headings.md`) while `links.target_path` stores bare names or
 /// relative paths (`"headings"`, `"simple.md"`). Pure SQL LIKE patterns would
 /// produce double-extension matches and ambiguous multi-row subqueries.
-pub fn migrate_v15_to_v16(conn: &Connection) -> Result<()> {
+pub fn migrate_v15_to_v16(conn: &Connection) -> SqlResult<()> {
     // Step 1: DDL — add columns and index, bump version. Run in a single batch.
     conn.execute_batch(
         "
@@ -39,7 +39,7 @@ pub fn migrate_v15_to_v16(conn: &Connection) -> Result<()> {
 }
 
 /// Iterate over all wiki/markdown links and resolve target_file_id in Rust.
-fn backfill_target_file_ids(conn: &Connection) -> Result<()> {
+fn backfill_target_file_ids(conn: &Connection) -> SqlResult<()> {
     // Collect links to backfill (avoid holding a read cursor while writing).
     let links: Vec<(String, String, String)> = {
         let mut stmt = conn.prepare(

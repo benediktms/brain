@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v32 → v33: Add `jobs` table for async job queue.
 ///
@@ -16,7 +16,7 @@ use crate::error::Result;
 /// - No `brain_id` (jobs are global)
 /// - No `ref_id` (dedup handled at application layer)
 /// - No `is_recurring`/`period_secs` (scheduling policy lives in the daemon)
-pub fn migrate_v32_to_v33(conn: &Connection) -> Result<()> {
+pub fn migrate_v32_to_v33(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         PRAGMA foreign_keys = OFF;

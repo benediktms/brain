@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add `brain_meta` key-value table for project configuration.
 /// Stamp version 6.
-pub fn migrate_v5_to_v6(conn: &Connection) -> Result<()> {
+pub fn migrate_v5_to_v6(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

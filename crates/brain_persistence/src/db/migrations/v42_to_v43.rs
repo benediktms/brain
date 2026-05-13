@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v42 → v43: Add `tag_cluster_runs` and `tag_aliases` tables for synonym
 /// clustering & label alias resolution (parent task brn-83a.7.2).
@@ -11,7 +11,7 @@ use crate::error::Result;
 /// Timestamps use ISO 8601 TEXT to align with the convention in `lod_chunks`
 /// and the direction of brn-83a.13 (which separately migrates existing
 /// INTEGER timestamp columns).
-pub fn migrate_v42_to_v43(conn: &Connection) -> Result<()> {
+pub fn migrate_v42_to_v43(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "BEGIN;
 

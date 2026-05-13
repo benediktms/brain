@@ -29,9 +29,9 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
-pub fn migrate_v50_to_v51(conn: &Connection) -> Result<()> {
+pub fn migrate_v50_to_v51(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute_batch(

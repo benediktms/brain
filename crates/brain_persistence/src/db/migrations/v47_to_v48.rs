@@ -24,10 +24,10 @@
 
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Create the `pre_tool_use_seen` table and stamp version 48.
-pub fn migrate_v47_to_v48(conn: &Connection) -> Result<()> {
+pub fn migrate_v47_to_v48(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     tx.execute_batch(

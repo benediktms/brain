@@ -1,9 +1,9 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Fresh database: create all tables and stamp version 1.
-pub fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
+pub fn migrate_v0_to_v1(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

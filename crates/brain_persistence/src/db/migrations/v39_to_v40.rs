@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v39 → v40: Create the `lod_chunks` table for Level-of-Detail storage.
 ///
@@ -15,7 +15,7 @@ use crate::error::Result;
 /// detection by comparing against the current source content.
 ///
 /// Part of the Retrieve+ initiative (ADR-001, brn-83a.5.1).
-pub fn migrate_v39_to_v40(conn: &Connection) -> Result<()> {
+pub fn migrate_v39_to_v40(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "BEGIN;
 

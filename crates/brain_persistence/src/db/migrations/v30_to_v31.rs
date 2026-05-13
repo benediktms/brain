@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 
 use crate::db::short_id::{blake3_short_hex, pick_unique_prefix};
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v30 → v31: Add `id` column to tasks for stable, hash-based display IDs.
 ///
@@ -19,7 +19,7 @@ use crate::error::Result;
 /// NOTE: JSONL event patching (injecting `id` into existing TaskCreated payloads)
 /// is handled separately in the TaskStore initialization, since this migration
 /// only receives a `&Connection` and has no access to filesystem paths.
-pub fn migrate_v30_to_v31(conn: &Connection) -> Result<()> {
+pub fn migrate_v30_to_v31(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "ALTER TABLE tasks ADD COLUMN id TEXT;
          CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_brain_short_id ON tasks(brain_id, id);",

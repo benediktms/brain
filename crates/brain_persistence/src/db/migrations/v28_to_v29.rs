@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v28 → v29: Add `object_links` table for URI-based cross-domain linking.
 ///
@@ -19,7 +19,7 @@ use crate::error::Result;
 /// );
 /// CREATE INDEX idx_object_links_target ON object_links(target_uri);
 /// ```
-pub fn migrate_v28_to_v29(conn: &Connection) -> Result<()> {
+pub fn migrate_v28_to_v29(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS object_links (
              source_uri TEXT NOT NULL,

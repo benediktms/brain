@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// Add task fields (type, assignee, defer_until) and tables (labels, comments).
 /// Stamp version 3.
-pub fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
+pub fn migrate_v2_to_v3(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
         BEGIN;

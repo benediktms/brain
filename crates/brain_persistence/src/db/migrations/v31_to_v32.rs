@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::sql::SqlResult;
 
 /// v31 → v32: Rename `id` column to `display_id` for clarity.
 ///
@@ -8,7 +8,7 @@ use crate::error::Result;
 /// The name `id` is ambiguous with `task_id` (the ULID primary key). Renaming
 /// to `display_id` clarifies intent. The JSON wire format keeps `"id"` as the
 /// key via serde rename — no API break.
-pub fn migrate_v31_to_v32(conn: &Connection) -> Result<()> {
+pub fn migrate_v31_to_v32(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "ALTER TABLE tasks RENAME COLUMN id TO display_id;
          DROP INDEX IF EXISTS idx_tasks_brain_short_id;
