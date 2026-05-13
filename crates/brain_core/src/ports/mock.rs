@@ -4,7 +4,7 @@
 //! using `HashMap`-backed in-memory state. They do not open SQLite or
 //! LanceDB. Use them in unit tests that need a pipeline without real storage.
 
-#![allow(clippy::manual_async_fn)]
+#![allow(clippy::manual_async_fn, clippy::type_complexity)]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;

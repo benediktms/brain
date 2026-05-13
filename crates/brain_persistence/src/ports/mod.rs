@@ -19,7 +19,7 @@ use brain_core::error::Result;
 // Re-export core trait names so `brain_persistence::ports::ChunkIndexWriter`
 // works alongside the persistence-owned traits below; brain_lib re-exports
 // from both modules transparently.
-pub use brain_core::ports::{ChunkIndexWriter, FileMetaReader, SchemaMeta};
+pub use brain_core::ports::{ChunkIndexWriter, FileMetaReader, SchemaMeta, SummaryStoreWriter};
 
 use crate::db::Db;
 use crate::db::chunks::{ChunkPollRow, ChunkRow};
@@ -571,11 +571,11 @@ impl LinkWriter for Db {
 // ---------------------------------------------------------------------------
 
 /// Key used in brain_meta to store the last embedded_at reset timestamp (Unix s).
-pub const EMBED_RESET_META_KEY: &str = "embed_reset_at";
+pub(crate) const EMBED_RESET_META_KEY: &str = "embed_reset_at";
 
 /// Key used in brain_meta to store the count of consecutive self-heal resets.
 /// Reset to 0 when a successful schema check is observed.
-pub const EMBED_CONSECUTIVE_RESETS_KEY: &str = "embed_consecutive_resets";
+pub(crate) const EMBED_CONSECUTIVE_RESETS_KEY: &str = "embed_consecutive_resets";
 
 /// Reset all `embedded_at` columns so items are re-embedded on the next poll cycle.
 ///
@@ -1084,21 +1084,6 @@ impl BrainManager for Db {
 // ---------------------------------------------------------------------------
 // LanceDB write path — summary embeddings
 // ---------------------------------------------------------------------------
-
-/// LanceDB write operations for summary (episode/reflection) embeddings.
-///
-/// Consumers: `mcp::tools::mem_write_episode`, `mcp::tools::mem_reflect`.
-pub trait SummaryStoreWriter: Send + Sync {
-    /// Upsert a summary embedding. Uses `file_id = "sum:{summary_id}"` so
-    /// each summary occupies exactly one vector row.
-    fn upsert_summary<'a>(
-        &'a self,
-        summary_id: &'a str,
-        content: &'a str,
-        brain_id: &'a str,
-        embedding: &'a [f32],
-    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
-}
 
 // -- SummaryStoreWriter for Store ------------------------------------------
 

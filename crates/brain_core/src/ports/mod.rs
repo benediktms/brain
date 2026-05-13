@@ -1,9 +1,8 @@
 //! Core persistence-port trait definitions shared across the workspace.
 //!
-//! These traits are framework-free: they describe the contracts the pipeline
-//! and query layers depend on, without binding to a specific storage
-//! implementation. Production implementations live in `brain_persistence`
-//! (for traits coupled to `Db`/`Store`/`StoreReader`) and `brain_lib`
+//! These traits are framework-free: their method signatures use only stdlib
+//! and `brain_core` types. Production implementations live in
+//! `brain_persistence` (where the storage types are defined) and `brain_lib`
 //! (for blanket adapters bridging brain_lib-internal stores).
 //!
 //! # Design
@@ -14,11 +13,10 @@
 //! - **Async** for LanceDB-style operations; SQLite methods stay sync (the
 //!   `with_read_conn` / `with_write_conn` wrappers handle blocking internally).
 //!
-//! Traits whose production impls bind to concrete persistence types
-//! (`Db`, `Store`, `StoreReader`) are re-exported from
-//! `brain_persistence::ports`; this module only carries the three traits
-//! whose contracts can stand on their own without referencing types from
-//! `brain_persistence`.
+//! This module only carries the traits whose signatures can stand alone
+//! without referencing types from `brain_persistence`. Row-coupled traits and
+//! their concrete impls live in `brain_persistence::ports`; `brain_lib::ports`
+//! re-exports both so callers have a single import path.
 
 use crate::error::Result;
 
@@ -26,13 +24,10 @@ use crate::error::Result;
 pub mod mock;
 
 // ---------------------------------------------------------------------------
-// Write path — used by IndexPipeline, embed_poll
+// LanceDB write path — chunk upsert + delete
 // ---------------------------------------------------------------------------
 
 /// LanceDB write operations required by the indexing pipeline.
-///
-/// Consumers: `IndexPipeline`, `embed_poll::poll_stale_chunks`,
-/// `embed_poll::poll_stale_tasks`.
 pub trait ChunkIndexWriter: Send + Sync {
     /// Upsert all chunks for a file: matched chunks are updated, new ones
     /// inserted, orphaned chunks for this `file_id` within `brain_id` are deleted.
@@ -69,13 +64,10 @@ pub trait ChunkIndexWriter: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Schema management — used by IndexPipeline startup
+// LanceDB schema management — used at pipeline startup + vacuum
 // ---------------------------------------------------------------------------
 
 /// LanceDB schema version management and maintenance operations.
-///
-/// Consumers: `pipeline::ensure_schema_version`, `IndexPipeline::repair`,
-/// `IndexPipeline::vacuum`, `embed_poll::self_heal_if_lance_missing`.
 pub trait SchemaMeta: Send + Sync {
     /// Return `true` if the live LanceDB table schema matches the expected
     /// schema. Used for diagnostic logging.
@@ -93,23 +85,21 @@ pub trait SchemaMeta: Send + Sync {
 
     /// Return all distinct `file_id`s that have chunks in LanceDB for a brain.
     ///
-    /// Used by `IndexPipeline::doctor` for orphan detection.
+    /// Used for orphan detection by the maintenance doctor pass.
     fn get_file_ids_with_chunks<'a>(
         &'a self,
         brain_id: &'a str,
     ) -> impl std::future::Future<Output = Result<std::collections::HashSet<String>>> + Send + 'a;
 
     /// Force an optimize of the LanceDB table (compaction + auto-index).
-    ///
-    /// Used by `IndexPipeline::vacuum`.
     fn force_optimize(&self) -> impl std::future::Future<Output = ()> + Send + '_;
 
     /// Aggressively prune LanceDB version manifests older than `older_than`.
     ///
     /// `force_optimize` uses LanceDB's default version retention; this method
-    /// lets `IndexPipeline::vacuum` honour the user-supplied `--older-than`
-    /// flag (including `--older-than 0` for immediate disk reclamation) on
-    /// the LanceDB side as well as the SQLite soft-delete side.
+    /// lets vacuum honour a user-supplied `--older-than` cutoff (including
+    /// `--older-than 0` for immediate disk reclamation) on the LanceDB side
+    /// in addition to the SQLite soft-delete side.
     fn prune_versions(
         &self,
         older_than: std::time::Duration,
@@ -117,12 +107,10 @@ pub trait SchemaMeta: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Read path — used by IndexPipeline doctor/scan
+// SQLite read path — file metadata reads for maintenance + scan
 // ---------------------------------------------------------------------------
 
 /// SQLite file metadata reads required by the maintenance pipeline.
-///
-/// Consumers: `IndexPipeline::doctor`, `pipeline::scan`.
 pub trait FileMetaReader: Send + Sync {
     /// Return all active (non-deleted) `(file_id, path)` pairs.
     fn get_all_active_paths(&self) -> Result<Vec<(String, String)>>;
@@ -142,4 +130,21 @@ pub trait FileMetaReader: Send + Sync {
 
     /// Get the stored chunker version for a file.
     fn get_chunker_version(&self, file_id: &str) -> Result<Option<u32>>;
+}
+
+// ---------------------------------------------------------------------------
+// LanceDB write path — summary embeddings
+// ---------------------------------------------------------------------------
+
+/// LanceDB write operations for summary (episode/reflection) embeddings.
+pub trait SummaryStoreWriter: Send + Sync {
+    /// Upsert a summary embedding. Uses `file_id = "sum:{summary_id}"` so
+    /// each summary occupies exactly one vector row.
+    fn upsert_summary<'a>(
+        &'a self,
+        summary_id: &'a str,
+        content: &'a str,
+        brain_id: &'a str,
+        embedding: &'a [f32],
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a;
 }
