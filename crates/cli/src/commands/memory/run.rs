@@ -787,6 +787,7 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
 
 #[cfg(test)]
 mod retrieve_tests {
+    use brain_persistence::sql::SqlResultExt;
     use std::sync::Arc;
 
     use brain_lib::embedder::{Embed, MockEmbedder};

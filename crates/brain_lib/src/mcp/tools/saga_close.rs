@@ -123,6 +123,7 @@ impl McpTool for SagaClose {
 
 #[cfg(test)]
 mod tests {
+    use brain_persistence::sql::SqlResultExt;
     use serde_json::{Value, json};
 
     use super::super::tests::create_test_context;

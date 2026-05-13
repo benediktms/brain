@@ -266,6 +266,7 @@ impl McpTool for RecordLinkRemove {
 
 #[cfg(test)]
 mod tests {
+    use brain_persistence::sql::{SqlError, SqlResultExt};
     use serde_json::json;
 
     use super::super::ToolRegistry;
