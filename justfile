@@ -64,10 +64,12 @@ build:
 
 alias b := build
 
-# Type-check without codegen
+# Type-check without codegen. Covers `--workspace --all-features --all-targets`
+# so #[cfg(test)] blocks inside production source files are also compile-checked
+# — bare `cargo check` (default targets) silently skips them.
 [group('dev')]
 check:
-    cargo check
+    cargo check --workspace --all-features --all-targets
 
 alias c := check
 
