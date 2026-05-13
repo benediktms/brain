@@ -104,6 +104,18 @@ pub fn store_episode_with_trust(
     Ok(summary_id)
 }
 
+/// Mark a summary row as trusted by its summary_id.
+///
+/// Used in tests (and admin paths) to promote an `untrusted` row to `trusted`
+/// without re-inserting it.
+pub fn mark_summary_trusted(conn: &Connection, summary_id: &str) -> SqlResult<()> {
+    conn.execute(
+        "UPDATE summaries SET trust = 'trusted' WHERE summary_id = ?1",
+        rusqlite::params![summary_id],
+    )?;
+    Ok(())
+}
+
 /// Store a reflection in the summaries table, linked to source summaries.
 /// Returns the summary_id.
 pub fn store_reflection(

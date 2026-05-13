@@ -148,6 +148,95 @@ pub fn ensure_brain_registered(conn: &Connection, brain_id: &str, brain_name: &s
     Ok(())
 }
 
+/// Register a brain during JSONL migration replay.
+///
+/// Uses `INSERT OR IGNORE` so re-runs are idempotent. The caller supplies the
+/// `created_at` Unix timestamp so the migrated row preserves its original time.
+pub fn register_brain_for_migration(
+    conn: &Connection,
+    brain_id: &str,
+    name: &str,
+    created_at: i64,
+) -> SqlResult<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES (?1, ?2, ?3)",
+        rusqlite::params![brain_id, name, created_at],
+    )?;
+    Ok(())
+}
+
+/// Read the prefix for a brain by name.
+///
+/// Returns `None` if no matching row exists or the prefix column is NULL.
+pub fn read_brain_prefix_by_name(conn: &Connection, brain_name: &str) -> SqlResult<Option<String>> {
+    use rusqlite::OptionalExtension;
+    let prefix: Option<String> = conn
+        .query_row(
+            "SELECT prefix FROM brains WHERE name = ?1",
+            [brain_name],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(prefix)
+}
+
+/// Update the prefix for a brain by name.
+///
+/// Returns the number of rows affected (0 if no brain with that name exists).
+pub fn update_brain_prefix_by_name(
+    conn: &Connection,
+    new_prefix: &str,
+    brain_name: &str,
+) -> SqlResult<usize> {
+    let n = conn.execute(
+        "UPDATE brains SET prefix = ?1 WHERE name = ?2",
+        rusqlite::params![new_prefix, brain_name],
+    )?;
+    Ok(n)
+}
+
+/// Counts returned by `count_migration_stats`.
+pub struct MigrationStats {
+    pub brain_count: i64,
+    pub task_count: i64,
+    pub record_count: i64,
+    pub orphaned_tasks: i64,
+    pub orphaned_records: i64,
+}
+
+/// Query post-migration verification counts from an open connection.
+pub fn count_migration_stats(conn: &Connection) -> SqlResult<MigrationStats> {
+    let brain_count: i64 = conn.query_row("SELECT COUNT(*) FROM brains", [], |r| r.get(0))?;
+    let task_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE brain_id != ''",
+        [],
+        |r| r.get(0),
+    )?;
+    let record_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM records WHERE brain_id != ''",
+        [],
+        |r| r.get(0),
+    )?;
+    let orphaned_tasks: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE brain_id = ''",
+        [],
+        |r| r.get(0),
+    )?;
+    let orphaned_records: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM records WHERE brain_id = ''",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(MigrationStats {
+        brain_count,
+        task_count,
+        record_count,
+        orphaned_tasks,
+        orphaned_records,
+    })
+}
+
 /// DTO for projecting state_projection.toml brain entries into the brains table.
 pub struct BrainProjection {
     pub brain_id: String,
