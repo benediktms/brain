@@ -4,10 +4,21 @@
 use std::fs;
 use std::io::Read as _;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use brain_persistence::db::summaries::Episode;
 use serde_json::{Map, Value, json};
+
+/// Soft deadline for the SessionStart render path.
+///
+/// SessionStart blocks the Claude Code UI on startup until the hook returns,
+/// so we bound how long the renderer is allowed to run. Each section is
+/// emitted in order; if the deadline is exceeded between sections, we truncate
+/// the remaining sections and log a warning. The contract from
+/// `session_start()` doc-comment is preserved: each section degrades to empty
+/// rather than crashing, and the returned envelope is always valid JSON.
+const SESSION_START_DEADLINE: Duration = Duration::from_secs(3);
 
 /// The hook entries brain installs into `.claude/settings.json`.
 ///
@@ -27,7 +38,7 @@ fn brain_hooks() -> Value {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "brain tasks list --ready --output=hook-envelope 2>/dev/null"
+                        "command": "brain hooks user-prompt-submit 2>/dev/null"
                     }
                 ]
             }
@@ -38,7 +49,7 @@ fn brain_hooks() -> Value {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "brain tasks stats --output=hook-envelope 2>/dev/null"
+                        "command": "brain hooks session-start 2>/dev/null"
                     }
                 ]
             }
@@ -141,10 +152,93 @@ pub fn install(dry_run: bool) -> Result<()> {
     println!("Installed brain hooks into .claude/settings.json");
     println!();
     println!("Hooks added:");
-    println!("  SessionStart     -> brain tasks stats --output=hook-envelope");
-    println!("  UserPromptSubmit -> brain tasks list --ready --output=hook-envelope");
+    println!(
+        "  SessionStart     -> brain hooks session-start  (top tasks + sagas/frontier + cwd-aware brains)"
+    );
+    println!("  UserPromptSubmit -> brain hooks user-prompt-submit  (episode-write nudge)");
 
     Ok(())
+}
+
+/// Per-event reporting state used by [`status`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HookEventState {
+    /// No brain-managed entry was found for this event.
+    Missing,
+    /// Brain-managed entry found and the configured command matches the
+    /// canonical `brain hooks <verb> 2>/dev/null` shape we install. The
+    /// verb is recognised by the installed binary.
+    Current,
+    /// Brain-managed entry found but the configured command's verb is
+    /// not recognised by the installed binary (`brain hooks <verb> --help`
+    /// returns non-zero). The user is on a newer settings.json than their
+    /// installed `brain` binary supports.
+    Stale { verb: String },
+    /// Brain-managed entry found but the configured command does not
+    /// match our canonical shape — the user customised it. We do not
+    /// false-alarm in this case.
+    Custom,
+}
+
+/// Inspect a single hooks event array, returning the state of its brain-managed
+/// entry.
+///
+/// Used by [`status`] to detect version skew between an installed
+/// `.claude/settings.json` and the local `brain` binary. We only run the
+/// subprocess probe for entries whose command literally matches the
+/// canonical install shape; user-customised commands are reported as
+/// `Custom` and the help-probe is skipped to avoid spawning arbitrary
+/// `brain <something>` calls.
+fn classify_hook_event(arr: &[Value]) -> HookEventState {
+    let Some(entry) = arr.iter().find(|e| is_brain_hook(e)) else {
+        return HookEventState::Missing;
+    };
+
+    // Extract the command from the first hook in the entry. Canonical
+    // shape installed by `brain hooks install` is:
+    //   "brain hooks <verb> 2>/dev/null"
+    let Some(cmd) = entry
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|h| h.get("command"))
+        .and_then(|c| c.as_str())
+    else {
+        return HookEventState::Custom;
+    };
+
+    let stripped = cmd.trim_end_matches(" 2>/dev/null").trim();
+    let tokens: Vec<&str> = stripped.split_whitespace().collect();
+    // Canonical: ["brain", "hooks", "<verb>"]. Anything else → custom.
+    if tokens.len() != 3 || tokens[0] != "brain" || tokens[1] != "hooks" {
+        return HookEventState::Custom;
+    }
+    let verb = tokens[2].to_string();
+
+    // Probe the installed binary for the verb. If `brain hooks <verb> --help`
+    // exits non-zero, the verb is not recognised → settings.json is stale.
+    let recognised = std::process::Command::new("brain")
+        .args(["hooks", &verb, "--help"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if recognised {
+        HookEventState::Current
+    } else {
+        HookEventState::Stale { verb }
+    }
+}
+
+fn render_status_line(event: &str, state: &HookEventState) -> String {
+    match state {
+        HookEventState::Missing => format!("  {event:<17} missing"),
+        HookEventState::Current => format!("  {event:<17} installed (current)"),
+        HookEventState::Custom => format!("  {event:<17} installed (custom)"),
+        HookEventState::Stale { verb } => format!(
+            "  {event:<17} installed (stale — settings.json references unknown subcommand: {verb}; run `brain hooks install` to update)"
+        ),
+    }
 }
 
 pub fn status() -> Result<()> {
@@ -164,38 +258,35 @@ pub fn status() -> Result<()> {
 
     let hooks = settings.get("hooks");
 
-    let has_session_start = hooks
-        .and_then(|h| h.get("SessionStart"))
-        .and_then(|v| v.as_array())
-        .is_some_and(|arr| arr.iter().any(is_brain_hook));
+    let event_state = |name: &str| -> HookEventState {
+        hooks
+            .and_then(|h| h.get(name))
+            .and_then(|v| v.as_array())
+            .map(|arr| classify_hook_event(arr))
+            .unwrap_or(HookEventState::Missing)
+    };
 
-    let has_prompt_submit = hooks
-        .and_then(|h| h.get("UserPromptSubmit"))
-        .and_then(|v| v.as_array())
-        .is_some_and(|arr| arr.iter().any(is_brain_hook));
+    let session_state = event_state("SessionStart");
+    let prompt_state = event_state("UserPromptSubmit");
 
-    if has_session_start && has_prompt_submit {
-        println!("Status: installed");
-        println!("  SessionStart:      active");
-        println!("  UserPromptSubmit:  active");
-    } else if has_session_start || has_prompt_submit {
+    let session_present = !matches!(session_state, HookEventState::Missing);
+    let prompt_present = !matches!(prompt_state, HookEventState::Missing);
+
+    let any_stale = matches!(session_state, HookEventState::Stale { .. })
+        || matches!(prompt_state, HookEventState::Stale { .. });
+
+    if session_present && prompt_present {
+        if any_stale {
+            println!("Status: installed (stale)");
+        } else {
+            println!("Status: installed");
+        }
+        println!("{}", render_status_line("SessionStart:", &session_state));
+        println!("{}", render_status_line("UserPromptSubmit:", &prompt_state));
+    } else if session_present || prompt_present {
         println!("Status: partially installed");
-        println!(
-            "  SessionStart:      {}",
-            if has_session_start {
-                "active"
-            } else {
-                "missing"
-            }
-        );
-        println!(
-            "  UserPromptSubmit:  {}",
-            if has_prompt_submit {
-                "active"
-            } else {
-                "missing"
-            }
-        );
+        println!("{}", render_status_line("SessionStart:", &session_state));
+        println!("{}", render_status_line("UserPromptSubmit:", &prompt_state));
         println!("  Run `brain hooks install` to fix");
     } else {
         println!("Status: not installed");
@@ -721,6 +812,314 @@ pub fn pre_tool_use() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// SessionStart hook
+// ---------------------------------------------------------------------------
+
+/// Render Section A — top ready/actionable tasks for the cwd-resolved brain.
+///
+/// Sort matches `brain tasks next`: in-progress first, then priority ascending
+/// (0=critical), then due_ts, then task_id. Returns the section body as plain
+/// text, or an empty string if no tasks were found. Errors are logged via
+/// tracing and surfaced as an empty section so a transient DB failure does
+/// not crash the whole hook.
+fn render_top_tasks_section(stores: &brain_lib::stores::BrainStores) -> String {
+    let mut tasks = match stores.tasks.list_ready_actionable() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(error = %e, "session-start: failed to list ready tasks");
+            return String::new();
+        }
+    };
+
+    let status_ord = |status: &str| -> u8 { if status == "in_progress" { 0 } else { 1 } };
+    tasks.sort_by(|a, b| {
+        status_ord(&a.status)
+            .cmp(&status_ord(&b.status))
+            .then(a.priority.cmp(&b.priority))
+            .then_with(|| match (a.due_ts, b.due_ts) {
+                (Some(a_ts), Some(b_ts)) => a_ts.cmp(&b_ts),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            .then(a.task_id.cmp(&b.task_id))
+    });
+
+    tasks
+        .into_iter()
+        .take(10)
+        .map(|t| {
+            let short = stores.tasks.compact_id_or_raw(&t.task_id);
+            format!("{short} [P{}] {}", t.priority, t.title)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Render Section B — open/planning sagas with their per-saga frontier.
+///
+/// Default filter mirrors `brain sagas list`: excludes `closed` and
+/// `cancelled`. For each saga, the next line lists the ready-actionable
+/// member task IDs and titles (an open saga's frontier). Errors fetching the
+/// frontier for a single saga are logged but do not omit the saga line.
+fn render_sagas_section(stores: &brain_lib::stores::BrainStores) -> String {
+    use brain_persistence::db::sagas::SagaListFilter;
+
+    let sagas = match stores.sagas.list(SagaListFilter::default()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "session-start: failed to list sagas");
+            return String::new();
+        }
+    };
+
+    let mut lines: Vec<String> = Vec::with_capacity(sagas.len() * 2);
+    for s in sagas {
+        let saga_id = brain_persistence::db::sagas::compact_saga_id(&s.display_id);
+        lines.push(format!("{saga_id} [{}] {}", s.status, s.title));
+
+        let frontier_text = match stores.sagas.frontier(&s.saga_id) {
+            Ok(f) => f
+                .tasks
+                .iter()
+                .map(|t| {
+                    let short = stores.tasks.compact_id_or_raw(&t.task_id);
+                    format!("{short} {}", t.title)
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            Err(e) => {
+                tracing::warn!(saga_id=%saga_id, error=%e, "session-start: failed to fetch frontier");
+                String::new()
+            }
+        };
+        // Only emit a frontier line when there is content. Sagas with no
+        // ready tasks (or transient frontier errors) render as just the
+        // header line — no trailing `  frontier: ` noise.
+        if !frontier_text.is_empty() {
+            lines.push(format!("  frontier: {frontier_text}"));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Compare two filesystem paths after canonicalisation, falling back to a
+/// direct comparison if either side cannot be canonicalised.
+///
+/// On macOS, cwd reported as `/Users/foo/...` may differ from a stored brain
+/// root canonicalised to `/private/Users/foo/...` (or vice versa). A naive
+/// `==` comparison silently misses these cases, producing "no current brain"
+/// even though cwd is inside a registered brain.
+fn paths_equal(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
+}
+
+/// Render Section C — current brain in detail + other non-archived brains.
+///
+/// The cwd-resolved brain (the one whose root contains the working directory)
+/// is displayed with full detail (id, root, aliases). Other non-archived
+/// brains are listed as a compact `name(prefix)` pair line.
+fn render_brains_section(stores: &brain_lib::stores::BrainStores) -> String {
+    // active_only=true filters to projected=1 AND archived=0.
+    let brains = match stores.list_brains(true) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "session-start: failed to list brains");
+            return String::new();
+        }
+    };
+
+    // Identify the cwd-resolved brain by matching root path. We compare
+    // against the registered brain rows (roots_json is a JSON array of
+    // PathBufs as strings) so the projection in the DB is authoritative.
+    let cwd_root = std::env::current_dir()
+        .ok()
+        .and_then(|c| brain_lib::config::find_brain_root(&c));
+
+    let parse_json_array = |opt: &Option<String>| -> Vec<String> {
+        opt.as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default()
+    };
+
+    // Find current brain row by matching its registered roots against cwd_root.
+    // Path comparison goes through `paths_equal` to handle macOS canonicalisation
+    // (`/Users/...` vs `/private/Users/...`).
+    let current_idx = cwd_root.as_ref().and_then(|cwd_root| {
+        brains.iter().position(|b| {
+            let roots = parse_json_array(&b.roots_json);
+            roots
+                .iter()
+                .any(|r| paths_equal(std::path::Path::new(r), cwd_root.as_path()))
+        })
+    });
+
+    let mut lines: Vec<String> = Vec::new();
+
+    if let Some(idx) = current_idx {
+        let b = &brains[idx];
+        let roots = parse_json_array(&b.roots_json);
+        let root = roots.first().cloned().unwrap_or_default();
+        let aliases = parse_json_array(&b.aliases_json);
+        // Encode aliases as a JSON array so values containing `,` or `]`
+        // do not break naive parsers.
+        let aliases_json = serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".to_string());
+        let prefix = b.prefix.as_deref().unwrap_or("");
+        lines.push(format!(
+            "Current brain: {name} ({prefix}) — id:{id}, root:{root}, aliases:{aliases_json}",
+            name = b.name,
+            id = b.brain_id,
+        ));
+    } else {
+        // Make the unregistered-cwd case explicit so the agent can always
+        // rely on the first non-blank line of this section being a
+        // `Current brain:` line.
+        lines.push("Current brain: (none — cwd is not in a registered brain)".to_string());
+    }
+
+    // Other brains — exclude current (if any) and any archived.
+    let others: Vec<String> = brains
+        .iter()
+        .enumerate()
+        .filter(|(i, b)| Some(*i) != current_idx && !b.archived)
+        .map(|(_, b)| {
+            let prefix = b.prefix.as_deref().unwrap_or("");
+            format!("{}({prefix})", b.name)
+        })
+        .collect();
+    if !others.is_empty() {
+        lines.push(format!("Other brains: {}", others.join(", ")));
+    }
+
+    lines.join("\n")
+}
+
+/// `brain hooks session-start` — invoked by the Claude Code SessionStart hook.
+///
+/// ## Output contract
+///
+/// Always prints a single Claude Code hook envelope:
+///
+/// ```json
+/// {
+///   "suppressOutput": true,
+///   "hookSpecificOutput": {
+///     "hookEventName": "SessionStart",
+///     "additionalContext": "<plain text>"
+///   }
+/// }
+/// ```
+///
+/// The `additionalContext` field is plain text (NOT JSON) with three
+/// sections in this order:
+///
+/// 1. `## Top tasks` — ready/in-progress tasks for the cwd-resolved brain.
+/// 2. `## Sagas` — open/planning sagas, each followed by an optional
+///    `  frontier: ...` line listing ready member tasks.
+/// 3. `## Brains` — the cwd-resolved brain (or an explicit
+///    `Current brain: (none …)` line when cwd is not registered), plus
+///    a compact list of other registered brains.
+///
+/// ## Stability
+///
+/// This is a stable text contract. Adding, removing, or reordering
+/// sections is a breaking change for any agent that parses the text.
+///
+/// ## Failure modes
+///
+/// Each renderer MUST NOT propagate errors — instead, a section degrades
+/// to an empty string (and the failure is logged via `tracing::warn!`).
+/// On a fatal `open_stores_for_cwd` failure, an empty `additionalContext`
+/// is emitted but the envelope is still valid JSON.
+///
+/// ## Latency budget
+///
+/// The render path is bounded by [`SESSION_START_DEADLINE`]. If the deadline
+/// is exceeded mid-render, remaining sections are truncated and a warning
+/// is logged. SessionStart blocks UI startup, so this guard prevents a
+/// slow DB from stalling the user's session.
+pub fn session_start() -> Result<()> {
+    let context = build_session_start_context();
+    println!(
+        "{}",
+        crate::hooks::build_hook_envelope("SessionStart", &context)
+    );
+    Ok(())
+}
+
+/// Open the cwd-resolved stores and assemble the SessionStart context bundle.
+///
+/// On store-open failure returns an empty string rather than propagating —
+/// see the failure-modes section of [`session_start`] for the rationale.
+/// The hook contract requires a valid envelope on every invocation.
+fn build_session_start_context() -> String {
+    let stores = match open_stores_for_cwd() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "session-start: failed to open stores");
+            return String::new();
+        }
+    };
+    render_session_start_with_stores(&stores)
+}
+
+/// Render the three SessionStart sections from an open [`BrainStores`].
+///
+/// Section headers are written even when a section body is empty so the
+/// contract documented on [`session_start`] is preserved (each section is
+/// always present). The body for each section is allowed to be empty when
+/// the underlying renderer returns `""` (no data, or a logged error).
+///
+/// Bounded by [`SESSION_START_DEADLINE`]: if the deadline is exceeded
+/// between sections, remaining sections are skipped entirely (header and
+/// body) and a warning is logged.
+fn render_session_start_with_stores(stores: &brain_lib::stores::BrainStores) -> String {
+    let start = Instant::now();
+    let mut out = String::new();
+
+    out.push_str("## Top tasks\n");
+    out.push_str(&render_top_tasks_section(stores));
+
+    if start.elapsed() > SESSION_START_DEADLINE {
+        tracing::warn!("session-start exceeded deadline before sagas section; truncating");
+        return out;
+    }
+    out.push_str("\n\n## Sagas\n");
+    out.push_str(&render_sagas_section(stores));
+
+    if start.elapsed() > SESSION_START_DEADLINE {
+        tracing::warn!("session-start exceeded deadline before brains section; truncating");
+        return out;
+    }
+    out.push_str("\n\n## Brains\n");
+    out.push_str(&render_brains_section(stores));
+
+    out
+}
+
+// ---------------------------------------------------------------------------
+// UserPromptSubmit hook
+// ---------------------------------------------------------------------------
+
+/// `brain hooks user-prompt-submit` — invoked by the Claude Code
+/// UserPromptSubmit hook. Emits a static nudge directing the model to call
+/// `memory_write_episode` when the user just shared durable context.
+pub fn user_prompt_submit() -> Result<()> {
+    let nudge = "If the user just shared durable context worth keeping \
+        (API quirks, architecture/conventions, business rules, gotchas, \
+        lessons learned), call memory_write_episode with goal/actions/outcome \
+        + tags. Skip for routine code requests.";
+    println!(
+        "{}",
+        crate::hooks::build_hook_envelope("UserPromptSubmit", nudge)
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1132,15 +1531,36 @@ mod tests {
                 panic!("event {event} is declared in brain_hooks() but missing from plugin.json")
             });
 
-            let direct_cmd = entries[0]["hooks"][0]["command"]
-                .as_str()
-                .unwrap_or_default();
-            let manifest_cmd = manifest_entry[0]["hooks"][0]["command"]
-                .as_str()
-                .unwrap_or_default();
+            let direct_arr = entries
+                .as_array()
+                .unwrap_or_else(|| panic!("brain_hooks entries for {event} must be an array"));
+            let manifest_arr = manifest_entry
+                .as_array()
+                .unwrap_or_else(|| panic!("plugin.json entries for {event} must be an array"));
+
+            // Sorted-vec comparison: reordering entries in either source
+            // must not cause a positional zip to silently align mismatched
+            // commands, AND a duplicate entry must not be silently absorbed
+            // by set semantics (BTreeSet dedupes). Compare lengths first,
+            // then the sorted vec of command strings.
+            let mut direct_cmds: Vec<&str> = direct_arr
+                .iter()
+                .map(|e| e["hooks"][0]["command"].as_str().unwrap_or_default())
+                .collect();
+            let mut manifest_cmds: Vec<&str> = manifest_arr
+                .iter()
+                .map(|e| e["hooks"][0]["command"].as_str().unwrap_or_default())
+                .collect();
             assert_eq!(
-                direct_cmd, manifest_cmd,
-                "hook command for event {event} drifted between brain_hooks() and plugin.json"
+                direct_cmds.len(),
+                manifest_cmds.len(),
+                "entry count mismatch for event {event}: a duplicate or missing entry in one source slipped past set semantics"
+            );
+            direct_cmds.sort();
+            manifest_cmds.sort();
+            assert_eq!(
+                direct_cmds, manifest_cmds,
+                "command set for event {event} drifted between brain_hooks() and plugin.json"
             );
         }
     }
@@ -1177,5 +1597,238 @@ mod tests {
                 "plugin.json must declare a hook entry for {event}"
             );
         }
+    }
+
+    // ── SessionStart / UserPromptSubmit Rust hooks ─────────────────────────
+
+    /// Verify `user_prompt_submit` builds a valid envelope whose
+    /// `additionalContext` contains the `memory_write_episode` nudge text.
+    /// We exercise the envelope construction directly rather than capturing
+    /// stdout to keep the test hermetic.
+    #[test]
+    fn user_prompt_submit_emits_static_envelope() {
+        // Build the same envelope `user_prompt_submit()` prints.
+        let nudge = "If the user just shared durable context worth keeping \
+            (API quirks, architecture/conventions, business rules, gotchas, \
+            lessons learned), call memory_write_episode with goal/actions/outcome \
+            + tags. Skip for routine code requests.";
+        let envelope = crate::hooks::build_hook_envelope("UserPromptSubmit", nudge);
+        let parsed: Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["suppressOutput"], true);
+        assert_eq!(
+            parsed["hookSpecificOutput"]["hookEventName"],
+            "UserPromptSubmit"
+        );
+        let ctx = parsed["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            ctx.contains("memory_write_episode"),
+            "additionalContext must include the memory_write_episode nudge"
+        );
+    }
+
+    /// Verify that with a non-empty in-memory brain,
+    /// `render_session_start_with_stores` returns a string containing all
+    /// three section headers, the seeded task data, and that the surrounding
+    /// envelope built by `build_hook_envelope` parses to valid JSON with the
+    /// expected `hookEventName`. Goes through the same render path
+    /// `session_start()` uses (rather than hand-assembling the bundle), so
+    /// reordering or dropping a section in `render_session_start_with_stores`
+    /// is caught here.
+    #[test]
+    fn session_start_emits_valid_envelope() {
+        use brain_lib::stores::BrainStores;
+        use brain_lib::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, new_task_id};
+
+        let (_tmp, stores) =
+            BrainStores::in_memory_with_brain("brain-ss-1", "test-brain", "TST").unwrap();
+
+        // Seed three tasks via the append-event path so the projection,
+        // brain_id scope, and display_id all match production behaviour.
+        for (i, title) in ["First task", "Second task", "Third task"]
+            .iter()
+            .enumerate()
+        {
+            let task_id = new_task_id("TST");
+            let ev = TaskEvent::from_payload(
+                &task_id,
+                "test",
+                TaskCreatedPayload {
+                    title: title.to_string(),
+                    description: None,
+                    priority: (i as i32) + 1,
+                    status: TaskStatus::Open,
+                    due_ts: None,
+                    task_type: None,
+                    assignee: None,
+                    defer_until: None,
+                    parent_task_id: None,
+                    display_id: None,
+                },
+            );
+            stores.tasks.append(&ev).unwrap();
+        }
+
+        // Render through the same code path session_start() uses — this
+        // catches accidental reordering / dropping of sections.
+        let context = render_session_start_with_stores(&stores);
+
+        // All three section headers must be present, in order.
+        let tasks_idx = context.find("## Top tasks").expect("Top tasks header");
+        let sagas_idx = context.find("## Sagas").expect("Sagas header");
+        let brains_idx = context.find("## Brains").expect("Brains header");
+        assert!(
+            tasks_idx < sagas_idx && sagas_idx < brains_idx,
+            "section order must be Top tasks → Sagas → Brains, got context:\n{context}"
+        );
+
+        // Top tasks body should include at least one seeded title.
+        assert!(
+            context.contains("First task"),
+            "context must include seeded task title, got:\n{context}"
+        );
+
+        // Verify the envelope wrapping the context is valid JSON with the
+        // expected hookEventName + additionalContext that round-trips.
+        let envelope = crate::hooks::build_hook_envelope("SessionStart", &context);
+        let parsed: Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["suppressOutput"], true);
+        assert_eq!(
+            parsed["hookSpecificOutput"]["hookEventName"],
+            "SessionStart"
+        );
+        assert_eq!(
+            parsed["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap_or_default(),
+            context
+        );
+    }
+
+    // ── Renderer Err-path tests ────────────────────────────────────────────
+    //
+    // The contract on `session_start()` promises each section degrades to
+    // empty if its data source errors. To exercise that behavior without
+    // building a separate test double for every store trait, we close the
+    // underlying SQLite connection via the test-only `db_for_tests()` handle
+    // and force subsequent reads through `with_read_conn` to fail. The
+    // renderer should swallow the error, log it via `tracing::warn!`, and
+    // return an empty string.
+    //
+    // We construct a fresh in-memory DB, then run each test_close_db helper.
+    //
+    // If the renderer is refactored to propagate errors via `?`, these tests
+    // panic at the `unwrap` after the renderer call — exactly the regression
+    // we want to catch.
+
+    /// Holder for a broken `BrainStores` plus its TempDir.
+    ///
+    /// Dropping the returned tuple's `_tmp` reclaims the SQLite-on-disk
+    /// backing file; callers keep it bound for the test lifetime.
+    struct BrokenStores {
+        _tmp: tempfile::TempDir,
+        stores: brain_lib::stores::BrainStores,
+    }
+
+    /// Build a [`BrainStores`] whose backing tables have been dropped via a
+    /// side-channel rusqlite connection.
+    ///
+    /// `in_memory_with_brain` keeps the SQLite file on disk in a TempDir, so
+    /// we can open a second connection, drop the tables every renderer reads
+    /// from, and the renderer-owned connection (in the brain_persistence
+    /// pool) will then see the missing tables and fail. The contract on each
+    /// renderer is to swallow that error and return an empty string —
+    /// exactly what these tests assert.
+    fn make_broken_stores() -> BrokenStores {
+        let (tmp, stores) =
+            brain_lib::stores::BrainStores::in_memory_with_brain("brain-broken-1", "broken", "BRK")
+                .unwrap();
+
+        let db_path = stores.brain_home.join("brain.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS brains;
+             DROP TABLE IF EXISTS tasks;
+             DROP TABLE IF EXISTS sagas;",
+        )
+        .unwrap();
+        drop(conn);
+
+        BrokenStores { _tmp: tmp, stores }
+    }
+
+    #[test]
+    fn render_top_tasks_section_degrades_to_empty_on_db_error() {
+        let broken = make_broken_stores();
+        let out = render_top_tasks_section(&broken.stores);
+        assert_eq!(
+            out, "",
+            "expected empty top-tasks section on DB error, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn render_sagas_section_degrades_to_empty_on_db_error() {
+        let broken = make_broken_stores();
+        let out = render_sagas_section(&broken.stores);
+        assert_eq!(
+            out, "",
+            "expected empty sagas section on DB error, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn render_brains_section_degrades_to_empty_on_db_error() {
+        let broken = make_broken_stores();
+        let out = render_brains_section(&broken.stores);
+        // When list_brains errors, the section returns String::new() per
+        // the contract on session_start(). The unregistered-cwd label is
+        // only added in the success-no-match branch.
+        assert_eq!(
+            out, "",
+            "expected empty brains section on DB error, got: {out:?}"
+        );
+    }
+
+    // ── Status command — version-skew detection ────────────────────────────
+
+    #[test]
+    fn classify_missing_entry_returns_missing() {
+        let arr: Vec<Value> = vec![];
+        assert_eq!(classify_hook_event(&arr), HookEventState::Missing);
+    }
+
+    #[test]
+    fn classify_non_brain_entry_returns_missing() {
+        let arr = vec![json!({
+            "hooks": [{"type": "command", "command": "brain hooks session-start 2>/dev/null"}]
+        })];
+        assert_eq!(classify_hook_event(&arr), HookEventState::Missing);
+    }
+
+    #[test]
+    fn classify_custom_command_returns_custom() {
+        let arr = vec![json!({
+            "_brain_managed": true,
+            "hooks": [{
+                "type": "command",
+                "command": "wrapper && brain hooks session-start 2>/dev/null"
+            }]
+        })];
+        assert_eq!(classify_hook_event(&arr), HookEventState::Custom);
+    }
+
+    #[test]
+    fn classify_non_brain_canonical_returns_custom() {
+        // Three tokens but not `brain hooks <verb>`.
+        let arr = vec![json!({
+            "_brain_managed": true,
+            "hooks": [{
+                "type": "command",
+                "command": "other tool verb 2>/dev/null"
+            }]
+        })];
+        assert_eq!(classify_hook_event(&arr), HookEventState::Custom);
     }
 }

@@ -820,7 +820,7 @@ brain mcp                      # Start MCP server (stdio)
 brain mcp setup claude         # Auto-configure Claude Code MCP
 brain mcp setup cursor         # Auto-configure Cursor MCP
 brain mcp setup vscode         # Auto-configure VS Code MCP
-brain hooks install            # Install git hooks
+brain hooks install            # Install Claude Code session/prompt hooks
 
 # Agent docs
 brain docs                     # Regenerate AGENTS.md + bridge CLAUDE.md

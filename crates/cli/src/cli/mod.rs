@@ -679,13 +679,20 @@ pub(crate) enum HooksAction {
     /// Show current hook status
     Status,
     /// PreCompact hook: snapshot edited files + open tasks from transcript
-    #[command(name = "pre-compact")]
+    #[command(name = "pre-compact", hide = true)]
     PreCompact,
     /// Stop hook: auto-write episode summary from transcript JSONL
+    #[command(hide = true)]
     Stop,
     /// PreToolUse:Edit|Write hook: inject file-scoped memory before edits
-    #[command(name = "pre-tool-use")]
+    #[command(name = "pre-tool-use", hide = true)]
     PreToolUse,
+    /// SessionStart hook: emit top tasks + sagas/frontier + brains
+    #[command(name = "session-start", hide = true)]
+    SessionStart,
+    /// UserPromptSubmit hook: emit episode-write nudge
+    #[command(name = "user-prompt-submit", hide = true)]
+    UserPromptSubmit,
 }
 
 #[derive(Subcommand)]
