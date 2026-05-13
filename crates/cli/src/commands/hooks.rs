@@ -1,6 +1,3 @@
-// Pre-existing technical debt: raw rusqlite usage in test setup below.
-#![allow(clippy::disallowed_macros)]
-
 use std::fs;
 use std::io::Read as _;
 use std::path::Path;
@@ -1020,11 +1017,7 @@ mod tests {
 
         // Mark it trusted.
         db.with_write_conn(|conn| {
-            conn.execute(
-                "UPDATE summaries SET trust = 'trusted' WHERE summary_id = ?1",
-                rusqlite::params![id],
-            )?;
-            Ok(())
+            brain_persistence::db::summaries::mark_summary_trusted(conn, &id)
         })
             .into_brain_core()
         .unwrap();
