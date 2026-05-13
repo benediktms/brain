@@ -271,9 +271,9 @@ pub fn resolve_task_id_scoped(
     };
 
     match matches.len() {
-        0 => {
-            Err(SqlError::Domain(BrainCoreError::TaskEvent(format!("no task found matching prefix: {input}"))))
-        }
+        0 => Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
+            "no task found matching prefix: {input}"
+        )))),
         1 => Ok(matches.into_iter().next().unwrap().0),
         n => {
             let candidates: Vec<String> = matches

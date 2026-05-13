@@ -235,11 +235,16 @@ impl SagaStore {
                 let canonical = resolve_saga_id(&tx, saga_id)?;
 
                 let current = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                    SqlError::Domain(BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}")))
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
                 })?;
 
                 let from: SagaStatus = current.status.parse().map_err(|_| {
-                    SqlError::Domain(BrainCoreError::Parse(format!("unknown saga status: {}", current.status)))
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        current.status
+                    )))
                 })?;
 
                 validate_transition(from, SagaStatus::Closed).map_err(SqlError::Domain)?;
@@ -312,11 +317,16 @@ impl SagaStore {
                 let canonical = resolve_saga_id(&tx, saga_id)?;
 
                 let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                    SqlError::Domain(BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}")))
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
                 })?;
 
                 let from: SagaStatus = row.status.parse().map_err(|_| {
-                    SqlError::Domain(BrainCoreError::Parse(format!("unknown saga status: {}", row.status)))
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        row.status
+                    )))
                 })?;
 
                 validate_transition(from, SagaStatus::Open).map_err(SqlError::Domain)?;
@@ -345,8 +355,9 @@ impl SagaStore {
                     },
                 )?;
 
-                let result = queries::get_saga(&tx, &canonical)?
-                    .ok_or_else(|| SqlError::Domain(BrainCoreError::Parse("saga disappeared after start".into())))?;
+                let result = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
+                    SqlError::Domain(BrainCoreError::Parse("saga disappeared after start".into()))
+                })?;
                 tx.commit()?;
                 Ok(result)
             })
@@ -377,10 +388,15 @@ impl SagaStore {
                 // Without this guard the result is empty only by accident (no ready
                 // member tasks); the contract should be explicit.
                 let row = queries::get_saga(conn, &canonical)?.ok_or_else(|| {
-                    SqlError::Domain(BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}")))
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
                 })?;
                 let status: SagaStatus = row.status.parse().map_err(|_| {
-                    SqlError::Domain(BrainCoreError::Parse(format!("unknown saga status: {}", row.status)))
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        row.status
+                    )))
                 })?;
                 if !matches!(status, SagaStatus::Open) {
                     return Ok(SagaFrontier {
@@ -472,11 +488,16 @@ impl SagaStore {
                 let canonical = resolve_saga_id(&tx, saga_id)?;
 
                 let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                    SqlError::Domain(BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}")))
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
                 })?;
 
                 let from: SagaStatus = row.status.parse().map_err(|_| {
-                    SqlError::Domain(BrainCoreError::Parse(format!("unknown saga status: {}", row.status)))
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        row.status
+                    )))
                 })?;
                 // Pre-checks for friendlier error messages — `validate_transition`
                 // would still reject these, but with a generic "invalid transition"
@@ -525,7 +546,9 @@ impl SagaStore {
                 };
 
                 let updated = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                    SqlError::Domain(BrainCoreError::Database("saga disappeared after cancel".into()))
+                    SqlError::Domain(BrainCoreError::Database(
+                        "saga disappeared after cancel".into(),
+                    ))
                 })?;
                 tx.commit()?;
                 Ok((updated, cascade_results))
@@ -807,11 +830,16 @@ impl SagaStore {
                 let canonical = resolve_saga_id(&tx, &saga_id)?;
 
                 let row = queries::get_saga(&tx, &canonical)?.ok_or_else(|| {
-                    SqlError::Domain(BrainCoreError::SagaNotFound(format!("saga not found: {saga_id}")))
+                    SqlError::Domain(BrainCoreError::SagaNotFound(format!(
+                        "saga not found: {saga_id}"
+                    )))
                 })?;
 
                 let from: SagaStatus = row.status.parse().map_err(|_| {
-                    SqlError::Domain(BrainCoreError::Parse(format!("unknown saga status: {}", row.status)))
+                    SqlError::Domain(BrainCoreError::Parse(format!(
+                        "unknown saga status: {}",
+                        row.status
+                    )))
                 })?;
 
                 // Reopen is only valid from terminal states; planning→open is `start`, not `reopen`.

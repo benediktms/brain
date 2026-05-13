@@ -162,8 +162,11 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         }
 
         RecordEventType::TagAdded => {
-            let p: TagPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| SqlError::Domain(BrainCoreError::RecordEvent(format!("bad TagAdded payload: {e}"))))?;
+            let p: TagPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                    "bad TagAdded payload: {e}"
+                )))
+            })?;
 
             conn.execute(
                 "INSERT OR IGNORE INTO record_tags (record_id, tag) VALUES (?1, ?2)",
@@ -172,8 +175,11 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         }
 
         RecordEventType::TagRemoved => {
-            let p: TagPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| SqlError::Domain(BrainCoreError::RecordEvent(format!("bad TagRemoved payload: {e}"))))?;
+            let p: TagPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                    "bad TagRemoved payload: {e}"
+                )))
+            })?;
 
             conn.execute(
                 "DELETE FROM record_tags WHERE record_id = ?1 AND tag = ?2",
@@ -182,8 +188,11 @@ fn apply_event_inner(conn: &Connection, event: &RecordEvent, brain_id: &str) -> 
         }
 
         RecordEventType::LinkAdded => {
-            let p: LinkPayload = serde_json::from_value(event.payload.clone())
-                .map_err(|e| SqlError::Domain(BrainCoreError::RecordEvent(format!("bad LinkAdded payload: {e}"))))?;
+            let p: LinkPayload = serde_json::from_value(event.payload.clone()).map_err(|e| {
+                SqlError::Domain(BrainCoreError::RecordEvent(format!(
+                    "bad LinkAdded payload: {e}"
+                )))
+            })?;
 
             // Validate before any writes — ensures rollback is clean on error.
             let to = link_payload_to_entity_ref(&p)?;

@@ -45,7 +45,9 @@ pub fn parse_short_form(input: &str) -> Option<&str> {
 /// is therefore complete.
 pub fn resolve_saga_id(conn: &Connection, input: &str) -> SqlResult<String> {
     if input.is_empty() {
-        return Err(SqlError::Domain(BrainCoreError::Parse("empty saga id".into())));
+        return Err(SqlError::Domain(BrainCoreError::Parse(
+            "empty saga id".into(),
+        )));
     }
 
     // 1. Exact ULID match.
@@ -160,7 +162,10 @@ mod tests {
         fresh_v54(&conn);
 
         let err = resolve_saga_id(&conn, "saga-deadbeef").unwrap_err();
-        assert!(matches!(err, SqlError::Domain(BrainCoreError::SagaNotFound(_))));
+        assert!(matches!(
+            err,
+            SqlError::Domain(BrainCoreError::SagaNotFound(_))
+        ));
     }
 
     #[test]

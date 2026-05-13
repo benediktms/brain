@@ -234,13 +234,18 @@ pub fn update_saga(
             )?;
         }
         (None, None) => {
-            return Err(SqlError::Domain(crate::error::BrainCoreError::InvalidOperation(
-                "update_saga: at least one field must be provided".into(),
-            )));
+            return Err(SqlError::Domain(
+                crate::error::BrainCoreError::InvalidOperation(
+                    "update_saga: at least one field must be provided".into(),
+                ),
+            ));
         }
     }
-    get_saga(conn, saga_id)?
-        .ok_or_else(|| SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())))
+    get_saga(conn, saga_id)?.ok_or_else(|| {
+        SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(
+            saga_id.to_string(),
+        ))
+    })
 }
 
 /// Close a saga: set status = 'closed', closed_at = now, bump updated_at.
@@ -256,15 +261,20 @@ pub fn close_saga(conn: &Connection, saga_id: &str) -> SqlResult<SagaRow> {
     if rows_changed == 0 {
         let existing = get_saga(conn, saga_id)?;
         return Err(match existing {
-            None => SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())),
+            None => SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(
+                saga_id.to_string(),
+            )),
             Some(row) => SqlError::Domain(crate::error::BrainCoreError::Parse(format!(
                 "saga cannot be closed from status '{}'; only 'open' sagas can be closed",
                 row.status
             ))),
         });
     }
-    get_saga(conn, saga_id)?
-        .ok_or_else(|| SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())))
+    get_saga(conn, saga_id)?.ok_or_else(|| {
+        SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(
+            saga_id.to_string(),
+        ))
+    })
 }
 
 /// Fetch a saga row by ID.
@@ -326,8 +336,11 @@ pub fn saga_members_in(
     if task_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let seeds_json = serde_json::to_string(task_ids)
-        .map_err(|e| SqlError::Domain(BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))))?;
+    let seeds_json = serde_json::to_string(task_ids).map_err(|e| {
+        SqlError::Domain(BrainCoreError::TaskEvent(format!(
+            "payload serialize failed: {e}"
+        )))
+    })?;
     let mut stmt = conn.prepare(
         "SELECT task_id FROM saga_tasks \
          WHERE saga_id = ?1 AND task_id IN (SELECT value FROM json_each(?2))",
@@ -401,8 +414,11 @@ pub fn remove_saga_tasks(
     // placeholder list — same idiom as `saga_members_in` and `task_subtree`.
     // Avoids the SQLite per-statement variable cap that a 1k+ cascade
     // expansion would otherwise hit.
-    let seeds_json = serde_json::to_string(task_ids)
-        .map_err(|e| SqlError::Domain(BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))))?;
+    let seeds_json = serde_json::to_string(task_ids).map_err(|e| {
+        SqlError::Domain(BrainCoreError::TaskEvent(format!(
+            "payload serialize failed: {e}"
+        )))
+    })?;
     let changed = conn.execute(
         "DELETE FROM saga_tasks \
          WHERE saga_id = ?1 AND task_id IN (SELECT value FROM json_each(?2))",
@@ -552,7 +568,9 @@ pub fn cancel_saga(conn: &Connection, saga_id: &str) -> SqlResult<()> {
     if rows_changed == 0 {
         let existing = get_saga(conn, saga_id)?;
         return Err(match existing {
-            None => SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(saga_id.to_string())),
+            None => SqlError::Domain(crate::error::BrainCoreError::SagaNotFound(
+                saga_id.to_string(),
+            )),
             Some(row) => SqlError::Domain(crate::error::BrainCoreError::Parse(format!(
                 "saga already in terminal status '{}'",
                 row.status
@@ -641,8 +659,11 @@ pub fn cascade_member_tasks(
             outcome: outcome_str.to_string(),
         };
         let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaTaskCascaded, &payload);
-        let payload_json = serde_json::to_string(&event.payload)
-            .map_err(|e| SqlError::Domain(BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))))?;
+        let payload_json = serde_json::to_string(&event.payload).map_err(|e| {
+            SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                "payload serialize failed: {e}"
+            )))
+        })?;
         event_stmt.execute(params![
             event.event_id,
             event.saga_id,
@@ -883,7 +904,9 @@ mod tests {
         db.with_write_conn(|conn| {
             let err = cancel_saga(conn, "no_such_saga").unwrap_err();
             match err {
-                SqlError::Domain(BrainCoreError::SagaNotFound(id)) => assert_eq!(id, "no_such_saga"),
+                SqlError::Domain(BrainCoreError::SagaNotFound(id)) => {
+                    assert_eq!(id, "no_such_saga")
+                }
                 other => panic!("expected Domain(SagaNotFound), got {other:?}"),
             }
             Ok(())
