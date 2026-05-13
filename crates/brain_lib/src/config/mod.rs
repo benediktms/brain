@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::embedder::Embed;
 use crate::error::{BrainCoreError, Result};
+use brain_core::ports::Embed;
 use brain_persistence::store::{Store, StoreReader};
 
 // ---------------------------------------------------------------------------
@@ -1067,7 +1067,7 @@ mod tests {
         fs::write(home.join(PROJECTION_FILENAME), "[brains]\n").expect("unwrap should not fail");
 
         // Dummy embedder
-        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
+        let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(DummyEmbedder);
         let model_dir = home.join("models");
 
         let result = open_remote_search_context(home, "nonexistent", &model_dir, &embedder)
@@ -1097,7 +1097,7 @@ mod tests {
         let text = toml::to_string_pretty(&cfg).expect("unwrap should not fail");
         fs::write(home.join(PROJECTION_FILENAME), text).expect("unwrap should not fail");
 
-        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
+        let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(DummyEmbedder);
         let model_dir = home.join("models");
 
         let ctx = open_remote_search_context(home, "test-brain", &model_dir, &embedder)
@@ -1131,7 +1131,7 @@ mod tests {
         let text = toml::to_string_pretty(&cfg).expect("unwrap should not fail");
         fs::write(home.join(PROJECTION_FILENAME), text).expect("unwrap should not fail");
 
-        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(DummyEmbedder);
+        let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(DummyEmbedder);
         let model_dir = home.join("models");
 
         // Look up by ID instead of name
@@ -1395,7 +1395,7 @@ roots = ["/some/path"]
     /// Minimal no-op embedder for tests that need Arc<dyn Embed>.
     struct DummyEmbedder;
 
-    impl crate::embedder::Embed for DummyEmbedder {
+    impl brain_core::ports::Embed for DummyEmbedder {
         fn embed_batch(&self, texts: &[&str]) -> crate::error::Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|_| vec![0.0f32; 384]).collect())
         }

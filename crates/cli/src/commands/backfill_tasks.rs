@@ -83,7 +83,7 @@ pub async fn run(
         // Embed task capsule
         match brain_lib::tasks::capsule::embed_task_capsule(
             &store,
-            &embedder,
+            Some(&embedder),
             &db,
             brain_lib::tasks::capsule::TaskCapsuleParams {
                 task_id: &task.task_id,
@@ -108,7 +108,7 @@ pub async fn run(
         if task.status == "done" || task.status == "cancelled" {
             match brain_lib::tasks::capsule::embed_outcome_capsule(
                 &store,
-                &embedder,
+                Some(&embedder),
                 &db,
                 &task.task_id,
                 &task.title,

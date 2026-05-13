@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_lib::watcher::{FileEvent, coalesce_events};
 use brain_persistence::db::Db;
 use brain_persistence::db::files;
@@ -230,7 +230,10 @@ async fn test_concurrent_read_write_no_deadlocks() {
     assert_eq!(stats.indexed, 20);
 
     // Create a query embedding for readers
-    let embedder = pipeline.embedder().clone();
+    let embedder = pipeline
+        .embedder()
+        .expect("perf test built with embedder")
+        .clone();
     let query_vec = embedder.embed_batch(&["search query"]).unwrap()[0].clone();
 
     // Create StoreReader clones for concurrent queries
@@ -325,7 +328,10 @@ async fn test_optimize_row_threshold() {
     );
 
     // Queries should still work after optimize
-    let embedder = pipeline.embedder().clone();
+    let embedder = pipeline
+        .embedder()
+        .expect("perf test built with embedder")
+        .clone();
     let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
     let results = pipeline
         .store()
@@ -508,7 +514,10 @@ async fn test_ivf_pq_query_returns_results() {
     pipeline.store().create_vector_index(&config).await.unwrap();
 
     // Query with nprobes
-    let embedder = pipeline.embedder().clone();
+    let embedder = pipeline
+        .embedder()
+        .expect("perf test built with embedder")
+        .clone();
     let query_vec = embedder.embed_batch(&["search query"]).unwrap()[0].clone();
     let results = pipeline
         .store()
@@ -574,7 +583,10 @@ async fn test_auto_index_on_optimize() {
     }
 
     // Queries should still work with the index
-    let embedder = pipeline.embedder().clone();
+    let embedder = pipeline
+        .embedder()
+        .expect("perf test built with embedder")
+        .clone();
     let query_vec = embedder.embed_batch(&["test query"]).unwrap()[0].clone();
     let results = pipeline
         .store()

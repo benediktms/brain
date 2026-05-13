@@ -30,6 +30,7 @@ pub(crate) use analyses::*;
 pub(crate) use artifacts::*;
 pub(crate) use documents::*;
 pub(crate) use jobs::*;
+#[cfg(feature = "embed")]
 pub(crate) use memory::*;
 pub(crate) use plans::*;
 pub(crate) use record_common::*;
@@ -155,6 +156,7 @@ pub(crate) enum Command {
             Files that haven't changed since the last run (detected via content \
             hash) are skipped automatically."
     )]
+    #[cfg(feature = "embed")]
     Index {
         /// Path to the notes directory
         #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
@@ -168,6 +170,7 @@ pub(crate) enum Command {
             Performs an initial full index scan, then enters a filesystem event \
             loop that re-indexes only the files that changed. Press Ctrl+C to stop."
     )]
+    #[cfg(feature = "embed")]
     Watch {
         /// Path to the notes directory
         #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
@@ -213,6 +216,7 @@ pub(crate) enum Command {
     },
 
     /// Force re-index files (clears content hashes, re-embeds everything)
+    #[cfg(feature = "embed")]
     Reindex {
         /// Re-index all files in this directory
         #[arg(long, value_hint = ValueHint::DirPath)]
@@ -224,6 +228,7 @@ pub(crate) enum Command {
     },
 
     /// Compact and reclaim space (SQLite VACUUM + LanceDB optimize + purge deleted)
+    #[cfg(feature = "embed")]
     Vacuum {
         /// Purge soft-deleted files older than this many days
         #[arg(long, default_value = "30")]
@@ -231,6 +236,7 @@ pub(crate) enum Command {
     },
 
     /// Backfill task capsule embeddings for tasks not yet indexed in the vector store
+    #[cfg(feature = "embed")]
     BackfillTasks {
         /// Preview mode: list tasks that would be indexed without writing
         #[arg(long)]
@@ -250,6 +256,7 @@ pub(crate) enum Command {
     },
 
     /// Run health checks on the index
+    #[cfg(feature = "embed")]
     Doctor {
         /// Path to the notes directory
         #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
@@ -465,6 +472,7 @@ pub(crate) enum Command {
             - consolidate     Cluster recent episodes and summarise\n  \
             - summarize-scope Generate extractive summaries scoped to a directory or tag"
     )]
+    #[cfg(feature = "embed")]
     Memory {
         /// Output as JSON instead of human-readable text
         #[arg(long, global = true)]

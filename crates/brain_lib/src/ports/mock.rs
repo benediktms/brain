@@ -437,8 +437,8 @@ mod tests {
     async fn index_pipeline_with_mock_store_upserts_without_lancedb() {
         use std::sync::Arc;
 
-        use crate::embedder::MockEmbedder;
         use crate::pipeline::IndexPipeline;
+        use crate::ports::mock::MockEmbedder;
         use brain_persistence::db::Db;
 
         let db = Db::open_in_memory().unwrap();
@@ -474,8 +474,8 @@ mod tests {
     async fn query_pipeline_with_mock_searcher_returns_preset_results() {
         use std::sync::Arc;
 
-        use crate::embedder::MockEmbedder;
         use crate::metrics::Metrics;
+        use crate::ports::mock::MockEmbedder;
         use crate::query_pipeline::QueryPipeline;
         use brain_persistence::db::Db;
         use brain_persistence::store::QueryResult;
@@ -490,7 +490,7 @@ mod tests {
             score: Some(0.05),
             brain_id: String::new(),
         }]);
-        let embedder: Arc<dyn crate::embedder::Embed> = Arc::new(MockEmbedder);
+        let embedder: Arc<dyn brain_core::ports::Embed> = Arc::new(MockEmbedder);
         let metrics = Arc::new(Metrics::new());
 
         let pipeline = QueryPipeline::new(&db, &store, &embedder, &metrics);

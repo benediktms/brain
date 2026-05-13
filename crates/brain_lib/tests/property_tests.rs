@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use brain_lib::chunker::chunk_document;
-use brain_lib::embedder::MockEmbedder;
 use brain_lib::parser::parse_document;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_lib::prelude::*;
 use brain_lib::ranking::{RankedResult, SignalScores};
 use brain_lib::retrieval::{expand_results, pack_minimal};

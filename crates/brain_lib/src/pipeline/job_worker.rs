@@ -19,8 +19,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use dashmap::DashSet;
 use tracing::{debug, warn};
 
-use crate::embedder::Embed;
 use crate::ports::{JobPersistence, JobQueue};
+use brain_core::ports::Embed;
 use brain_persistence::db::Db;
 use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload};
 use brain_persistence::sql::SqlResultExt;
@@ -158,7 +158,7 @@ No markdown formatting.\n\nEpisodes:\n";
 pub async fn process_jobs(
     db: &Db,
     store: &Store,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     active: &ActiveJobs,
     limit: i32,
 ) -> usize {
@@ -202,7 +202,7 @@ pub async fn process_jobs(
     for (job, _guard) in claimed.into_iter().zip(guards) {
         let db = db.clone();
         let store = store.clone();
-        let embedder = embedder.clone();
+        let embedder: Option<Arc<dyn Embed>> = embedder.cloned();
 
         tokio::spawn(async move {
             // _guard is moved into this future and dropped when the task ends
@@ -223,7 +223,7 @@ pub async fn process_jobs(
                 return;
             }
 
-            let result = dispatch_job(&db, &store, &embedder, &job.payload).await;
+            let result = dispatch_job(&db, &store, embedder.as_ref(), &job.payload).await;
 
             match result {
                 Ok(result_str) => {
@@ -298,7 +298,7 @@ type JobResult = std::result::Result<Option<String>, Box<dyn std::error::Error +
 async fn dispatch_job(
     db: &Db,
     store: &Store,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     payload: &JobPayload,
 ) -> JobResult {
     match payload {
@@ -467,13 +467,20 @@ async fn process_consolidation_sweep(db: &Db) -> JobResult {
 async fn process_full_scan(
     db: &Db,
     store: &Store,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     brain_id: &str,
 ) -> JobResult {
     if brain_id.is_empty() {
         warn!("FullScanSweep has empty brain_id, skipping");
         return Ok(Some(r#"{"skipped":"empty_brain_id"}"#.to_string()));
     }
+    let Some(embedder) = embedder else {
+        debug!(
+            brain_id = %brain_id,
+            "FullScanSweep: tasks-only mode \u{2014} skipping (no embedder)"
+        );
+        return Ok(Some(r#"{"skipped":"tasks_only_mode"}"#.to_string()));
+    };
 
     let dirs: Vec<PathBuf> = db.with_read_conn(|conn| {
         use brain_persistence::db::schema::get_brain;
@@ -522,7 +529,7 @@ async fn process_full_scan(
 async fn process_embed_poll(
     db: &Db,
     store: &Store,
-    embedder: &Arc<dyn Embed>,
+    embedder: Option<&Arc<dyn Embed>>,
     brain_id: &str,
 ) -> JobResult {
     use crate::pipeline::embed_poll;

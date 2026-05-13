@@ -9,8 +9,9 @@
 //! to exercise the duplicate path, and unrelated content for the
 //! non-duplicate path.
 
+use brain_core::ports::Embed;
 use brain_lib::dedup::{DEFAULT_DEDUP_THRESHOLD, DuplicateCandidate, check_duplicate};
-use brain_lib::embedder::{Embed, MockEmbedder};
+use brain_lib::ports::mock::MockEmbedder;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

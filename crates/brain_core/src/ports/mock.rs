@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use crate::error::Result;
 
-use super::{ChunkIndexWriter, FileMetaReader, SchemaMeta};
+use super::{ChunkIndexWriter, Embed, FileMetaReader, SchemaMeta};
 
 // ---------------------------------------------------------------------------
 // MockChunkIndexWriter
@@ -299,4 +299,49 @@ impl SchemaMeta for MockStore {
     ) -> impl std::future::Future<Output = ()> + Send + '_ {
         async move {}
     }
+}
+
+// ---------------------------------------------------------------------------
+// MockEmbedder
+// ---------------------------------------------------------------------------
+
+/// In-memory mock for the [`Embed`] port. Produces deterministic 384-dim unit
+/// vectors derived from BLAKE3 of the input text, so tests are reproducible
+/// without needing model weights on disk.
+pub struct MockEmbedder;
+
+impl Embed for MockEmbedder {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|text| mock_embedding(text)).collect())
+    }
+
+    fn hidden_size(&self) -> usize {
+        384
+    }
+
+    fn version(&self) -> &str {
+        "mock-v1"
+    }
+}
+
+/// Generate a deterministic 384-dim unit vector from text content using BLAKE3.
+fn mock_embedding(text: &str) -> Vec<f32> {
+    let hash = blake3::hash(text.as_bytes());
+    let bytes = hash.as_bytes();
+
+    let mut embedding = Vec::with_capacity(384);
+    for i in 0..384 {
+        // Cycle through 32 hash bytes to fill 384 dimensions.
+        let byte = bytes[i % 32];
+        embedding.push((byte as f32 / 255.0) - 0.5);
+    }
+
+    let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut embedding {
+            *v /= norm;
+        }
+    }
+
+    embedding
 }

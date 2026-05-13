@@ -317,7 +317,7 @@ impl BrainStores {
     pub fn query_pipeline<'a, S>(
         &'a self,
         store: &'a S,
-        embedder: &'a std::sync::Arc<dyn crate::embedder::Embed>,
+        embedder: &'a std::sync::Arc<dyn brain_core::ports::Embed>,
         metrics: &'a std::sync::Arc<crate::metrics::Metrics>,
     ) -> crate::query_pipeline::QueryPipeline<'a, S, Db>
     where
@@ -334,7 +334,7 @@ impl BrainStores {
     pub fn federated_pipeline<'a, S>(
         &'a self,
         brains: Vec<(String, String, Option<S>)>,
-        embedder: &'a std::sync::Arc<dyn crate::embedder::Embed>,
+        embedder: &'a std::sync::Arc<dyn brain_core::ports::Embed>,
         metrics: &'a std::sync::Arc<crate::metrics::Metrics>,
     ) -> crate::query_pipeline::FederatedPipeline<'a, S, Db>
     where

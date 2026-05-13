@@ -3,12 +3,16 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::json;
 
+#[cfg(feature = "embed")]
 use brain_lib::query_pipeline::SearchParams;
 use brain_lib::records::integrity;
 use brain_lib::stores::BrainStores;
+#[cfg(feature = "embed")]
 use brain_lib::uri::SynapseUri;
 
+#[cfg(feature = "embed")]
 use crate::commands::memory::run::MemoryCtx;
+#[cfg(feature = "embed")]
 use crate::markdown_table::MarkdownTable;
 
 pub struct RecordsCtx {
@@ -180,6 +184,7 @@ pub fn unpin(ctx: &RecordsCtx, id: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "embed")]
 pub struct RecordsSearchParams {
     pub query: String,
     pub k: usize,
@@ -188,6 +193,7 @@ pub struct RecordsSearchParams {
     pub brains: Vec<String>,
 }
 
+#[cfg(feature = "embed")]
 pub async fn search(ctx: &MemoryCtx, params: RecordsSearchParams) -> Result<()> {
     // Over-request to account for post-filter attrition.
     let over_k = params.k * 3;

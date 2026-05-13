@@ -6,13 +6,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use brain_lib::embedder::{Embed, MockEmbedder};
+use brain_core::ports::Embed;
 use brain_lib::error::Result as BrainResult;
 use brain_lib::mcp::McpContext;
 use brain_lib::mcp::protocol::ToolCallResult;
 use brain_lib::mcp::tools::ToolRegistry;
 use brain_lib::metrics::Metrics;
 use brain_lib::pipeline::IndexPipeline;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_persistence::store::{Store, StoreReader};

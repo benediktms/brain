@@ -88,6 +88,7 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "embed")]
     use std::path::Path;
 
     use super::*;
@@ -95,6 +96,7 @@ mod tests {
 
     // ── Subcommand parsing ──────────────────────────────────────────
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_index() {
         let cli = Cli::try_parse_from(["brain", "index", "./notes"]).unwrap();
@@ -103,6 +105,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_watch() {
         let cli = Cli::try_parse_from(["brain", "watch", "./notes"]).unwrap();
@@ -351,12 +354,14 @@ mod tests {
 
     // ── Alias parsing ───────────────────────────────────────────────
 
+    #[cfg(feature = "embed")]
     #[test]
     fn alias_idx() {
         let cli = Cli::try_parse_from(["brain", "idx", "./notes"]).unwrap();
         assert!(matches!(cli.command, Command::Index { .. }));
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn alias_w() {
         let cli = Cli::try_parse_from(["brain", "w", "./notes"]).unwrap();
@@ -418,6 +423,7 @@ mod tests {
 
     // ── New command parsing ─────────────────────────────────────────
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_reindex_full() {
         let cli = Cli::try_parse_from(["brain", "reindex", "--full", "./notes"]).unwrap();
@@ -430,6 +436,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_reindex_file() {
         let cli = Cli::try_parse_from(["brain", "reindex", "--file", "test.md"]).unwrap();
@@ -442,6 +449,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_vacuum_defaults() {
         let cli = Cli::try_parse_from(["brain", "vacuum"]).unwrap();
@@ -453,6 +461,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_vacuum_custom() {
         let cli = Cli::try_parse_from(["brain", "vacuum", "--older-than", "7"]).unwrap();
@@ -464,6 +473,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_doctor() {
         let cli = Cli::try_parse_from(["brain", "doctor", "./notes"]).unwrap();
@@ -475,6 +485,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_doctor_default_path() {
         let cli = Cli::try_parse_from(["brain", "doctor"]).unwrap();

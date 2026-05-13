@@ -5,8 +5,8 @@
 //! The check is purely vector-based: it embeds the candidate content and
 //! computes cosine similarity against a set of pre-computed embeddings.
 
-use crate::embedder::Embed;
 use crate::error::Result;
+use brain_core::ports::Embed;
 
 /// Default cosine similarity threshold above which content is considered a
 /// near-duplicate.
@@ -86,7 +86,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
-    use crate::embedder::MockEmbedder;
+    use crate::ports::mock::MockEmbedder;
 
     #[test]
     fn cosine_similarity_identical_unit_vectors() {

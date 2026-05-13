@@ -8,10 +8,10 @@
 
 use std::sync::Arc;
 
-use brain_lib::embedder::MockEmbedder;
 use brain_lib::mcp::McpContext;
 use brain_lib::mcp::tools::ToolRegistry;
 use brain_lib::metrics::Metrics;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_lib::search_service::SearchService;
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::tag_aliases as ta;

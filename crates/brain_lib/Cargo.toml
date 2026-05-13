@@ -4,8 +4,20 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = []
-accelerate = ["brain-embedder/accelerate"]
+default = ["embed"]
+# Compiles the BGE-small-en-v1.5 candle embedder and exposes the
+# `brain_lib::embedder` alias + the `Embedder` prelude re-export. Disabling
+# `embed` (via `--no-default-features`) drops the entire candle stack
+# (candle-core/nn/transformers + tokenizers) from the build and leaves the
+# indexing pipeline in soft-gated "tasks-only" mode at runtime — the read
+# path's existing `McpContext::bootstrap` gate is mirrored at the write
+# path via `IndexPipeline::tasks_only`.
+embed = ["dep:brain-embedder"]
+# `accelerate` implies `embed` — Apple's BLAS only meaningfully accelerates
+# the BGE-small candle path, so requesting one without the other has no
+# sensible interpretation. The `?` qualifier on the forwarded feature is a
+# belt-and-suspenders against feature unification edge cases.
+accelerate = ["embed", "brain-embedder?/accelerate"]
 # Exposes test-only accessors (e.g. BrainStores::db_for_tests) and the
 # matching brain-persistence seed helpers. Enable from integration tests
 # that need direct DB access; not for production use.
@@ -13,7 +25,7 @@ test-utils = ["brain-persistence/test-utils", "brain-core/test-utils"]
 
 [dependencies]
 brain-core = { path = "../brain_core" }
-brain-embedder = { path = "../brain_embedder" }
+brain-embedder = { path = "../brain_embedder", optional = true }
 brain-persistence = { path = "../brain_persistence" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

@@ -6,9 +6,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::ports::FileMetaWriter;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_lib::utils::content_hash;
 use brain_lib::watcher::FileEvent;
 use brain_persistence::db::Db;

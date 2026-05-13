@@ -14,13 +14,13 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use brain_lib::embedder::{Embed, MockEmbedder};
-use brain_lib::error::BrainCoreError;
+use brain_core::ports::Embed;
 use brain_lib::links::{LinkType, extract_links};
 use brain_lib::mcp::McpContext;
 use brain_lib::mcp::tools::ToolRegistry;
 use brain_lib::parser::parse_document;
 use brain_lib::pipeline::IndexPipeline;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_lib::ranking::{
     CandidateSignals, RankedResult, SignalScores, WeightProfile, Weights, rank_candidates,
 };
@@ -877,7 +877,8 @@ async fn test_procedure_surfaces_in_retrieve_with_kind_procedure() {
         .unwrap();
 
     // 3. Embed it into LanceDB using MockEmbedder
-    let embedder: Arc<dyn brain_lib::embedder::Embed> = Arc::new(brain_lib::embedder::MockEmbedder);
+    let embedder: Arc<dyn brain_core::ports::Embed> =
+        Arc::new(brain_lib::ports::mock::MockEmbedder);
     let embedder_arc = Arc::clone(&embedder);
     let vecs = embed_batch_async(&embedder_arc, vec![procedure_content.to_string()])
         .await
@@ -900,7 +901,7 @@ async fn test_procedure_surfaces_in_retrieve_with_kind_procedure() {
         stores: stores2,
         search: Some(brain_lib::search_service::SearchService {
             store: store2_reader,
-            embedder: Arc::new(brain_lib::embedder::MockEmbedder),
+            embedder: Arc::new(brain_lib::ports::mock::MockEmbedder),
         }),
         writable_store: Some(store2),
         metrics: Arc::new(brain_lib::metrics::Metrics::new()),

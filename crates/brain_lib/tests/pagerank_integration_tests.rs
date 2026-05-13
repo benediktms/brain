@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
+use brain_lib::ports::mock::MockEmbedder;
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::Store;

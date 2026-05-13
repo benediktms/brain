@@ -4,6 +4,7 @@ use clap::Subcommand;
 /// 1.0]` would produce all-singleton clusters silently, so we reject them
 /// at the CLI boundary rather than letting the recluster job complete and
 /// write a misleading "successful" run row.
+#[cfg(feature = "embed")]
 fn parse_threshold(s: &str) -> Result<f32, String> {
     let v: f32 = s.parse().map_err(|e| format!("invalid f32 '{s}': {e}"))?;
     if !(0.0..=1.0).contains(&v) {
@@ -15,6 +16,7 @@ fn parse_threshold(s: &str) -> Result<f32, String> {
 #[derive(Subcommand)]
 pub(crate) enum TagsAction {
     /// Run synonym clustering over the current brain's raw tags
+    #[cfg(feature = "embed")]
     Recluster {
         /// Cosine similarity threshold for cluster edges. Must be in [0.0, 1.0].
         #[arg(long, default_value = "0.85", value_parser = parse_threshold)]
