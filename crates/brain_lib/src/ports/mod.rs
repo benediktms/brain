@@ -20,12 +20,14 @@
 // working without code changes at call sites. Listed explicitly (rather
 // than glob-imported) because each parent module also exposes its own
 // `mock` submodule, and glob re-exports would ambiguate them.
-pub use brain_core::ports::{ChunkIndexWriter, FileMetaReader, SchemaMeta, SummaryStoreWriter};
+pub use brain_core::ports::{
+    BrainRegistry, ChunkIndexWriter, FileMetaReader, SchemaMeta, SummaryStoreWriter,
+};
 pub use brain_persistence::ports::{
-    BrainManager, BrainRegistry, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, EmbeddingOps,
-    EmbeddingResetter, EpisodeReader, EpisodeWriter, FileMetaWriter, FtsSearcher, GraphLinkReader,
-    JobPersistence, JobQueue, LinkWriter, MaintenanceOps, ProcedureWriter, ProviderStore,
-    ReflectionWriter, StatusReader, SummaryReader, SummaryWriter, TagAliasReader, TagAliasWriter,
+    BrainManager, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, EmbeddingOps, EmbeddingResetter,
+    EpisodeReader, EpisodeWriter, FileMetaWriter, FtsSearcher, GraphLinkReader, JobPersistence,
+    JobQueue, LinkWriter, MaintenanceOps, ProcedureWriter, ProviderStore, ReflectionWriter,
+    StatusReader, SummaryReader, SummaryWriter, TagAliasReader, TagAliasWriter,
 };
 
 use crate::error::Result;

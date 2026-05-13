@@ -1,3 +1,4 @@
+pub mod brain;
 pub mod error;
 pub mod metrics;
 pub mod ports;

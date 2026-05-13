@@ -286,11 +286,13 @@ impl BrainStores {
         BrainRegistry::is_brain_archived(&self.db, brain_id)
     }
 
-    /// List all brain rows, optionally filtered to active-only.
-    pub fn list_brains(
-        &self,
-        active_only: bool,
-    ) -> Result<Vec<brain_persistence::db::schema::BrainRow>> {
+    /// List all registered brains, optionally filtered to active-only.
+    ///
+    /// Returns the framework-free [`brain_core::brain::Brain`] DTO. Callers
+    /// that need the richer persistence-layer row representation (e.g.
+    /// `notes_json`, `projected`) should reach for the inherent
+    /// `Db::list_brains` helper via `inner_db()` instead.
+    pub fn list_brains(&self, active_only: bool) -> Result<Vec<brain_core::brain::Brain>> {
         use crate::ports::BrainRegistry;
         BrainRegistry::list_brains(&self.db, active_only)
     }
@@ -1038,10 +1040,7 @@ impl BrainRegistry for crate::stores::BrainStores {
         crate::stores::BrainStores::is_brain_archived(self, brain_id)
     }
 
-    fn list_brains(
-        &self,
-        active_only: bool,
-    ) -> Result<Vec<brain_persistence::db::schema::BrainRow>> {
+    fn list_brains(&self, active_only: bool) -> Result<Vec<brain_core::brain::Brain>> {
         crate::stores::BrainStores::list_brains(self, active_only)
     }
 

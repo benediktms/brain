@@ -18,10 +18,34 @@
 //! their concrete impls live in `brain_persistence::ports`; `brain_lib::ports`
 //! re-exports both so callers have a single import path.
 
+use crate::brain::Brain;
 use crate::error::Result;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
+
+// ---------------------------------------------------------------------------
+// Brain registry — used by MCP tools and the CLI for brain lookups
+// ---------------------------------------------------------------------------
+
+/// Brain registry queries for archive checks and brain listing.
+///
+/// Returns the framework-free [`Brain`] DTO rather than a persistence-layer
+/// row so the trait can live in `brain_core` without leaking storage types.
+/// Consumers that need a richer representation can use the inherent
+/// `Db::list_brains` helper in `brain_persistence` directly.
+pub trait BrainRegistry: Send + Sync {
+    /// Check whether a brain has been archived.
+    ///
+    /// Returns `false` when no matching row exists (brain not yet registered).
+    fn is_brain_archived(&self, brain_id: &str) -> Result<bool>;
+
+    /// List all registered brains, optionally filtered to active-only.
+    fn list_brains(&self, active_only: bool) -> Result<Vec<Brain>>;
+
+    /// Return all active brain `(name, id)` pairs, sorted by name.
+    fn list_brain_keys(&self) -> Result<Vec<(String, String)>>;
+}
 
 // ---------------------------------------------------------------------------
 // LanceDB write path — chunk upsert + delete

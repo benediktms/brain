@@ -19,7 +19,9 @@ use brain_core::error::Result;
 // Re-export core trait names so `brain_persistence::ports::ChunkIndexWriter`
 // works alongside the persistence-owned traits below; brain_lib re-exports
 // from both modules transparently.
-pub use brain_core::ports::{ChunkIndexWriter, FileMetaReader, SchemaMeta, SummaryStoreWriter};
+pub use brain_core::ports::{
+    BrainRegistry, ChunkIndexWriter, FileMetaReader, SchemaMeta, SummaryStoreWriter,
+};
 
 use crate::db::Db;
 use crate::db::chunks::{ChunkPollRow, ChunkRow};
@@ -834,26 +836,13 @@ impl EpisodeReader for Db {
 }
 
 // ---------------------------------------------------------------------------
-// Brain registry — used by MCP tools for brain lookups
+// Brain registry — production impl for the core-defined trait
 // ---------------------------------------------------------------------------
-
-/// Brain registry queries for archive checks and brain listing.
-///
-/// Consumers: `mcp::tools::helpers`, `mcp::tools::brains_list`,
-/// `mcp::tools::task_create`, `mcp::tools::task_apply_event`,
-/// `mcp::mod::resolve_brain_from_roots`.
-pub trait BrainRegistry: Send + Sync {
-    /// Check whether a brain has been archived.
-    ///
-    /// Returns `false` when no matching row exists (brain not yet registered).
-    fn is_brain_archived(&self, brain_id: &str) -> Result<bool>;
-
-    /// List all brain rows, optionally filtered to active-only.
-    fn list_brains(&self, active_only: bool) -> Result<Vec<crate::db::schema::BrainRow>>;
-
-    /// Return all active brain `(name, id)` pairs.
-    fn list_brain_keys(&self) -> Result<Vec<(String, String)>>;
-}
+//
+// The trait itself lives in `brain_core::ports` so its signature can speak
+// purely in core DTOs. The `Db` impl below maps each `BrainRow` to a
+// `brain_core::brain::Brain` at the boundary, so persistence row types stay
+// inside `brain_persistence`.
 
 // -- BrainRegistry for Db --------------------------------------------------
 
@@ -863,8 +852,10 @@ impl BrainRegistry for Db {
         self.with_read_conn(move |conn| crate::db::schema::is_brain_archived(conn, &brain_id))
     }
 
-    fn list_brains(&self, active_only: bool) -> Result<Vec<crate::db::schema::BrainRow>> {
-        self.with_read_conn(move |conn| crate::db::schema::list_brains(conn, active_only))
+    fn list_brains(&self, active_only: bool) -> Result<Vec<brain_core::brain::Brain>> {
+        let rows =
+            self.with_read_conn(move |conn| crate::db::schema::list_brains(conn, active_only))?;
+        Ok(rows.into_iter().map(brain_row_to_brain).collect())
     }
 
     fn list_brain_keys(&self) -> Result<Vec<(String, String)>> {
@@ -873,6 +864,22 @@ impl BrainRegistry for Db {
             rows.into_iter().map(|r| (r.name, r.brain_id)).collect();
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(pairs)
+    }
+}
+
+/// Map a persistence-layer `BrainRow` to the framework-free `Brain` DTO.
+///
+/// Drops `notes_json` and `projected` — neither is consumed via the
+/// `BrainRegistry` trait surface. Callers that still need the rich row can
+/// use the inherent `Db::list_brains` helper.
+fn brain_row_to_brain(row: crate::db::schema::BrainRow) -> brain_core::brain::Brain {
+    brain_core::brain::Brain {
+        brain_id: row.brain_id,
+        name: row.name,
+        prefix: row.prefix,
+        roots_json: row.roots_json,
+        aliases_json: row.aliases_json,
+        archived: row.archived,
     }
 }
 
