@@ -42,7 +42,10 @@ has_blocked_ancestor(tid) AS (
       )
 ) ";
 
-fn comparator_legacy_list_ready(conn: &Connection, brain_id: Option<&str>) -> SqlResult<Vec<String>> {
+fn comparator_legacy_list_ready(
+    conn: &Connection,
+    brain_id: Option<&str>,
+) -> SqlResult<Vec<String>> {
     let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
         "{LEGACY_ANCESTOR_BLOCKED_CTE}
@@ -178,7 +181,10 @@ fn comparator_legacy_list_newly_unblocked(
     crate::db::collect_rows(rows)
 }
 
-fn comparator_legacy_get_children(conn: &Connection, parent_task_id: &str) -> SqlResult<Vec<String>> {
+fn comparator_legacy_get_children(
+    conn: &Connection,
+    parent_task_id: &str,
+) -> SqlResult<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT task_id FROM tasks WHERE parent_task_id = ?1
          ORDER BY task_id ASC",
@@ -187,7 +193,10 @@ fn comparator_legacy_get_children(conn: &Connection, parent_task_id: &str) -> Sq
     crate::db::collect_rows(rows)
 }
 
-fn comparator_legacy_get_tasks_blocking(conn: &Connection, task_id: &str) -> SqlResult<Vec<String>> {
+fn comparator_legacy_get_tasks_blocking(
+    conn: &Connection,
+    task_id: &str,
+) -> SqlResult<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT task_id FROM tasks
          WHERE task_id IN (
@@ -246,7 +255,10 @@ pub fn list_ready(conn: &Connection, brain_id: Option<&str>) -> SqlResult<Vec<Ta
     Ok(new_result)
 }
 
-fn list_ready_via_entity_links(conn: &Connection, brain_id: Option<&str>) -> SqlResult<Vec<TaskRow>> {
+fn list_ready_via_entity_links(
+    conn: &Connection,
+    brain_id: Option<&str>,
+) -> SqlResult<Vec<TaskRow>> {
     let (brain_clause, brain_params) = brain_id_filter(brain_id);
     let sql = format!(
         "{ANCESTOR_BLOCKED_CTE}
@@ -601,7 +613,10 @@ pub fn get_children(conn: &Connection, parent_task_id: &str) -> SqlResult<Vec<Ta
     Ok(new_result)
 }
 
-fn get_children_via_entity_links(conn: &Connection, parent_task_id: &str) -> SqlResult<Vec<TaskRow>> {
+fn get_children_via_entity_links(
+    conn: &Connection,
+    parent_task_id: &str,
+) -> SqlResult<Vec<TaskRow>> {
     let sql = format!(
         "SELECT {TASK_COLUMNS_T} FROM tasks t
          JOIN entity_links el ON el.to_id = t.task_id
@@ -675,7 +690,10 @@ pub fn get_tasks_blocking(conn: &Connection, task_id: &str) -> SqlResult<Vec<Tas
     Ok(new_result)
 }
 
-fn get_tasks_blocking_via_entity_links(conn: &Connection, task_id: &str) -> SqlResult<Vec<TaskRow>> {
+fn get_tasks_blocking_via_entity_links(
+    conn: &Connection,
+    task_id: &str,
+) -> SqlResult<Vec<TaskRow>> {
     let sql = format!(
         "SELECT {TASK_COLUMNS_T} FROM tasks t
          JOIN entity_links el ON el.from_id = t.task_id

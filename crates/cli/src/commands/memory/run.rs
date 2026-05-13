@@ -979,7 +979,7 @@ mod retrieve_tests {
                 let id: String = stmt.query_row([&brain_id], |row| row.get(0))?;
                 Ok(id)
             })
-                .into_brain_core()
+            .into_brain_core()
             .expect("get chunk_id from DB");
 
         let uri = format!("synapse://test-brain/memory/{chunk_id}");

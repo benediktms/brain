@@ -169,7 +169,7 @@ mod tests {
                 )?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
 
         let result = call(json!({}), &ctx).await;
@@ -196,7 +196,7 @@ mod tests {
                 )?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
 
         let result = call(json!({ "all": true }), &ctx).await;
@@ -222,7 +222,7 @@ mod tests {
                 )?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
         create.call(json!({ "title": "Open" }), &ctx).await;
 
@@ -276,7 +276,7 @@ mod tests {
                 [&saga_b],
             )?;
             Ok(())
-        }).into_brain_core().unwrap()
+        }).into_brain_core().unwrap();
 
         let result = call(json!({ "containing_brain": "brain-x" }), &ctx).await;
         let listed: Value = serde_json::from_str(&result.content[0].text).unwrap();
@@ -334,7 +334,7 @@ mod tests {
                 [&saga_a],
             )?;
             Ok(())
-        }).into_brain_core().unwrap()
+        }).into_brain_core().unwrap();
 
         // Filtering by the brain's name (not brain_id) must not match.
         let result = call(json!({ "containing_brain": "human-name" }), &ctx).await;

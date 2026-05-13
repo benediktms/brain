@@ -24,12 +24,12 @@ pub use brain_core::ports::{
     BrainRegistry, ChunkIndexWriter, FileMetaReader, SchemaMeta, SummaryStoreWriter,
 };
 pub use brain_persistence::ports::{
-use brain_persistence::sql::SqlResultExt;
     BrainManager, ChunkMetaReader, ChunkMetaWriter, ChunkSearcher, EmbeddingOps, EmbeddingResetter,
     EpisodeReader, EpisodeWriter, FileMetaWriter, FtsSearcher, GraphLinkReader, JobPersistence,
     JobQueue, LinkWriter, MaintenanceOps, ProcedureWriter, ProviderStore, ReflectionWriter,
     StatusReader, SummaryReader, SummaryWriter, TagAliasReader, TagAliasWriter,
 };
+use brain_persistence::sql::SqlResultExt;
 
 use crate::error::Result;
 
@@ -125,13 +125,15 @@ impl DerivedSummaryStore for Db {
     ) -> Result<GeneratedScopeSummary> {
         let scope_type = scope_type.as_str().to_string();
         let scope_value = scope_value.to_string();
-        let generated = self.with_write_conn(move |conn| {
-            brain_persistence::derived_summaries::generate_scope_summary(
-                conn,
-                &scope_type,
-                &scope_value,
-            )
-        }).into_brain_core()?;
+        let generated = self
+            .with_write_conn(move |conn| {
+                brain_persistence::derived_summaries::generate_scope_summary(
+                    conn,
+                    &scope_type,
+                    &scope_value,
+                )
+            })
+            .into_brain_core()?;
 
         Ok(GeneratedScopeSummary {
             id: generated.id,
@@ -147,9 +149,15 @@ impl DerivedSummaryStore for Db {
     ) -> Result<Option<DerivedSummary>> {
         let scope_type = scope_type.as_str().to_string();
         let scope_value = scope_value.to_string();
-        let row = self.with_read_conn(move |conn| {
-            brain_persistence::derived_summaries::get_scope_summary(conn, &scope_type, &scope_value)
-        }).into_brain_core()?;
+        let row = self
+            .with_read_conn(move |conn| {
+                brain_persistence::derived_summaries::get_scope_summary(
+                    conn,
+                    &scope_type,
+                    &scope_value,
+                )
+            })
+            .into_brain_core()?;
 
         Ok(row.map(|summary| DerivedSummary {
             id: summary.id,
@@ -167,14 +175,16 @@ impl DerivedSummaryStore for Db {
         self.with_write_conn(move |conn| {
             brain_persistence::derived_summaries::mark_scope_stale(conn, &scope_type, &scope_value)
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>> {
         let query = query.to_string();
-        let rows = self.with_read_conn(move |conn| {
-            brain_persistence::derived_summaries::search_derived_summaries(conn, &query, limit)
-        }).into_brain_core()?;
+        let rows = self
+            .with_read_conn(move |conn| {
+                brain_persistence::derived_summaries::search_derived_summaries(conn, &query, limit)
+            })
+            .into_brain_core()?;
 
         Ok(rows
             .into_iter()
@@ -190,9 +200,11 @@ impl DerivedSummaryStore for Db {
     }
 
     fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>> {
-        let rows = self.with_read_conn(move |conn| {
-            brain_persistence::derived_summaries::list_stale_summaries(conn, limit)
-        }).into_brain_core()?;
+        let rows = self
+            .with_read_conn(move |conn| {
+                brain_persistence::derived_summaries::list_stale_summaries(conn, limit)
+            })
+            .into_brain_core()?;
 
         Ok(rows
             .into_iter()
@@ -240,24 +252,29 @@ impl LodChunkStore for Db {
         };
         self.with_write_conn(|conn| {
             brain_persistence::db::lod_chunks::upsert_lod_chunk(conn, &persist)
-        }).into_brain_core()?;
+        })
+        .into_brain_core()?;
         Ok(id)
     }
 
     fn get_lod_chunk(&self, object_uri: &str, lod_level: LodLevel) -> Result<Option<LodChunk>> {
         let uri = object_uri.to_string();
         let level = lod_level.as_str().to_string();
-        let row = self.with_read_conn(move |conn| {
-            brain_persistence::db::lod_chunks::get_lod_chunk(conn, &uri, &level)
-        }).into_brain_core()?;
+        let row = self
+            .with_read_conn(move |conn| {
+                brain_persistence::db::lod_chunks::get_lod_chunk(conn, &uri, &level)
+            })
+            .into_brain_core()?;
         row.map(row_to_lod_chunk).transpose()
     }
 
     fn get_lod_chunks_for_uri(&self, object_uri: &str) -> Result<Vec<LodChunk>> {
         let uri = object_uri.to_string();
-        let rows = self.with_read_conn(move |conn| {
-            brain_persistence::db::lod_chunks::get_lod_chunks_for_uri(conn, &uri)
-        }).into_brain_core()?;
+        let rows = self
+            .with_read_conn(move |conn| {
+                brain_persistence::db::lod_chunks::get_lod_chunks_for_uri(conn, &uri)
+            })
+            .into_brain_core()?;
         rows.into_iter().map(row_to_lod_chunk).collect()
     }
 
@@ -266,7 +283,7 @@ impl LodChunkStore for Db {
         self.with_write_conn(move |conn| {
             brain_persistence::db::lod_chunks::delete_lod_chunks_for_uri(conn, &uri)
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     fn delete_expired_lod_chunks(&self, now_iso: &str) -> Result<usize> {
@@ -274,7 +291,7 @@ impl LodChunkStore for Db {
         self.with_write_conn(move |conn| {
             brain_persistence::db::lod_chunks::delete_expired_lod_chunks(conn, &now)
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     fn is_lod_fresh(
@@ -316,7 +333,7 @@ impl LodChunkStore for Db {
                 level.as_deref(),
             )
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     fn list_lod_chunks_by_brain(
@@ -326,9 +343,13 @@ impl LodChunkStore for Db {
         offset: usize,
     ) -> Result<Vec<LodChunk>> {
         let bid = brain_id.to_string();
-        let rows = self.with_read_conn(move |conn| {
-            brain_persistence::db::lod_chunks::list_lod_chunks_by_brain(conn, &bid, limit, offset)
-        }).into_brain_core()?;
+        let rows = self
+            .with_read_conn(move |conn| {
+                brain_persistence::db::lod_chunks::list_lod_chunks_by_brain(
+                    conn, &bid, limit, offset,
+                )
+            })
+            .into_brain_core()?;
         rows.into_iter().map(row_to_lod_chunk).collect()
     }
 }

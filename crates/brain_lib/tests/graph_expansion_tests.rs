@@ -110,7 +110,7 @@ async fn test_link_a_to_b_is_stored_after_indexing() {
             )
             .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     assert_eq!(link_count, 1, "a.md must store exactly one link to 'b'");
@@ -126,7 +126,7 @@ async fn test_link_a_to_b_is_stored_after_indexing() {
             )
             .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     assert_eq!(

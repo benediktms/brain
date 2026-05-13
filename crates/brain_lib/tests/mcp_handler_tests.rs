@@ -3,8 +3,8 @@
 mod mcp_test_harness;
 
 use crate::mcp_test_harness::*;
-use brain_persistence::sql::SqlResultExt;
 use brain_lib::mcp::protocol::ToolCallResult;
+use brain_persistence::sql::SqlResultExt;
 use serde_json::{Value, json};
 
 fn success_json(result: &ToolCallResult) -> Value {
@@ -447,7 +447,7 @@ fn inject_orphan_dep(db: &brain_persistence::db::Db, task_id: &str, depends_on: 
         entity_links_result?;
         Ok(())
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 }
 

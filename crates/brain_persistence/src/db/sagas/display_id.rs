@@ -70,7 +70,8 @@ pub fn resolve_saga_id(conn: &Connection, input: &str) -> SqlResult<String> {
     {
         return Err(BrainCoreError::Parse(format!(
             "saga short id must be `saga-<lowercase hex>`, got `{input}`"
-        )).into());
+        ))
+        .into());
     }
     conn.query_row(
         "SELECT saga_id FROM sagas WHERE display_id = ?1",

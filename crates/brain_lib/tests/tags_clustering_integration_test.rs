@@ -68,7 +68,7 @@ async fn tag_clustering_end_to_end() {
                 ta::seed_task_with_labels(conn, "t2", &bid, 8000, &["chore"])?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .expect("seed records and tasks");
     }
 
@@ -105,7 +105,7 @@ async fn tag_clustering_end_to_end() {
         .stores
         .db_for_tests()
         .with_read_conn(|conn| ta::read_alias_snapshot(conn, &brain_id))
-            .into_brain_core()
+        .into_brain_core()
         .expect("alias snapshot");
     let canonical = |t: &str| {
         snapshot
@@ -270,6 +270,6 @@ fn snapshot_tag_rows(ctx: &McpContext) -> (BTreeSet<(String, String)>, BTreeSet<
 
             Ok((rt, tl))
         })
-            .into_brain_core()
+        .into_brain_core()
         .expect("snapshot tag rows")
 }

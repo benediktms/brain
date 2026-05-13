@@ -58,7 +58,7 @@ async fn tags_mcp_surface_round_trip() {
                 ta::seed_task_with_labels(conn, "t1", &bid, 4000, &["docs"])?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
     }
 

@@ -90,8 +90,9 @@ fn generate_master_key(path: &Path) -> SqlResult<[u8; KEY_LEN]> {
 /// Encrypt plaintext with AES-256-GCM.  Returns `nonce || ciphertext` encoded
 /// as base64.
 pub fn encrypt(master_key: &[u8; KEY_LEN], plaintext: &str) -> SqlResult<String> {
-    let cipher = Aes256Gcm::new_from_slice(master_key)
-        .map_err(|e| SqlError::Domain(BrainCoreError::Config(format!("invalid master key: {e}"))))?;
+    let cipher = Aes256Gcm::new_from_slice(master_key).map_err(|e| {
+        SqlError::Domain(BrainCoreError::Config(format!("invalid master key: {e}")))
+    })?;
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -115,7 +116,9 @@ pub fn encrypt(master_key: &[u8; KEY_LEN], plaintext: &str) -> SqlResult<String>
 /// Decrypt a base64-encoded `nonce || ciphertext` back to plaintext.
 pub fn decrypt(master_key: &[u8; KEY_LEN], encoded: &str) -> SqlResult<String> {
     let combined = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-        .map_err(|e| SqlError::Domain(BrainCoreError::Config(format!("base64 decode failed: {e}"))))?;
+        .map_err(|e| {
+            SqlError::Domain(BrainCoreError::Config(format!("base64 decode failed: {e}")))
+        })?;
 
     if combined.len() < NONCE_LEN + 1 {
         return Err(SqlError::Domain(BrainCoreError::Config(
@@ -126,15 +129,19 @@ pub fn decrypt(master_key: &[u8; KEY_LEN], encoded: &str) -> SqlResult<String> {
     let (nonce_bytes, ciphertext) = combined.split_at(NONCE_LEN);
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    let cipher = Aes256Gcm::new_from_slice(master_key)
-        .map_err(|e| SqlError::Domain(BrainCoreError::Config(format!("invalid master key: {e}"))))?;
+    let cipher = Aes256Gcm::new_from_slice(master_key).map_err(|e| {
+        SqlError::Domain(BrainCoreError::Config(format!("invalid master key: {e}")))
+    })?;
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|e| SqlError::Domain(BrainCoreError::Config(format!("decryption failed: {e}"))))?;
 
-    String::from_utf8(plaintext)
-        .map_err(|e| SqlError::Domain(BrainCoreError::Config(format!("decrypted data is not valid UTF-8: {e}"))))
+    String::from_utf8(plaintext).map_err(|e| {
+        SqlError::Domain(BrainCoreError::Config(format!(
+            "decrypted data is not valid UTF-8: {e}"
+        )))
+    })
 }
 
 /// Hash an API key with blake3 for uniqueness enforcement.

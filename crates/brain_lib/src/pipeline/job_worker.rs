@@ -22,8 +22,8 @@ use tracing::{debug, warn};
 use crate::embedder::Embed;
 use crate::ports::{JobPersistence, JobQueue};
 use brain_persistence::db::Db;
-use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload};
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::Store;
 
 // ─── Active-job lock set ────────────────────────────────────────
@@ -414,9 +414,11 @@ async fn process_stale_scope_sweep(db: &Db) -> JobResult {
 async fn process_consolidation_sweep(db: &Db) -> JobResult {
     use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 
-    let brain_ids = db.with_read_conn(|conn| {
-        brain_persistence::db::summaries::list_unconsolidated_brain_ids(conn)
-    }).into_brain_core()?;
+    let brain_ids = db
+        .with_read_conn(|conn| {
+            brain_persistence::db::summaries::list_unconsolidated_brain_ids(conn)
+        })
+        .into_brain_core()?;
 
     if brain_ids.is_empty() {
         return Ok(Some(
@@ -428,9 +430,11 @@ async fn process_consolidation_sweep(db: &Db) -> JobResult {
     let mut total_enqueued = 0;
 
     for brain_id in &brain_ids {
-        let episodes = db.with_read_conn(|conn| {
-            brain_persistence::db::summaries::list_unconsolidated_episodes(conn, 100, brain_id)
-        }).into_brain_core()?;
+        let episodes = db
+            .with_read_conn(|conn| {
+                brain_persistence::db::summaries::list_unconsolidated_episodes(conn, 100, brain_id)
+            })
+            .into_brain_core()?;
 
         if episodes.is_empty() {
             continue;
@@ -778,7 +782,7 @@ mod tests {
             )?;
             Ok(())
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     }
 
@@ -797,7 +801,7 @@ mod tests {
         // Verify the job is still in_progress (not reset).
         let job = db
             .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-ACTIVE"))
-                .into_brain_core()
+            .into_brain_core()
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -841,7 +845,7 @@ mod tests {
         // Verify: J-HELD still in_progress, J-FREE was reaped (fail_job was called).
         let held = db
             .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-HELD"))
-                .into_brain_core()
+            .into_brain_core()
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -851,7 +855,7 @@ mod tests {
 
         let freed = db
             .with_read_conn(|conn| brain_persistence::db::jobs::get_job(conn, "J-FREE"))
-                .into_brain_core()
+            .into_brain_core()
             .unwrap()
             .unwrap();
         // fail_job with retryable config resets to Ready.
@@ -1050,7 +1054,7 @@ mod tests {
             )?;
             Ok(())
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
         // Now a new enqueue should succeed.
@@ -1093,7 +1097,7 @@ mod tests {
                 )?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
             assert!(
                 db.has_active_lod_job(&uri).unwrap(),
@@ -1130,7 +1134,7 @@ mod tests {
                 )?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
             assert!(
                 !db.has_active_lod_job(&uri).unwrap(),

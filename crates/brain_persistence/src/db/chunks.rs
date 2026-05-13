@@ -263,7 +263,11 @@ pub fn upsert_record_chunk(
 /// Set `embedded_at` on a batch of chunks, marking them as current in LanceDB.
 ///
 /// `chunk_ids` must be non-empty. Skips gracefully if the slice is empty.
-pub fn mark_chunks_embedded(conn: &Connection, chunk_ids: &[&str], timestamp: i64) -> SqlResult<()> {
+pub fn mark_chunks_embedded(
+    conn: &Connection,
+    chunk_ids: &[&str],
+    timestamp: i64,
+) -> SqlResult<()> {
     if chunk_ids.is_empty() {
         return Ok(());
     }

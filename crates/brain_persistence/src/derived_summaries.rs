@@ -124,17 +124,14 @@ pub fn generate_scope_summary(
             "UPDATE derived_summaries SET stale = 0
              WHERE scope_type = ?1 AND scope_value = ?2 AND source_content_hash = ?3",
             params![scope_type, scope_value, new_hash],
-        )
-        ?;
+        )?;
 
-        let id: String = conn
-            .query_row(
-                "SELECT id FROM derived_summaries
+        let id: String = conn.query_row(
+            "SELECT id FROM derived_summaries
                  WHERE scope_type = ?1 AND scope_value = ?2",
-                params![scope_type, scope_value],
-                |row| row.get(0),
-            )
-            ?;
+            params![scope_type, scope_value],
+            |row| row.get(0),
+        )?;
 
         return Ok(GeneratedScopeSummaryRow {
             id,
@@ -165,18 +162,14 @@ pub fn generate_scope_summary(
 
     let id = existing_id.unwrap_or_else(|| ulid::Ulid::new().to_string());
 
-    let tx = conn
-        .unchecked_transaction()
-        ?;
+    let tx = conn.unchecked_transaction()?;
 
-    let updated = tx
-        .execute(
-            "UPDATE derived_summaries
+    let updated = tx.execute(
+        "UPDATE derived_summaries
              SET content = ?1, stale = 0, generated_at = ?2, source_content_hash = ?3
              WHERE id = ?4",
-            params![summary_content, now, new_hash, id],
-        )
-        ?;
+        params![summary_content, now, new_hash, id],
+    )?;
 
     if updated == 0 {
         tx.execute(
@@ -184,8 +177,7 @@ pub fn generate_scope_summary(
                  (id, scope_type, scope_value, content, stale, generated_at, source_content_hash)
              VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
             params![id, scope_type, scope_value, summary_content, now, new_hash],
-        )
-        ?;
+        )?;
     }
 
     tx.execute(
@@ -194,20 +186,16 @@ pub fn generate_scope_summary(
     )?;
 
     {
-        let mut stmt = tx
-            .prepare_cached(
-                "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO summary_sources (summary_id, source_id, source_type, created_at)
                  VALUES (?1, ?2, ?3, ?4)",
-            )
-            ?;
+        )?;
         for (src_id, _, source_type) in &sources {
-            stmt.execute(params![id, src_id, source_type, now])
-                ?;
+            stmt.execute(params![id, src_id, source_type, now])?;
         }
     }
 
-    tx.commit()
-        ?;
+    tx.commit()?;
 
     Ok(GeneratedScopeSummaryRow {
         id,
@@ -236,14 +224,16 @@ pub fn get_scope_summary(
     }
 }
 
-pub fn mark_scope_stale(conn: &Connection, scope_type: &str, scope_value: &str) -> SqlResult<usize> {
-    let n = conn
-        .execute(
-            "UPDATE derived_summaries SET stale = 1
+pub fn mark_scope_stale(
+    conn: &Connection,
+    scope_type: &str,
+    scope_value: &str,
+) -> SqlResult<usize> {
+    let n = conn.execute(
+        "UPDATE derived_summaries SET stale = 1
              WHERE scope_type = ?1 AND scope_value = ?2",
-            params![scope_type, scope_value],
-        )
-        ?;
+        params![scope_type, scope_value],
+    )?;
     Ok(n)
 }
 
@@ -272,10 +262,8 @@ pub fn search_derived_summaries(
              LIMIT ?2",
         )?;
         let summaries = stmt
-            .query_map(params![query, limit as i64], map_row)
-            ?
-            .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()
-            ?;
+            .query_map(params![query, limit as i64], map_row)?
+            .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()?;
         Ok(summaries)
     } else {
         let pattern = format!("%{}%", query);
@@ -286,10 +274,8 @@ pub fn search_derived_summaries(
              LIMIT ?2",
         )?;
         let summaries = stmt
-            .query_map(params![pattern, limit as i64], map_row)
-            ?
-            .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()
-            ?;
+            .query_map(params![pattern, limit as i64], map_row)?
+            .collect::<std::result::Result<Vec<DerivedSummaryRow>, _>>()?;
         Ok(summaries)
     }
 }

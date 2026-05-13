@@ -27,11 +27,11 @@ use brain_lib::ranking::{
 use brain_lib::retrieval::{expand_results, pack_minimal};
 use brain_lib::tokens::estimate_tokens;
 use brain_persistence::db::Db;
-use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::chunks::get_chunks_by_ids;
 use brain_persistence::db::fts::search_fts;
 use brain_persistence::db::links::count_backlinks;
 use brain_persistence::db::summaries::{Episode, get_summary, list_episodes, store_episode};
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::Store;
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -184,7 +184,7 @@ async fn test_links_stored_and_backlinks_queryable() {
     let backlinks = pipeline
         .db_for_tests()
         .with_read_conn(|conn| count_backlinks(conn, "b"))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(backlinks, 1, "b.md should have 1 backlink from a.md");
 }
@@ -219,7 +219,7 @@ async fn test_fts_keyword_search_after_indexing() {
     let results = pipeline
         .db_for_tests()
         .with_read_conn(|conn| search_fts(conn, "rust", 10, None))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(!results.is_empty(), "FTS should find 'rust'");
     // The result should be from the rust.md chunk
@@ -232,7 +232,7 @@ async fn test_fts_keyword_search_after_indexing() {
     let results = pipeline
         .db_for_tests()
         .with_read_conn(|conn| search_fts(conn, "\"machine learning\"", 10, None))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         results.len(),
@@ -244,7 +244,7 @@ async fn test_fts_keyword_search_after_indexing() {
     let results = pipeline
         .db_for_tests()
         .with_read_conn(|conn| search_fts(conn, "javascript", 10, None))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(results.is_empty(), "javascript not in any file");
 }
@@ -268,7 +268,7 @@ async fn test_fts_consistent_after_file_update() {
     let results = pipeline
         .db_for_tests()
         .with_read_conn(|conn| search_fts(conn, "databases", 10, None))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(results.len(), 1);
 
@@ -279,7 +279,7 @@ async fn test_fts_consistent_after_file_update() {
     let results = pipeline
         .db_for_tests()
         .with_read_conn(|conn| search_fts(conn, "databases", 10, None))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(
         results.is_empty(),
@@ -289,7 +289,7 @@ async fn test_fts_consistent_after_file_update() {
     let results = pipeline
         .db_for_tests()
         .with_read_conn(|conn| search_fts(conn, "networking", 10, None))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(results.len(), 1, "new keyword should be found");
 }
@@ -500,7 +500,7 @@ async fn test_chunk_lookup_by_ids() {
             }
             Ok(ids)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     assert_eq!(
@@ -513,7 +513,7 @@ async fn test_chunk_lookup_by_ids() {
     let rows = pipeline
         .db_for_tests()
         .with_read_conn(|conn| get_chunks_by_ids(conn, &chunk_ids))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     assert_eq!(rows.len(), 2);
@@ -555,7 +555,7 @@ async fn test_mcp_write_episode_and_retrieve() {
         .stores
         .db_for_tests()
         .with_read_conn(|conn| get_summary(conn, summary_id))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(episode.is_some(), "episode should be retrievable");
     let ep = episode.unwrap();
@@ -712,7 +712,7 @@ async fn test_mcp_retrieve_uri_mode_returns_full_content() {
             conn.query_row("SELECT chunk_id FROM chunks LIMIT 1", [], |row| row.get(0))
                 .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // Retrieve full content via URI mode (replaces memory.expand)
@@ -805,7 +805,7 @@ fn test_episode_store_and_list() {
                 },
             )
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     let _ep2_id = db
@@ -822,20 +822,20 @@ fn test_episode_store_and_list() {
                 },
             )
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // List episodes
     let episodes = db
         .with_read_conn(|conn| list_episodes(conn, 10, ""))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(episodes.len(), 2);
 
     // Get specific episode
     let ep = db
         .with_read_conn(|conn| get_summary(conn, &ep1_id))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap()
         .unwrap();
     assert_eq!(ep.kind, "episode");
@@ -975,7 +975,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
     let fts_results = pipeline
         .db_for_tests()
         .with_read_conn(|conn| search_fts(conn, "vector", 10, None))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(
         !fts_results.is_empty(),
@@ -989,7 +989,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
             conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
                 .map_err(|e| BrainCoreError::Database(e.to_string()))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(
         chunk_count > 10,
@@ -1003,7 +1003,7 @@ async fn test_fixtures_fts_and_chunks_consistent() {
             conn.query_row("SELECT COUNT(*) FROM fts_chunks", [], |row| row.get(0))
                 .map_err(|e| BrainCoreError::Database(e.to_string()))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         fts_count, chunk_count,

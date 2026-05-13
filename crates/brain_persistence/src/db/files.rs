@@ -243,7 +243,9 @@ pub fn purge_deleted_files(conn: &Connection, older_than_ts: i64) -> SqlResult<V
 }
 
 /// Get all active file_ids with their content hashes for doctor verification.
-pub fn get_files_with_hashes(conn: &Connection) -> SqlResult<Vec<(String, String, Option<String>)>> {
+pub fn get_files_with_hashes(
+    conn: &Connection,
+) -> SqlResult<Vec<(String, String, Option<String>)>> {
     let mut stmt =
         conn.prepare("SELECT file_id, path, content_hash FROM files WHERE deleted_at IS NULL")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
@@ -268,7 +270,11 @@ pub fn count_stuck_indexing(conn: &Connection) -> SqlResult<u64> {
 }
 
 /// Look up a file by path, rename it, and return its file_id.
-pub fn rename_by_path(conn: &Connection, from_path: &str, to_path: &str) -> SqlResult<Option<String>> {
+pub fn rename_by_path(
+    conn: &Connection,
+    from_path: &str,
+    to_path: &str,
+) -> SqlResult<Option<String>> {
     let file_id: Option<String> = conn
         .query_row(
             "SELECT file_id FROM files WHERE path = ?1 AND deleted_at IS NULL",

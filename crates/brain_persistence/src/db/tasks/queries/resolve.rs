@@ -170,7 +170,8 @@ pub fn resolve_task_id_scoped(
                     return Err(BrainCoreError::TaskEvent(format!(
                         "ambiguous short hash '{input}': matches {n} tasks:\n{}",
                         candidates.join("\n")
-                    )).into());
+                    ))
+                    .into());
                 }
                 _ => {} // 0 matches — fall through to prefix path
             }
@@ -207,7 +208,8 @@ pub fn resolve_task_id_scoped(
                     return Err(BrainCoreError::TaskEvent(format!(
                         "ambiguous short hash '{input}': matches {n} tasks:\n{}",
                         candidates.join("\n")
-                    )).into());
+                    ))
+                    .into());
                 }
                 _ => {} // 0 matches — fall through to ULID path
             }
@@ -226,7 +228,8 @@ pub fn resolve_task_id_scoped(
                 return Err(BrainCoreError::TaskEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters after '{}'",
                     &normalized[..=dash_pos]
-                )).into());
+                ))
+                .into());
             }
             normalized
         }
@@ -240,7 +243,8 @@ pub fn resolve_task_id_scoped(
                 return Err(BrainCoreError::TaskEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters, got {}",
                     normalized.len()
-                )).into());
+                ))
+                .into());
             }
             let prefix =
                 meta::get_meta(conn, "project_prefix")?.unwrap_or_else(|| "BRN".to_string());
@@ -271,10 +275,9 @@ pub fn resolve_task_id_scoped(
     };
 
     match matches.len() {
-        0 => Err(BrainCoreError::TaskEvent(format!(
-            "no task found matching prefix: {input}"
-        ))
-        .into()),
+        0 => {
+            Err(BrainCoreError::TaskEvent(format!("no task found matching prefix: {input}")).into())
+        }
         1 => Ok(matches.into_iter().next().unwrap().0),
         n => {
             let candidates: Vec<String> = matches

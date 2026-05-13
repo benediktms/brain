@@ -366,7 +366,10 @@ pub fn get_run(conn: &Connection, run_id: &str) -> SqlResult<Option<TagClusterRu
 
 /// Most recent `tag_cluster_runs` row for a brain, ordered by `started_at`
 /// DESC. Returns `None` for brains that have never been reclustered.
-pub fn latest_run_for_brain(conn: &Connection, brain_id: &str) -> SqlResult<Option<TagClusterRunRow>> {
+pub fn latest_run_for_brain(
+    conn: &Connection,
+    brain_id: &str,
+) -> SqlResult<Option<TagClusterRunRow>> {
     let mut stmt = conn.prepare(
         "SELECT run_id, started_at, finished_at, source_count, cluster_count,
                 embedder_version, threshold, triggered_by, notes

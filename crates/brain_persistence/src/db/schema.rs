@@ -129,7 +129,11 @@ pub(crate) fn run_migrations(conn: &Connection, from_version: i32) -> SqlResult<
 /// Called once during bootstrap, before any writes. This replaces the old
 /// `backfill_brain_id()` self-healing approach — with FK constraints on
 /// `brain_id`, every brain must be registered upfront.
-pub fn ensure_brain_registered(conn: &Connection, brain_id: &str, brain_name: &str) -> SqlResult<()> {
+pub fn ensure_brain_registered(
+    conn: &Connection,
+    brain_id: &str,
+    brain_name: &str,
+) -> SqlResult<()> {
     use super::meta::generate_prefix;
 
     // Derive prefix solely from brain_name — never read brain_meta.project_prefix
@@ -208,21 +212,19 @@ pub struct MigrationStats {
 /// Query post-migration verification counts from an open connection.
 pub fn count_migration_stats(conn: &Connection) -> SqlResult<MigrationStats> {
     let brain_count: i64 = conn.query_row("SELECT COUNT(*) FROM brains", [], |r| r.get(0))?;
-    let task_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE brain_id != ''",
-        [],
-        |r| r.get(0),
-    )?;
+    let task_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM tasks WHERE brain_id != ''", [], |r| {
+            r.get(0)
+        })?;
     let record_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM records WHERE brain_id != ''",
         [],
         |r| r.get(0),
     )?;
-    let orphaned_tasks: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE brain_id = ''",
-        [],
-        |r| r.get(0),
-    )?;
+    let orphaned_tasks: i64 =
+        conn.query_row("SELECT COUNT(*) FROM tasks WHERE brain_id = ''", [], |r| {
+            r.get(0)
+        })?;
     let orphaned_records: i64 = conn.query_row(
         "SELECT COUNT(*) FROM records WHERE brain_id = ''",
         [],
@@ -589,7 +591,9 @@ pub fn resolve_brain(conn: &Connection, input: &str) -> SqlResult<(String, Strin
         }
     }
 
-    Err(SqlError::Domain(BrainCoreError::BrainNotFound(input.to_string())))
+    Err(SqlError::Domain(BrainCoreError::BrainNotFound(
+        input.to_string(),
+    )))
 }
 
 /// Ensure FTS5 virtual table and sync triggers exist (idempotent).

@@ -86,118 +86,126 @@ impl TaskStore {
         let brain_id = self.brain_id.clone();
         self.db
             .with_write_conn(|conn| projections::validate_and_apply(conn, event, &brain_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// List tasks that are ready to work on (no unresolved deps, not blocked).
     pub fn list_ready(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::list_ready(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::list_ready(conn, filter)
+            })
             .into_brain_core()
     }
 
     /// List tasks that are blocked (unresolved deps or explicit blocked_reason).
     pub fn list_blocked(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::list_blocked(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::list_blocked(conn, filter)
+            })
             .into_brain_core()
     }
 
     /// List all tasks.
     pub fn list_all(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::list_all(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::list_all(conn, filter)
+            })
             .into_brain_core()
     }
 
     /// List open tasks (excludes done/cancelled).
     pub fn list_open(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::list_open(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::list_open(conn, filter)
+            })
             .into_brain_core()
     }
 
     /// List done/cancelled tasks.
     pub fn list_done(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::list_done(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::list_done(conn, filter)
+            })
             .into_brain_core()
     }
 
     /// List tasks with status exactly 'in_progress'.
     pub fn list_in_progress(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::list_in_progress(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::list_in_progress(conn, filter)
+            })
             .into_brain_core()
     }
 
     /// List tasks with status exactly 'cancelled'.
     pub fn list_cancelled(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::list_cancelled(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::list_cancelled(conn, filter)
+            })
             .into_brain_core()
     }
 
     /// List ready tasks excluding epics (actionable work items only).
     pub fn list_ready_actionable(&self) -> Result<Vec<queries::TaskRow>> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::list_ready_actionable(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::list_ready_actionable(conn, filter)
+            })
             .into_brain_core()
     }
 
@@ -205,82 +213,84 @@ impl TaskStore {
     pub fn get_task(&self, task_id: &str) -> Result<Option<queries::TaskRow>> {
         self.db
             .with_read_conn(|conn| queries::get_task(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// List task IDs that became unblocked because `completed_task_id` was resolved.
     pub fn list_newly_unblocked(&self, completed_task_id: &str) -> Result<Vec<String>> {
         self.db
             .with_read_conn(|conn| queries::list_newly_unblocked(conn, completed_task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Get the dependency summary for a task.
     pub fn get_dependency_summary(&self, task_id: &str) -> Result<queries::DependencySummary> {
         self.db
             .with_read_conn(|conn| queries::get_dependency_summary(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Get note links for a task.
     pub fn get_task_note_links(&self, task_id: &str) -> Result<Vec<queries::TaskNoteLink>> {
         self.db
             .with_read_conn(|conn| queries::get_task_note_links(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Get labels for a task.
     pub fn get_task_labels(&self, task_id: &str) -> Result<Vec<String>> {
         self.db
             .with_read_conn(|conn| queries::get_task_labels(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Batch-fetch labels for a set of task IDs.
     pub fn get_labels_for_tasks(&self, task_ids: &[&str]) -> Result<HashMap<String, Vec<String>>> {
         self.db
             .with_read_conn(|conn| queries::get_labels_for_tasks(conn, task_ids))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Get comments for a task.
     pub fn get_task_comments(&self, task_id: &str) -> Result<Vec<queries::TaskComment>> {
         self.db
             .with_read_conn(|conn| queries::get_task_comments(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Get child tasks of a parent.
     pub fn get_children(&self, parent_task_id: &str) -> Result<Vec<queries::TaskRow>> {
         self.db
             .with_read_conn(|conn| queries::get_children(conn, parent_task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
     pub fn get_tasks_blocking(&self, task_id: &str) -> Result<Vec<queries::TaskRow>> {
         self.db
             .with_read_conn(|conn| queries::get_tasks_blocking(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Count of ready and blocked tasks.
     pub fn count_ready_blocked(&self) -> Result<(usize, usize)> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            let filter = if brain_id.is_empty() {
-                None
-            } else {
-                Some(brain_id.as_str())
-            };
-            queries::count_ready_blocked(conn, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                let filter = if brain_id.is_empty() {
+                    None
+                } else {
+                    Some(brain_id.as_str())
+                };
+                queries::count_ready_blocked(conn, filter)
+            })
             .into_brain_core()
     }
 
     /// Count tasks grouped by status.
     pub fn count_by_status(&self) -> Result<queries::StatusCounts> {
-        self.db.with_read_conn(queries::count_by_status)
+        self.db
+            .with_read_conn(queries::count_by_status)
             .into_brain_core()
     }
 
@@ -291,7 +301,7 @@ impl TaskStore {
     pub fn get_external_ids(&self, task_id: &str) -> Result<Vec<queries::ExternalIdRow>> {
         self.db
             .with_read_conn(|conn| queries::get_external_ids(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Get external blocker rows for a task (`blocking = 1` only).
@@ -302,31 +312,34 @@ impl TaskStore {
     pub fn get_external_blockers(&self, task_id: &str) -> Result<Vec<queries::ExternalIdRow>> {
         self.db
             .with_read_conn(|conn| queries::get_external_blockers(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Resolve an external ID to a brain task_id.
     pub fn resolve_external_id(&self, source: &str, external_id: &str) -> Result<Option<String>> {
         self.db
             .with_read_conn(|conn| queries::resolve_external_id(conn, source, external_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// List all dependency edges (bulk load for export).
     pub fn list_all_deps(&self) -> Result<Vec<queries::TaskDep>> {
-        self.db.with_read_conn(queries::list_all_deps)
+        self.db
+            .with_read_conn(queries::list_all_deps)
             .into_brain_core()
     }
 
     /// List all (task_id, label) pairs (bulk load for export).
     pub fn list_all_labels(&self) -> Result<Vec<(String, String)>> {
-        self.db.with_read_conn(queries::list_all_labels)
+        self.db
+            .with_read_conn(queries::list_all_labels)
             .into_brain_core()
     }
 
     /// Get all labels with counts and associated task IDs.
     pub fn label_summary(&self) -> Result<Vec<queries::LabelSummary>> {
-        self.db.with_read_conn(queries::label_summary)
+        self.db
+            .with_read_conn(queries::label_summary)
             .into_brain_core()
     }
 
@@ -346,21 +359,21 @@ impl TaskStore {
     pub fn get_task_ids_with_label(&self, label: &str) -> Result<Vec<String>> {
         self.db
             .with_read_conn(|conn| queries::get_task_ids_with_label(conn, label))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Get all dependency targets for a task (what it depends on).
     pub fn get_deps_for_task(&self, task_id: &str) -> Result<Vec<String>> {
         self.db
             .with_read_conn(|conn| queries::get_deps_for_task(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Full-text search on task title and description.
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<String>> {
         self.db
             .with_read_conn(|conn| queries::search_tasks_fts(conn, query, limit))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Resolve a task ID from an exact match or unique prefix.
@@ -373,23 +386,25 @@ impl TaskStore {
     /// ensures cross-brain task references work from any store context.
     pub fn resolve_task_id(&self, input: &str) -> Result<String> {
         let brain_id = self.brain_id.clone();
-        self.db.with_read_conn(move |conn| {
-            // If input has a prefix pointing to a different brain, use that brain's scope.
-            let effective_brain_id = if !brain_id.is_empty() {
-                queries::resolve_brain_from_prefix(conn, input).unwrap_or(Some(brain_id))
-            } else {
-                // Unscoped — let resolve_task_id_scoped handle prefix derivation
-                None
-            };
-            let filter = effective_brain_id.as_deref();
-            queries::resolve_task_id_scoped(conn, input, filter)
-        })
+        self.db
+            .with_read_conn(move |conn| {
+                // If input has a prefix pointing to a different brain, use that brain's scope.
+                let effective_brain_id = if !brain_id.is_empty() {
+                    queries::resolve_brain_from_prefix(conn, input).unwrap_or(Some(brain_id))
+                } else {
+                    // Unscoped — let resolve_task_id_scoped handle prefix derivation
+                    None
+                };
+                let filter = effective_brain_id.as_deref();
+                queries::resolve_task_id_scoped(conn, input, filter)
+            })
             .into_brain_core()
     }
 
     /// Compute compact display IDs for all tasks (batch).
     pub fn compact_ids(&self) -> Result<HashMap<String, String>> {
-        self.db.with_read_conn(queries::compact_ids)
+        self.db
+            .with_read_conn(queries::compact_ids)
             .into_brain_core()
     }
 
@@ -397,7 +412,7 @@ impl TaskStore {
     pub fn compact_id(&self, task_id: &str) -> Result<String> {
         self.db
             .with_read_conn(|conn| queries::compact_id(conn, task_id))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     /// Compact a task ID for user-facing emission, falling back to the input
@@ -425,17 +440,20 @@ impl TaskStore {
     pub fn get_project_prefix(&self) -> Result<String> {
         let brain_id = self.brain_id.clone();
         if !brain_id.is_empty() {
-            let result = self.db.with_read_conn(|conn| {
-                let prefix: Option<String> = conn
-                    .query_row(
-                        "SELECT prefix FROM brains WHERE brain_id = ?1",
-                        [&brain_id],
-                        |row| row.get::<_, Option<String>>(0),
-                    )
-                    .ok()
-                    .flatten();
-                Ok(prefix)
-            }).into_brain_core()?;
+            let result = self
+                .db
+                .with_read_conn(|conn| {
+                    let prefix: Option<String> = conn
+                        .query_row(
+                            "SELECT prefix FROM brains WHERE brain_id = ?1",
+                            [&brain_id],
+                            |row| row.get::<_, Option<String>>(0),
+                        )
+                        .ok()
+                        .flatten();
+                    Ok(prefix)
+                })
+                .into_brain_core()?;
             if let Some(ref prefix) =
                 result.filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
             {
@@ -446,9 +464,13 @@ impl TaskStore {
             ));
         }
         // Unscoped/legacy mode: fall back to brain_meta
-        self.db.with_write_conn(|conn| {
-            brain_persistence::db::meta::get_or_init_project_prefix(conn, std::path::Path::new("."))
-        })
+        self.db
+            .with_write_conn(|conn| {
+                brain_persistence::db::meta::get_or_init_project_prefix(
+                    conn,
+                    std::path::Path::new("."),
+                )
+            })
             .into_brain_core()
     }
 
@@ -482,7 +504,8 @@ impl TaskStore {
         // Step 1: commit the SQLite transaction (source of truth).
         let mut result = self
             .db
-            .with_write_conn(|conn| transfer_task_inner(conn, &task_id, &target_brain_id)).into_brain_core()?;
+            .with_write_conn(|conn| transfer_task_inner(conn, &task_id, &target_brain_id))
+            .into_brain_core()?;
 
         // Step 2: re-stamp LanceDB vector rows (best-effort, non-fatal).
         if !result.was_no_op
@@ -530,20 +553,22 @@ impl TaskStore {
         }
         let brain_id = self.brain_id.clone();
         let mut imported = 0usize;
-        self.db.with_write_conn(|conn| {
-            for event in &all_events {
-                match projections::apply_event(conn, event, &brain_id) {
-                    Ok(()) => imported += 1,
-                    Err(e) => {
-                        tracing::debug!(
-                            event_id = %event.event_id,
-                            "skipping event during import: {e}"
-                        );
+        self.db
+            .with_write_conn(|conn| {
+                for event in &all_events {
+                    match projections::apply_event(conn, event, &brain_id) {
+                        Ok(()) => imported += 1,
+                        Err(e) => {
+                            tracing::debug!(
+                                event_id = %event.event_id,
+                                "skipping event during import: {e}"
+                            );
+                        }
                     }
                 }
-            }
-            Ok(())
-        }).into_brain_core()?;
+                Ok(())
+            })
+            .into_brain_core()?;
         Ok(imported)
     }
 }

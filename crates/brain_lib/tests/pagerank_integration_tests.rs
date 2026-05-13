@@ -53,7 +53,7 @@ fn get_pagerank_scores(db: &Db) -> Vec<(String, Option<f64>)> {
             .collect::<Vec<_>>();
         Ok(rows)
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap()
 }
 
@@ -101,7 +101,7 @@ async fn test_pagerank_scores_populated_after_set_db_and_optimize() {
             )
             .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         backlinks, 2,

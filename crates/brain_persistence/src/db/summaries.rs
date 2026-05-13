@@ -463,7 +463,11 @@ pub fn get_summaries_by_ids(conn: &Connection, ids: &[String]) -> SqlResult<Vec<
 
 /// List recent episodes.
 /// When `brain_id` is non-empty, filters to that brain only. Empty string returns all brains.
-pub fn list_episodes(conn: &Connection, limit: usize, brain_id: &str) -> SqlResult<Vec<SummaryRow>> {
+pub fn list_episodes(
+    conn: &Connection,
+    limit: usize,
+    brain_id: &str,
+) -> SqlResult<Vec<SummaryRow>> {
     if brain_id.is_empty() {
         let mut stmt = conn.prepare(
             "SELECT summary_id, kind, title, content, tags, importance, created_at, updated_at,

@@ -819,7 +819,7 @@ mod tests {
 
         let summary_id = db
             .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &episode))
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
 
         assert!(!summary_id.is_empty());
@@ -831,7 +831,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM summaries", [], |row| row.get(0))
                     .unwrap_or(0))
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
         assert_eq!(count, 1);
     }
@@ -896,7 +896,7 @@ mod tests {
 
         let id = db
             .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
         assert!(!id.is_empty());
     }
@@ -939,7 +939,7 @@ mod tests {
 
         let id = db
             .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
         assert!(!id.is_empty());
     }
@@ -1003,7 +1003,7 @@ mod tests {
         };
         let id = db
             .with_write_conn(|conn| brain_persistence::db::summaries::store_episode(conn, &ep))
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
 
         // Untrusted summary must not be returned.
@@ -1019,7 +1019,7 @@ mod tests {
         db.with_write_conn(|conn| {
             brain_persistence::db::summaries::mark_summary_trusted(conn, &id)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
         let results = db

@@ -375,7 +375,11 @@ pub fn count_jobs_by_status(conn: &Connection, status: &JobStatus) -> SqlResult<
 }
 
 /// List recent jobs filtered by status, ordered by most recent first.
-pub fn list_jobs_by_status(conn: &Connection, status: &JobStatus, limit: i32) -> SqlResult<Vec<Job>> {
+pub fn list_jobs_by_status(
+    conn: &Connection,
+    status: &JobStatus,
+    limit: i32,
+) -> SqlResult<Vec<Job>> {
     let status_str = status.as_ref().to_string();
     let mut stmt = conn.prepare(&format!(
         "SELECT {JOB_COLUMNS} FROM jobs
@@ -490,7 +494,10 @@ pub fn get_job_by_kind(conn: &Connection, kind: &str) -> SqlResult<Option<Job>> 
 ///
 /// Uses a single INSERT ... WHERE NOT EXISTS for atomicity under
 /// SQLite's single-writer serialization.
-pub fn ensure_singleton_job(conn: &Connection, input: &EnqueueJobInput) -> SqlResult<Option<String>> {
+pub fn ensure_singleton_job(
+    conn: &Connection,
+    input: &EnqueueJobInput,
+) -> SqlResult<Option<String>> {
     let job_id = ulid::Ulid::new().to_string();
     let now = now_secs();
     let scheduled_at = if input.scheduled_at == 0 {

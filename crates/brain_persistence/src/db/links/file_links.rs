@@ -7,8 +7,8 @@ use rusqlite::Connection;
 use ulid::Ulid;
 
 use crate::db::collect_rows;
-use crate::sql::SqlResult;
 use crate::links::Link;
+use crate::sql::SqlResult;
 
 /// Resolve a link's `target_path` to a `file_id` using Obsidian-style disambiguation.
 ///

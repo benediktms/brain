@@ -282,7 +282,11 @@ pub fn get_saga(conn: &Connection, saga_id: &str) -> SqlResult<Option<SagaRow>> 
 ///
 /// Caller is responsible for transaction boundaries and pre-validation.
 /// Returns the number of rows inserted.
-pub fn insert_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> SqlResult<usize> {
+pub fn insert_saga_tasks(
+    conn: &Connection,
+    saga_id: &str,
+    task_ids: &[String],
+) -> SqlResult<usize> {
     let ts = now_ts();
     let mut stmt = conn.prepare_cached(
         "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, ?3)",
@@ -382,7 +386,11 @@ pub fn list_saga_task_ids(conn: &Connection, saga_id: &str) -> SqlResult<Vec<Str
 ///
 /// Missing memberships are silently skipped (idempotent). Runs inside the
 /// caller's transaction — does NOT commit.
-pub fn remove_saga_tasks(conn: &Connection, saga_id: &str, task_ids: &[String]) -> SqlResult<usize> {
+pub fn remove_saga_tasks(
+    conn: &Connection,
+    saga_id: &str,
+    task_ids: &[String],
+) -> SqlResult<usize> {
     if task_ids.is_empty() {
         return Ok(0);
     }
@@ -601,7 +609,8 @@ pub fn cascade_member_tasks(
         _ => {
             return Err(BrainCoreError::Parse(format!(
                 "cascade_member_tasks: unsupported target status {target_status:?}"
-            )).into());
+            ))
+            .into());
         }
     };
     let task_ids = list_saga_task_ids(conn, saga_id)?;

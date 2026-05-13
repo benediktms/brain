@@ -160,7 +160,7 @@ mod tests {
                 )?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
         saga_id
     }
@@ -273,7 +273,7 @@ mod tests {
                 )?;
                 Ok(())
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
 
         let result = call_close(json!({ "saga_id": &saga_id, "cascade": true }), &ctx).await;

@@ -12,10 +12,10 @@ use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use crate::utils::now_ts;
 use brain_persistence::db::chunks::ChunkMeta;
-use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::chunks::replace_chunk_metadata;
 use brain_persistence::db::links::replace_links;
 use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
+use brain_persistence::sql::SqlResultExt;
 
 use super::{IndexPipeline, ScanStats};
 
@@ -204,14 +204,16 @@ where
             self.db
                 .replace_chunk_metadata(&verdict.file_id, &[], &self.brain_id)?;
             self.db.replace_links(&verdict.file_id, &[])?;
-            self.db.with_write_conn(|conn| {
-                brain_persistence::db::files::update_file_frontmatter(
-                    conn,
-                    &verdict.file_id,
-                    &tags_json,
-                    importance,
-                )
-            }).into_brain_core()?;
+            self.db
+                .with_write_conn(|conn| {
+                    brain_persistence::db::files::update_file_frontmatter(
+                        conn,
+                        &verdict.file_id,
+                        &tags_json,
+                        importance,
+                    )
+                })
+                .into_brain_core()?;
             gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             return Ok(true);
         }
@@ -221,31 +223,33 @@ where
 
         let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
         let l0_inputs = build_l0_inputs(&chunks, &chunk_metas, &self.brain_id);
-        self.db.with_write_conn(|conn| {
-            replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas, &self.brain_id)?;
-            replace_links(conn, &verdict.file_id, &links)?;
-            let now = chrono::Utc::now().to_rfc3339();
-            for l0 in &l0_inputs {
-                lod_chunks::upsert_lod_chunk(
-                    conn,
-                    &InsertLodChunk {
-                        id: &l0.id,
-                        object_uri: &l0.uri,
-                        brain_id: &self.brain_id,
-                        lod_level: "L0",
-                        content: &l0.content,
-                        token_est: Some(l0.token_est),
-                        method: "extractive",
-                        model_id: None,
-                        source_hash: &l0.source_hash,
-                        created_at: &now,
-                        expires_at: None,
-                        job_id: None,
-                    },
-                )?;
-            }
-            Ok(())
-        }).into_brain_core()?;
+        self.db
+            .with_write_conn(|conn| {
+                replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas, &self.brain_id)?;
+                replace_links(conn, &verdict.file_id, &links)?;
+                let now = chrono::Utc::now().to_rfc3339();
+                for l0 in &l0_inputs {
+                    lod_chunks::upsert_lod_chunk(
+                        conn,
+                        &InsertLodChunk {
+                            id: &l0.id,
+                            object_uri: &l0.uri,
+                            brain_id: &self.brain_id,
+                            lod_level: "L0",
+                            content: &l0.content,
+                            token_est: Some(l0.token_est),
+                            method: "extractive",
+                            model_id: None,
+                            source_hash: &l0.source_hash,
+                            created_at: &now,
+                            expires_at: None,
+                            job_id: None,
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .into_brain_core()?;
 
         if chunks_match_stored(&chunks, &stored_hashes) {
             // Chunks already in LanceDB — still stamp embedded_at so the daemon
@@ -253,14 +257,16 @@ where
             let ts = now_ts();
             let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
             self.db.mark_chunks_embedded(&ids, ts)?;
-            self.db.with_write_conn(|conn| {
-                brain_persistence::db::files::update_file_frontmatter(
-                    conn,
-                    &verdict.file_id,
-                    &tags_json,
-                    importance,
-                )
-            }).into_brain_core()?;
+            self.db
+                .with_write_conn(|conn| {
+                    brain_persistence::db::files::update_file_frontmatter(
+                        conn,
+                        &verdict.file_id,
+                        &tags_json,
+                        importance,
+                    )
+                })
+                .into_brain_core()?;
             gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
             self.metrics.record_index_latency(start.elapsed());
             return Ok(true);
@@ -289,14 +295,16 @@ where
         self.db.mark_chunks_embedded(&ids, ts)?;
 
         // Mark indexed (sets hash + state=indexed + disk mtime)
-        self.db.with_write_conn(|conn| {
-            brain_persistence::db::files::update_file_frontmatter(
-                conn,
-                &verdict.file_id,
-                &tags_json,
-                importance,
-            )
-        }).into_brain_core()?;
+        self.db
+            .with_write_conn(|conn| {
+                brain_persistence::db::files::update_file_frontmatter(
+                    conn,
+                    &verdict.file_id,
+                    &tags_json,
+                    importance,
+                )
+            })
+            .into_brain_core()?;
         gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
 
         // Content changed — mark ancestor directory scopes stale.
@@ -367,19 +375,23 @@ where
                     .await?;
                 let pattern = lod_uri_pattern_for_file(&self.brain_id, &verdict.file_id);
                 self.db.delete_lod_chunks_by_uri_pattern(&pattern)?;
-                self.db.with_write_conn(|conn| {
-                    replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
-                    replace_links(conn, &verdict.file_id, &[])?;
-                    Ok(())
-                }).into_brain_core()?;
-                self.db.with_write_conn(|conn| {
-                    brain_persistence::db::files::update_file_frontmatter(
-                        conn,
-                        &verdict.file_id,
-                        &tags_json,
-                        importance,
-                    )
-                }).into_brain_core()?;
+                self.db
+                    .with_write_conn(|conn| {
+                        replace_chunk_metadata(conn, &verdict.file_id, &[], &self.brain_id)?;
+                        replace_links(conn, &verdict.file_id, &[])?;
+                        Ok(())
+                    })
+                    .into_brain_core()?;
+                self.db
+                    .with_write_conn(|conn| {
+                        brain_persistence::db::files::update_file_frontmatter(
+                            conn,
+                            &verdict.file_id,
+                            &tags_json,
+                            importance,
+                        )
+                    })
+                    .into_brain_core()?;
                 gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
@@ -392,41 +404,51 @@ where
                 let chunk_metas = build_chunk_metas(&verdict.file_id, &chunks);
                 let l0_inputs = build_l0_inputs(&chunks, &chunk_metas, &self.brain_id);
                 let ts = now_ts();
-                self.db.with_write_conn(|conn| {
-                    replace_chunk_metadata(conn, &verdict.file_id, &chunk_metas, &self.brain_id)?;
-                    replace_links(conn, &verdict.file_id, &links)?;
-                    let now = chrono::Utc::now().to_rfc3339();
-                    for l0 in &l0_inputs {
-                        lod_chunks::upsert_lod_chunk(
+                self.db
+                    .with_write_conn(|conn| {
+                        replace_chunk_metadata(
                             conn,
-                            &InsertLodChunk {
-                                id: &l0.id,
-                                object_uri: &l0.uri,
-                                brain_id: &self.brain_id,
-                                lod_level: "L0",
-                                content: &l0.content,
-                                token_est: Some(l0.token_est),
-                                method: "extractive",
-                                model_id: None,
-                                source_hash: &l0.source_hash,
-                                created_at: &now,
-                                expires_at: None,
-                                job_id: None,
-                            },
+                            &verdict.file_id,
+                            &chunk_metas,
+                            &self.brain_id,
                         )?;
-                    }
-                    let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
-                    brain_persistence::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
-                    Ok(())
-                }).into_brain_core()?;
-                self.db.with_write_conn(|conn| {
-                    brain_persistence::db::files::update_file_frontmatter(
-                        conn,
-                        &verdict.file_id,
-                        &tags_json,
-                        importance,
-                    )
-                }).into_brain_core()?;
+                        replace_links(conn, &verdict.file_id, &links)?;
+                        let now = chrono::Utc::now().to_rfc3339();
+                        for l0 in &l0_inputs {
+                            lod_chunks::upsert_lod_chunk(
+                                conn,
+                                &InsertLodChunk {
+                                    id: &l0.id,
+                                    object_uri: &l0.uri,
+                                    brain_id: &self.brain_id,
+                                    lod_level: "L0",
+                                    content: &l0.content,
+                                    token_est: Some(l0.token_est),
+                                    method: "extractive",
+                                    model_id: None,
+                                    source_hash: &l0.source_hash,
+                                    created_at: &now,
+                                    expires_at: None,
+                                    job_id: None,
+                                },
+                            )?;
+                        }
+                        let ids: Vec<&str> =
+                            chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
+                        brain_persistence::db::chunks::mark_chunks_embedded(conn, &ids, ts)?;
+                        Ok(())
+                    })
+                    .into_brain_core()?;
+                self.db
+                    .with_write_conn(|conn| {
+                        brain_persistence::db::files::update_file_frontmatter(
+                            conn,
+                            &verdict.file_id,
+                            &tags_json,
+                            importance,
+                        )
+                    })
+                    .into_brain_core()?;
                 gate.mark_passed(&verdict.file_id, &verdict.hash, disk_mtime)?;
                 stats.indexed += 1;
                 continue;
@@ -513,31 +535,33 @@ where
             let links = &pf.links;
 
             match async {
-                self.db.with_write_conn(|conn| {
-                    replace_chunk_metadata(conn, file_id, &chunk_metas, &self.brain_id)?;
-                    replace_links(conn, file_id, links)?;
-                    let now = chrono::Utc::now().to_rfc3339();
-                    for l0 in &l0_inputs {
-                        lod_chunks::upsert_lod_chunk(
-                            conn,
-                            &InsertLodChunk {
-                                id: &l0.id,
-                                object_uri: &l0.uri,
-                                brain_id: &self.brain_id,
-                                lod_level: "L0",
-                                content: &l0.content,
-                                token_est: Some(l0.token_est),
-                                method: "extractive",
-                                model_id: None,
-                                source_hash: &l0.source_hash,
-                                created_at: &now,
-                                expires_at: None,
-                                job_id: None,
-                            },
-                        )?;
-                    }
-                    Ok(())
-                }).into_brain_core()?;
+                self.db
+                    .with_write_conn(|conn| {
+                        replace_chunk_metadata(conn, file_id, &chunk_metas, &self.brain_id)?;
+                        replace_links(conn, file_id, links)?;
+                        let now = chrono::Utc::now().to_rfc3339();
+                        for l0 in &l0_inputs {
+                            lod_chunks::upsert_lod_chunk(
+                                conn,
+                                &InsertLodChunk {
+                                    id: &l0.id,
+                                    object_uri: &l0.uri,
+                                    brain_id: &self.brain_id,
+                                    lod_level: "L0",
+                                    content: &l0.content,
+                                    token_est: Some(l0.token_est),
+                                    method: "extractive",
+                                    model_id: None,
+                                    source_hash: &l0.source_hash,
+                                    created_at: &now,
+                                    expires_at: None,
+                                    job_id: None,
+                                },
+                            )?;
+                        }
+                        Ok(())
+                    })
+                    .into_brain_core()?;
 
                 let chunk_pairs: Vec<(usize, &str)> = pf
                     .chunks
@@ -559,14 +583,16 @@ where
                 let ids: Vec<&str> = chunk_metas.iter().map(|m| m.chunk_id.as_str()).collect();
                 self.db.mark_chunks_embedded(&ids, ts)?;
 
-                self.db.with_write_conn(|conn| {
-                    brain_persistence::db::files::update_file_frontmatter(
-                        conn,
-                        file_id,
-                        &pf.tags_json,
-                        pf.importance,
-                    )
-                }).into_brain_core()?;
+                self.db
+                    .with_write_conn(|conn| {
+                        brain_persistence::db::files::update_file_frontmatter(
+                            conn,
+                            file_id,
+                            &pf.tags_json,
+                            pf.importance,
+                        )
+                    })
+                    .into_brain_core()?;
                 gate.mark_passed(file_id, &pf.hash, pf.disk_mtime)?;
                 Ok::<(), crate::error::BrainCoreError>(())
             }

@@ -23,10 +23,14 @@ fn searchable_for_kind(kind: &str) -> bool {
 fn link_payload_to_entity_ref(p: &LinkPayload) -> SqlResult<EntityRef> {
     match (&p.task_id, &p.chunk_id) {
         (Some(tid), None) => EntityRef::task(tid).map_err(|_| {
-            SqlError::Domain(BrainCoreError::RecordEvent("link payload task_id must not be empty".into()))
+            SqlError::Domain(BrainCoreError::RecordEvent(
+                "link payload task_id must not be empty".into(),
+            ))
         }),
         (None, Some(cid)) => EntityRef::chunk(cid).map_err(|_| {
-            SqlError::Domain(BrainCoreError::RecordEvent("link payload chunk_id must not be empty".into()))
+            SqlError::Domain(BrainCoreError::RecordEvent(
+                "link payload chunk_id must not be empty".into(),
+            ))
         }),
         (None, None) => Err(SqlError::Domain(BrainCoreError::RecordEvent(
             "link payload must have exactly one of task_id or chunk_id, got neither".into(),

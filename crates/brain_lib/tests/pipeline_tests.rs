@@ -13,8 +13,8 @@ use brain_lib::embedder::MockEmbedder;
 use brain_lib::pipeline::IndexPipeline;
 use brain_lib::ports::FileMetaWriter;
 use brain_persistence::db::Db;
-use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::files;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::Store;
 
 use tempfile::TempDir;
@@ -63,7 +63,7 @@ async fn test_index_file_stores_chunks_in_sqlite() {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(
         chunk_count > 0,
@@ -116,7 +116,7 @@ async fn test_index_file_utf8_multibyte_content() {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(chunk_count > 0, "UTF-8 file should produce chunks");
 }
@@ -135,7 +135,7 @@ async fn test_index_file_empty_file_returns_true_no_chunks() {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(chunk_count, 0, "empty file should produce zero chunks");
 }
@@ -157,7 +157,7 @@ async fn test_index_file_sqlite_and_lancedb_agree_on_file_id() {
             let pairs = files::get_all_active_paths(conn)?;
             Ok(pairs.into_iter().map(|(fid, _)| fid).collect())
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(sqlite_ids.len(), 1);
 
@@ -217,7 +217,7 @@ async fn test_full_scan_idempotent_no_duplicate_chunks() {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // Second scan — identical content, nothing should change
@@ -231,7 +231,7 @@ async fn test_full_scan_idempotent_no_duplicate_chunks() {
             let c = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(c)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         chunk_count_after_first, chunk_count_after_second,
@@ -271,7 +271,7 @@ async fn test_full_scan_detects_deletion() {
     let active = pipeline
         .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(
         active.is_empty(),
@@ -281,7 +281,7 @@ async fn test_full_scan_detects_deletion() {
     let active = pipeline
         .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(active.is_empty(), "soft-deleted file should not be active");
 }
@@ -320,7 +320,7 @@ async fn test_vacuum_purges_soft_deleted_files() {
     let active = pipeline
         .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(
         active.is_empty(),
@@ -340,7 +340,7 @@ async fn test_vacuum_purges_soft_deleted_files() {
             )?;
             Ok(())
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     let stats = pipeline.vacuum(1).await.unwrap();
@@ -373,7 +373,7 @@ async fn test_vacuum_does_not_purge_active_files() {
     let active = pipeline
         .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(active.len(), 1, "active file should still be present");
 }

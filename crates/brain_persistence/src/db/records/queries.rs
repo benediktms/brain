@@ -233,7 +233,10 @@ fn get_record_links_via_entity_links(
 // Wave 7 deletes this block alongside the comparator wrap.
 // ---------------------------------------------------------------------------
 
-fn comparator_legacy_get_record_links(conn: &Connection, record_id: &str) -> SqlResult<Vec<String>> {
+fn comparator_legacy_get_record_links(
+    conn: &Connection,
+    record_id: &str,
+) -> SqlResult<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT task_id, chunk_id FROM record_links WHERE record_id = ?1 ORDER BY created_at ASC",
     )?;
@@ -285,7 +288,8 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> SqlR
                 return Err(BrainCoreError::RecordEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters after '{}'",
                     &normalized[..=dash_pos]
-                )).into());
+                ))
+                .into());
             }
             normalized
         }
@@ -299,7 +303,8 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> SqlR
                 return Err(BrainCoreError::RecordEvent(format!(
                     "prefix too short: need at least {MIN_ULID_PREFIX_LEN} characters, got {}",
                     normalized.len()
-                )).into());
+                ))
+                .into());
             }
             let prefix = if !brain_id.is_empty() {
                 conn.query_row(
@@ -329,10 +334,9 @@ pub fn resolve_record_id(conn: &Connection, input: &str, brain_id: &str) -> SqlR
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     match matches.len() {
-        0 => Err(BrainCoreError::RecordEvent(format!(
-            "no record found matching prefix: {input}"
-        ))
-        .into()),
+        0 => Err(
+            BrainCoreError::RecordEvent(format!("no record found matching prefix: {input}")).into(),
+        ),
         1 => Ok(matches.into_iter().next().unwrap().0),
         n => {
             let candidates: Vec<String> = matches

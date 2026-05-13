@@ -52,8 +52,8 @@ pub fn transfer_task_inner(
         )
         .optional()?;
 
-    let (from_brain_id, from_display_id_opt) =
-        current.ok_or_else(|| SqlError::Domain(BrainCoreError::TaskNotFound(task_id.to_string())))?;
+    let (from_brain_id, from_display_id_opt) = current
+        .ok_or_else(|| SqlError::Domain(BrainCoreError::TaskNotFound(task_id.to_string())))?;
 
     let from_display_id = from_display_id_opt.unwrap_or_default();
 
@@ -81,7 +81,9 @@ pub fn transfer_task_inner(
         .optional()?
         .unwrap_or(false);
     if !target_exists {
-        return Err(SqlError::Domain(BrainCoreError::BrainNotFound(target_brain_id.to_string())));
+        return Err(SqlError::Domain(BrainCoreError::BrainNotFound(
+            target_brain_id.to_string(),
+        )));
     }
 
     conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -98,9 +100,9 @@ pub fn transfer_task_inner(
             params![target_brain_id, to_display_id, task_id, from_brain_id],
         )?;
         if rows != 1 {
-            return Err(SqlError::Domain(BrainCoreError::TaskTransferCasFailed(format!(
-                "task {task_id}: concurrent transfer detected — retry"
-            ))));
+            return Err(SqlError::Domain(BrainCoreError::TaskTransferCasFailed(
+                format!("task {task_id}: concurrent transfer detected — retry"),
+            )));
         }
 
         // 5. Update SQLite chunks and files.
@@ -135,8 +137,11 @@ pub fn transfer_task_inner(
         // ev.payload is already a serde_json::Value; serializing it to a JSON
         // string is infallible in practice, but we propagate errors explicitly
         // rather than silently corrupting the event row with "{}".
-        let payload_json = serde_json::to_string(&ev.payload)
-            .map_err(|e| SqlError::Domain(BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))))?;
+        let payload_json = serde_json::to_string(&ev.payload).map_err(|e| {
+            SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                "payload serialize failed: {e}"
+            )))
+        })?;
         conn.execute(
             "INSERT INTO task_events \
              (event_id, task_id, event_type, timestamp, actor, payload) \

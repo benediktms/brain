@@ -98,7 +98,7 @@ fn count_records(db: &Db) -> i64 {
         conn.query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
             .map_err(Into::into)
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap()
 }
 
@@ -111,7 +111,7 @@ fn count_tags_for(db: &Db, record_id: &str) -> i64 {
         )
         .map_err(Into::into)
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap()
 }
 
@@ -124,7 +124,7 @@ fn count_links_for(db: &Db, record_id: &str) -> i64 {
         )
         .map_err(Into::into)
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap()
 }
 
@@ -137,7 +137,7 @@ fn get_status(db: &Db, record_id: &str) -> String {
         )
         .map_err(Into::into)
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap()
 }
 
@@ -150,7 +150,7 @@ fn get_title(db: &Db, record_id: &str) -> String {
         )
         .map_err(Into::into)
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap()
 }
 
@@ -164,7 +164,7 @@ fn tag_exists(db: &Db, record_id: &str, tag: &str) -> bool {
             )
             .map_err(Into::into)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     count > 0
 }
@@ -179,7 +179,7 @@ fn link_task_exists(db: &Db, record_id: &str, task_id: &str) -> bool {
             )
             .map_err(Into::into)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     count > 0
 }
@@ -193,7 +193,7 @@ fn get_content_hash(db: &Db, record_id: &str) -> String {
         )
         .map_err(Into::into)
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap()
 }
 
@@ -541,7 +541,7 @@ fn test_incremental_apply_matches_bulk_rebuild() {
     for ev in &events_to_apply {
         db_incremental
             .with_write_conn(|conn| apply_event(conn, ev, ""))
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
         append_event(&events_path, ev).unwrap();
     }
@@ -641,7 +641,7 @@ fn test_status_transition_active_to_archived() {
     db.with_write_conn(|conn| {
         apply_event(conn, &make_created_event(&rid, "My Record", "export"), "")
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
     assert_eq!(get_status(&db, &rid), "active");
 
@@ -658,7 +658,7 @@ fn test_status_transition_active_to_archived() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
     assert_eq!(get_status(&db, &rid), "archived");
 }
@@ -672,12 +672,12 @@ fn test_multiple_records_have_independent_status() {
     db.with_write_conn(|conn| {
         apply_event(conn, &make_created_event(&r1, "Active One", "report"), "")
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
     db.with_write_conn(|conn| {
         apply_event(conn, &make_created_event(&r2, "Active Two", "diff"), "")
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 
     // Archive only r2
@@ -688,7 +688,7 @@ fn test_multiple_records_have_independent_status() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 
     assert_eq!(get_status(&db, &r1), "active");
@@ -709,7 +709,7 @@ fn test_tag_add_then_remove_leaves_no_tag() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 
     db.with_write_conn(|conn| {
@@ -726,7 +726,7 @@ fn test_tag_add_then_remove_leaves_no_tag() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
     assert!(tag_exists(&db, &rid, "temporary"));
 
@@ -744,7 +744,7 @@ fn test_tag_add_then_remove_leaves_no_tag() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 
     assert!(
@@ -775,7 +775,7 @@ fn test_multiple_tags_add_remove_selectively() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 
     db.with_write_conn(|conn| {
@@ -792,7 +792,7 @@ fn test_multiple_tags_add_remove_selectively() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 
     assert!(tag_exists(&db, &rid, "keep-a"));
@@ -855,7 +855,7 @@ fn test_link_add_then_remove_leaves_no_link() {
     db.with_write_conn(|conn| {
         apply_event(conn, &make_created_event(&rid, "Linked Record", "diff"), "")
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 
     db.with_write_conn(|conn| {
@@ -873,7 +873,7 @@ fn test_link_add_then_remove_leaves_no_link() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
     assert!(link_task_exists(&db, &rid, "TASK-99"));
 
@@ -892,7 +892,7 @@ fn test_link_add_then_remove_leaves_no_link() {
             "",
         )
     })
-        .into_brain_core()
+    .into_brain_core()
     .unwrap();
 
     assert!(
@@ -1067,7 +1067,7 @@ fn test_object_store_deduplication_with_multiple_records() {
                 .collect();
             Ok(v)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap()
     };
     assert_eq!(hashes.len(), 2);
@@ -1125,7 +1125,7 @@ fn test_record_store_apply_multiple_events() {
             conn.query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
                 .map_err(Into::into)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(total, 2);
 
@@ -1138,7 +1138,7 @@ fn test_record_store_apply_multiple_events() {
             )
             .map_err(Into::into)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(tag_count, 1);
 }

@@ -93,7 +93,7 @@ fn insert_note(db: &Db, chunk_id: &str, path: &str, content: &str) {
         .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))?;
         Ok(())
     })
-        .into_brain_core()
+    .into_brain_core()
     .expect("insert_note");
 }
 
@@ -121,7 +121,7 @@ fn insert_derived_summary(
         .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))?;
         Ok(())
     })
-        .into_brain_core()
+    .into_brain_core()
     .expect("insert_derived_summary");
 }
 
@@ -219,7 +219,7 @@ fn test_reindex_marks_directory_summary_stale() {
             )
             .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(fresh, 0, "summary must start as fresh (stale=0)");
 
@@ -236,7 +236,7 @@ fn test_reindex_marks_directory_summary_stale() {
             )
             .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         stale, 1,

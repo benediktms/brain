@@ -5,9 +5,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use brain_persistence::db::links::{
-use brain_persistence::sql::SqlResultExt;
     EntityRef, LinkError, edge_kind_str, entity_type_str, for_entity,
 };
+use brain_persistence::sql::{SqlError, SqlResultExt};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
@@ -49,12 +49,18 @@ impl LinksForEntity {
             ));
         }
 
-        let links = ctx.stores.inner_db().with_read_conn(|conn| {
-            for_entity(conn, &entity, None).map_err(|e| match e {
-                LinkError::Database(msg) => brain_core::error::BrainCoreError::Database(msg),
-                LinkError::Cycle(_) => unreachable!("for_entity never returns Cycle"),
+        let links = ctx
+            .stores
+            .inner_db()
+            .with_read_conn(|conn| {
+                for_entity(conn, &entity, None).map_err(|e| match e {
+                    LinkError::Database(msg) => {
+                        SqlError::Domain(brain_core::error::BrainCoreError::Database(msg))
+                    }
+                    LinkError::Cycle(_) => unreachable!("for_entity never returns Cycle"),
+                })
             })
-        }).into_brain_core()
+            .into_brain_core();
 
         match links {
             Err(e) => ToolCallResult::error(format!("Internal error: {e}")),

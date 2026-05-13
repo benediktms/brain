@@ -498,7 +498,7 @@ impl BrainStores {
     ) -> Result<Vec<brain_persistence::db::job::Job>> {
         self.db
             .with_read_conn(move |conn| brain_persistence::db::jobs::list_jobs(conn, status, limit))
-                .into_brain_core()
+            .into_brain_core()
     }
 
     // -- LinkWriter --

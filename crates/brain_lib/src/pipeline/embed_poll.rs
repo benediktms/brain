@@ -18,9 +18,9 @@ use crate::tasks::queries::{TaskPollRow, get_labels_for_tasks};
 use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
-use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::chunks::ChunkPollRow;
 use brain_persistence::db::summaries::SummaryPollRow;
+use brain_persistence::sql::SqlResultExt;
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 

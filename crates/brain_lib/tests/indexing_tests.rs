@@ -12,9 +12,9 @@ use brain_lib::ports::FileMetaWriter;
 use brain_lib::utils::content_hash;
 use brain_lib::watcher::FileEvent;
 use brain_persistence::db::Db;
-use brain_persistence::sql::SqlResultExt;
 use brain_persistence::db::files;
 use brain_persistence::db::meta;
+use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::{LANCE_SCHEMA_VERSION, Store};
 
 use tempfile::TempDir;
@@ -184,7 +184,7 @@ async fn test_startup_recovery_reindexes_stuck_files() {
             files::set_indexing_state(conn, &paths[0].0, "indexing_started")?;
             Ok(())
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // Re-scan — should recover stuck file and re-index
@@ -261,7 +261,7 @@ async fn test_multiple_scans_no_duplicates() {
     let active = pipeline
         .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(active.len(), 1);
 }
@@ -290,7 +290,7 @@ async fn test_file_rename_preserves_identity() {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths[0].0.clone())
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // Rename on disk and in the pipeline
@@ -302,7 +302,7 @@ async fn test_file_rename_preserves_identity() {
     let active = pipeline
         .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].0, original_id);
@@ -347,7 +347,7 @@ async fn test_handle_event_created() {
                 .unwrap();
             Ok((paths[0].1.clone(), state))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(active.0.ends_with("new.md"));
     assert_eq!(active.1, "indexed");
@@ -381,7 +381,7 @@ async fn test_handle_event_deleted() {
     let active = pipeline
         .db_for_tests()
         .with_read_conn(files::get_all_active_paths)
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert!(active.is_empty());
 }
@@ -407,7 +407,7 @@ async fn test_handle_event_renamed() {
             let hash = files::get_content_hash(conn, &paths[0].0)?;
             Ok((paths[0].0.clone(), hash))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // Rename on disk + via event
@@ -430,7 +430,7 @@ async fn test_handle_event_renamed() {
             let hash = files::get_content_hash(conn, &paths[0].0)?;
             Ok((paths[0].0.clone(), paths[0].1.clone(), hash))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(found_id, original_id);
     assert!(found_path.ends_with("after.md"));
@@ -460,7 +460,7 @@ async fn test_delete_then_recreate_resurrects_id() {
             let paths = files::get_all_active_paths(conn)?;
             Ok(paths[0].0.clone())
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // Delete on disk — explicit handle_delete (full_scan no longer sweeps deletions)
@@ -493,7 +493,7 @@ async fn test_delete_then_recreate_resurrects_id() {
             assert_eq!(paths.len(), 1);
             Ok(paths[0].0.clone())
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(resurrected_id, original_id);
 }
@@ -532,7 +532,7 @@ async fn test_upsert_add_paragraph_adds_chunk() {
                 .unwrap();
             Ok((fid, c))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(count, 2);
 
@@ -561,7 +561,7 @@ async fn test_upsert_add_paragraph_adds_chunk() {
                 .unwrap();
             Ok(c)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(new_count, 3);
 }
@@ -598,7 +598,7 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
                 .unwrap();
             Ok((fid, c))
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(count, 3);
 
@@ -620,7 +620,7 @@ async fn test_upsert_remove_paragraph_removes_chunk() {
                 .unwrap();
             Ok(c)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(new_count, 2);
 }
@@ -762,7 +762,7 @@ async fn test_schema_version_mismatch_triggers_rebuild() {
     let stored: Option<String> = pipeline
         .db_for_tests()
         .with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         stored,
@@ -846,7 +846,7 @@ async fn test_first_run_stamps_without_rebuild() {
     let stored: Option<String> = pipeline
         .db_for_tests()
         .with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         stored,
@@ -886,7 +886,7 @@ async fn test_unparseable_version_triggers_rebuild() {
     let stored: Option<String> = pipeline
         .db_for_tests()
         .with_read_conn(|conn| meta::get_meta(conn, "lancedb_schema_version"))
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
     assert_eq!(
         stored,

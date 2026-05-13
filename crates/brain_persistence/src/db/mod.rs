@@ -68,8 +68,7 @@ pub struct Db {
 impl Db {
     /// Open (or create) the SQLite database at the given path and initialize the schema.
     pub fn open(path: &Path) -> Result<Self> {
-        let writer = Connection::open(path)
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+        let writer = Connection::open(path).map_err(|e| BrainCoreError::Database(e.to_string()))?;
         schema::init_schema(&writer).into_brain_core()?;
 
         let read_flags = OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -97,8 +96,8 @@ impl Db {
     ///
     /// Uses 0 readers — `with_read_conn` falls back to the write connection.
     pub fn open_in_memory() -> Result<Self> {
-        let writer = Connection::open_in_memory()
-            .map_err(|e| BrainCoreError::Database(e.to_string()))?;
+        let writer =
+            Connection::open_in_memory().map_err(|e| BrainCoreError::Database(e.to_string()))?;
         schema::init_schema(&writer).into_brain_core()?;
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
@@ -272,7 +271,7 @@ impl Db {
             )?;
             Ok(count > 0)
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     /// Record `(session_id, file_path)` as seen by the PreToolUse hook.
@@ -293,7 +292,7 @@ impl Db {
             )?;
             Ok(())
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     // ── File-scoped memory retrieval ────────────────────────────────────
@@ -334,7 +333,7 @@ impl Db {
                 })?;
             collect_rows(rows)
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     /// Full-text search summaries filtered to the trustworthy band
@@ -389,7 +388,7 @@ impl Db {
             })?;
             collect_rows(rows)
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     // ── LOD Chunks ─────────────────────────────────────────────────────
@@ -442,7 +441,7 @@ impl Db {
         self.with_write_conn(move |conn| {
             lod_chunks::delete_lod_chunks_by_uri_pattern(conn, &uri_pattern)
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     pub fn count_lod_chunks_by_brain(
@@ -455,7 +454,7 @@ impl Db {
         self.with_read_conn(move |conn| {
             lod_chunks::count_lod_chunks_by_brain(conn, &brain_id, lod_level.as_deref())
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     pub fn list_lod_chunks_by_brain(
@@ -468,7 +467,7 @@ impl Db {
         self.with_read_conn(move |conn| {
             lod_chunks::list_lod_chunks_by_brain(conn, &brain_id, limit, offset)
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 
     // ── Provider CRUD ──────────────────────────────────────────────────
@@ -519,7 +518,7 @@ impl Db {
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
             Ok(())
         })
-            .into_brain_core()
+        .into_brain_core()
     }
 }
 

@@ -436,7 +436,7 @@ fn test_crossbrain_prefix_not_poisoned_by_brain_meta() {
         .with_write_conn(|conn| {
             brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX")
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // Register a cross-brain entry — prefix must derive from brain_name, NOT from brain_meta
@@ -454,7 +454,7 @@ fn test_crossbrain_prefix_not_poisoned_by_brain_meta() {
             )
             .map_err(brain_persistence::sql::SqlError::from)
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     assert_eq!(
@@ -477,7 +477,7 @@ fn test_with_brain_id_uses_brain_name_for_prefix() {
         .with_write_conn(|conn| {
             brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX")
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     // Create TaskStore with explicit brain_name — prefix must come from brain_name
@@ -507,7 +507,7 @@ fn test_multiple_crossbrain_prefixes_independent() {
         .with_write_conn(|conn| {
             brain_persistence::db::meta::set_meta(conn, "project_prefix", "BRX")
         })
-            .into_brain_core()
+        .into_brain_core()
         .unwrap();
 
     let _tasks_a = dir.path().join("tasks_a");

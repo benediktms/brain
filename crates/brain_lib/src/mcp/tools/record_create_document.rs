@@ -1,7 +1,7 @@
 #![allow(clippy::items_after_test_module)]
 
+use brain_persistence::sql::{SqlError, SqlResultExt};
 use std::future::Future;
-use brain_persistence::sql::SqlResultExt;
 use std::pin::Pin;
 
 use base64::Engine as _;
@@ -242,9 +242,11 @@ mod tests {
                     [&record_file_id],
                     |row| row.get(0),
                 )
-                .map_err(|e| brain_core::error::BrainCoreError::Database(e.to_string()))
+                .map_err(|e| {
+                    SqlError::Domain(brain_core::error::BrainCoreError::Database(e.to_string()))
+                })
             })
-                .into_brain_core()
+            .into_brain_core()
             .expect("chunk query should succeed");
         assert_eq!(chunk_count, 1, "document record should write one FTS chunk");
 
