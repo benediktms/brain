@@ -11,7 +11,7 @@ use brain_persistence::db::sagas::events::{
 };
 use brain_persistence::db::sagas::queries::{
     self, LabelCount, SagaEventInsert, SagaMemberStub, SagaRow, SagaStatsRow, close_saga,
-    list_saga_member_stubs, list_saga_task_ids, saga_members_in,
+    list_saga_member_stubs, list_saga_task_ids, saga_members_in, start_saga,
 };
 use brain_persistence::db::sagas::reopen_saga;
 use brain_persistence::db::sagas::{compact_saga_id, resolve_saga_id};
@@ -315,11 +315,7 @@ impl SagaStore {
             // SystemTime::now().unwrap_or(0) which would silently write
             // epoch-zero on a clock anomaly.
             let now = crate::utils::now_ts();
-            #[allow(clippy::disallowed_macros)]
-            tx.execute(
-                "UPDATE sagas SET status = 'open', updated_at = ?1 WHERE saga_id = ?2",
-                rusqlite::params![now, canonical],
-            )?;
+            start_saga(&tx, &canonical, now)?;
 
             let event = SagaEvent::new(
                 &canonical,
@@ -382,10 +378,7 @@ impl SagaStore {
                 });
             }
 
-            let mut stmt = conn.prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1")?;
-            let task_ids: Vec<String> = stmt
-                .query_map([&canonical], |row| row.get(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let task_ids: Vec<String> = list_saga_task_ids(conn, &canonical)?;
 
             let tasks = list_ready_actionable_for_tasks(conn, &task_ids)?;
             let brains = queries::brains_for_saga(conn, &canonical)?;
