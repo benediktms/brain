@@ -124,8 +124,9 @@ fn brain_hooks_help_hides_internal_subcommands() {
     // "stop" is short enough to collide with other text — check it as a
     // line-starting token instead.
     assert!(
-        !stdout.lines().any(|l| l.trim_start().starts_with("stop ")
-            || l.trim_start() == "stop"),
+        !stdout
+            .lines()
+            .any(|l| l.trim_start().starts_with("stop ") || l.trim_start() == "stop"),
         "internal subcommand `stop` must not appear in `brain hooks --help`, got:\n{stdout}"
     );
 
