@@ -31,7 +31,6 @@ walkdir = "2"
 ignore = "0.4"
 blake3 = { workspace = true }
 ulid = { workspace = true }
-rusqlite = { workspace = true }
 serde = { workspace = true }
 # File watching
 notify-debouncer-full = "0.7"
