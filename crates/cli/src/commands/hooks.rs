@@ -966,8 +966,7 @@ fn render_brains_section(stores: &brain_lib::stores::BrainStores) -> String {
         let aliases = parse_json_array(&b.aliases_json);
         // Encode aliases as a JSON array so values containing `,` or `]`
         // do not break naive parsers.
-        let aliases_json =
-            serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".to_string());
+        let aliases_json = serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".to_string());
         let prefix = b.prefix.as_deref().unwrap_or("");
         lines.push(format!(
             "Current brain: {name} ({prefix}) — id:{id}, root:{root}, aliases:{aliases_json}",
@@ -978,9 +977,7 @@ fn render_brains_section(stores: &brain_lib::stores::BrainStores) -> String {
         // Make the unregistered-cwd case explicit so the agent can always
         // rely on the first non-blank line of this section being a
         // `Current brain:` line.
-        lines.push(
-            "Current brain: (none — cwd is not in a registered brain)".to_string(),
-        );
+        lines.push("Current brain: (none — cwd is not in a registered brain)".to_string());
     }
 
     // Other brains — exclude current (if any) and any archived.
@@ -1087,18 +1084,14 @@ fn render_session_start_with_stores(stores: &brain_lib::stores::BrainStores) -> 
     out.push_str(&render_top_tasks_section(stores));
 
     if start.elapsed() > SESSION_START_DEADLINE {
-        tracing::warn!(
-            "session-start exceeded deadline before sagas section; truncating"
-        );
+        tracing::warn!("session-start exceeded deadline before sagas section; truncating");
         return out;
     }
     out.push_str("\n\n## Sagas\n");
     out.push_str(&render_sagas_section(stores));
 
     if start.elapsed() > SESSION_START_DEADLINE {
-        tracing::warn!(
-            "session-start exceeded deadline before brains section; truncating"
-        );
+        tracing::warn!("session-start exceeded deadline before brains section; truncating");
         return out;
     }
     out.push_str("\n\n## Brains\n");
@@ -1541,9 +1534,9 @@ mod tests {
             let direct_arr = entries
                 .as_array()
                 .unwrap_or_else(|| panic!("brain_hooks entries for {event} must be an array"));
-            let manifest_arr = manifest_entry.as_array().unwrap_or_else(|| {
-                panic!("plugin.json entries for {event} must be an array")
-            });
+            let manifest_arr = manifest_entry
+                .as_array()
+                .unwrap_or_else(|| panic!("plugin.json entries for {event} must be an array"));
 
             // Sorted-vec comparison: reordering entries in either source
             // must not cause a positional zip to silently align mismatched
@@ -1748,12 +1741,9 @@ mod tests {
     /// renderer is to swallow that error and return an empty string —
     /// exactly what these tests assert.
     fn make_broken_stores() -> BrokenStores {
-        let (tmp, stores) = brain_lib::stores::BrainStores::in_memory_with_brain(
-            "brain-broken-1",
-            "broken",
-            "BRK",
-        )
-        .unwrap();
+        let (tmp, stores) =
+            brain_lib::stores::BrainStores::in_memory_with_brain("brain-broken-1", "broken", "BRK")
+                .unwrap();
 
         let db_path = stores.brain_home.join("brain.db");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
