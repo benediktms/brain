@@ -36,10 +36,9 @@ pub fn init_schema(conn: &Connection) -> SqlResult<()> {
     let current: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
 
     if current > SCHEMA_VERSION {
-        return Err(BrainCoreError::SchemaVersion(format!(
+        return Err(SqlError::Domain(BrainCoreError::SchemaVersion(format!(
             "database schema version {current} is newer than supported version {SCHEMA_VERSION}"
-        ))
-        .into());
+        ))));
     }
 
     if current < SCHEMA_VERSION {
@@ -112,11 +111,10 @@ pub(crate) fn run_migrations(conn: &Connection, from_version: i32) -> SqlResult<
             52 => migrate_v52_to_v53(conn)?,
             53 => migrate_v53_to_v54(conn)?,
             other => {
-                return Err(BrainCoreError::SchemaVersion(format!(
+                return Err(SqlError::Domain(BrainCoreError::SchemaVersion(format!(
                     "no migration defined from version {other} to {}",
                     other + 1
-                ))
-                .into());
+                ))));
             }
         }
         version += 1;

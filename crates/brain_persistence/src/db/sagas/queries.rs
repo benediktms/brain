@@ -326,7 +326,8 @@ pub fn saga_members_in(
     if task_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let seeds_json = serde_json::to_string(task_ids)?;
+    let seeds_json = serde_json::to_string(task_ids)
+        .map_err(|e| SqlError::Domain(BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))))?;
     let mut stmt = conn.prepare(
         "SELECT task_id FROM saga_tasks \
          WHERE saga_id = ?1 AND task_id IN (SELECT value FROM json_each(?2))",
@@ -400,7 +401,8 @@ pub fn remove_saga_tasks(
     // placeholder list — same idiom as `saga_members_in` and `task_subtree`.
     // Avoids the SQLite per-statement variable cap that a 1k+ cascade
     // expansion would otherwise hit.
-    let seeds_json = serde_json::to_string(task_ids)?;
+    let seeds_json = serde_json::to_string(task_ids)
+        .map_err(|e| SqlError::Domain(BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))))?;
     let changed = conn.execute(
         "DELETE FROM saga_tasks \
          WHERE saga_id = ?1 AND task_id IN (SELECT value FROM json_each(?2))",
@@ -639,7 +641,8 @@ pub fn cascade_member_tasks(
             outcome: outcome_str.to_string(),
         };
         let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaTaskCascaded, &payload);
-        let payload_json = serde_json::to_string(&event.payload)?;
+        let payload_json = serde_json::to_string(&event.payload)
+            .map_err(|e| SqlError::Domain(BrainCoreError::TaskEvent(format!("payload serialize failed: {e}"))))?;
         event_stmt.execute(params![
             event.event_id,
             event.saga_id,

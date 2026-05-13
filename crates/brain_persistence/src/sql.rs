@@ -27,6 +27,9 @@ pub enum SqlError {
     #[error("rusqlite error: {0}")]
     Rusqlite(#[from] rusqlite::Error),
 
+    #[error("payload serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+
     #[error("mutex poisoned: {0}")]
     MutexPoisoned(String),
 
@@ -51,6 +54,9 @@ impl<T> SqlResultExt<T> for SqlResult<T> {
     fn into_brain_core(self) -> brain_core::error::Result<T> {
         self.map_err(|e| match e {
             SqlError::Rusqlite(err) => BrainCoreError::Database(err.to_string()),
+            SqlError::Serde(err) => BrainCoreError::TaskEvent(format!(
+                "payload serialize failed: {err}"
+            )),
             SqlError::Domain(err) => err,
             SqlError::MutexPoisoned(msg) => BrainCoreError::Database(msg),
         })

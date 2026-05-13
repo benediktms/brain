@@ -12,7 +12,8 @@ use tracing::warn;
 
 use crate::db::links::{EdgeKind, EntityLink, EntityRef, EntityType, for_entity};
 use crate::db::summaries::{SummaryRow, get_summaries_by_ids};
-use crate::sql::SqlResult;
+use crate::error::BrainCoreError;
+use crate::sql::{SqlError, SqlResult};
 
 /// Edge kinds traversed by [`collect_linked_episode_set`] (consolidation cohort).
 ///
@@ -160,7 +161,8 @@ fn collect_episode_set_inner(
             id: current.clone(),
         };
 
-        let edges = for_entity(conn, &entity, Some(edge_kinds))?;
+        let edges = for_entity(conn, &entity, Some(edge_kinds))
+            .map_err(|e| SqlError::Domain(BrainCoreError::Database(e.to_string())))?;
 
         for link in edges {
             extend_with_neighbour(&link, &current, depth, &mut visited, &mut queue);

@@ -67,7 +67,7 @@ fn setup() -> Db {
                  VALUES (new.rowid, new.scope_value, new.content);
              END;",
         )
-        .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
+        .map_err(brain_persistence::sql::SqlError::from)
     })
         .into_brain_core()
     .expect("extend schema with derived_summaries");
@@ -82,7 +82,7 @@ fn insert_note(db: &Db, chunk_id: &str, path: &str, content: &str) {
             "INSERT OR IGNORE INTO files (file_id, path, indexing_state) VALUES (?1, ?2, 'idle')",
             rusqlite::params![path, path],
         )
-        .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))?;
+        .map_err(brain_persistence::sql::SqlError::from)?;
         conn.execute(
             "INSERT INTO chunks
                  (chunk_id, file_id, chunk_ord, chunk_hash, content,
@@ -90,7 +90,7 @@ fn insert_note(db: &Db, chunk_id: &str, path: &str, content: &str) {
              VALUES (?1, ?2, 0, '', ?3, '', 0, 0, 0)",
             rusqlite::params![chunk_id, path, content],
         )
-        .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))?;
+        .map_err(brain_persistence::sql::SqlError::from)?;
         Ok(())
     })
     .into_brain_core()
@@ -118,7 +118,7 @@ fn insert_derived_summary(
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![id, scope_type, scope_value, content, stale as i64, now],
         )
-        .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))?;
+        .map_err(brain_persistence::sql::SqlError::from)?;
         Ok(())
     })
     .into_brain_core()
@@ -217,7 +217,7 @@ fn test_reindex_marks_directory_summary_stale() {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
+            .map_err(brain_persistence::sql::SqlError::from)
         })
         .into_brain_core()
         .unwrap();
@@ -234,7 +234,7 @@ fn test_reindex_marks_directory_summary_stale() {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
+            .map_err(brain_persistence::sql::SqlError::from)
         })
         .into_brain_core()
         .unwrap();

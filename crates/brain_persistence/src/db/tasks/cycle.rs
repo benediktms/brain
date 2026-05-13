@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 
 use crate::error::BrainCoreError;
-use crate::sql::SqlResult;
+use crate::sql::{SqlError, SqlResult};
 
 /// Check whether adding a dependency `task_id → depends_on` would create a cycle.
 ///
@@ -13,9 +13,9 @@ use crate::sql::SqlResult;
 pub fn check_cycle(conn: &Connection, task_id: &str, depends_on: &str) -> SqlResult<()> {
     // Self-loop is always a cycle
     if task_id == depends_on {
-        return Err(
-            BrainCoreError::TaskCycle(format!("self-dependency: {task_id} -> {task_id}")).into(),
-        );
+        return Err(SqlError::Domain(BrainCoreError::TaskCycle(format!(
+            "self-dependency: {task_id} -> {task_id}"
+        ))));
     }
 
     // Use a recursive CTE to walk from `depends_on` through all reachable nodes
@@ -37,10 +37,9 @@ pub fn check_cycle(conn: &Connection, task_id: &str, depends_on: &str) -> SqlRes
     )?;
 
     if found {
-        return Err(BrainCoreError::TaskCycle(format!(
+        return Err(SqlError::Domain(BrainCoreError::TaskCycle(format!(
             "adding {task_id} -> {depends_on} would create a cycle"
-        ))
-        .into());
+        ))));
     }
 
     Ok(())

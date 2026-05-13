@@ -710,7 +710,7 @@ async fn test_mcp_retrieve_uri_mode_returns_full_content() {
         .db_for_tests()
         .with_read_conn(|conn: &rusqlite::Connection| {
             conn.query_row("SELECT chunk_id FROM chunks LIMIT 1", [], |row| row.get(0))
-                .map_err(|e| brain_lib::error::BrainCoreError::Database(e.to_string()))
+                .map_err(brain_persistence::sql::SqlError::from)
         })
         .into_brain_core()
         .unwrap();
