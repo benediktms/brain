@@ -1,5 +1,5 @@
-// Pre-existing technical debt: raw rusqlite usage inside test modules below.
-// Architectural cleanup tracked separately; this allow keeps the workspace lint clean.
+// rusqlite is a dev-dependency; test modules below use it directly via #[cfg(test)].
+// The allow suppresses the workspace lint for rusqlite::params! inside those blocks.
 #![allow(clippy::disallowed_macros)]
 
 /// Read-path orchestration pipeline.
