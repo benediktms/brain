@@ -24,15 +24,16 @@ pub fn migrate_v54_to_v55(conn: &Connection) -> SqlResult<()> {
     let tx = conn.unchecked_transaction()?;
 
     // Refuse to run if data has duplicates — caller must reconcile first.
-    // Collects all duplicate prefixes (with the brain ids that share them)
-    // into the error so the operator gets actionable detail.
+    // Case-insensitive grouping (`UPPER(prefix)`) matches `resolve_brain_from_prefix`'s
+    // lookup semantics; pre-migration databases with 'Cpm' alongside 'CPM' would
+    // otherwise slip past this check and still misroute at runtime.
     let duplicates: Vec<(String, i64)> = {
         let mut stmt = tx.prepare(
-            "SELECT prefix, COUNT(*) AS cnt FROM brains
+            "SELECT UPPER(prefix) AS p, COUNT(*) AS cnt FROM brains
              WHERE prefix IS NOT NULL
-             GROUP BY prefix
+             GROUP BY UPPER(prefix)
              HAVING cnt > 1
-             ORDER BY prefix",
+             ORDER BY p",
         )?;
         stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -44,15 +45,16 @@ pub fn migrate_v54_to_v55(conn: &Connection) -> SqlResult<()> {
         let mut detail = String::from(
             "v54→v55 cannot enforce UNIQUE(prefix) — these prefixes are used by multiple brains:\n",
         );
-        for (prefix, cnt) in &duplicates {
+        for (prefix_upper, cnt) in &duplicates {
             let names: Vec<String> = {
                 let mut stmt = tx.prepare(
-                    "SELECT brain_id || ' (' || name || ')' FROM brains WHERE prefix = ?1",
+                    "SELECT brain_id || ' (' || name || ', prefix=' || prefix || ')'
+                     FROM brains WHERE UPPER(prefix) = ?1",
                 )?;
-                stmt.query_map([prefix], |row| row.get::<_, String>(0))?
+                stmt.query_map([prefix_upper], |row| row.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
-            detail.push_str(&format!("  {prefix} × {cnt}: {}\n", names.join(", ")));
+            detail.push_str(&format!("  {prefix_upper} × {cnt}: {}\n", names.join(", ")));
         }
         detail.push_str(
             "Reconcile by renaming the prefix of all but one brain, then retry the migration.",
@@ -60,11 +62,13 @@ pub fn migrate_v54_to_v55(conn: &Connection) -> SqlResult<()> {
         return Err(SqlError::Domain(BrainCoreError::Migration(detail)));
     }
 
+    // `COLLATE NOCASE` aligns the UNIQUE constraint with the resolver's
+    // `UPPER(prefix)` lookup — 'cpm' and 'CPM' are treated as a single value.
     // Idempotent: `IF NOT EXISTS` handles fixture replays that bump
     // user_version without the index actually existing yet.
     tx.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_brains_prefix
-         ON brains(prefix) WHERE prefix IS NOT NULL;",
+         ON brains(prefix COLLATE NOCASE) WHERE prefix IS NOT NULL;",
     )?;
 
     tx.pragma_update(None, "user_version", 55i32)?;
@@ -193,6 +197,52 @@ mod tests {
         assert!(
             result.is_err(),
             "duplicate prefix INSERT must fail the UNIQUE constraint"
+        );
+    }
+
+    #[test]
+    fn case_different_prefixes_are_detected_as_duplicates() {
+        // 'Cpm' and 'CPM' must be flagged because the resolver does
+        // `UPPER(prefix) = ?1` — case-different rows still misroute.
+        let conn = Connection::open_in_memory().unwrap();
+        fresh_v54(&conn);
+        insert_brain(&conn, "b1", "alpha", Some("Cpm"));
+        insert_brain(&conn, "b2", "beta", Some("CPM"));
+
+        let err =
+            migrate_v54_to_v55(&conn).expect_err("case-different duplicates must abort migration");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("CPM"),
+            "error must report the case-normalized prefix; got: {msg}"
+        );
+        // Both offending rows are still listed (with their original casing)
+        // so the operator can pick the right one to rename.
+        assert!(msg.contains("b1"), "got: {msg}");
+        assert!(msg.contains("b2"), "got: {msg}");
+        // Stored casing is preserved in the detail to disambiguate visually.
+        assert!(
+            msg.contains("Cpm") || msg.contains("prefix=Cpm"),
+            "error must preserve the original mixed-case prefix string; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn post_migration_case_different_insert_is_rejected() {
+        // The UNIQUE index uses COLLATE NOCASE so 'cpm' clashes with 'CPM'.
+        let conn = Connection::open_in_memory().unwrap();
+        fresh_v54(&conn);
+        insert_brain(&conn, "b1", "alpha", Some("CPM"));
+
+        migrate_v54_to_v55(&conn).unwrap();
+
+        let result = conn.execute(
+            "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('b2', 'duplicate', 'cpm', 2000)",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "case-different INSERT must fail the COLLATE NOCASE UNIQUE check"
         );
     }
 

@@ -405,8 +405,11 @@ impl TaskStore {
         self.db
             .with_read_conn(move |conn| {
                 // If input has a prefix pointing to a different brain, use that brain's scope.
+                // Propagate the resolver's errors (BrainRegistry ambiguity, DB errors) instead
+                // of swallowing them with `unwrap_or` — the explicit error from the persistence
+                // layer is the whole point of the defense-in-depth check at that boundary.
                 let effective_brain_id = if !brain_id.is_empty() {
-                    queries::resolve_brain_from_prefix(conn, input).unwrap_or(Some(brain_id))
+                    queries::resolve_brain_from_prefix(conn, input)?.or(Some(brain_id))
                 } else {
                     // Unscoped — let resolve_task_id_scoped handle prefix derivation
                     None
