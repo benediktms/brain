@@ -138,7 +138,13 @@ pub fn ensure_brain_registered(
 
     // Derive prefix solely from brain_name — never read brain_meta.project_prefix
     // (that table is unscoped and causes cross-brain prefix poisoning).
-    let prefix = generate_prefix(brain_name);
+    // Auto-disambiguate when the generated prefix collides with another brain
+    // so `brain init` survives the v54→v55 UNIQUE(prefix COLLATE NOCASE)
+    // constraint — `generate_prefix` is deterministic (e.g. "brain" and
+    // "brain2" both produce "BRN") and would otherwise hard-fail on the
+    // second create.
+    let base_prefix = generate_prefix(brain_name);
+    let prefix = pick_unique_brain_prefix(conn, brain_id, &base_prefix)?;
     conn.execute(
         "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES (?1, ?2, ?3, strftime('%s', 'now'))
          ON CONFLICT(brain_id) DO UPDATE SET prefix = COALESCE(brains.prefix, excluded.prefix)",
@@ -150,6 +156,53 @@ pub fn ensure_brain_registered(
         rusqlite::params![brain_id],
     )?;
     Ok(())
+}
+
+/// Find a unique brain prefix starting from `base`, auto-extending with
+/// digit suffixes (`BRN`, `BRN1`, `BRN2`, …) until one is free.
+///
+/// "Free" means no row in `brains` other than `brain_id` itself has the
+/// prefix (case-insensitive, matching the resolver's `UPPER(prefix)`
+/// semantics and the v54→v55 `COLLATE NOCASE` UNIQUE index).
+///
+/// Returns the base unchanged if it's already free, or `base + "1".."9"`
+/// for the first free variant. Errors after 9 attempts — a 4-char prefix
+/// is the resolver's documented limit (`dash_pos <= 4`), so we don't
+/// extend further.
+pub(crate) fn pick_unique_brain_prefix(
+    conn: &Connection,
+    brain_id: &str,
+    base: &str,
+) -> SqlResult<String> {
+    use rusqlite::OptionalExtension;
+
+    let taken_by_other = |candidate: &str| -> SqlResult<bool> {
+        let row: Option<String> = conn
+            .query_row(
+                "SELECT brain_id FROM brains
+                 WHERE prefix IS NOT NULL
+                   AND UPPER(prefix) = UPPER(?1)
+                   AND brain_id != ?2
+                 LIMIT 1",
+                rusqlite::params![candidate, brain_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(row.is_some())
+    };
+
+    if !taken_by_other(base)? {
+        return Ok(base.to_string());
+    }
+    for suffix in 1..=9 {
+        let candidate = format!("{base}{suffix}");
+        if !taken_by_other(&candidate)? {
+            return Ok(candidate);
+        }
+    }
+    Err(SqlError::Domain(BrainCoreError::BrainRegistry(format!(
+        "could not pick a unique prefix for brain {brain_id}: base '{base}' collides with another brain and {base}1..{base}9 are all taken"
+    ))))
 }
 
 /// Register a brain during JSONL migration replay.
