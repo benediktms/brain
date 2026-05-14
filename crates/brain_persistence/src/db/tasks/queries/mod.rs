@@ -157,8 +157,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO entity_links (link_id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
-             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', strftime('%s','now'), NULL)",
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
             rusqlite::params![task_id, depends_on],
         )
         .unwrap();
@@ -545,8 +545,8 @@ mod tests {
         .unwrap();
         // Dual-write parent_of edge into entity_links
         conn.execute(
-            "INSERT INTO entity_links (link_id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
-             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of', strftime('%s','now'), NULL)",
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
             rusqlite::params![parent_id, task_id],
         )
         .unwrap();
@@ -749,8 +749,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO entity_links (link_id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
-             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of', strftime('%s','now'), NULL)",
+            "INSERT OR IGNORE INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
             rusqlite::params![parent_id, task_id],
         )
         .unwrap();

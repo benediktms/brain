@@ -72,8 +72,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO entity_links (link_id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
-             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', strftime('%s','now'), NULL)",
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
             rusqlite::params![task_id, depends_on],
         )
         .unwrap();
@@ -160,10 +160,10 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
         conn.execute(
             "INSERT OR IGNORE INTO entity_links \
-             (link_id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope) \
+             (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope) \
              VALUES \
              (lower(hex(randomblob(16))), 'TASK', 't2', 'TASK', 'ghost-9999', 'blocks', \
-              strftime('%s', 'now'), NULL)",
+              strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)",
             [],
         )
         .unwrap();
