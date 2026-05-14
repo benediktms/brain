@@ -8,10 +8,10 @@
 mod mcp_test_harness;
 
 use brain_persistence::db::Db;
-use brain_persistence::db::tasks::projections::apply_event;
 use brain_persistence::sql::SqlResultExt;
 use brain_tasks::TaskStore;
 use brain_tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, TaskTransferredPayload};
+use brain_tasks::projections::apply_event;
 use serde_json::json;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ async fn transfer_happy_path_all_tables_updated() {
 
     // Verify task is in source brain before transfer.
     let row = store.get_task("task-hp-1").unwrap().unwrap();
-    assert_eq!(row.task_id, "task-hp-1");
+    assert_eq!(row.id.as_str(), "task-hp-1");
 
     let result = store
         .transfer_task("task-hp-1", &dst_brain, None)

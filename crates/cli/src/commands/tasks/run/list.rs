@@ -2,9 +2,9 @@ use anyhow::{Result, bail};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
-use brain_persistence::db::tasks::queries::{TaskFilter, TaskRow, apply_filters};
-use brain_tasks::enrichment::enrich_task_list;
-use brain_tasks::enrichment::task_row_to_compact_json;
+use brain_tasks::Task;
+use brain_tasks::enrichment::{enrich_task_list, task_row_to_compact_json};
+use brain_tasks::filtering::{TaskFilter, apply_filters};
 
 use crate::hooks::{OutputFormat, build_hook_envelope};
 use crate::markdown_table::MarkdownTable;
@@ -17,7 +17,7 @@ enum LabelFetchMode {
 }
 
 struct FilteredTasks {
-    tasks: Vec<TaskRow>,
+    tasks: Vec<Task>,
     labels_map: Option<HashMap<String, Vec<String>>>,
 }
 
@@ -30,16 +30,16 @@ fn display_id(task_id: &str, short_ids: &HashMap<String, String>) -> String {
 
 fn render_task_table<'a, I>(tasks: I, short_ids: &HashMap<String, String>)
 where
-    I: IntoIterator<Item = &'a TaskRow>,
+    I: IntoIterator<Item = &'a Task>,
 {
     let mut table = MarkdownTable::new(vec!["PRI", "STATUS", "TYPE", "ASSIGNEE", "ID", "TITLE"]);
     for t in tasks {
         table.add_row(vec![
-            priority_label(t.priority).to_string(),
-            t.status.clone(),
+            priority_label(t.priority.as_i32()).to_string(),
+            t.status.as_ref().to_string(),
             t.task_type.as_str().to_string(),
             t.assignee.as_deref().unwrap_or("-").to_string(),
-            display_id(&t.task_id, short_ids),
+            display_id(t.id.as_str(), short_ids),
             t.title.clone(),
         ]);
     }
@@ -82,7 +82,7 @@ fn fetch_filtered_tasks(
         .into_iter()
         .filter(|t| {
             if let Some(ref s) = params.status {
-                t.status == *s
+                t.status.as_ref() == s.as_str()
             } else {
                 true
             }
@@ -92,14 +92,14 @@ fn fetch_filtered_tasks(
     let labels_map = match label_fetch_mode {
         LabelFetchMode::OnlyWhenFiltering => {
             if filter.label.is_some() {
-                let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+                let task_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
                 ctx.store.get_labels_for_tasks(&task_ids).ok()
             } else {
                 None
             }
         }
         LabelFetchMode::AlwaysWarnDefault => {
-            let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+            let task_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
             let labels_map = match ctx.store.get_labels_for_tasks(&task_ids) {
                 Ok(m) => m,
                 Err(e) => {
@@ -142,7 +142,7 @@ fn list_inner(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         fetch_filtered_tasks(ctx, params, LabelFetchMode::OnlyWhenFiltering)?;
 
     if ctx.output.is_json_mode() {
-        let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+        let task_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
         let labels_map = match ctx.store.get_labels_for_tasks(&task_ids) {
             Ok(m) => m,
             Err(e) => {
@@ -205,11 +205,11 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
     let labels_map = labels_map.unwrap_or_default();
 
     // Group tasks by label
-    let mut groups: BTreeMap<String, Vec<&TaskRow>> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Vec<&Task>> = BTreeMap::new();
     let mut unlabeled = Vec::new();
 
     for task in &tasks {
-        let task_labels = labels_map.get(&task.task_id);
+        let task_labels = labels_map.get(task.id.as_str());
         if let Some(lbls) = task_labels {
             if lbls.is_empty() {
                 unlabeled.push(task);
@@ -231,10 +231,10 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
                 let task_jsons: Vec<serde_json::Value> = group_tasks
                     .iter()
                     .map(|t| {
-                        let labels = labels_map.get(&t.task_id).cloned().unwrap_or_default();
+                        let labels = labels_map.get(t.id.as_str()).cloned().unwrap_or_default();
                         let mut j = task_row_to_compact_json(&ctx.store, t, labels);
                         if let Some(obj) = j.as_object_mut() {
-                            let short = display_id(&t.task_id, &short_ids);
+                            let short = display_id(t.id.as_str(), &short_ids);
                             obj.insert("short_id".into(), json!(short));
                             if !params.include_description {
                                 obj.remove("description");
@@ -251,10 +251,10 @@ fn list_grouped_by_label(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
             let task_jsons: Vec<serde_json::Value> = unlabeled
                 .iter()
                 .map(|t| {
-                    let labels = labels_map.get(&t.task_id).cloned().unwrap_or_default();
+                    let labels = labels_map.get(t.id.as_str()).cloned().unwrap_or_default();
                     let mut j = task_row_to_compact_json(&ctx.store, t, labels);
                     if let Some(obj) = j.as_object_mut() {
-                        let short = display_id(&t.task_id, &short_ids);
+                        let short = display_id(t.id.as_str(), &short_ids);
                         obj.insert("short_id".into(), json!(short));
                         if !params.include_description {
                             obj.remove("description");

@@ -1,7 +1,6 @@
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::comparator;
-use crate::db::tasks::events::TaskStatus;
 use crate::sql::SqlResult;
 
 use super::ANCESTOR_BLOCKED_CTE;
@@ -54,7 +53,7 @@ pub fn get_dependency_summary(conn: &Connection, task_id: &str) -> SqlResult<Dep
         let (dep_id, status_opt) = row?;
         total_deps += 1;
         match status_opt.as_deref() {
-            Some(s) if s == TaskStatus::Done.as_ref() || s == TaskStatus::Cancelled.as_ref() => {
+            Some(s) if s == "done" || s == "cancelled" => {
                 done_deps += 1;
             }
             _ => {

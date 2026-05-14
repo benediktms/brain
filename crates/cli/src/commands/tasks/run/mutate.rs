@@ -62,8 +62,8 @@ pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
     } else {
         println!("Updated task {display_id}");
         println!("  Title: {}", task.title);
-        println!("  Status: {}", task.status);
-        println!("  Priority: {}", priority_label(task.priority));
+        println!("  Status: {}", task.status.as_ref());
+        println!("  Priority: {}", priority_label(task.priority.as_i32()));
     }
 
     Ok(())

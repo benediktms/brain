@@ -5,7 +5,6 @@ use std::path::Path;
 use serde::Deserialize;
 
 use brain_core::error::{BrainCoreError, Result};
-use brain_persistence::db::tasks::queries;
 
 use crate::TaskStore;
 use crate::events::{
@@ -452,10 +451,10 @@ pub fn import_beads_issues(
     let brain_ids_from_beads: HashSet<&str> = beads_to_brain.values().map(|s| s.as_str()).collect();
 
     // Load existing state for diffing (keyed by brain task_id)
-    let existing_tasks: HashMap<String, queries::TaskRow> = task_store
+    let existing_tasks: HashMap<String, crate::Task> = task_store
         .list_all()?
         .into_iter()
-        .map(|t| (t.task_id.clone(), t))
+        .map(|t| (t.id.as_str().to_string(), t))
         .collect();
 
     let existing_labels: HashMap<String, HashSet<String>> = {
@@ -566,7 +565,7 @@ pub fn import_beads_issues(
                 upd.description = new_desc.or(Some(String::new()));
                 has_field = true;
             }
-            if issue.priority != existing.priority {
+            if issue.priority != existing.priority.as_i32() {
                 upd.priority = Some(issue.priority);
                 has_field = true;
             }
@@ -592,7 +591,7 @@ pub fn import_beads_issues(
                 "in_progress" => TaskStatus::InProgress,
                 _ => TaskStatus::Open,
             };
-            if brain_status.as_ref() != existing.status {
+            if brain_status != existing.status {
                 phase2.push(
                     TaskEvent::from_payload(
                         brain_id,
@@ -685,7 +684,7 @@ pub fn import_beads_issues(
 
             // Parent diff (only when beads-related)
             let exp_parent = expected_parents.get(brain_id).map(|p| p.as_str());
-            let cur_parent = existing.parent_task_id.as_deref();
+            let cur_parent = existing.parent.as_ref().map(|p| p.as_str());
             let exp_is_beads = exp_parent.is_some_and(|p| brain_ids_from_beads.contains(p));
             let cur_is_beads = cur_parent.is_some_and(|p| brain_ids_from_beads.contains(p));
 
@@ -920,7 +919,7 @@ mod tests {
     }
 
     /// Look up a brain task by its original beads ID via the external_ids table.
-    fn get_by_beads_id(store: &TaskStore, beads_id: &str) -> queries::TaskRow {
+    fn get_by_beads_id(store: &TaskStore, beads_id: &str) -> crate::Task {
         let brain_id = store
             .resolve_external_id("beads", beads_id)
             .unwrap()
@@ -976,10 +975,10 @@ mod tests {
 
         let t1 = get_by_beads_id(&store, "t1");
         assert_eq!(t1.title, "Task 1");
-        assert_eq!(t1.status, "open");
-        assert_eq!(t1.priority, 2);
+        assert_eq!(t1.status.as_ref(), "open");
+        assert_eq!(t1.priority.as_i32(), 2);
         // Brain ID should NOT be the beads ID
-        assert_ne!(t1.task_id, "t1");
+        assert_ne!(t1.id.as_str(), "t1");
     }
 
     #[test]
@@ -994,7 +993,7 @@ mod tests {
         assert_eq!(report.issues_imported, 1);
 
         let t = get_by_beads_id(&store, "t1");
-        assert_eq!(t.status, "done");
+        assert_eq!(t.status.as_ref(), "done");
 
         // close_reason should be a comment
         let bid = brain_id(&store, "t1");
@@ -1012,7 +1011,7 @@ mod tests {
         assert_eq!(report.issues_imported, 1);
 
         let t = get_by_beads_id(&store, "t1");
-        assert_eq!(t.status, "in_progress");
+        assert_eq!(t.status.as_ref(), "in_progress");
     }
 
     #[test]
@@ -1038,11 +1037,11 @@ mod tests {
         // t1 should be ready, t2 should be blocked
         let ready = store.list_ready().unwrap();
         assert_eq!(ready.len(), 1);
-        assert_eq!(ready[0].task_id, bid_t1);
+        assert_eq!(ready[0].id.as_str(), bid_t1);
 
         let blocked = store.list_blocked().unwrap();
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].task_id, bid_t2);
+        assert_eq!(blocked[0].id.as_str(), bid_t2);
     }
 
     #[test]
@@ -1067,17 +1066,17 @@ mod tests {
         let bid_child = brain_id(&store, "child-1");
         let bid_parent = brain_id(&store, "parent-1");
 
-        // Verify parent_task_id is set
+        // Verify parent is set
         let child_row = store.get_task(&bid_child).unwrap().unwrap();
         assert_eq!(
-            child_row.parent_task_id.as_deref(),
+            child_row.parent.as_ref().map(|p| p.as_str()),
             Some(bid_parent.as_str())
         );
 
         // Verify children query
         let children = store.get_children(&bid_parent).unwrap();
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].task_id, bid_child);
+        assert_eq!(children[0].id.as_str(), bid_child);
     }
 
     #[test]
@@ -1237,9 +1236,9 @@ mod tests {
         // Data unchanged
         let t1 = get_by_beads_id(&store, "t1");
         assert_eq!(t1.title, "Task 1");
-        assert_eq!(t1.status, "open");
+        assert_eq!(t1.status.as_ref(), "open");
         let t2 = get_by_beads_id(&store, "t2");
-        assert_eq!(t2.status, "done");
+        assert_eq!(t2.status.as_ref(), "done");
     }
 
     #[test]
@@ -1299,7 +1298,7 @@ mod tests {
         let issues = vec![make_issue("t1", "Task 1", "open", 2)];
         let path = write_jsonl(dir.path(), &issues);
         import_beads_issues(&path, &store, false).unwrap();
-        assert_eq!(get_by_beads_id(&store, "t1").status, "open");
+        assert_eq!(get_by_beads_id(&store, "t1").status.as_ref(), "open");
 
         // Close in beads
         let mut closed = make_issue("t1", "Task 1", "closed", 2);
@@ -1310,7 +1309,7 @@ mod tests {
         assert_eq!(r.issues_updated, 1);
 
         let t = get_by_beads_id(&store, "t1");
-        assert_eq!(t.status, "done");
+        assert_eq!(t.status.as_ref(), "done");
     }
 
     #[test]
@@ -1348,7 +1347,7 @@ mod tests {
         let issues = vec![make_issue("t1", "Task 1", "open", 2)];
         let path = write_jsonl(dir.path(), &issues);
         import_beads_issues(&path, &store, false).unwrap();
-        assert_eq!(get_by_beads_id(&store, "t1").priority, 2);
+        assert_eq!(get_by_beads_id(&store, "t1").priority.as_i32(), 2);
 
         // Change priority
         let issues = vec![make_issue("t1", "Task 1", "open", 0)];
@@ -1358,7 +1357,7 @@ mod tests {
         assert_eq!(r.issues_updated, 1);
 
         let t = get_by_beads_id(&store, "t1");
-        assert_eq!(t.priority, 0);
+        assert_eq!(t.priority.as_i32(), 0);
     }
 
     #[test]
@@ -1384,7 +1383,7 @@ mod tests {
         // t2 should be blocked by t1
         let blocked = store.list_blocked().unwrap();
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].task_id, bid_t2);
+        assert_eq!(blocked[0].id.as_str(), bid_t2);
 
         // Change deps: t1 no longer blocks t2, now t3 blocks t2
         let t1 = make_issue("t1", "Blocker", "open", 1); // no deps
@@ -1405,10 +1404,10 @@ mod tests {
         // t2 should now be blocked by t3, not t1
         let blocked = store.list_blocked().unwrap();
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].task_id, bid_t2);
+        assert_eq!(blocked[0].id.as_str(), bid_t2);
 
         let ready = store.list_ready().unwrap();
-        let ready_ids: Vec<&str> = ready.iter().map(|r| r.task_id.as_str()).collect();
+        let ready_ids: Vec<&str> = ready.iter().map(|r| r.id.as_str()).collect();
         assert!(ready_ids.contains(&bid_t1.as_str()));
         assert!(ready_ids.contains(&bid_t3.as_str()));
         assert!(!ready_ids.contains(&bid_t2.as_str()));

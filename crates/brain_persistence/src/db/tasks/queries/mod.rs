@@ -10,8 +10,6 @@ pub use labels::*;
 pub use listing::*;
 pub use resolve::*;
 
-use super::events::TaskType;
-
 /// A row from the tasks projection table.
 #[derive(Debug, Clone)]
 pub struct TaskRow {
@@ -22,7 +20,7 @@ pub struct TaskRow {
     pub priority: i32,
     pub blocked_reason: Option<String>,
     pub due_ts: Option<i64>,
-    pub task_type: TaskType,
+    pub task_type: String,
     pub assignee: Option<String>,
     pub defer_until: Option<i64>,
     pub parent_task_id: Option<String>,
@@ -104,26 +102,15 @@ has_blocked_ancestor(tid) AS (
 ) ";
 
 pub(super) fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
-    let task_type_str: String = row.get(7)?;
-    let task_id: String = row.get(0)?;
-    let task_type = task_type_str.parse().unwrap_or_else(|e| {
-        tracing::warn!(
-            task_id = %task_id,
-            raw_value = %task_type_str,
-            error = %e,
-            "invalid task_type in database; defaulting to Task — possible schema or migration issue"
-        );
-        TaskType::Task
-    });
     Ok(TaskRow {
-        task_id,
+        task_id: row.get(0)?,
         title: row.get(1)?,
         description: row.get(2)?,
         status: row.get(3)?,
         priority: row.get(4)?,
         blocked_reason: row.get(5)?,
         due_ts: row.get(6)?,
-        task_type,
+        task_type: row.get(7)?,
         assignee: row.get(8)?,
         defer_until: row.get(9)?,
         parent_task_id: row.get(10)?,
@@ -138,8 +125,6 @@ pub(super) fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskRow> {
 mod tests {
     use super::*;
     use crate::db::schema::init_schema;
-    use crate::db::tasks::events::*;
-    use crate::db::tasks::projections::apply_event;
     use rusqlite::Connection;
 
     fn setup() -> Connection {
@@ -149,46 +134,34 @@ mod tests {
     }
 
     fn create_task(conn: &Connection, task_id: &str, title: &str, priority: i32) {
-        let ev = TaskEvent::from_payload(
-            task_id,
-            "user",
-            TaskCreatedPayload {
-                title: title.to_string(),
-                description: None,
-                priority,
-                status: TaskStatus::Open,
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-                display_id: None,
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at, display_id)
+             VALUES (?1, '', ?2, 'open', ?3, 'task', strftime('%s','now'), strftime('%s','now'), ?1)",
+            rusqlite::params![task_id, title, priority],
+        )
+        .unwrap();
     }
 
     fn set_status(conn: &Connection, task_id: &str, status: &str) {
-        let ev = TaskEvent::from_payload(
-            task_id,
-            "user",
-            StatusChangedPayload {
-                new_status: status.parse().unwrap(),
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        conn.execute(
+            "UPDATE tasks SET status = ?1, updated_at = strftime('%s','now') WHERE task_id = ?2",
+            rusqlite::params![status, task_id],
+        )
+        .unwrap();
     }
 
     fn add_dep(conn: &Connection, task_id: &str, depends_on: &str) {
-        let ev = TaskEvent::new(
-            task_id,
-            "user",
-            EventType::DependencyAdded,
-            &DependencyPayload {
-                depends_on_task_id: depends_on.to_string(),
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        conn.execute(
+            "INSERT INTO task_deps (task_id, depends_on) VALUES (?1, ?2)",
+            rusqlite::params![task_id, depends_on],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
+            rusqlite::params![task_id, depends_on],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -262,21 +235,11 @@ mod tests {
         let conn = setup();
         create_task(&conn, "t1", "Task", 2);
 
-        let ev = TaskEvent::from_payload(
-            "t1",
-            "user",
-            TaskUpdatedPayload {
-                title: None,
-                description: None,
-                priority: None,
-                due_ts: None,
-                blocked_reason: Some("waiting on external API".to_string()),
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-            },
-        );
-        apply_event(&conn, &ev, "").unwrap();
+        conn.execute(
+            "UPDATE tasks SET blocked_reason = ?1, updated_at = strftime('%s','now') WHERE task_id = ?2",
+            rusqlite::params!["waiting on external API", "t1"],
+        )
+        .unwrap();
 
         let blocked = list_blocked(&conn, None).unwrap();
         assert_eq!(blocked.len(), 1);
@@ -319,63 +282,22 @@ mod tests {
         assert!(!task_exists(&conn, "t2").unwrap());
     }
 
+    fn create_task_with_due(conn: &Connection, task_id: &str, title: &str, due_ts: Option<i64>) {
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, due_ts, created_at, updated_at, display_id)
+             VALUES (?1, '', ?2, 'open', 2, 'task', ?3, strftime('%s','now'), strftime('%s','now'), ?1)",
+            rusqlite::params![task_id, title, due_ts],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn test_priority_ordering_with_due_dates() {
         let conn = setup();
 
-        // Same priority, different due dates
-        let ev1 = TaskEvent::from_payload(
-            "t1",
-            "user",
-            TaskCreatedPayload {
-                title: "Later due".to_string(),
-                description: None,
-                priority: 2,
-                status: TaskStatus::Open,
-                due_ts: Some(2000),
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-                display_id: None,
-            },
-        );
-        let ev2 = TaskEvent::from_payload(
-            "t2",
-            "user",
-            TaskCreatedPayload {
-                title: "Earlier due".to_string(),
-                description: None,
-                priority: 2,
-                status: TaskStatus::Open,
-                due_ts: Some(1000),
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-                display_id: None,
-            },
-        );
-        let ev3 = TaskEvent::from_payload(
-            "t3",
-            "user",
-            TaskCreatedPayload {
-                title: "No due date".to_string(),
-                description: None,
-                priority: 2,
-                status: TaskStatus::Open,
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-                display_id: None,
-            },
-        );
-
-        apply_event(&conn, &ev1, "").unwrap();
-        apply_event(&conn, &ev2, "").unwrap();
-        apply_event(&conn, &ev3, "").unwrap();
+        create_task_with_due(&conn, "t1", "Later due", Some(2000));
+        create_task_with_due(&conn, "t2", "Earlier due", Some(1000));
+        create_task_with_due(&conn, "t3", "No due date", None);
 
         let ready = list_ready(&conn, None).unwrap();
         assert_eq!(ready.len(), 3);
@@ -615,79 +537,47 @@ mod tests {
         title: &str,
         priority: i32,
     ) {
-        let ev = TaskEvent::from_payload(
-            task_id,
-            "user",
-            TaskCreatedPayload {
-                title: title.to_string(),
-                description: None,
-                priority,
-                status: TaskStatus::Open,
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: Some(parent_id.to_string()),
-                display_id: None,
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        // Compute next child_seq before adding the parent_of edge, so the
+        // count over existing children is correct.
+        let child_seq = super::next_child_seq(conn, parent_id).unwrap();
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, parent_task_id, child_seq, created_at, updated_at, display_id)
+             VALUES (?1, '', ?2, 'open', ?3, 'task', ?4, ?5, strftime('%s','now'), strftime('%s','now'), ?1)",
+            rusqlite::params![task_id, title, priority, parent_id, child_seq],
+        )
+        .unwrap();
+        // Dual-write parent_of edge into entity_links
+        conn.execute(
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
+            rusqlite::params![parent_id, task_id],
+        )
+        .unwrap();
     }
 
     fn create_epic(conn: &Connection, task_id: &str, title: &str, priority: i32) {
-        let ev = TaskEvent::from_payload(
-            task_id,
-            "user",
-            TaskCreatedPayload {
-                title: title.to_string(),
-                description: None,
-                priority,
-                status: TaskStatus::Open,
-                due_ts: None,
-                task_type: Some(TaskType::Epic),
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-                display_id: None,
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at, display_id)
+             VALUES (?1, '', ?2, 'open', ?3, 'epic', strftime('%s','now'), strftime('%s','now'), ?1)",
+            rusqlite::params![task_id, title, priority],
+        )
+        .unwrap();
     }
 
     fn set_blocked_reason(conn: &Connection, task_id: &str, reason: Option<&str>) {
-        let ev = TaskEvent::from_payload(
-            task_id,
-            "user",
-            TaskUpdatedPayload {
-                title: None,
-                description: None,
-                priority: None,
-                due_ts: None,
-                blocked_reason: reason.map(|s| s.to_string()),
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        conn.execute(
+            "UPDATE tasks SET blocked_reason = ?1, updated_at = strftime('%s','now') WHERE task_id = ?2",
+            rusqlite::params![reason, task_id],
+        )
+        .unwrap();
     }
 
     fn set_defer_until(conn: &Connection, task_id: &str, ts: Option<i64>) {
-        let ev = TaskEvent::from_payload(
-            task_id,
-            "user",
-            TaskUpdatedPayload {
-                title: None,
-                description: None,
-                priority: None,
-                due_ts: None,
-                blocked_reason: None,
-                task_type: None,
-                assignee: None,
-                defer_until: ts,
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        conn.execute(
+            "UPDATE tasks SET defer_until = ?1, updated_at = strftime('%s','now') WHERE task_id = ?2",
+            rusqlite::params![ts, task_id],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -856,15 +746,20 @@ mod tests {
     // All edges are wired via the dual-write path (apply_event), not direct INSERTs.
 
     fn set_parent(conn: &Connection, task_id: &str, parent_id: &str) {
-        let ev = TaskEvent::new(
-            task_id,
-            "user",
-            EventType::ParentSet,
-            &ParentSetPayload {
-                parent_task_id: Some(parent_id.to_string()),
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        // Compute next child_seq before adding the parent_of edge so dot-notation
+        // compact IDs work (real ParentSet projection sets this via next_child_seq).
+        let child_seq = super::next_child_seq(conn, parent_id).unwrap();
+        conn.execute(
+            "UPDATE tasks SET parent_task_id = ?1, child_seq = ?2, updated_at = strftime('%s','now') WHERE task_id = ?3",
+            rusqlite::params![parent_id, child_seq, task_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
+            rusqlite::params![parent_id, task_id],
+        )
+        .unwrap();
     }
 
     /// Three-deep parent chain via entity_links parent_of edges.
@@ -1073,62 +968,22 @@ mod tests {
         );
     }
 
-    // -- Invalid task_type handling tests --
+    // -- task_type round-trip tests --
 
-    /// Directly corrupt a task_type value in the DB (bypassing the CHECK constraint via
-    /// PRAGMA writable_schema / direct column update after disabling constraint checks)
-    /// and verify that row_to_task gracefully defaults to TaskType::Task instead of panicking.
-    ///
-    /// This scenario models external DB manipulation or future schema migrations where an
-    /// unknown task_type value could appear in the database.
-    #[test]
-    fn test_row_to_task_invalid_type_defaults_to_task() {
-        let conn = setup();
-        create_task(&conn, "t1", "Task 1", 2);
-
-        // Disable integrity enforcement, update the value, then re-enable.
-        // This simulates data corruption or a future migration that doesn't
-        // yet know about the CHECK constraint.
-        conn.execute_batch(
-            "PRAGMA ignore_check_constraints = ON;
-             UPDATE tasks SET task_type = 'corrupted_type' WHERE task_id = 't1';
-             PRAGMA ignore_check_constraints = OFF;",
-        )
-        .unwrap();
-
-        let task = get_task(&conn, "t1").unwrap().unwrap();
-        assert_eq!(
-            task.task_type,
-            TaskType::Task,
-            "invalid task_type should default to TaskType::Task"
-        );
-    }
-
-    /// Verify that the TaskType FromStr implementation correctly rejects unknown values.
-    /// This is the underlying mechanism that row_to_task relies on for its warn+default path.
-    #[test]
-    fn test_task_type_parse_rejects_unknown_values() {
-        let invalid_values = ["", "unknown", "corrupted_type", "TASK", "Task", "BUG"];
-        for s in &invalid_values {
-            let result: Result<TaskType, _> = s.parse();
-            assert!(result.is_err(), "'{s}' should fail to parse as TaskType");
-        }
-    }
-
-    /// Verify that all valid task_type values round-trip correctly through the DB.
+    /// Verify that task_type values stored in the DB are returned as-is.
     #[test]
     fn test_row_to_task_all_valid_types_roundtrip() {
         let conn = setup();
 
         let cases = [
-            ("t_task", "task", TaskType::Task),
-            ("t_bug", "bug", TaskType::Bug),
-            ("t_feature", "feature", TaskType::Feature),
-            ("t_epic", "epic", TaskType::Epic),
-            ("t_spike", "spike", TaskType::Spike),
+            ("t_task", "task"),
+            ("t_bug", "bug"),
+            ("t_feature", "feature"),
+            ("t_epic", "epic"),
+            ("t_spike", "spike"),
         ];
 
-        for (task_id, type_str, expected) in &cases {
+        for (task_id, type_str) in &cases {
             create_task(&conn, task_id, "title", 2);
             conn.execute(
                 "UPDATE tasks SET task_type = ?1 WHERE task_id = ?2",
@@ -1138,7 +993,7 @@ mod tests {
 
             let task = get_task(&conn, task_id).unwrap().unwrap();
             assert_eq!(
-                &task.task_type, expected,
+                task.task_type, *type_str,
                 "task_type '{type_str}' should round-trip correctly"
             );
         }
@@ -1187,24 +1042,12 @@ mod tests {
         // Register the brain so the FK on tasks.brain_id is satisfied.
         crate::db::schema::ensure_brain_registered(conn, brain_id, brain_id).unwrap();
 
-        let ev = TaskEvent::from_payload(
-            task_id,
-            "user",
-            TaskCreatedPayload {
-                title: title.to_string(),
-                description: None,
-                priority,
-                status: TaskStatus::Open,
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-                display_id: None,
-            },
-        );
-        // Apply with the target brain_id so the task lands in that partition.
-        apply_event(conn, &ev, brain_id).unwrap();
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at, display_id)
+             VALUES (?1, ?2, ?3, 'open', ?4, 'task', strftime('%s','now'), strftime('%s','now'), ?1)",
+            rusqlite::params![task_id, brain_id, title, priority],
+        )
+        .unwrap();
     }
 
     /// A task in brain-a depending on an open task in brain-b is NOT ready.
@@ -1667,25 +1510,8 @@ mod tests {
     fn test_row_to_task_parent_via_entity_links() {
         let conn = setup();
 
-        // Create parent with TaskCreated payload carrying parent_task_id.
         create_task(&conn, "parent", "Parent Task", 1);
-        let ev = TaskEvent::from_payload(
-            "child",
-            "user",
-            TaskCreatedPayload {
-                title: "Child Task".to_string(),
-                description: None,
-                priority: 2,
-                status: TaskStatus::Open,
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: Some("parent".to_string()),
-                display_id: None,
-            },
-        );
-        apply_event(&conn, &ev, "").unwrap();
+        create_child_task(&conn, "child", "parent", "Child Task", 2);
 
         let task = get_task(&conn, "child").unwrap().unwrap();
         assert_eq!(

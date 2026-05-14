@@ -830,26 +830,27 @@ fn render_top_tasks_section(stores: &brain_lib::stores::BrainStores) -> String {
         }
     };
 
-    let status_ord = |status: &str| -> u8 { if status == "in_progress" { 0 } else { 1 } };
+    use brain_tasks::events::TaskStatus;
+    let status_ord = |s: &TaskStatus| -> u8 { if *s == TaskStatus::InProgress { 0 } else { 1 } };
     tasks.sort_by(|a, b| {
         status_ord(&a.status)
             .cmp(&status_ord(&b.status))
             .then(a.priority.cmp(&b.priority))
-            .then_with(|| match (a.due_ts, b.due_ts) {
+            .then_with(|| match (a.due_at, b.due_at) {
                 (Some(a_ts), Some(b_ts)) => a_ts.cmp(&b_ts),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => std::cmp::Ordering::Equal,
             })
-            .then(a.task_id.cmp(&b.task_id))
+            .then(a.id.as_str().cmp(b.id.as_str()))
     });
 
     tasks
         .into_iter()
         .take(10)
         .map(|t| {
-            let short = stores.tasks.compact_id_or_raw(&t.task_id);
-            format!("{short} [P{}] {}", t.priority, t.title)
+            let short = stores.tasks.compact_id_or_raw(t.id.as_str());
+            format!("{short} [P{}] {}", t.priority.as_i32(), t.title)
         })
         .collect::<Vec<_>>()
         .join("\n")

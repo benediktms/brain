@@ -1,9 +1,9 @@
 use anyhow::Result;
 use serde_json::json;
 
-use brain_tasks::enrichment::task_row_to_compact_json;
 use brain_tasks::enrichment::{
-    children_stubs_to_json, comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
+    children_stubs_to_json, comments_to_json, dep_summary_to_json_with_blocking,
+    note_links_to_json, task_row_to_compact_json,
 };
 
 use super::{TaskCtx, format_ts, format_ts_short, priority_label};
@@ -68,21 +68,21 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
         let display_id = ctx.store.compact_id_or_raw(&id);
         println!("Task: {display_id}");
         println!("Title: {}", task.title);
-        println!("Status: {}", task.status);
-        println!("Priority: {}", priority_label(task.priority));
-        println!("Type: {}", task.task_type);
+        println!("Status: {}", task.status.as_ref());
+        println!("Priority: {}", priority_label(task.priority.as_i32()));
+        println!("Type: {}", task.task_type.as_str());
         println!("Assignee: {}", task.assignee.as_deref().unwrap_or("-"));
-        if let Some(ref parent) = task.parent_task_id {
-            let display_parent = ctx.store.compact_id_or_raw(parent);
+        if let Some(ref parent) = task.parent {
+            let display_parent = ctx.store.compact_id_or_raw(parent.as_str());
             println!("Parent: {display_parent}");
         }
-        println!("Created: {}", format_ts(task.created_at));
-        println!("Updated: {}", format_ts(task.updated_at));
-        if let Some(due) = task.due_ts {
-            println!("Due: {}", format_ts(due));
+        println!("Created: {}", format_ts(task.created_at.timestamp()));
+        println!("Updated: {}", format_ts(task.updated_at.timestamp()));
+        if let Some(due) = task.due_at {
+            println!("Due: {}", format_ts(due.timestamp()));
         }
         if let Some(defer) = task.defer_until {
-            println!("Deferred until: {}", format_ts(defer));
+            println!("Deferred until: {}", format_ts(defer.timestamp()));
         }
         if let Some(ref reason) = task.blocked_reason {
             println!("Blocked: {reason}");
@@ -126,11 +126,11 @@ pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
         if !children.is_empty() {
             println!("\nChildren:");
             for child in &children {
-                let short = ctx.store.compact_id_or_raw(&child.task_id);
+                let short = ctx.store.compact_id_or_raw(child.id.as_str());
                 println!(
                     "  [{}] {} {}  {}",
-                    child.status,
-                    priority_label(child.priority),
+                    child.status.as_ref(),
+                    priority_label(child.priority.as_i32()),
                     short,
                     child.title
                 );

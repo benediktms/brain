@@ -290,7 +290,7 @@ mod tests {
             .get_task("t1")
             .expect("checked in test assertions")
             .expect("checked in test assertions");
-        assert_eq!(task.status, "done");
+        assert_eq!(task.status.as_ref(), "done");
     }
 
     #[tokio::test]

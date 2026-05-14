@@ -105,11 +105,11 @@ fn test_multi_brain_task_isolation() {
     // Each scoped store sees only its own tasks.
     let tasks_a = store_a.list_all().unwrap();
     assert_eq!(tasks_a.len(), 2, "brain-a should see exactly 2 tasks");
-    assert!(tasks_a.iter().all(|t| t.task_id.starts_with("task-a")));
+    assert!(tasks_a.iter().all(|t| t.id.as_str().starts_with("task-a")));
 
     let tasks_b = store_b.list_all().unwrap();
     assert_eq!(tasks_b.len(), 1, "brain-b should see exactly 1 task");
-    assert_eq!(tasks_b[0].task_id, "task-b1");
+    assert_eq!(tasks_b[0].id.as_str(), "task-b1");
 
     // An unscoped store on the same DB sees all three tasks.
     let _tasks_dir_all = dir.path().join("tasks_all");
@@ -132,14 +132,14 @@ fn test_multi_brain_task_interleaved_writes() {
     create_task(&store_b, "b2", "Delta");
 
     let tasks_a = store_a.list_all().unwrap();
-    let ids_a: Vec<&str> = tasks_a.iter().map(|t| t.task_id.as_str()).collect();
+    let ids_a: Vec<&str> = tasks_a.iter().map(|t| t.id.as_str()).collect();
     assert!(ids_a.contains(&"a1"));
     assert!(ids_a.contains(&"a2"));
     assert!(!ids_a.contains(&"b1"));
     assert!(!ids_a.contains(&"b2"));
 
     let tasks_b = store_b.list_all().unwrap();
-    let ids_b: Vec<&str> = tasks_b.iter().map(|t| t.task_id.as_str()).collect();
+    let ids_b: Vec<&str> = tasks_b.iter().map(|t| t.id.as_str()).collect();
     assert!(ids_b.contains(&"b1"));
     assert!(ids_b.contains(&"b2"));
     assert!(!ids_b.contains(&"a1"));
@@ -196,7 +196,7 @@ fn test_cross_brain_dependency_resolves() {
 
     // "dependent" should now appear as ready from brain-b's perspective.
     let ready = store_b.list_ready().unwrap();
-    let ready_ids: Vec<&str> = ready.iter().map(|t| t.task_id.as_str()).collect();
+    let ready_ids: Vec<&str> = ready.iter().map(|t| t.id.as_str()).collect();
     assert!(
         ready_ids.contains(&"dependent"),
         "dependent should be ready after prereq done; got: {ready_ids:?}"

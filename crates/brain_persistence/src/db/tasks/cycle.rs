@@ -49,10 +49,6 @@ pub fn check_cycle(conn: &Connection, task_id: &str, depends_on: &str) -> SqlRes
 mod tests {
     use super::*;
     use crate::db::schema::init_schema;
-    use crate::db::tasks::events::{
-        DependencyPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus,
-    };
-    use crate::db::tasks::projections::apply_event;
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -61,35 +57,26 @@ mod tests {
     }
 
     fn create_task(conn: &Connection, task_id: &str) {
-        let ev = TaskEvent::from_payload(
-            task_id,
-            "user",
-            TaskCreatedPayload {
-                title: task_id.to_string(),
-                description: None,
-                priority: 2,
-                status: TaskStatus::Open,
-                due_ts: None,
-                task_type: None,
-                assignee: None,
-                defer_until: None,
-                parent_task_id: None,
-                display_id: None,
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        conn.execute(
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at, display_id)
+             VALUES (?1, '', ?1, 'open', 2, 'task', strftime('%s','now'), strftime('%s','now'), ?1)",
+            rusqlite::params![task_id],
+        )
+        .unwrap();
     }
 
     fn add_dep(conn: &Connection, task_id: &str, depends_on: &str) {
-        let ev = TaskEvent::new(
-            task_id,
-            "user",
-            EventType::DependencyAdded,
-            &DependencyPayload {
-                depends_on_task_id: depends_on.to_string(),
-            },
-        );
-        apply_event(conn, &ev, "").unwrap();
+        conn.execute(
+            "INSERT INTO task_deps (task_id, depends_on) VALUES (?1, ?2)",
+            rusqlite::params![task_id, depends_on],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
+             VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', strftime('%Y-%m-%dT%H:%M:%SZ','now'), NULL)",
+            rusqlite::params![task_id, depends_on],
+        )
+        .unwrap();
     }
 
     #[test]
