@@ -20,7 +20,7 @@ use brain_persistence::db::tasks::queries::{
 
 pub use brain_persistence::db::sagas::queries::BrainSummary;
 
-use crate::error::{BrainCoreError, Result};
+use brain_core::error::{BrainCoreError, Result};
 
 pub mod lifecycle;
 pub mod status;
@@ -46,9 +46,10 @@ pub struct SagaStats {
     pub brains: Vec<BrainSummary>,
 }
 
-// Cascade types live in brain-persistence (they need rusqlite-backed helpers
-// to walk member tasks). Re-exported here so the public API is still
-// `brain_lib::sagas::CascadeResult` / `CascadeOutcome`.
+// Cascade types live in the persistence layer (they need rusqlite-backed
+// helpers to walk member tasks). Re-exported here so the saga domain's
+// public surface owns the cascade vocabulary even though the SQL stays
+// upstream.
 pub use brain_persistence::db::sagas::queries::{CascadeOutcome, CascadeResult};
 
 /// Store for saga lifecycle operations. Registry-level: not scoped to any brain.
@@ -85,7 +86,7 @@ impl SagaStore {
             .with_read_conn(move |conn| {
                 let canonical = resolve_saga_id(conn, &input)?;
                 let row = queries::get_saga(conn, &canonical)?.ok_or_else(|| {
-                    SqlError::Domain(crate::error::BrainCoreError::Internal(format!(
+                    SqlError::Domain(brain_core::error::BrainCoreError::Internal(format!(
                         "saga {canonical} disappeared between resolve and fetch"
                     )))
                 })?;
@@ -152,7 +153,7 @@ impl SagaStore {
         actor: &str,
     ) -> Result<SagaRow> {
         if title.is_none() && description.is_none() {
-            return Err(crate::error::BrainCoreError::Parse(
+            return Err(brain_core::error::BrainCoreError::Parse(
                 "update: at least one of title or description must be provided".into(),
             ));
         }
@@ -160,7 +161,7 @@ impl SagaStore {
             Some(t) => {
                 let trimmed = t.trim();
                 if trimmed.is_empty() {
-                    return Err(crate::error::BrainCoreError::Parse(
+                    return Err(brain_core::error::BrainCoreError::Parse(
                         "update: title must not be empty".into(),
                     ));
                 }
@@ -333,7 +334,7 @@ impl SagaStore {
                 // L4: use the canonical now_ts() helper instead of an inline
                 // SystemTime::now().unwrap_or(0) which would silently write
                 // epoch-zero on a clock anomaly.
-                let now = crate::utils::now_ts();
+                let now = brain_core::utils::now_ts();
                 start_saga(&tx, &canonical, now)?;
 
                 let event = SagaEvent::new(
@@ -550,8 +551,14 @@ impl SagaStore {
             .into_brain_core()
     }
 
-    #[cfg(test)]
-    pub(crate) fn db(&self) -> &Db {
+    /// Borrow the underlying `Db` handle.
+    ///
+    /// Exposed for callers that need to open additional read/write
+    /// connections through the store — e.g. MCP tool dispatchers that
+    /// issue their own queries rather than going through wrapper methods.
+    /// The accessor is unconditional (not test-gated) because production
+    /// dispatch sites reach in directly today.
+    pub fn db(&self) -> &Db {
         &self.db
     }
 
@@ -877,11 +884,11 @@ impl SagaStore {
     /// L5: uses `now_ts()` (seconds) like every other timestamp in the table —
     /// previously wrote `as_millis()` which was ~1000× larger and would look
     /// like a future timestamp to anything that compared across paths.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn force_status_for_test(&self, saga_id: &str, status: SagaStatus) -> Result<()> {
         let saga_id = saga_id.to_string();
         let status_str = status.as_str();
-        let ts = crate::utils::now_ts();
+        let ts = brain_core::utils::now_ts();
         self.db
             .with_write_conn(move |conn| {
                 let canonical = resolve_saga_id(conn, &saga_id)?;
@@ -900,7 +907,7 @@ impl SagaStore {
     /// Used by L6: timestamp-monotonicity tests no longer need a 1.1s sleep —
     /// they backdate the row, then call `update()` and assert the new
     /// `updated_at` is strictly greater than the backdated value.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn force_updated_at_for_test(&self, saga_id: &str, ts: i64) -> Result<()> {
         let saga_id = saga_id.to_string();
         self.db
@@ -1472,7 +1479,7 @@ mod tests {
     fn update_bumps_updated_at_strictly() {
         let store = in_memory_store();
         let row = store.create("Timing", None, "test").unwrap();
-        let backdated = crate::utils::now_ts() - 2;
+        let backdated = brain_core::utils::now_ts() - 2;
         store
             .force_updated_at_for_test(&row.saga_id, backdated)
             .unwrap();

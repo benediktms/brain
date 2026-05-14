@@ -65,7 +65,7 @@ pub mod query_pipeline;
 pub mod ranking;
 pub mod records;
 pub mod retrieval;
-pub mod sagas;
+pub use brain_sagas as sagas;
 pub mod scanner;
 pub mod search_service;
 pub mod stores;
