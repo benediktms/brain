@@ -537,10 +537,13 @@ mod tests {
         title: &str,
         priority: i32,
     ) {
+        // Compute next child_seq before adding the parent_of edge, so the
+        // count over existing children is correct.
+        let child_seq = super::next_child_seq(conn, parent_id).unwrap();
         conn.execute(
-            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, parent_task_id, created_at, updated_at, display_id)
-             VALUES (?1, '', ?2, 'open', ?3, 'task', ?4, strftime('%s','now'), strftime('%s','now'), ?1)",
-            rusqlite::params![task_id, title, priority, parent_id],
+            "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, parent_task_id, child_seq, created_at, updated_at, display_id)
+             VALUES (?1, '', ?2, 'open', ?3, 'task', ?4, ?5, strftime('%s','now'), strftime('%s','now'), ?1)",
+            rusqlite::params![task_id, title, priority, parent_id, child_seq],
         )
         .unwrap();
         // Dual-write parent_of edge into entity_links
@@ -743,9 +746,12 @@ mod tests {
     // All edges are wired via the dual-write path (apply_event), not direct INSERTs.
 
     fn set_parent(conn: &Connection, task_id: &str, parent_id: &str) {
+        // Compute next child_seq before adding the parent_of edge so dot-notation
+        // compact IDs work (real ParentSet projection sets this via next_child_seq).
+        let child_seq = super::next_child_seq(conn, parent_id).unwrap();
         conn.execute(
-            "UPDATE tasks SET parent_task_id = ?1, updated_at = strftime('%s','now') WHERE task_id = ?2",
-            rusqlite::params![parent_id, task_id],
+            "UPDATE tasks SET parent_task_id = ?1, child_seq = ?2, updated_at = strftime('%s','now') WHERE task_id = ?3",
+            rusqlite::params![parent_id, child_seq, task_id],
         )
         .unwrap();
         conn.execute(
