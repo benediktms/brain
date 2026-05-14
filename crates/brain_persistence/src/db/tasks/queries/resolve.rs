@@ -42,18 +42,31 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> SqlResult<String> {
 ///
 /// Returns `Some(brain_id)` if the input has a short prefix (1-4 chars before dash)
 /// that matches a registered brain's prefix. Returns `None` otherwise.
+///
+/// Fails explicitly if multiple brains share the same prefix. The v54→v55 schema
+/// migration enforces uniqueness, but this check is a defense-in-depth against
+/// stale state (e.g. a fixture that bypassed the migration, or a hand-edited DB).
+/// Silently picking the first match is the bug `brn-37e` ultimately diagnosed,
+/// so this resolver refuses to do it.
 pub fn resolve_brain_from_prefix(conn: &Connection, input: &str) -> SqlResult<Option<String>> {
     match input.find('-') {
         Some(dash_pos) if dash_pos > 0 && dash_pos <= 4 => {
             let prefix = input[..dash_pos].to_ascii_uppercase();
-            let brain_id: Option<String> = conn
-                .query_row(
-                    "SELECT brain_id FROM brains WHERE UPPER(prefix) = ?1",
-                    [&prefix],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            Ok(brain_id)
+            let matches: Vec<String> = {
+                let mut stmt =
+                    conn.prepare("SELECT brain_id FROM brains WHERE UPPER(prefix) = ?1")?;
+                stmt.query_map([&prefix], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            match matches.as_slice() {
+                [] => Ok(None),
+                [only] => Ok(Some(only.clone())),
+                multiple => Err(SqlError::Domain(BrainCoreError::TaskEvent(format!(
+                    "ambiguous brain prefix '{prefix}': {} brains share it: {}",
+                    multiple.len(),
+                    multiple.join(", ")
+                )))),
+            }
         }
         _ => Ok(None),
     }
@@ -76,20 +89,10 @@ pub fn resolve_task_id_scoped(
 
     // Defense-in-depth: if the input has a prefix like "ckt-ebd", derive
     // the brain_id from the prefix when no explicit scope was provided.
-    // This ensures the prefix in the ID itself always provides scoping.
+    // Routes through `resolve_brain_from_prefix` so the ambiguity check
+    // (multiple brains with the same prefix → error) applies uniformly.
     let derived_brain_id: Option<String> = if brain_id.is_none() {
-        match input.find('-') {
-            Some(dash_pos) if dash_pos <= 4 && dash_pos > 0 => {
-                let prefix = input[..dash_pos].to_ascii_uppercase();
-                conn.query_row(
-                    "SELECT brain_id FROM brains WHERE UPPER(prefix) = ?1",
-                    [&prefix],
-                    |row| row.get(0),
-                )
-                .optional()?
-            }
-            _ => None,
-        }
+        resolve_brain_from_prefix(conn, input)?
     } else {
         None
     };
