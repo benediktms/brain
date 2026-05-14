@@ -1,4 +1,3 @@
-pub mod cycle;
 pub mod display_id;
 pub mod queries;
 pub mod transfer;
