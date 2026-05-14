@@ -124,7 +124,7 @@ jobs:
     #   cli       — `brain` binary + assert_cmd integration tests (also pulls
     #                brain-lib transitively, hence its own shard)
     #   leaves    — brain_core, brain_embedder, brain_persistence, brain_tasks
-    name: Test
+    name: Test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
