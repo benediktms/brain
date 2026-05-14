@@ -5,7 +5,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::tasks::display_id::compute_display_id_for_target;
-use crate::db::tasks::events::{TaskEvent, TaskTransferredPayload};
+use crate::db::tasks::writers;
 use crate::error::BrainCoreError;
 use crate::sql::{SqlError, SqlResult};
 
@@ -124,36 +124,15 @@ pub fn transfer_task_inner(
         )?;
 
         // 7. Insert task_transferred event.
-        let ev = TaskEvent::from_payload(
+        writers::append_task_transferred_event(
+            conn,
             task_id,
+            &from_brain_id,
+            target_brain_id,
+            &from_display_id,
+            &to_display_id,
             "system",
-            TaskTransferredPayload {
-                from_brain_id: from_brain_id.clone(),
-                to_brain_id: target_brain_id.to_string(),
-                from_display_id: from_display_id.clone(),
-                to_display_id: to_display_id.clone(),
-            },
-        );
-        // ev.payload is already a serde_json::Value; serializing it to a JSON
-        // string is infallible in practice, but we propagate errors explicitly
-        // rather than silently corrupting the event row with "{}".
-        let payload_json = serde_json::to_string(&ev.payload).map_err(|e| {
-            SqlError::Domain(BrainCoreError::TaskEvent(format!(
-                "payload serialize failed: {e}"
-            )))
-        })?;
-        conn.execute(
-            "INSERT INTO task_events \
-             (event_id, task_id, event_type, timestamp, actor, payload) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                ev.event_id,
-                ev.task_id,
-                format!("{:?}", ev.event_type),
-                ev.timestamp,
-                ev.actor,
-                payload_json,
-            ],
+            crate::utils::now_ts(),
         )?;
 
         Ok(TaskTransferResult {

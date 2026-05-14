@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use brain_persistence::db::sagas::events::SagaCancelledPayload;
-use brain_persistence::db::tasks::events::TaskStatus;
 use brain_persistence::sql::{SqlError, SqlResultExt};
 
 use brain_persistence::db::Db;
@@ -270,7 +269,7 @@ impl SagaStore {
                 )?;
 
                 let cascade_results = if cascade {
-                    queries::cascade_member_tasks(&tx, &canonical, &actor_owned, TaskStatus::Done)?
+                    queries::cascade_member_tasks(&tx, &canonical, &actor_owned, "done")?
                 } else {
                     vec![]
                 };
@@ -535,12 +534,7 @@ impl SagaStore {
                 )?;
 
                 let cascade_results = if cascade {
-                    queries::cascade_member_tasks(
-                        &tx,
-                        &canonical,
-                        &actor_owned,
-                        TaskStatus::Cancelled,
-                    )?
+                    queries::cascade_member_tasks(&tx, &canonical, &actor_owned, "cancelled")?
                 } else {
                     vec![]
                 };

@@ -1,8 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::sagas::events::{SagaEvent, SagaEventType, SagaTaskCascadedPayload};
-use crate::db::tasks::events::{StatusChangedPayload, TaskEvent, TaskStatus};
-use crate::db::tasks::projections::apply_event_inner;
+use crate::db::tasks::writers;
 use crate::error::BrainCoreError;
 use crate::sql::{SqlError, SqlResult};
 use crate::utils::now_ts;
@@ -623,19 +622,13 @@ pub fn cascade_member_tasks(
     conn: &Connection,
     saga_id: &str,
     actor: &str,
-    target_status: TaskStatus,
+    target_status: &str,
 ) -> SqlResult<Vec<CascadeResult>> {
-    let target_str: &'static str = match target_status {
-        TaskStatus::Done => "done",
-        TaskStatus::Cancelled => "cancelled",
-        // Other statuses don't make sense as a cascade target; the call
-        // sites only pass Done or Cancelled.
-        _ => {
-            return Err(SqlError::Domain(BrainCoreError::Parse(format!(
-                "cascade_member_tasks: unsupported target status {target_status:?}"
-            ))));
-        }
-    };
+    if target_status != "done" && target_status != "cancelled" {
+        return Err(SqlError::Domain(BrainCoreError::Parse(format!(
+            "cascade_member_tasks: unsupported target status {target_status:?}"
+        ))));
+    }
     let task_ids = list_saga_task_ids(conn, saga_id)?;
     let mut results = Vec::with_capacity(task_ids.len());
     let mut event_stmt = conn.prepare_cached(
@@ -643,7 +636,7 @@ pub fn cascade_member_tasks(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )?;
     for task_id in task_ids {
-        let outcome = cascade_one_task_inner(conn, actor, &task_id, target_status.clone());
+        let outcome = cascade_one_task_inner(conn, actor, &task_id, target_status);
 
         // Always emit a SagaTaskCascaded event regardless of outcome — the saga
         // log is the single source of truth for what the cascade did.
@@ -655,7 +648,7 @@ pub fn cascade_member_tasks(
         };
         let payload = SagaTaskCascadedPayload {
             task_id: task_id.clone(),
-            new_status: target_str.to_string(),
+            new_status: target_status.to_string(),
             outcome: outcome_str.to_string(),
         };
         let event = SagaEvent::new(saga_id, actor, SagaEventType::SagaTaskCascaded, &payload);
@@ -682,7 +675,7 @@ fn cascade_one_task_inner(
     conn: &Connection,
     actor: &str,
     task_id: &str,
-    target_status: TaskStatus,
+    target_status: &str,
 ) -> CascadeOutcome {
     // Fetch current task status. Orphan saga_tasks rows (task deleted) are
     // recorded as Failed rather than panicking.
@@ -711,7 +704,7 @@ fn cascade_one_task_inner(
         };
     }
 
-    let brain_id = match brain_id_opt {
+    match brain_id_opt {
         Some(b) if !b.is_empty() => b,
         _ => {
             return CascadeOutcome::Failed {
@@ -720,31 +713,28 @@ fn cascade_one_task_inner(
         }
     };
 
-    let success_outcome = match &target_status {
-        TaskStatus::Done => CascadeOutcome::Closed,
-        TaskStatus::Cancelled => CascadeOutcome::Cancelled,
+    let success_outcome = match target_status {
+        "done" => CascadeOutcome::Closed,
+        "cancelled" => CascadeOutcome::Cancelled,
         _ => {
             return CascadeOutcome::Failed {
                 error: "unexpected target status".into(),
             };
         }
     };
-    let ev = TaskEvent::from_payload(
-        task_id,
-        actor,
-        StatusChangedPayload {
-            new_status: target_status,
-        },
-    );
-    // Use `apply_event_inner` (no internal tx) because we already operate
-    // inside the saga's outer transaction; calling `apply_event` here would
-    // attempt a nested BEGIN and SQLite would reject it.
-    match apply_event_inner(conn, &ev, &brain_id) {
-        Ok(_) => success_outcome,
-        Err(e) => CascadeOutcome::Failed {
+
+    let ts = crate::utils::now_ts();
+    if let Err(e) = writers::set_task_status(conn, task_id, target_status, ts) {
+        return CascadeOutcome::Failed {
             error: format!("{e}"),
-        },
+        };
     }
+    if let Err(e) = writers::append_status_changed_event(conn, task_id, target_status, actor, ts) {
+        return CascadeOutcome::Failed {
+            error: format!("{e}"),
+        };
+    }
+    success_outcome
 }
 
 #[cfg(test)]
