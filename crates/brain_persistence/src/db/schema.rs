@@ -169,7 +169,7 @@ pub fn ensure_brain_registered(
 /// for the first free variant. Errors after 9 attempts — a 4-char prefix
 /// is the resolver's documented limit (`dash_pos <= 4`), so we don't
 /// extend further.
-pub(crate) fn pick_unique_brain_prefix(
+pub fn pick_unique_brain_prefix(
     conn: &Connection,
     brain_id: &str,
     base: &str,

@@ -1065,8 +1065,15 @@ fn set_prefix(db_path: &std::path::Path, prefix: &str) {
         [prefix],
     )
     .unwrap();
-    conn.execute("UPDATE brains SET prefix = ?1", [prefix])
-        .unwrap();
+    // Target the test brain by name. The bulk `UPDATE brains SET prefix = ?1`
+    // would trip the v54→v55 `UNIQUE(prefix COLLATE NOCASE)` index whenever
+    // more than one brain row exists in the test DB (which init can produce
+    // via auto-disambiguated child registrations).
+    conn.execute(
+        "UPDATE brains SET prefix = ?1 WHERE name = 'test-brain'",
+        [prefix],
+    )
+    .unwrap();
 }
 
 /// Helper: read project_prefix from a SQLite database.

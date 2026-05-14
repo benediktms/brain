@@ -194,7 +194,14 @@ pub fn run(name: Option<String>, notes: Vec<PathBuf>, no_agents_md: bool) -> Res
     seed_project_prefix_if_missing(&db_path, &brain_name)?;
     {
         let db = brain_persistence::db::Db::open(&db_path)?;
-        let prefix = brain_persistence::db::meta::generate_prefix(&brain_name);
+        // Auto-disambiguate the base prefix against any other brain that
+        // already holds it (case-insensitive). `generate_prefix` is
+        // deterministic, so two brains with similar names (e.g. "brain"
+        // and "brain2") otherwise hard-fail the v54→v55 UNIQUE constraint.
+        let base_prefix = brain_persistence::db::meta::generate_prefix(&brain_name);
+        let prefix = db.with_read_conn(|conn| {
+            brain_persistence::db::schema::pick_unique_brain_prefix(conn, &brain_id, &base_prefix)
+        })?;
         let existing_row = db.get_brain(&brain_id)?;
 
         let merged_roots: Vec<PathBuf> = match &existing_row {
