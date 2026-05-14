@@ -114,18 +114,46 @@ jobs:
       - run: cargo clippy --workspace -- -D warnings
 
   test:
-    name: Test
+    # Sharded by package to avoid runner-disk ENOSPC during workspace link.
+    # The full `cargo nextest run --workspace` previously linked ~300 rlibs at
+    # once (embed stack: candle/tokenizers/lance/datafusion/geo), which exceeded
+    # the standard runner's free disk. Each shard gets its own runner-disk.
+    #
+    # Shards:
+    #   brain-lib — heaviest crate (embed stack lives here)
+    #   cli       — `brain` binary + assert_cmd integration tests (also pulls
+    #                brain-lib transitively, hence its own shard)
+    #   leaves    — brain_core, brain_embedder, brain_persistence, brain_tasks
+    name: Test (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: brain-lib
+            args: -p brain-lib
+            doc: true
+          - shard: cli
+            args: -p brain
+            # `brain` is a bin-only crate; `cargo test --doc` errors with
+            # "no library targets found", so skip the doc-test step here.
+            doc: false
+          - shard: leaves
+            args: --workspace --exclude brain-lib --exclude brain
+            doc: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-${{ matrix.shard }}
       - uses: taiki-e/install-action@nextest
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: cargo nextest run --workspace --profile ci
-      - run: cargo test --doc --workspace
+      - run: cargo nextest run ${{ matrix.args }} --profile ci
+      - if: matrix.doc
+        run: cargo test --doc ${{ matrix.args }}
 
   test-perf:
     name: Perf Tests

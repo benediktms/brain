@@ -719,6 +719,22 @@ pub fn task_exists(conn: &Connection, task_id: &str) -> SqlResult<bool> {
     Ok(count > 0)
 }
 
+/// Return the `to_id` of every TASK→TASK 'blocks' edge originating at `task_id`.
+///
+/// Pure read of the dependency graph: given a source node, list the tasks it
+/// depends on directly. Used by the cycle-detection BFS in `brain_tasks::cycle`
+/// to walk the graph one node at a time.
+pub fn outgoing_blocks(conn: &Connection, task_id: &str) -> SqlResult<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT to_id FROM entity_links
+         WHERE from_type='TASK' AND to_type='TASK' AND edge_kind='blocks' AND from_id = ?1",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![task_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 // Embed-poll helpers
 // ---------------------------------------------------------------------------

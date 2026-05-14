@@ -381,8 +381,9 @@ pub fn apply_event(conn: &Connection, event: &TaskEvent, brain_id: &str) -> SqlR
 /// - `ParentSet`: task must exist; parent must exist and not be self
 /// - Others: task must exist
 pub fn validate_and_apply(conn: &Connection, event: &TaskEvent, brain_id: &str) -> SqlResult<()> {
-    use brain_persistence::db::tasks::cycle;
     use brain_persistence::db::tasks::queries::task_exists;
+
+    use crate::cycle;
 
     let tx = conn.unchecked_transaction()?;
 

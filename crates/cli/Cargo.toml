@@ -45,6 +45,12 @@ notify-debouncer-full = "0.7"
 blake3 = { workspace = true }
 
 [dev-dependencies]
+# Re-declares brain-lib with the `test-utils` feature so cli's unit tests can
+# reach `brain_lib::ports::mock::*` without relying on workspace-wide feature
+# unification. Cargo merges this with the entry in `[dependencies]` only for
+# tests/examples/benches; the release binary still builds against the lean
+# `default-features = false` view.
+brain-lib = { path = "../brain_lib", default-features = false, features = ["test-utils"] }
 assert_cmd = "2.2.0"
 predicates = "3.1.4"
 rusqlite = { workspace = true }
