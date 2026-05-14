@@ -6,9 +6,12 @@ use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
-use super::TaskStore;
-use super::queries::{DependencySummary, TaskComment, TaskNoteLink, TaskRow};
-use crate::utils::{ts_to_iso, ts_to_json};
+use brain_core::utils::{ts_to_iso, ts_to_json};
+use brain_persistence::db::tasks::queries::{
+    DependencySummary, TaskComment, TaskNoteLink, TaskRow,
+};
+
+use crate::TaskStore;
 
 /// Serialize a `TaskRow` and its labels into a JSON object with ISO timestamps.
 pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
@@ -280,7 +283,7 @@ pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::events::TaskType;
+    use crate::events::TaskType;
 
     fn make_comment(id: &str, author: &str, body: &str, ts: i64) -> TaskComment {
         TaskComment {
@@ -360,8 +363,8 @@ mod tests {
 
     #[test]
     fn test_children_stubs_to_json_shape() {
-        use crate::tasks::queries::TaskRow;
         use brain_persistence::db::Db;
+        use brain_persistence::db::tasks::queries::TaskRow;
         let db = Db::open_in_memory().unwrap();
         let store = TaskStore::new(db);
         let child = TaskRow {
@@ -393,8 +396,8 @@ mod tests {
 
     #[test]
     fn test_attach_summary_fields_key_names() {
-        use crate::tasks::queries::TaskRow;
         use brain_persistence::db::Db;
+        use brain_persistence::db::tasks::queries::TaskRow;
         let row = TaskRow {
             task_id: "t1".to_string(),
             title: "Test".to_string(),

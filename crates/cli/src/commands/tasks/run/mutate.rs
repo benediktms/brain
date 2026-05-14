@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
 use serde_json::json;
 
+use brain_lib::tasks::enrichment::task_row_to_compact_json;
 use brain_lib::tasks::events::*;
-use brain_lib::utils::task_row_to_compact_json;
 
 use crate::hooks::{OutputFormat, build_hook_envelope};
 

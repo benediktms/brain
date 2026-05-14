@@ -9,7 +9,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
-use crate::error::{BrainCoreError, Result};
+use brain_core::error::{BrainCoreError, Result};
 
 /// Append a single event to the JSONL file.
 ///

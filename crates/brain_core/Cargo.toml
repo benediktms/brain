@@ -8,13 +8,12 @@ default = []
 # Exposes the `ports::mock` module so other crates can pull in the
 # in-memory mock impls without enabling their own test cfg. Mirrors
 # the same gate in `brain-persistence`.
-#
-# `dep:blake3` is pulled in because the in-memory `MockEmbedder` uses
-# BLAKE3 to produce deterministic, content-derived test vectors.
-test-utils = ["dep:blake3"]
+test-utils = []
 
 [dependencies]
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-blake3 = { workspace = true, optional = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }

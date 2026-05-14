@@ -693,9 +693,11 @@ name = "brain-core"
 version = "0.4.1"
 dependencies = [
  "blake3",
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -725,6 +727,7 @@ dependencies = [
  "brain-embedder",
  "brain-lib",
  "brain-persistence",
+ "brain-tasks",
  "chrono",
  "criterion",
  "dashmap",
@@ -778,6 +781,24 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "brain-tasks"
+version = "0.4.1"
+dependencies = [
+ "blake3",
+ "brain-core",
+ "brain-embedder",
+ "brain-persistence",
+ "brain-tasks",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "ulid",

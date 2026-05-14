@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
 use brain_lib::stores::BrainStores;
-use brain_lib::tasks::queries::TaskRow;
+use brain_persistence::db::tasks::queries::TaskRow;
 
 fn format_ts(ts: i64) -> String {
     DateTime::<Utc>::from_timestamp(ts, 0)

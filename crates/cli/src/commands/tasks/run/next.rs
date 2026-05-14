@@ -5,7 +5,7 @@ use serde_json::json;
 
 use brain_lib::tasks::enrichment::enrich_task_summaries;
 use brain_lib::tasks::events::TaskType;
-use brain_lib::tasks::queries::TaskRow;
+use brain_persistence::db::tasks::queries::TaskRow;
 
 use crate::markdown_table::MarkdownTable;
 

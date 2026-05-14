@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use crate::embedder::{Embed, embed_batch_async};
-use crate::error::Result;
-use crate::tokens::estimate_tokens;
-use crate::uri::SynapseUri;
+use brain_core::error::Result;
+use brain_core::tokens::estimate_tokens;
+use brain_core::uri::SynapseUri;
+use brain_embedder::{Embed, embed_batch_async};
 use brain_persistence::db::Db;
 use brain_persistence::db::lod_chunks::{self, InsertLodChunk};
 use brain_persistence::sql::SqlResultExt;
@@ -189,11 +189,11 @@ pub async fn embed_outcome_capsule(
 ///
 /// Uses the chunk_id format (`{file_id}:0`) for the URI to match the lookup
 /// path in `lod_resolver::build_object_uri`, which receives `ranked.chunk_id`.
-pub(crate) fn upsert_task_lod_l0(db: &Db, file_id: &str, capsule_text: &str, brain_id: &str) {
+pub fn upsert_task_lod_l0(db: &Db, file_id: &str, capsule_text: &str, brain_id: &str) {
     // chunk_id = "{file_id}:0" — matches what chunks.rs:207 stores in FTS.
     let chunk_id = format!("{file_id}:0");
     let lod_uri = SynapseUri::for_task(brain_id, &chunk_id).to_string();
-    let source_hash = crate::utils::content_hash(capsule_text);
+    let source_hash = brain_core::utils::content_hash(capsule_text);
     let token_est = estimate_tokens(capsule_text) as i64;
     let now = chrono::Utc::now().to_rfc3339();
     if let Err(e) = db.with_write_conn(|conn| {

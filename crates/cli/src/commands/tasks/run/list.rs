@@ -3,8 +3,8 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
 use brain_lib::tasks::enrichment::enrich_task_list;
-use brain_lib::tasks::queries::{TaskFilter, TaskRow, apply_filters};
-use brain_lib::utils::task_row_to_compact_json;
+use brain_lib::tasks::enrichment::task_row_to_compact_json;
+use brain_persistence::db::tasks::queries::{TaskFilter, TaskRow, apply_filters};
 
 use crate::hooks::{OutputFormat, build_hook_envelope};
 use crate::markdown_table::MarkdownTable;

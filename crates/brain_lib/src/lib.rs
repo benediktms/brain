@@ -76,10 +76,10 @@ pub(crate) mod tags;
 // module namespace itself (preserves a deliberate review gate on what becomes
 // public API).
 pub use crate::tags::{ClusterParams, ReclusterReport, run_recluster};
-pub mod tasks;
 pub use brain_core::tokens;
 pub use brain_core::uri;
-pub mod utils;
+pub use brain_core::utils;
+pub use brain_tasks as tasks;
 pub mod watcher;
 pub mod work_queue;
 

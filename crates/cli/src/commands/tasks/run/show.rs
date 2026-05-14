@@ -1,10 +1,10 @@
 use anyhow::Result;
 use serde_json::json;
 
+use brain_lib::tasks::enrichment::task_row_to_compact_json;
 use brain_lib::tasks::enrichment::{
     children_stubs_to_json, comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
 };
-use brain_lib::utils::task_row_to_compact_json;
 
 use super::{TaskCtx, format_ts, format_ts_short, priority_label};
 
