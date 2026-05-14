@@ -1065,12 +1065,14 @@ fn set_prefix(db_path: &std::path::Path, prefix: &str) {
         [prefix],
     )
     .unwrap();
-    // Target the test brain by name. The bulk `UPDATE brains SET prefix = ?1`
-    // would trip the v54→v55 `UNIQUE(prefix COLLATE NOCASE)` index whenever
-    // more than one brain row exists in the test DB (which init can produce
-    // via auto-disambiguated child registrations).
+    // Target the brains that the CLI plausibly resolves against during these
+    // tests: the explicit `test-brain` row and the v22 `(unscoped)` sentinel
+    // (brain_id='') that the cli falls back to when cwd doesn't match a
+    // registered brain root. A bulk `UPDATE brains SET prefix = ?1` would
+    // trip the v54→v55 `UNIQUE(prefix COLLATE NOCASE)` index by trying to
+    // set every brain row in the DB to the same value.
     conn.execute(
-        "UPDATE brains SET prefix = ?1 WHERE name = 'test-brain'",
+        "UPDATE brains SET prefix = ?1 WHERE name IN ('test-brain', '(unscoped)')",
         [prefix],
     )
     .unwrap();
