@@ -132,10 +132,15 @@ jobs:
         include:
           - shard: brain-lib
             args: -p brain-lib
+            doc: true
           - shard: cli
             args: -p brain
+            # `brain` is a bin-only crate; `cargo test --doc` errors with
+            # "no library targets found", so skip the doc-test step here.
+            doc: false
           - shard: leaves
             args: --workspace --exclude brain-lib --exclude brain
+            doc: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -147,7 +152,8 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo nextest run ${{ matrix.args }} --profile ci
-      - run: cargo test --doc ${{ matrix.args }}
+      - if: matrix.doc
+        run: cargo test --doc ${{ matrix.args }}
 
   test-perf:
     name: Perf Tests
