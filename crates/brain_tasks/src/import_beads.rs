@@ -4,10 +4,11 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::error::{BrainCoreError, Result};
+use brain_core::error::{BrainCoreError, Result};
+use brain_persistence::db::tasks::queries;
 
-use super::TaskStore;
-use super::events::{
+use crate::TaskStore;
+use crate::events::{
     CommentPayload, DependencyPayload, EventType, ExternalIdPayload, LabelPayload,
     ParentSetPayload, StatusChangedPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType,
     TaskUpdatedPayload, new_task_id, now_ts,
@@ -451,7 +452,7 @@ pub fn import_beads_issues(
     let brain_ids_from_beads: HashSet<&str> = beads_to_brain.values().map(|s| s.as_str()).collect();
 
     // Load existing state for diffing (keyed by brain task_id)
-    let existing_tasks: HashMap<String, super::queries::TaskRow> = task_store
+    let existing_tasks: HashMap<String, queries::TaskRow> = task_store
         .list_all()?
         .into_iter()
         .map(|t| (t.task_id.clone(), t))
@@ -919,7 +920,7 @@ mod tests {
     }
 
     /// Look up a brain task by its original beads ID via the external_ids table.
-    fn get_by_beads_id(store: &TaskStore, beads_id: &str) -> super::super::queries::TaskRow {
+    fn get_by_beads_id(store: &TaskStore, beads_id: &str) -> queries::TaskRow {
         let brain_id = store
             .resolve_external_id("beads", beads_id)
             .unwrap()

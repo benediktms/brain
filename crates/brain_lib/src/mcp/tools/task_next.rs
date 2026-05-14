@@ -11,8 +11,8 @@ use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::enrichment::enrich_task_summaries;
 use crate::tasks::events::TaskType;
-use crate::tasks::queries::TaskRow;
 use crate::uri::SynapseUri;
+use brain_persistence::db::tasks::queries::TaskRow;
 
 use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, inject_warnings, json_response, store_or_warn};

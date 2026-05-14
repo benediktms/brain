@@ -10,12 +10,12 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
+use crate::tasks::enrichment::task_row_to_compact_json;
 use crate::tasks::enrichment::{
     comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
 };
-use crate::tasks::queries::TaskRow;
 use crate::uri::{SynapseUri, resolve_id};
-use crate::utils::task_row_to_compact_json;
+use brain_persistence::db::tasks::queries::TaskRow;
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 
@@ -165,7 +165,7 @@ impl TaskGet {
                     source: "get_dependency_summary".to_string(),
                     error: err.to_string(),
                 });
-                crate::tasks::queries::DependencySummary::default()
+                brain_persistence::db::tasks::queries::DependencySummary::default()
             }
         };
 

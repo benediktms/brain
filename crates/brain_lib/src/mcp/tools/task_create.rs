@@ -7,12 +7,13 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
+use crate::tasks::enrichment::task_row_to_compact_json;
 use crate::tasks::events::{
     EventType, ExternalIdPayload, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
 };
-use crate::tasks::queries::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 use crate::uri::SynapseUri;
-use crate::utils::{parse_timestamp, task_row_to_compact_json};
+use crate::utils::parse_timestamp;
+use brain_persistence::db::tasks::queries::{MIN_SHORT_HASH_LEN, blake3_short_hex};
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 

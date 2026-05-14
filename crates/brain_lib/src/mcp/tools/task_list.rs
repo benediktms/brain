@@ -13,8 +13,8 @@ use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::tasks::TaskStore;
 use crate::tasks::enrichment::enrich_task_list;
 use crate::tasks::events::TaskType;
-use crate::tasks::queries::{TaskFilter, TaskRow, apply_filters};
 use crate::uri::SynapseUri;
+use brain_persistence::db::tasks::queries::{TaskFilter, TaskRow, apply_filters};
 
 use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
@@ -433,7 +433,7 @@ impl TaskList {
     }
 
     fn build_response(
-        tasks: &[crate::tasks::queries::TaskRow],
+        tasks: &[brain_persistence::db::tasks::queries::TaskRow],
         include_description: bool,
         limit: usize,
         store: &TaskStore,

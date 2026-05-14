@@ -1,15 +1,16 @@
+#[cfg(feature = "embed")]
 pub mod capsule;
 pub mod cycle;
 pub mod enrichment;
 pub mod events;
 pub mod import_beads;
 pub mod projections;
-pub mod queries;
 
 use std::collections::HashMap;
 
-use crate::error::Result;
+use brain_core::error::Result;
 use brain_persistence::db::Db;
+use brain_persistence::db::tasks::queries;
 use brain_persistence::sql::SqlResultExt;
 
 use events::TaskEvent;
@@ -459,7 +460,7 @@ impl TaskStore {
             {
                 return Ok(prefix.clone());
             }
-            return Err(crate::error::BrainCoreError::Config(
+            return Err(brain_core::error::BrainCoreError::Config(
                 "brains.prefix not set for this brain".into(),
             ));
         }

@@ -16,12 +16,12 @@ use crate::l0_generate::{generate_episode_l0, generate_procedure_l0};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingOps, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
 use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
-use crate::tasks::queries::{TaskPollRow, get_labels_for_tasks};
 use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
 use brain_persistence::db::chunks::ChunkPollRow;
 use brain_persistence::db::summaries::SummaryPollRow;
+use brain_persistence::db::tasks::queries::{TaskPollRow, get_labels_for_tasks};
 #[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
 

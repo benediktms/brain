@@ -22,8 +22,8 @@ use serde_json::json;
 
 use brain_lib::stores::BrainStores;
 use brain_lib::tasks::TaskStore;
+use brain_lib::tasks::enrichment::task_row_to_compact_json;
 use brain_lib::tasks::events::{self, *};
-use brain_lib::utils::task_row_to_compact_json;
 
 use crate::hooks::OutputFormat;
 
