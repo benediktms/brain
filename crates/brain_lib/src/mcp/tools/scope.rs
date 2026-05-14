@@ -190,13 +190,19 @@ mod tests {
     use brain_persistence::db::schema::BrainUpsert;
 
     /// Register a brain with `projected=1` so it shows up in `list_brain_keys()`.
+    ///
+    /// Derives the prefix from `name` via the production `generate_prefix`
+    /// algorithm so multiple brains in the same test don't collide on the
+    /// v54→v55 `UNIQUE(prefix COLLATE NOCASE)` index. Mirrors what
+    /// `ensure_brain_registered` does in real bootstraps.
     fn register_active(ctx: &McpContext, brain_id: &str, name: &str) {
+        let prefix = brain_persistence::db::meta::generate_prefix(name);
         ctx.stores
             .db_for_tests()
             .upsert_brain(&BrainUpsert {
                 brain_id,
                 name,
-                prefix: "TST",
+                prefix: &prefix,
                 roots_json: "[]",
                 notes_json: "[]",
                 aliases_json: "[]",

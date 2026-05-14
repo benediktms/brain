@@ -1065,8 +1065,31 @@ fn set_prefix(db_path: &std::path::Path, prefix: &str) {
         [prefix],
     )
     .unwrap();
-    conn.execute("UPDATE brains SET prefix = ?1", [prefix])
-        .unwrap();
+    // The v54→v55 `UNIQUE(prefix COLLATE NOCASE)` index forbids two brains
+    // sharing the same prefix value. The tests need exactly one brain (the
+    // one the cli actually creates tasks in) to carry the planted prefix.
+    //
+    // The cli falls back to the v22 `(unscoped)` sentinel (`brain_id = ''`)
+    // when cwd doesn't match any registered brain root — true here since
+    // tests run from the cargo runner's cwd. So we plant the prefix on the
+    // sentinel.
+    //
+    // To keep `get_prefix` returning the planted value, we NULL out
+    // `test-brain`'s prefix — `get_prefix`'s first query skips the sentinel
+    // (`brain_id != ''`) and prefers a non-sentinel non-NULL row; with
+    // test-brain now NULL it falls through to `brain_meta.project_prefix`
+    // (which set_prefix's first execute updated above). NULL rows are
+    // exempt from the partial UNIQUE index (`WHERE prefix IS NOT NULL`).
+    conn.execute(
+        "UPDATE brains SET prefix = NULL WHERE name = 'test-brain'",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE brains SET prefix = ?1 WHERE brain_id = ''",
+        [prefix],
+    )
+    .unwrap();
 }
 
 /// Helper: read project_prefix from a SQLite database.

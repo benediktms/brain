@@ -41,6 +41,9 @@ pub enum BrainCoreError {
     #[error("brain not found: {0}")]
     BrainNotFound(String),
 
+    #[error("brain registry error: {0}")]
+    BrainRegistry(String),
+
     #[error("task dependency cycle: {0}")]
     TaskCycle(String),
 

@@ -42,18 +42,31 @@ pub fn resolve_task_id(conn: &Connection, input: &str) -> SqlResult<String> {
 ///
 /// Returns `Some(brain_id)` if the input has a short prefix (1-4 chars before dash)
 /// that matches a registered brain's prefix. Returns `None` otherwise.
+///
+/// Fails explicitly if multiple brains share the same prefix. The v54→v55 schema
+/// migration enforces uniqueness, but this check is a defense-in-depth against
+/// stale state (e.g. a fixture that bypassed the migration, or a hand-edited DB).
+/// Silently picking the first match is the bug `brn-37e` ultimately diagnosed,
+/// so this resolver refuses to do it.
 pub fn resolve_brain_from_prefix(conn: &Connection, input: &str) -> SqlResult<Option<String>> {
     match input.find('-') {
         Some(dash_pos) if dash_pos > 0 && dash_pos <= 4 => {
             let prefix = input[..dash_pos].to_ascii_uppercase();
-            let brain_id: Option<String> = conn
-                .query_row(
-                    "SELECT brain_id FROM brains WHERE UPPER(prefix) = ?1",
-                    [&prefix],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            Ok(brain_id)
+            let matches: Vec<String> = {
+                let mut stmt =
+                    conn.prepare("SELECT brain_id FROM brains WHERE UPPER(prefix) = ?1")?;
+                stmt.query_map([&prefix], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            match matches.as_slice() {
+                [] => Ok(None),
+                [only] => Ok(Some(only.clone())),
+                multiple => Err(SqlError::Domain(BrainCoreError::BrainRegistry(format!(
+                    "ambiguous brain prefix '{prefix}': {} brains share it: {}",
+                    multiple.len(),
+                    multiple.join(", ")
+                )))),
+            }
         }
         _ => Ok(None),
     }
@@ -76,20 +89,10 @@ pub fn resolve_task_id_scoped(
 
     // Defense-in-depth: if the input has a prefix like "ckt-ebd", derive
     // the brain_id from the prefix when no explicit scope was provided.
-    // This ensures the prefix in the ID itself always provides scoping.
+    // Routes through `resolve_brain_from_prefix` so the ambiguity check
+    // (multiple brains with the same prefix → error) applies uniformly.
     let derived_brain_id: Option<String> = if brain_id.is_none() {
-        match input.find('-') {
-            Some(dash_pos) if dash_pos <= 4 && dash_pos > 0 => {
-                let prefix = input[..dash_pos].to_ascii_uppercase();
-                conn.query_row(
-                    "SELECT brain_id FROM brains WHERE UPPER(prefix) = ?1",
-                    [&prefix],
-                    |row| row.get(0),
-                )
-                .optional()?
-            }
-            _ => None,
-        }
+        resolve_brain_from_prefix(conn, input)?
     } else {
         None
     };
@@ -642,5 +645,102 @@ mod tests {
         assert_eq!(common_prefix_len("abc", "xyz"), 0);
         assert_eq!(common_prefix_len("abc", "abc"), 3);
         assert_eq!(common_prefix_len("", "abc"), 0);
+    }
+
+    // ─── resolve_brain_from_prefix defense-in-depth tests ─────────────────
+    //
+    // These tests construct duplicate-prefix state by dropping the v54→v55
+    // UNIQUE index before inserting. This simulates pre-migration databases
+    // and the "stale fixture / hand-edited DB" scenarios the resolver defense
+    // is documented to protect against.
+
+    fn setup_with_duplicate_prefixes(conn: &Connection, prefix_a: &str, prefix_b: &str) {
+        init_schema(conn).unwrap();
+        conn.execute_batch("DROP INDEX IF EXISTS idx_brains_prefix")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('b1', 'alpha', ?1, 1000)",
+            [prefix_a],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('b2', 'beta', ?1, 1001)",
+            [prefix_b],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn resolve_brain_from_prefix_returns_error_on_ambiguity() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_with_duplicate_prefixes(&conn, "DUP", "DUP");
+
+        let err = resolve_brain_from_prefix(&conn, "dup-xyz")
+            .expect_err("multi-match must return an explicit error");
+        let msg = err.to_string();
+        assert!(msg.contains("ambiguous"), "got: {msg}");
+        assert!(
+            msg.contains("DUP"),
+            "error must name the prefix; got: {msg}"
+        );
+        assert!(
+            msg.contains("b1"),
+            "error must enumerate brain_ids; got: {msg}"
+        );
+        assert!(
+            msg.contains("b2"),
+            "error must enumerate brain_ids; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_brain_from_prefix_case_insensitive_ambiguity() {
+        // 'Cpm' and 'CPM' must both surface as ambiguous because the resolver
+        // does `WHERE UPPER(prefix) = ?1`. The defense fires regardless of
+        // stored casing.
+        let conn = Connection::open_in_memory().unwrap();
+        setup_with_duplicate_prefixes(&conn, "Cpm", "CPM");
+
+        let err = resolve_brain_from_prefix(&conn, "cpm-xyz")
+            .expect_err("case-different duplicates must still trigger ambiguity error");
+        assert!(err.to_string().contains("ambiguous"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_brain_from_prefix_single_match_returns_brain_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        ensure_brain_registered(&conn, "brain-aaa", "alpha").unwrap();
+        let prefix = crate::db::schema::read_brain_prefix_by_name(&conn, "alpha")
+            .unwrap()
+            .unwrap();
+
+        let resolved =
+            resolve_brain_from_prefix(&conn, &format!("{}-anything", prefix.to_lowercase()))
+                .expect("unique prefix should resolve")
+                .expect("resolver should return Some");
+        assert_eq!(resolved, "brain-aaa");
+    }
+
+    #[test]
+    fn resolve_brain_from_prefix_no_match_returns_none() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        let result =
+            resolve_brain_from_prefix(&conn, "xyz-anything").expect("no matches is not an error");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_brain_from_prefix_no_dash_returns_none() {
+        // Input without a `-` is not a prefix-bearing ID — the function
+        // returns None without touching the brains table.
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        let result =
+            resolve_brain_from_prefix(&conn, "01JTEST0000000000000000AA").expect("no error path");
+        assert_eq!(result, None);
     }
 }
