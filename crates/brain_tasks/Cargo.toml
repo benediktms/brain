@@ -21,6 +21,7 @@ test-utils = ["brain-persistence/test-utils", "brain-core/test-utils"]
 brain-core = { path = "../brain_core" }
 brain-embedder = { path = "../brain_embedder", optional = true }
 brain-persistence = { path = "../brain_persistence" }
+rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
