@@ -854,7 +854,7 @@ mod tests {
             .get_task("t1")
             .expect("checked in test assertions")
             .expect("checked in test assertions");
-        assert_eq!(row.defer_until, Some(1796083200));
+        assert_eq!(row.defer_until.map(|dt| dt.timestamp()), Some(1796083200));
     }
 
     #[tokio::test]
@@ -884,7 +884,7 @@ mod tests {
             .get_task("t1")
             .expect("checked in test assertions")
             .expect("checked in test assertions");
-        assert_eq!(row.defer_until, Some(1796083200));
+        assert_eq!(row.defer_until.map(|dt| dt.timestamp()), Some(1796083200));
     }
 
     #[tokio::test]

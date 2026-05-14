@@ -11,10 +11,11 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::uri::SynapseUri;
-use brain_persistence::db::tasks::queries::{TaskFilter, TaskRow, apply_filters};
+use brain_tasks::Task;
 use brain_tasks::TaskStore;
 use brain_tasks::enrichment::enrich_task_list;
 use brain_tasks::events::TaskType;
+use brain_tasks::filtering::{TaskFilter, apply_filters};
 
 use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
@@ -151,7 +152,7 @@ impl TaskList {
             search: params.search.clone(),
         };
 
-        let mut all_tasks: Vec<(BrainRef, Arc<McpContext>, TaskRow)> = Vec::new();
+        let mut all_tasks: Vec<(BrainRef, Arc<McpContext>, Task)> = Vec::new();
         let mut warnings = Vec::new();
         let mut total_ready: usize = 0;
         let mut total_blocked: usize = 0;
@@ -211,7 +212,7 @@ impl TaskList {
                 tasks
             } else {
                 let labels_map = if filter.label.is_some() {
-                    let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+                    let task_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
                     match store.get_labels_for_tasks(&task_ids) {
                         Ok(map) => Some(map),
                         Err(e) => {
@@ -255,7 +256,7 @@ impl TaskList {
         // all of its tasks (avoids N+1 vs. enriching per-row).
         // We track each row's original index so the final response preserves
         // the merged-and-capped order rather than the per-brain group order.
-        type EnrichEntry<'a> = (usize, &'a TaskRow, &'a BrainRef);
+        type EnrichEntry<'a> = (usize, &'a Task, &'a BrainRef);
         let mut by_brain: std::collections::BTreeMap<&str, Vec<EnrichEntry<'_>>> =
             std::collections::BTreeMap::new();
         let mut store_for_brain: std::collections::HashMap<&str, &TaskStore> =
@@ -276,13 +277,13 @@ impl TaskList {
                 .get(brain_id)
                 .copied()
                 .expect("store inserted with key above");
-            let task_ids: Vec<&str> = entries.iter().map(|(_, r, _)| r.task_id.as_str()).collect();
+            let task_ids: Vec<&str> = entries.iter().map(|(_, r, _)| r.id.as_str()).collect();
             let labels_map = store_or_warn(
                 store.get_labels_for_tasks(&task_ids),
                 "get_labels_for_tasks",
                 &mut warnings,
             );
-            let rows: Vec<TaskRow> = entries.iter().map(|(_, r, _)| (*r).clone()).collect();
+            let rows: Vec<Task> = entries.iter().map(|(_, r, _)| (*r).clone()).collect();
             let (mut json_vec, _r, _b) = enrich_task_list(store, &rows, &labels_map);
             for ((orig_idx, _row, brain_ref), mut task_val) in
                 entries.iter().zip(json_vec.drain(..))
@@ -385,7 +386,7 @@ impl TaskList {
         let tasks = if !filter.is_empty() {
             // Batch-fetch labels if label filter is active
             let labels_map = if filter.label.is_some() {
-                let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+                let task_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
                 match store.get_labels_for_tasks(&task_ids) {
                     Ok(map) => Some(map),
                     Err(e) => {
@@ -433,7 +434,7 @@ impl TaskList {
     }
 
     fn build_response(
-        tasks: &[brain_persistence::db::tasks::queries::TaskRow],
+        tasks: &[Task],
         include_description: bool,
         limit: usize,
         store: &TaskStore,
@@ -448,7 +449,7 @@ impl TaskList {
         };
 
         // Batch-fetch labels for displayed tasks (eliminates N+1 queries)
-        let task_ids: Vec<&str> = capped.iter().map(|t| t.task_id.as_str()).collect();
+        let task_ids: Vec<&str> = capped.iter().map(|t| t.id.as_str()).collect();
         let labels_map = store_or_warn(
             store.get_labels_for_tasks(&task_ids),
             "get_labels_for_tasks",

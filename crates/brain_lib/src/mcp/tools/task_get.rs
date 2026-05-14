@@ -10,7 +10,7 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::uri::{SynapseUri, resolve_id};
-use brain_persistence::db::tasks::queries::TaskRow;
+use brain_tasks::Task;
 use brain_tasks::TaskStore;
 use brain_tasks::enrichment::task_row_to_compact_json;
 use brain_tasks::enrichment::{
@@ -57,7 +57,7 @@ fn task_stub(store: &TaskStore, task_id: &str, title: &str) -> Value {
 /// Build a full task JSON with labels but without description (expanded relations
 /// omit descriptions to keep responses concise — use `tasks.get` on the specific
 /// task to retrieve its full description).
-fn expanded_task(store: &TaskStore, row: &TaskRow, labels: Vec<String>) -> Value {
+fn expanded_task(store: &TaskStore, row: &Task, labels: Vec<String>) -> Value {
     let mut json = task_row_to_compact_json(store, row, labels);
     if let Some(obj) = json.as_object_mut() {
         obj.remove("description");
@@ -185,9 +185,10 @@ impl TaskGet {
 
         // 4. Build parent field
         let parent_json = if params.expand.contains(&ExpandField::Parent) {
-            task.parent_task_id
-                .as_deref()
+            task.parent
+                .as_ref()
                 .map(|pid| {
+                    let pid = pid.as_str();
                     let Some(parent) =
                         store_or_warn(store.get_task(pid), "get_task", &mut warnings)
                     else {
@@ -199,14 +200,15 @@ impl TaskGet {
                 })
                 .unwrap_or(Value::Null)
         } else {
-            task.parent_task_id
-                .as_deref()
+            task.parent
+                .as_ref()
                 .map(|pid| {
+                    let pid = pid.as_str();
                     store
                         .get_task(pid)
                         .ok()
                         .flatten()
-                        .map(|t| task_stub(store, &t.task_id, &t.title))
+                        .map(|t| task_stub(store, t.id.as_str(), &t.title))
                         .unwrap_or(task_stub(store, pid, "(not found)"))
                 })
                 .unwrap_or(Value::Null)
@@ -218,7 +220,7 @@ impl TaskGet {
                 .iter()
                 .map(|c| {
                     let labels = store_or_warn(
-                        store.get_task_labels(&c.task_id),
+                        store.get_task_labels(c.id.as_str()),
                         "get_task_labels",
                         &mut warnings,
                     );
@@ -232,7 +234,7 @@ impl TaskGet {
         } else {
             children
                 .iter()
-                .map(|c| task_stub(store, &c.task_id, &c.title))
+                .map(|c| task_stub(store, c.id.as_str(), &c.title))
                 .collect()
         };
 
@@ -261,7 +263,7 @@ impl TaskGet {
                         .get_task(id)
                         .ok()
                         .flatten()
-                        .map(|t| task_stub(store, &t.task_id, &t.title))
+                        .map(|t| task_stub(store, t.id.as_str(), &t.title))
                 })
                 .collect()
         };
@@ -272,7 +274,7 @@ impl TaskGet {
                 .iter()
                 .map(|b| {
                     let labels = store_or_warn(
-                        store.get_task_labels(&b.task_id),
+                        store.get_task_labels(b.id.as_str()),
                         "get_task_labels",
                         &mut warnings,
                     );
@@ -286,7 +288,7 @@ impl TaskGet {
         } else {
             blocks
                 .iter()
-                .map(|b| task_stub(store, &b.task_id, &b.title))
+                .map(|b| task_stub(store, b.id.as_str(), &b.title))
                 .collect()
         };
 

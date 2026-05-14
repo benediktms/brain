@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
 use brain_lib::stores::BrainStores;
-use brain_persistence::db::tasks::queries::TaskRow;
+use brain_tasks::Task;
 
 fn format_ts(ts: i64) -> String {
     DateTime::<Utc>::from_timestamp(ts, 0)
@@ -14,7 +14,7 @@ fn format_ts(ts: i64) -> String {
 }
 
 fn render_task_markdown(
-    task: &TaskRow,
+    task: &Task,
     display_id: &str,
     labels: &[&str],
     blocks: &[&str],
@@ -30,11 +30,17 @@ fn render_task_markdown(
         "title: \"{}\"\n",
         task.title.replace('\\', "\\\\").replace('"', "\\\"")
     ));
-    out.push_str(&format!("status: {}\n", task.status));
-    out.push_str(&format!("priority: {}\n", task.priority));
-    out.push_str(&format!("type: {}\n", task.task_type));
-    out.push_str(&format!("created: {}\n", format_ts(task.created_at)));
-    out.push_str(&format!("updated: {}\n", format_ts(task.updated_at)));
+    out.push_str(&format!("status: {}\n", task.status.as_ref()));
+    out.push_str(&format!("priority: {}\n", task.priority.as_i32()));
+    out.push_str(&format!("type: {}\n", task.task_type.as_str()));
+    out.push_str(&format!(
+        "created: {}\n",
+        format_ts(task.created_at.timestamp())
+    ));
+    out.push_str(&format!(
+        "updated: {}\n",
+        format_ts(task.updated_at.timestamp())
+    ));
     if let Some(assignee) = &task.assignee {
         out.push_str(&format!("assignee: {assignee}\n"));
     }
@@ -115,11 +121,11 @@ pub fn run(dir: PathBuf, sqlite_db: PathBuf, lance_db: Option<PathBuf>) -> Resul
     let mut count = 0;
     for task in &tasks {
         let display_id = short_ids
-            .get(&task.task_id)
+            .get(task.id.as_str())
             .cloned()
-            .unwrap_or_else(|| task.task_id.clone());
+            .unwrap_or_else(|| task.id.as_str().to_string());
         let task_labels = labels_map
-            .get(task.task_id.as_str())
+            .get(task.id.as_str())
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         let task_blocks: Vec<&str> = blocks

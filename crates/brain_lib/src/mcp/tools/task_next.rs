@@ -10,9 +10,8 @@ use tracing::error;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::uri::SynapseUri;
-use brain_persistence::db::tasks::queries::TaskRow;
+use brain_tasks::Task;
 use brain_tasks::enrichment::enrich_task_summaries;
-use brain_tasks::events::TaskType;
 
 use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, inject_warnings, json_response, store_or_warn};
@@ -38,7 +37,7 @@ fn default_k() -> u64 {
 pub(super) struct TaskNext;
 
 /// (Brain that owns the task, the task row).
-type BrainTask = (BrainRef, TaskRow);
+type BrainTask = (BrainRef, Task);
 
 impl TaskNext {
     fn execute(&self, raw_params: Value, ctx: &McpContext) -> ToolCallResult {
@@ -97,12 +96,14 @@ impl TaskNext {
         }
 
         // Global sort across the merged ready set.
-        let status_ord = |status: &str| -> u8 { if status == "in_progress" { 0 } else { 1 } };
+        use brain_tasks::events::TaskStatus;
+        let status_ord =
+            |s: &TaskStatus| -> u8 { if *s == TaskStatus::InProgress { 0 } else { 1 } };
         let policy_due_date = params.policy == "due_date";
         all_ready.sort_by(|(_, a), (_, b)| {
             let s = status_ord(&a.status).cmp(&status_ord(&b.status));
             if policy_due_date {
-                let due_cmp = match (a.due_ts, b.due_ts) {
+                let due_cmp = match (a.due_at, b.due_at) {
                     (Some(a_ts), Some(b_ts)) => a_ts.cmp(&b_ts),
                     (Some(_), None) => std::cmp::Ordering::Less,
                     (None, Some(_)) => std::cmp::Ordering::Greater,
@@ -110,10 +111,10 @@ impl TaskNext {
                 };
                 s.then(due_cmp)
                     .then(a.priority.cmp(&b.priority))
-                    .then(a.task_id.cmp(&b.task_id))
+                    .then(a.id.as_str().cmp(b.id.as_str()))
             } else {
                 s.then(a.priority.cmp(&b.priority))
-                    .then(a.task_id.cmp(&b.task_id))
+                    .then(a.id.as_str().cmp(b.id.as_str()))
             }
         });
 
@@ -157,32 +158,34 @@ fn build_single_groups(
     brain_ref: &BrainRef,
     ctx: &Arc<McpContext>,
 ) -> Vec<Value> {
-    let task_rows: Vec<TaskRow> = selected.iter().map(|(_, t)| t.clone()).collect();
+    use brain_tasks::events::TaskType;
+    let task_rows: Vec<Task> = selected.iter().map(|(_, t)| t.clone()).collect();
     let mut tasks_json = enrich_task_summaries(&ctx.stores.tasks, &task_rows);
     decorate_tasks(&mut tasks_json, &brain_ref.brain_name, false);
 
-    // Resolve epic stubs for each unique parent_task_id.
+    // Resolve epic stubs for each unique parent id.
     let mut epic_cache: HashMap<String, Option<Value>> = HashMap::new();
     for (_, task) in selected {
-        if let Some(ref parent_id) = task.parent_task_id {
-            if epic_cache.contains_key(parent_id) {
+        if let Some(ref parent_id) = task.parent {
+            let parent_str = parent_id.as_str().to_string();
+            if epic_cache.contains_key(&parent_str) {
                 continue;
             }
             let epic_val = ctx
                 .stores
                 .tasks
-                .get_task(parent_id)
+                .get_task(parent_id.as_str())
                 .ok()
                 .flatten()
                 .filter(|t| t.task_type == TaskType::Epic)
                 .map(|t| {
-                    let short = ctx.stores.tasks.compact_id_or_raw(&t.task_id);
+                    let short = ctx.stores.tasks.compact_id_or_raw(t.id.as_str());
                     json!({
                         "task_id": short,
                         "title": t.title,
                     })
                 });
-            epic_cache.insert(parent_id.clone(), epic_val);
+            epic_cache.insert(parent_str, epic_val);
         }
     }
 
@@ -190,12 +193,10 @@ fn build_single_groups(
     let mut group_index: HashMap<Option<String>, usize> = HashMap::new();
     for ((_, task), task_json) in selected.iter().zip(tasks_json) {
         let epic_key: Option<String> = task
-            .parent_task_id
+            .parent
             .as_ref()
-            .and_then(|pid| epic_cache.get(pid))
-            .and_then(|v| v.as_ref())
-            .map(|_| task.parent_task_id.clone())
-            .unwrap_or(None);
+            .map(|pid| pid.as_str().to_string())
+            .and_then(|pid| epic_cache.get(&pid).and_then(|v| v.as_ref()).map(|_| pid));
 
         if let Some(&idx) = group_index.get(&epic_key) {
             groups[idx].1.push(task_json);
@@ -227,7 +228,7 @@ fn build_federated_groups(
     selected: &[BrainTask],
     per_brain: &[(BrainRef, Arc<McpContext>)],
 ) -> Vec<Value> {
-    let mut by_brain: HashMap<String, Vec<TaskRow>> = HashMap::new();
+    let mut by_brain: HashMap<String, Vec<Task>> = HashMap::new();
     for (brain_ref, task) in selected {
         by_brain
             .entry(brain_ref.brain_name.clone())

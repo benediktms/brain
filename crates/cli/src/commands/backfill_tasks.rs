@@ -39,13 +39,14 @@ pub async fn run(
     }
 
     // Batch-fetch labels for all tasks
-    let task_ids: Vec<&str> = all_tasks.iter().map(|t| t.task_id.as_str()).collect();
+    let task_ids: Vec<&str> = all_tasks.iter().map(|t| t.id.as_str()).collect();
     let labels_map = task_store.get_labels_for_tasks(&task_ids)?;
 
+    use brain_tasks::events::TaskStatus;
     let total = all_tasks.len();
     let terminal_count = all_tasks
         .iter()
-        .filter(|t| t.status == "done" || t.status == "cancelled")
+        .filter(|t| t.status == TaskStatus::Done || t.status == TaskStatus::Cancelled)
         .count();
 
     if dry_run {
@@ -54,14 +55,14 @@ pub async fn run(
         );
         for task in &all_tasks {
             let labels = labels_map
-                .get(&task.task_id)
+                .get(task.id.as_str())
                 .map(|v| v.join(", "))
                 .unwrap_or_default();
-            let display_id = task_store.compact_id_or_raw(&task.task_id);
+            let display_id = task_store.compact_id_or_raw(task.id.as_str());
             println!(
                 "  {} [{}] {} {}",
                 display_id,
-                task.status,
+                task.status.as_ref(),
                 task.title,
                 if labels.is_empty() {
                     String::new()
@@ -78,7 +79,10 @@ pub async fn run(
     let mut errors = 0usize;
 
     for (i, task) in all_tasks.iter().enumerate() {
-        let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
+        let labels = labels_map
+            .get(task.id.as_str())
+            .cloned()
+            .unwrap_or_default();
 
         // Embed task capsule
         match brain_tasks::capsule::embed_task_capsule(
@@ -86,40 +90,40 @@ pub async fn run(
             Some(&embedder),
             &db,
             brain_tasks::capsule::TaskCapsuleParams {
-                task_id: &task.task_id,
+                task_id: task.id.as_str(),
                 title: &task.title,
                 description: task.description.as_deref(),
                 labels: &labels,
-                priority: task.priority,
+                priority: task.priority.as_i32(),
             },
-            "", // brain_id not on TaskRow; ON CONFLICT DO UPDATE self-heals via embed_poll
+            "", // brain_id not on Task; ON CONFLICT DO UPDATE self-heals via embed_poll
         )
         .await
         {
             Ok(()) => embedded += 1,
             Err(e) => {
-                let display_id = task_store.compact_id_or_raw(&task.task_id);
+                let display_id = task_store.compact_id_or_raw(task.id.as_str());
                 eprintln!("  warn: task capsule failed for {display_id}: {e}");
                 errors += 1;
             }
         }
 
         // Embed outcome capsule for done/cancelled tasks
-        if task.status == "done" || task.status == "cancelled" {
+        if task.status == TaskStatus::Done || task.status == TaskStatus::Cancelled {
             match brain_tasks::capsule::embed_outcome_capsule(
                 &store,
                 Some(&embedder),
                 &db,
-                &task.task_id,
+                task.id.as_str(),
                 &task.title,
                 None,
-                "", // brain_id not on TaskRow; ON CONFLICT DO UPDATE self-heals via embed_poll
+                "", // brain_id not on Task; ON CONFLICT DO UPDATE self-heals via embed_poll
             )
             .await
             {
                 Ok(()) => outcomes += 1,
                 Err(e) => {
-                    let display_id = task_store.compact_id_or_raw(&task.task_id);
+                    let display_id = task_store.compact_id_or_raw(task.id.as_str());
                     eprintln!("  warn: outcome capsule failed for {display_id}: {e}");
                     errors += 1;
                 }

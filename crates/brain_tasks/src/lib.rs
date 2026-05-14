@@ -1,10 +1,14 @@
 #[cfg(feature = "embed")]
 pub mod capsule;
 pub mod cycle;
+pub mod domain;
 pub mod enrichment;
 pub mod events;
+pub mod filtering;
 pub mod import_beads;
 pub mod projections;
+
+pub use domain::{Priority, Task, TaskId};
 
 use std::collections::HashMap;
 
@@ -91,7 +95,7 @@ impl TaskStore {
     }
 
     /// List tasks that are ready to work on (no unresolved deps, not blocked).
-    pub fn list_ready(&self) -> Result<Vec<queries::TaskRow>> {
+    pub fn list_ready(&self) -> Result<Vec<Task>> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {
@@ -103,10 +107,11 @@ impl TaskStore {
                 queries::list_ready(conn, filter)
             })
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// List tasks that are blocked (unresolved deps or explicit blocked_reason).
-    pub fn list_blocked(&self) -> Result<Vec<queries::TaskRow>> {
+    pub fn list_blocked(&self) -> Result<Vec<Task>> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {
@@ -118,10 +123,11 @@ impl TaskStore {
                 queries::list_blocked(conn, filter)
             })
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// List all tasks.
-    pub fn list_all(&self) -> Result<Vec<queries::TaskRow>> {
+    pub fn list_all(&self) -> Result<Vec<Task>> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {
@@ -133,10 +139,11 @@ impl TaskStore {
                 queries::list_all(conn, filter)
             })
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// List open tasks (excludes done/cancelled).
-    pub fn list_open(&self) -> Result<Vec<queries::TaskRow>> {
+    pub fn list_open(&self) -> Result<Vec<Task>> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {
@@ -148,10 +155,11 @@ impl TaskStore {
                 queries::list_open(conn, filter)
             })
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// List done/cancelled tasks.
-    pub fn list_done(&self) -> Result<Vec<queries::TaskRow>> {
+    pub fn list_done(&self) -> Result<Vec<Task>> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {
@@ -163,10 +171,11 @@ impl TaskStore {
                 queries::list_done(conn, filter)
             })
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// List tasks with status exactly 'in_progress'.
-    pub fn list_in_progress(&self) -> Result<Vec<queries::TaskRow>> {
+    pub fn list_in_progress(&self) -> Result<Vec<Task>> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {
@@ -178,10 +187,11 @@ impl TaskStore {
                 queries::list_in_progress(conn, filter)
             })
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// List tasks with status exactly 'cancelled'.
-    pub fn list_cancelled(&self) -> Result<Vec<queries::TaskRow>> {
+    pub fn list_cancelled(&self) -> Result<Vec<Task>> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {
@@ -193,10 +203,11 @@ impl TaskStore {
                 queries::list_cancelled(conn, filter)
             })
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// List ready tasks excluding epics (actionable work items only).
-    pub fn list_ready_actionable(&self) -> Result<Vec<queries::TaskRow>> {
+    pub fn list_ready_actionable(&self) -> Result<Vec<Task>> {
         let brain_id = self.brain_id.clone();
         self.db
             .with_read_conn(move |conn| {
@@ -208,13 +219,15 @@ impl TaskStore {
                 queries::list_ready_actionable(conn, filter)
             })
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// Get a single task by ID.
-    pub fn get_task(&self, task_id: &str) -> Result<Option<queries::TaskRow>> {
+    pub fn get_task(&self, task_id: &str) -> Result<Option<Task>> {
         self.db
             .with_read_conn(|conn| queries::get_task(conn, task_id))
             .into_brain_core()
+            .map(|opt| opt.map(Task::from))
     }
 
     /// List task IDs that became unblocked because `completed_task_id` was resolved.
@@ -260,17 +273,19 @@ impl TaskStore {
     }
 
     /// Get child tasks of a parent.
-    pub fn get_children(&self, parent_task_id: &str) -> Result<Vec<queries::TaskRow>> {
+    pub fn get_children(&self, parent_task_id: &str) -> Result<Vec<Task>> {
         self.db
             .with_read_conn(|conn| queries::get_children(conn, parent_task_id))
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// Get tasks that depend on the given task and are not yet resolved (reverse deps).
-    pub fn get_tasks_blocking(&self, task_id: &str) -> Result<Vec<queries::TaskRow>> {
+    pub fn get_tasks_blocking(&self, task_id: &str) -> Result<Vec<Task>> {
         self.db
             .with_read_conn(|conn| queries::get_tasks_blocking(conn, task_id))
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Task::from).collect())
     }
 
     /// Count of ready and blocked tasks.
@@ -629,12 +644,12 @@ mod tests {
         // Only t1 ready now
         let ready = store.list_ready().unwrap();
         assert_eq!(ready.len(), 1);
-        assert_eq!(ready[0].task_id, "t1");
+        assert_eq!(ready[0].id.as_str(), "t1");
 
         // t2 should be blocked
         let blocked = store.list_blocked().unwrap();
         assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].task_id, "t2");
+        assert_eq!(blocked[0].id.as_str(), "t2");
 
         // Complete t1
         let done_event = TaskEvent::from_payload(
@@ -649,7 +664,7 @@ mod tests {
         // t2 now ready
         let ready = store.list_ready().unwrap();
         assert_eq!(ready.len(), 1);
-        assert_eq!(ready[0].task_id, "t2");
+        assert_eq!(ready[0].id.as_str(), "t2");
     }
 
     #[test]

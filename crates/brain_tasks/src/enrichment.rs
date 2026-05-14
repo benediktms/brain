@@ -7,42 +7,50 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use brain_core::utils::{ts_to_iso, ts_to_json};
-use brain_persistence::db::tasks::queries::{
-    DependencySummary, TaskComment, TaskNoteLink, TaskRow,
-};
+use brain_persistence::db::tasks::queries::{DependencySummary, TaskComment, TaskNoteLink};
 
 use crate::TaskStore;
+use crate::domain::Task;
 
-/// Serialize a `TaskRow` and its labels into a JSON object with ISO timestamps.
-pub fn task_row_to_json(row: &TaskRow, labels: Vec<String>) -> Value {
+/// Serialize a `Task` and its labels into a JSON object with ISO timestamps.
+pub fn task_to_json(task: &Task, labels: Vec<String>) -> Value {
     json!({
-        "task_id": row.task_id,
-        "title": row.title,
-        "description": row.description,
-        "status": row.status,
-        "priority": row.priority,
-        "blocked_reason": row.blocked_reason,
-        "due_ts": ts_to_json(row.due_ts),
-        "task_type": row.task_type.as_str(),
-        "assignee": row.assignee,
-        "defer_until": ts_to_json(row.defer_until),
-        "parent_task_id": row.parent_task_id,
-        "child_seq": row.child_seq,
+        "task_id": task.id.as_str(),
+        "title": task.title,
+        "description": task.description,
+        "status": task.status.as_ref(),
+        "priority": task.priority.as_i32(),
+        "blocked_reason": task.blocked_reason,
+        "due_ts": ts_to_json(task.due_at.map(|dt| dt.timestamp())),
+        "task_type": task.task_type.as_str(),
+        "assignee": task.assignee,
+        "defer_until": ts_to_json(task.defer_until.map(|dt| dt.timestamp())),
+        "parent_task_id": task.parent.as_ref().map(|p| p.as_str()),
+        "child_seq": task.child_seq,
         "labels": labels,
-        "created_at": ts_to_json(Some(row.created_at)),
-        "updated_at": ts_to_json(Some(row.updated_at)),
+        "created_at": ts_to_json(Some(task.created_at.timestamp())),
+        "updated_at": ts_to_json(Some(task.updated_at.timestamp())),
     })
 }
 
-/// Serialize a `TaskRow` to JSON with compact `parent_task_id`.
+/// Serialize a `Task` to JSON with compact `parent_task_id`.
 ///
-/// Combines `task_row_to_json` + `apply_compact_parent_id` into one call.
+/// Combines `task_to_json` + `apply_compact_parent_id` into one call.
 /// Prefer this over the two-step pattern whenever a `TaskStore` is available.
-pub fn task_row_to_compact_json(store: &TaskStore, row: &TaskRow, labels: Vec<String>) -> Value {
-    let mut json = task_row_to_json(row, labels);
+pub fn task_to_compact_json(store: &TaskStore, task: &Task, labels: Vec<String>) -> Value {
+    let mut json = task_to_json(task, labels);
     apply_compact_task_id(store, &mut json);
     apply_compact_parent_id(store, &mut json);
     json
+}
+
+/// Back-compat alias: `task_row_to_compact_json` → `task_to_compact_json`.
+///
+/// Many call sites imported this name; the alias keeps them compiling while
+/// the canonical name is used for new code.
+#[inline]
+pub fn task_row_to_compact_json(store: &TaskStore, task: &Task, labels: Vec<String>) -> Value {
+    task_to_compact_json(store, task, labels)
 }
 
 /// Convert the `task_id` field of a serialized task to its compact form.
@@ -135,17 +143,17 @@ pub fn dep_summary_to_json_with_blocking(store: &TaskStore, summary: &Dependency
     })
 }
 
-/// Convert child task rows to compact stubs (task_id, title, status, priority).
-pub fn children_stubs_to_json(store: &TaskStore, children: &[TaskRow]) -> Vec<Value> {
+/// Convert child task stubs to compact stubs (task_id, title, status, priority).
+pub fn children_stubs_to_json(store: &TaskStore, children: &[Task]) -> Vec<Value> {
     children
         .iter()
         .map(|c| {
-            let short = store.compact_id_or_raw(&c.task_id);
+            let short = store.compact_id_or_raw(c.id.as_str());
             json!({
                 "task_id": short,
                 "title": c.title,
-                "status": c.status,
-                "priority": c.priority,
+                "status": c.status.as_ref(),
+                "priority": c.priority.as_i32(),
             })
         })
         .collect()
@@ -171,38 +179,31 @@ fn attach_summary_fields(
 }
 
 /// Enrich a single task with dependency_summary and linked_notes (used by task_next).
-pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
-    let dep_summary = match store.get_dependency_summary(&task.task_id) {
+pub fn enrich_task_summary(store: &TaskStore, task: &Task) -> Value {
+    let task_id = task.id.as_str();
+    let dep_summary = match store.get_dependency_summary(task_id) {
         Ok(dep_summary) => dep_summary,
         Err(err) => {
-            tracing::warn!(
-                "Failed to get_dependency_summary for {}: {}",
-                task.task_id,
-                err
-            );
+            tracing::warn!("Failed to get_dependency_summary for {}: {}", task_id, err);
             DependencySummary::default()
         }
     };
-    let note_links = match store.get_task_note_links(&task.task_id) {
+    let note_links = match store.get_task_note_links(task_id) {
         Ok(note_links) => note_links,
         Err(err) => {
-            tracing::warn!(
-                "Failed to get_task_note_links for {}: {}",
-                task.task_id,
-                err
-            );
+            tracing::warn!("Failed to get_task_note_links for {}: {}", task_id, err);
             Vec::default()
         }
     };
-    let labels = match store.get_task_labels(&task.task_id) {
+    let labels = match store.get_task_labels(task_id) {
         Ok(labels) => labels,
         Err(err) => {
-            tracing::warn!("Failed to get_task_labels for {}: {}", task.task_id, err);
+            tracing::warn!("Failed to get_task_labels for {}: {}", task_id, err);
             Vec::default()
         }
     };
 
-    let mut task_json = task_row_to_compact_json(store, task, labels);
+    let mut task_json = task_to_compact_json(store, task, labels);
     attach_summary_fields(store, &mut task_json, &dep_summary, &note_links);
     task_json
 }
@@ -212,14 +213,17 @@ pub fn enrich_task_summary(store: &TaskStore, task: &TaskRow) -> Value {
 /// Returns `(tasks_json, ready_count, blocked_count)`.
 pub fn enrich_task_list(
     store: &TaskStore,
-    tasks: &[TaskRow],
+    tasks: &[Task],
     labels_map: &HashMap<String, Vec<String>>,
 ) -> (Vec<Value>, usize, usize) {
     let tasks_json: Vec<Value> = tasks
         .iter()
         .map(|task| {
-            let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
-            task_row_to_compact_json(store, task, labels)
+            let labels = labels_map
+                .get(task.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            task_to_compact_json(store, task, labels)
         })
         .collect();
     let (ready_count, blocked_count) = match store.count_ready_blocked() {
@@ -236,8 +240,8 @@ pub fn enrich_task_list(
 ///
 /// Used by `task_next` for the selected top-k tasks. Batch-fetches labels in one
 /// query instead of N per-task queries.
-pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value> {
-    let task_ids: Vec<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
+pub fn enrich_task_summaries(store: &TaskStore, tasks: &[Task]) -> Vec<Value> {
+    let task_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
     let labels_map = match store.get_labels_for_tasks(&task_ids) {
         Ok(labels_map) => labels_map,
         Err(err) => {
@@ -249,31 +253,24 @@ pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value>
     tasks
         .iter()
         .map(|task| {
-            let dep_summary = match store.get_dependency_summary(&task.task_id) {
+            let task_id = task.id.as_str();
+            let dep_summary = match store.get_dependency_summary(task_id) {
                 Ok(dep_summary) => dep_summary,
                 Err(err) => {
-                    tracing::warn!(
-                        "Failed to get_dependency_summary for {}: {}",
-                        task.task_id,
-                        err
-                    );
+                    tracing::warn!("Failed to get_dependency_summary for {}: {}", task_id, err);
                     DependencySummary::default()
                 }
             };
-            let note_links = match store.get_task_note_links(&task.task_id) {
+            let note_links = match store.get_task_note_links(task_id) {
                 Ok(note_links) => note_links,
                 Err(err) => {
-                    tracing::warn!(
-                        "Failed to get_task_note_links for {}: {}",
-                        task.task_id,
-                        err
-                    );
+                    tracing::warn!("Failed to get_task_note_links for {}: {}", task_id, err);
                     Vec::default()
                 }
             };
-            let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
+            let labels = labels_map.get(task_id).cloned().unwrap_or_default();
 
-            let mut task_json = task_row_to_compact_json(store, task, labels);
+            let mut task_json = task_to_compact_json(store, task, labels);
             attach_summary_fields(store, &mut task_json, &dep_summary, &note_links);
             task_json
         })
@@ -283,7 +280,7 @@ pub fn enrich_task_summaries(store: &TaskStore, tasks: &[TaskRow]) -> Vec<Value>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::TaskType;
+    use brain_persistence::db::tasks::queries::TaskComment;
 
     fn make_comment(id: &str, author: &str, body: &str, ts: i64) -> TaskComment {
         TaskComment {
@@ -308,6 +305,29 @@ mod tests {
             done_deps: done,
             blocking_task_ids: blocking,
             external_blocker_unresolved_count: 0,
+        }
+    }
+
+    fn make_task(task_id: &str) -> Task {
+        use crate::domain::{Priority, TaskId};
+        use crate::events::{TaskStatus, TaskType};
+        use chrono::Utc;
+        Task {
+            id: TaskId::from(task_id),
+            title: "Test Task".to_string(),
+            description: None,
+            status: TaskStatus::Open,
+            priority: Priority::Normal,
+            task_type: TaskType::Task,
+            assignee: None,
+            blocked_reason: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            due_at: None,
+            defer_until: None,
+            parent: None,
+            child_seq: None,
+            display_id: None,
         }
     }
 
@@ -364,31 +384,14 @@ mod tests {
     #[test]
     fn test_children_stubs_to_json_shape() {
         use brain_persistence::db::Db;
-        use brain_persistence::db::tasks::queries::TaskRow;
         let db = Db::open_in_memory().unwrap();
         let store = TaskStore::new(db);
-        let child = TaskRow {
-            task_id: "c1".to_string(),
-            title: "Child Task".to_string(),
-            description: None,
-            status: "open".to_string(),
-            priority: 2,
-            blocked_reason: None,
-            due_ts: None,
-            task_type: TaskType::Task,
-            assignee: None,
-            defer_until: None,
-            parent_task_id: None,
-            child_seq: None,
-            created_at: 0,
-            updated_at: 0,
-            display_id: None,
-        };
+        let child = make_task("c1");
         let result = children_stubs_to_json(&store, &[child]);
         assert_eq!(result.len(), 1);
         // compact_id falls back to raw ID when task not in DB
         assert_eq!(result[0]["task_id"], "c1");
-        assert_eq!(result[0]["title"], "Child Task");
+        assert_eq!(result[0]["title"], "Test Task");
         assert_eq!(result[0]["status"], "open");
         assert_eq!(result[0]["priority"], 2);
         assert!(result[0].get("description").is_none());
@@ -397,30 +400,13 @@ mod tests {
     #[test]
     fn test_attach_summary_fields_key_names() {
         use brain_persistence::db::Db;
-        use brain_persistence::db::tasks::queries::TaskRow;
-        let row = TaskRow {
-            task_id: "t1".to_string(),
-            title: "Test".to_string(),
-            description: None,
-            status: "open".to_string(),
-            priority: 1,
-            blocked_reason: None,
-            due_ts: None,
-            task_type: TaskType::Task,
-            assignee: None,
-            defer_until: None,
-            parent_task_id: None,
-            child_seq: None,
-            created_at: 0,
-            updated_at: 0,
-            display_id: None,
-        };
         let db = Db::open_in_memory().unwrap();
         let store = TaskStore::new(db);
+        let task = make_task("t1");
         let dep = make_dep_summary(2, 1, vec!["blocker".to_string()]);
         let links = vec![make_note_link("c1", "/file.md")];
 
-        let mut json = task_row_to_json(&row, vec![]);
+        let mut json = task_to_json(&task, vec![]);
         attach_summary_fields(&store, &mut json, &dep, &links);
 
         // Verify key names are consistent
