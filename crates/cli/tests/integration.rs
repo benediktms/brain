@@ -1065,14 +1065,15 @@ fn set_prefix(db_path: &std::path::Path, prefix: &str) {
         [prefix],
     )
     .unwrap();
-    // Target the brains that the CLI plausibly resolves against during these
-    // tests: the explicit `test-brain` row and the v22 `(unscoped)` sentinel
-    // (brain_id='') that the cli falls back to when cwd doesn't match a
-    // registered brain root. A bulk `UPDATE brains SET prefix = ?1` would
-    // trip the v54→v55 `UNIQUE(prefix COLLATE NOCASE)` index by trying to
-    // set every brain row in the DB to the same value.
+    // Target the v22 `(unscoped)` sentinel (`brain_id = ''`). When the CLI runs
+    // from a cwd that doesn't match any registered brain root — true for these
+    // tests since they execute from the cargo runner's cwd — task creation
+    // falls back to the unscoped sentinel, so its `prefix` is the one that
+    // determines compact-id display formatting. Updating it alone satisfies
+    // the v54→v55 `UNIQUE(prefix COLLATE NOCASE)` index without changing
+    // `test-brain`'s row.
     conn.execute(
-        "UPDATE brains SET prefix = ?1 WHERE name IN ('test-brain', '(unscoped)')",
+        "UPDATE brains SET prefix = ?1 WHERE brain_id = ''",
         [prefix],
     )
     .unwrap();
