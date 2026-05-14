@@ -9,13 +9,13 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::TaskStore;
-use crate::tasks::enrichment::task_row_to_compact_json;
-use crate::tasks::enrichment::{
-    comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
-};
 use crate::uri::{SynapseUri, resolve_id};
 use brain_persistence::db::tasks::queries::TaskRow;
+use brain_tasks::TaskStore;
+use brain_tasks::enrichment::task_row_to_compact_json;
+use brain_tasks::enrichment::{
+    comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
+};
 
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
 

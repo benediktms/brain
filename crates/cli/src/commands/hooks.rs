@@ -1640,7 +1640,7 @@ mod tests {
     #[test]
     fn session_start_emits_valid_envelope() {
         use brain_lib::stores::BrainStores;
-        use brain_lib::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, new_task_id};
+        use brain_tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, new_task_id};
 
         let (_tmp, stores) =
             BrainStores::in_memory_with_brain("brain-ss-1", "test-brain", "TST").unwrap();

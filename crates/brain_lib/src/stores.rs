@@ -12,9 +12,9 @@ use crate::error::{BrainCoreError, Result};
 use crate::records::RecordStore;
 use crate::records::objects::ObjectStore;
 use crate::sagas::SagaStore;
-use crate::tasks::TaskStore;
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
+use brain_tasks::TaskStore;
 
 /// Unified access to all brain stores.
 ///

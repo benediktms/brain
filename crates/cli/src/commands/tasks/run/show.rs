@@ -1,8 +1,8 @@
 use anyhow::Result;
 use serde_json::json;
 
-use brain_lib::tasks::enrichment::task_row_to_compact_json;
-use brain_lib::tasks::enrichment::{
+use brain_tasks::enrichment::task_row_to_compact_json;
+use brain_tasks::enrichment::{
     children_stubs_to_json, comments_to_json, dep_summary_to_json_with_blocking, note_links_to_json,
 };
 

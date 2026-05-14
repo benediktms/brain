@@ -427,7 +427,7 @@ pub fn now_ts() -> i64 {
 }
 
 // NOTE: File I/O functions (append_event, read_all_events) live in
-// brain_lib::tasks::events, not here. This module contains only type
+// brain_tasks::events, not here. This module contains only type
 // definitions and constructors.
 
 #[cfg(test)]

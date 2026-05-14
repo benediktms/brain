@@ -7,12 +7,12 @@ use tracing::warn;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::enrichment::task_row_to_compact_json;
-use crate::tasks::events::{
-    EventType, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
-};
 use crate::uri::{SynapseUri, resolve_id};
 use crate::utils::parse_timestamp;
+use brain_tasks::enrichment::task_row_to_compact_json;
+use brain_tasks::events::{
+    EventType, TaskCreatedPayload, TaskEvent, TaskStatus, TaskType, new_task_id,
+};
 
 use super::McpTool;
 use super::{Warning, inject_warnings, json_response, store_or_warn};
@@ -1068,7 +1068,7 @@ mod tests {
             super::parse_and_validate_event(&params).expect("checked in test assertions");
         assert_eq!(
             validated.event_type,
-            crate::tasks::events::EventType::StatusChanged
+            brain_tasks::events::EventType::StatusChanged
         );
         assert_eq!(validated.task_id_raw.as_deref(), Some("t1"));
         assert_eq!(validated.actor, "test-actor");

@@ -10,11 +10,11 @@ use tracing::error;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::TaskStore;
-use crate::tasks::enrichment::enrich_task_list;
-use crate::tasks::events::TaskType;
 use crate::uri::SynapseUri;
 use brain_persistence::db::tasks::queries::{TaskFilter, TaskRow, apply_filters};
+use brain_tasks::TaskStore;
+use brain_tasks::enrichment::enrich_task_list;
+use brain_tasks::events::TaskType;
 
 use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
@@ -567,9 +567,9 @@ mod tests {
 
     use super::super::ToolRegistry;
     use super::super::tests::create_test_context;
-    use crate::tasks::TaskStore;
-    use crate::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus};
     use brain_persistence::db::schema::BrainUpsert;
+    use brain_tasks::TaskStore;
+    use brain_tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus};
 
     /// Compute the expected compact ID for a task created via in_memory stores.
     /// `create_test_context` registers brain "test-brain" (id "test-brain-id")

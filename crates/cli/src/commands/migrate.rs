@@ -288,7 +288,7 @@ fn migrate_one_brain(
         .with_context(|| format!("failed to register brain '{name}' ({brain_id})"))?;
 
     // Replay task JSONL sources.
-    let task_store = brain_lib::tasks::TaskStore::with_brain_id(db.clone(), brain_id, name)?;
+    let task_store = brain_tasks::TaskStore::with_brain_id(db.clone(), brain_id, name)?;
 
     let mut total_tasks = 0usize;
     for path in &jsonl.task_sources {
@@ -443,9 +443,9 @@ fn migrate_one_objects_dir(
 mod tests {
     use super::*;
     use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
-    use brain_lib::tasks::events::TaskCreatedPayload;
     use brain_persistence::db::Db;
     use brain_persistence::sql::SqlResultExt;
+    use brain_tasks::events::TaskCreatedPayload;
 
     /// Write task events to a JSONL file and migrate via JSONL replay.
     #[test]
@@ -459,7 +459,7 @@ mod tests {
         std::fs::create_dir_all(&tasks_dir).unwrap();
         let tasks_jsonl = tasks_dir.join("events.jsonl");
 
-        let task_event = brain_lib::tasks::events::TaskEvent::from_payload(
+        let task_event = brain_tasks::events::TaskEvent::from_payload(
             "TST-01AAAA",
             "test",
             TaskCreatedPayload {
@@ -475,7 +475,7 @@ mod tests {
                 display_id: None,
             },
         );
-        brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
+        brain_tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
 
         // Create record JSONL
         let records_dir = tmp.path().join("records");
@@ -561,7 +561,7 @@ mod tests {
         std::fs::create_dir_all(&tasks_dir).unwrap();
         let tasks_jsonl = tasks_dir.join("events.jsonl");
 
-        let task_event = brain_lib::tasks::events::TaskEvent::from_payload(
+        let task_event = brain_tasks::events::TaskEvent::from_payload(
             "TST-02CCCC",
             "test",
             TaskCreatedPayload {
@@ -577,7 +577,7 @@ mod tests {
                 display_id: None,
             },
         );
-        brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
+        brain_tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
 
         let jsonl = JsonlPaths {
             task_sources: vec![tasks_jsonl.clone()],
@@ -629,7 +629,7 @@ mod tests {
         std::fs::create_dir_all(&tasks_dir).unwrap();
         let tasks_jsonl = tasks_dir.join("events.jsonl");
 
-        let task_event = brain_lib::tasks::events::TaskEvent::from_payload(
+        let task_event = brain_tasks::events::TaskEvent::from_payload(
             "GW-01DDDD",
             "test",
             TaskCreatedPayload {
@@ -645,7 +645,7 @@ mod tests {
                 display_id: None,
             },
         );
-        brain_lib::tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
+        brain_tasks::events::append_event(&tasks_jsonl, &task_event).unwrap();
 
         let jsonl = JsonlPaths {
             task_sources: vec![tasks_jsonl],

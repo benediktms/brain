@@ -670,6 +670,7 @@ dependencies = [
  "blake3",
  "brain-lib",
  "brain-persistence",
+ "brain-tasks",
  "chrono",
  "clap",
  "dirs",

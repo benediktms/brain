@@ -21,9 +21,9 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 
 use brain_lib::stores::BrainStores;
-use brain_lib::tasks::TaskStore;
-use brain_lib::tasks::enrichment::task_row_to_compact_json;
-use brain_lib::tasks::events::{self, *};
+use brain_tasks::TaskStore;
+use brain_tasks::enrichment::task_row_to_compact_json;
+use brain_tasks::events::{self, *};
 
 use crate::hooks::OutputFormat;
 

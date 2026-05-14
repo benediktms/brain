@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use brain_lib::tasks::events::*;
+use brain_tasks::events::*;
 
 use super::TaskCtx;
 

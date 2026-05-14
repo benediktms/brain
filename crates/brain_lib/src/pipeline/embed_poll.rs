@@ -15,7 +15,6 @@ use crate::embedder::embed_batch_async;
 use crate::l0_generate::{generate_episode_l0, generate_procedure_l0};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingOps, EmbeddingResetter};
 use crate::records::capsule::build_record_capsule;
-use crate::tasks::capsule::{build_outcome_capsule, build_task_capsule};
 use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
@@ -24,6 +23,7 @@ use brain_persistence::db::summaries::SummaryPollRow;
 use brain_persistence::db::tasks::queries::{TaskPollRow, get_labels_for_tasks};
 #[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
+use brain_tasks::capsule::{build_outcome_capsule, build_task_capsule};
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 
@@ -168,12 +168,7 @@ pub async fn poll_stale_tasks(
         }
 
         // L0 LOD upsert via shared helper (uses chunk_id format with :0 suffix).
-        crate::tasks::capsule::upsert_task_lod_l0(
-            db,
-            &entry.file_id,
-            &entry.capsule_text,
-            brain_id,
-        );
+        brain_tasks::capsule::upsert_task_lod_l0(db, &entry.file_id, &entry.capsule_text, brain_id);
 
         // Track unique task IDs (task + outcome capsule both count once)
         embedded_task_ids.insert(entry.task_id.clone());

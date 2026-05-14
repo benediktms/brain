@@ -10,12 +10,12 @@ use brain_lib::records::RecordStore;
 use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
 use brain_lib::records::objects::ObjectStore;
 use brain_lib::records::queries::RecordFilter;
-use brain_lib::tasks::TaskStore;
-use brain_lib::tasks::events::{
-    DependencyPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus,
-};
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
+use brain_tasks::TaskStore;
+use brain_tasks::events::{
+    DependencyPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus,
+};
 use tempfile::TempDir;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -183,8 +183,8 @@ fn test_cross_brain_dependency_resolves() {
     let done_ev = TaskEvent::from_payload(
         "prereq",
         "agent",
-        brain_lib::tasks::events::StatusChangedPayload {
-            new_status: brain_lib::tasks::events::TaskStatus::Done,
+        brain_tasks::events::StatusChangedPayload {
+            new_status: brain_tasks::events::TaskStatus::Done,
         },
     );
     store_a.append(&done_ev).unwrap();
