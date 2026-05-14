@@ -35,7 +35,7 @@ mod rebuild;
 mod tasks;
 
 pub use comments::{add_comment, update_comment};
-pub use deps::{add_dependency, remove_dependency};
+pub use deps::{add_dependency, add_orphan_blocks_edge, remove_dependency};
 pub use events::{
     append_status_changed_event, append_task_event_log, append_task_transferred_event,
 };

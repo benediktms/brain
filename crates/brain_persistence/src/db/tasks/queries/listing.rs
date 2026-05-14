@@ -725,7 +725,7 @@ pub fn task_exists(conn: &Connection, task_id: &str) -> SqlResult<bool> {
 /// depends on directly. Used by the cycle-detection BFS in `brain_tasks::cycle`
 /// to walk the graph one node at a time.
 pub fn outgoing_blocks(conn: &Connection, task_id: &str) -> SqlResult<Vec<String>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT to_id FROM entity_links
          WHERE from_type='TASK' AND to_type='TASK' AND edge_kind='blocks' AND from_id = ?1",
     )?;

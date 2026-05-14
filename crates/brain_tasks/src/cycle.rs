@@ -182,4 +182,40 @@ mod tests {
         // But adding another path t1 -> t4 is fine (already reachable, no cycle)
         check_cycle(&conn, "t1", "t4").unwrap();
     }
+
+    /// Recovers the BFS-level orphan-edge coverage that was lost when the
+    /// persistence-side `cycle` module was deleted. The persistence test
+    /// `outgoing_blocks_orphan` pins the primitive's contract; this test pins
+    /// the algorithm's behavior when that contract is exercised at runtime.
+    #[test]
+    fn test_orphan_neighbor_does_not_break_cycle_detection() {
+        use brain_persistence::db::tasks::writers::add_orphan_blocks_edge;
+
+        let conn = setup();
+        create_task(&conn, "t1");
+        create_task(&conn, "t2");
+        create_task(&conn, "t3");
+
+        // Real edges: t3 -> t2 -> t1.
+        add_dep(&conn, "t3", "t2");
+        add_dep(&conn, "t2", "t1");
+
+        // t2 also has an outgoing 'blocks' edge to a task that has no row in
+        // `tasks`. The BFS must tolerate this when traversal reaches t2.
+        add_orphan_blocks_edge(&conn, "t2", "ghost-9999").unwrap();
+
+        // (a) Real cycle still caught despite encountering the ghost mid-traversal.
+        //     Proposing t1 -> t3 would close the cycle t3 -> t2 -> t1 -> t3.
+        let result = check_cycle(&conn, "t1", "t3");
+        assert!(
+            result.is_err(),
+            "cycle must still be detected with orphan neighbor present"
+        );
+        assert!(result.unwrap_err().to_string().contains("cycle"));
+
+        // (b) No false-positive when BFS starts from a ghost id (proposed
+        //     depends_on has no row). Traversal terminates with no edges to follow.
+        check_cycle(&conn, "t1", "ghost-9999")
+            .expect("ghost-rooted traversal must not yield a false cycle");
+    }
 }

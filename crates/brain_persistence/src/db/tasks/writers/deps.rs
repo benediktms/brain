@@ -29,6 +29,25 @@ pub fn add_dependency(conn: &Connection, task_id: &str, depends_on: &str) -> Sql
     Ok(())
 }
 
+/// Test helper: insert a TASK→TASK 'blocks' edge directly into `entity_links`
+/// with foreign-key enforcement temporarily disabled. Lets tests construct
+/// corrupt-state fixtures (e.g. a `to_id` that has no corresponding row in
+/// `tasks`) so that defensive code paths in the cycle-detection BFS can be
+/// exercised. Production callers must use `add_dependency` instead.
+pub fn add_orphan_blocks_edge(conn: &Connection, from_id: &str, to_id: &str) -> SqlResult<()> {
+    conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+    conn.execute(
+        "INSERT OR IGNORE INTO entity_links \
+         (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope) \
+         VALUES \
+         (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'blocks', \
+          strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)",
+        rusqlite::params![from_id, to_id],
+    )?;
+    conn.execute_batch("PRAGMA foreign_keys = ON")?;
+    Ok(())
+}
+
 /// DELETE from task_deps + dual-write LinkRemoved blocks.
 pub fn remove_dependency(conn: &Connection, task_id: &str, depends_on: &str) -> SqlResult<()> {
     conn.execute(
