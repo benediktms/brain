@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use brain_lib::stores::BrainStores;
-use brain_lib::tasks::import_beads::import_beads_issues;
+use brain_tasks::import_beads::import_beads_issues;
 
 pub fn run(
     jsonl_path: Option<PathBuf>,

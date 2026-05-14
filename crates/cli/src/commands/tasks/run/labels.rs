@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::json;
 use tracing::debug;
 
-use brain_lib::tasks::events::*;
+use brain_tasks::events::*;
 
 use crate::markdown_table::MarkdownTable;
 

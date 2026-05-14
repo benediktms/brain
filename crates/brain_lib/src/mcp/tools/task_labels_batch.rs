@@ -6,9 +6,9 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tasks::TaskStore;
-use crate::tasks::events::{EventType, LabelPayload, TaskEvent};
 use crate::uri::{SynapseUri, resolve_id};
+use brain_tasks::TaskStore;
+use brain_tasks::events::{EventType, LabelPayload, TaskEvent};
 
 use super::{McpTool, json_response};
 

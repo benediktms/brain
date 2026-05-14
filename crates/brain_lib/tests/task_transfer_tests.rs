@@ -7,11 +7,11 @@
 /// MCP path.
 mod mcp_test_harness;
 
-use brain_lib::tasks::TaskStore;
-use brain_lib::tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, TaskTransferredPayload};
 use brain_persistence::db::Db;
 use brain_persistence::db::tasks::projections::apply_event;
 use brain_persistence::sql::SqlResultExt;
+use brain_tasks::TaskStore;
+use brain_tasks::events::{TaskCreatedPayload, TaskEvent, TaskStatus, TaskTransferredPayload};
 use serde_json::json;
 
 // ── helpers ──────────────────────────────────────────────────────────────────

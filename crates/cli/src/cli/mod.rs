@@ -66,7 +66,7 @@ pub(crate) enum TaskTypeArg {
     Spike,
 }
 
-impl From<TaskTypeArg> for brain_lib::tasks::events::TaskType {
+impl From<TaskTypeArg> for brain_tasks::events::TaskType {
     fn from(arg: TaskTypeArg) -> Self {
         match arg {
             TaskTypeArg::Task => Self::Task,

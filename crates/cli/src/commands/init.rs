@@ -457,7 +457,7 @@ fn attach_cwd_to_existing_brain(
 fn import_project_jsonl(db_path: &Path, brain_id: &str, jsonl_path: &Path) {
     let result = (|| -> Result<usize> {
         let db = brain_persistence::db::Db::open(db_path)?;
-        let store = brain_lib::tasks::TaskStore::with_brain_id(db, brain_id, brain_id)?;
+        let store = brain_tasks::TaskStore::with_brain_id(db, brain_id, brain_id)?;
         Ok(store.import_from_jsonl(jsonl_path)?)
     })();
     match result {

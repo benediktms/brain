@@ -29,7 +29,7 @@ pub async fn run(
     };
 
     // Open TaskStore
-    let task_store = brain_lib::tasks::TaskStore::new(db.clone());
+    let task_store = brain_tasks::TaskStore::new(db.clone());
 
     // List all tasks
     let all_tasks = task_store.list_all()?;
@@ -81,11 +81,11 @@ pub async fn run(
         let labels = labels_map.get(&task.task_id).cloned().unwrap_or_default();
 
         // Embed task capsule
-        match brain_lib::tasks::capsule::embed_task_capsule(
+        match brain_tasks::capsule::embed_task_capsule(
             &store,
             Some(&embedder),
             &db,
-            brain_lib::tasks::capsule::TaskCapsuleParams {
+            brain_tasks::capsule::TaskCapsuleParams {
                 task_id: &task.task_id,
                 title: &task.title,
                 description: task.description.as_deref(),
@@ -106,7 +106,7 @@ pub async fn run(
 
         // Embed outcome capsule for done/cancelled tasks
         if task.status == "done" || task.status == "cancelled" {
-            match brain_lib::tasks::capsule::embed_outcome_capsule(
+            match brain_tasks::capsule::embed_outcome_capsule(
                 &store,
                 Some(&embedder),
                 &db,

@@ -447,10 +447,10 @@ pub fn resolve_brain_with_fallback(
     Ok((name, bid))
 }
 
-/// Open a local [`crate::tasks::TaskStore`] for a brain identified by `name`.
+/// Open a local [`brain_tasks::TaskStore`] for a brain identified by `name`.
 ///
 /// Resolves the brain's data paths, creates the database directory if needed,
-/// and opens a [`brain_persistence::db::Db`] backed [`crate::tasks::TaskStore`] for the
+/// and opens a [`brain_persistence::db::Db`] backed [`brain_tasks::TaskStore`] for the
 /// named brain.
 ///
 /// # Deprecation
@@ -466,7 +466,7 @@ pub fn open_brain_stores(
 ) -> Result<(
     String,
     String,
-    crate::tasks::TaskStore,
+    brain_tasks::TaskStore,
     crate::records::RecordStore,
     crate::records::objects::ObjectStore,
 )> {
