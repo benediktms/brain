@@ -670,6 +670,7 @@ dependencies = [
  "blake3",
  "brain-lib",
  "brain-persistence",
+ "brain-records",
  "brain-tasks",
  "chrono",
  "clap",
@@ -728,6 +729,7 @@ dependencies = [
  "brain-embedder",
  "brain-lib",
  "brain-persistence",
+ "brain-records",
  "brain-sagas",
  "brain-tasks",
  "chrono",
@@ -786,6 +788,24 @@ dependencies = [
  "tokio",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "brain-records"
+version = "0.4.1"
+dependencies = [
+ "blake3",
+ "brain-core",
+ "brain-persistence",
+ "brain-records",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "ulid",
+ "zstd",
 ]
 
 [[package]]
