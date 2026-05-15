@@ -123,15 +123,14 @@ impl RecordCreatePlan {
             retention_class: None,
             producer: None,
             actor: "mcp".to_string(),
-            kind_override: None,
         };
 
         let record = match records.create_plan(create_params, &ctx.stores.objects) {
             Ok(r) => r,
             Err(e) => return ToolCallResult::error(format!("Failed to save record: {e}")),
         };
-        let record_id = record.record_id.clone();
-        let content_ref = record.content_ref.clone();
+        let record_id = record.record_id;
+        let content_ref = record.content_ref;
 
         let tags_refs: Vec<&str> = tags_for_capsule.iter().map(|s| s.as_str()).collect();
         let abstract_text =

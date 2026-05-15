@@ -17,10 +17,6 @@ use crate::projections;
 use crate::queries;
 
 /// Parameters for `RecordStore::create_*` methods.
-///
-/// `kind_override` is only consulted by `create_artifact` — the other
-/// `create_*` methods derive `kind` from their method name. Leave it `None`
-/// outside the artifact path.
 #[derive(Debug, Clone)]
 pub struct CreateRecordParams {
     pub title: String,
@@ -39,9 +35,6 @@ pub struct CreateRecordParams {
     pub producer: Option<String>,
     /// Actor stamped onto the event (e.g. `"cli"`, `"mcp"`, agent name).
     pub actor: String,
-    /// Only honored by `create_artifact`. Forces a specific kind string
-    /// (`report`, `diff`, …) when artifacts are stored under a custom kind.
-    pub kind_override: Option<String>,
 }
 
 /// The record store: SQLite is the sole source of truth.
@@ -195,24 +188,6 @@ impl RecordStore {
         objects: &objects::ObjectStore,
     ) -> Result<Record> {
         self.create_with_kind(params, "snapshot", objects)
-    }
-
-    /// Create an artifact record. The caller chooses the artifact `kind`
-    /// (`report`, `diff`, `export`, etc.) via `params.kind_override`.
-    ///
-    /// Unlike `create_document` / `create_analysis` / `create_plan` /
-    /// `create_snapshot`, artifacts have a customizable kind because the
-    /// `brain artifacts` CLI surface lets users record any free-form artifact
-    /// category. `params.kind_override` must be `Some(...)` here; the other
-    /// methods leave it `None`.
-    pub fn create_artifact(
-        &self,
-        params: CreateRecordParams,
-        objects: &objects::ObjectStore,
-    ) -> Result<Record> {
-        let kind = params.kind_override.as_deref().unwrap_or("artifact");
-        let kind = kind.to_string();
-        self.create_with_kind(params, &kind, objects)
     }
 
     fn create_with_kind(
@@ -771,7 +746,6 @@ mod tests {
             retention_class: None,
             producer: None,
             actor: "test".to_string(),
-            kind_override: None,
         }
     }
 
@@ -823,29 +797,6 @@ mod tests {
             .create_snapshot(create_params("state-cap", b"snapshot body"), &objects)
             .unwrap();
         assert_eq!(record.kind, "snapshot");
-    }
-
-    #[test]
-    fn test_create_artifact_honors_kind_override() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let (store, objects) = make_store_with_objects(&dir);
-
-        let mut params = create_params("ci-report", b"junit xml");
-        params.kind_override = Some("report".to_string());
-        let record = store.create_artifact(params, &objects).unwrap();
-        assert_eq!(record.kind, "report");
-    }
-
-    #[test]
-    fn test_create_artifact_defaults_kind_when_override_missing() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let (store, objects) = make_store_with_objects(&dir);
-
-        // No kind_override — falls back to "artifact".
-        let record = store
-            .create_artifact(create_params("misc", b"binary blob"), &objects)
-            .unwrap();
-        assert_eq!(record.kind, "artifact");
     }
 
     #[test]

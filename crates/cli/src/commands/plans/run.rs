@@ -104,15 +104,14 @@ pub fn create(ctx: &PlanCtx, params: CreateParams) -> Result<()> {
         retention_class: None,
         producer: None,
         actor: "cli".to_string(),
-        kind_override: None,
     };
 
     let record = stores
         .records
         .create_plan(create_params, &stores.objects)
         .context("Failed to save record")?;
-    let record_id = record.record_id.clone();
-    let content_ref = record.content_ref.clone();
+    let record_id = record.record_id;
+    let content_ref = record.content_ref;
 
     let tags_refs: Vec<&str> = tags_for_capsule.iter().map(|s| s.as_str()).collect();
     let abstract_text = generate_l0_abstract(&title_for_capsule, &content_for_abstract, &tags_refs);

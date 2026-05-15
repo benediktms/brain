@@ -109,14 +109,13 @@ pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
         retention_class: None,
         producer: None,
         actor: "cli".to_string(),
-        kind_override: None,
     };
 
     let record = record_store
         .create_snapshot(create_params, &ctx.object_store)
         .context("Failed to save snapshot")?;
-    let record_id = record.record_id.clone();
-    let content_ref = record.content_ref.clone();
+    let record_id = record.record_id;
+    let content_ref = record.content_ref;
 
     if ctx.json {
         let mut out = json!({

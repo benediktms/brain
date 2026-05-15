@@ -15,7 +15,6 @@ pub mod queries;
 mod store;
 
 pub use domain::{
-    ArtifactRecord, ContentRef, KindPolicy, Record, RecordDomain, RecordId, RecordKind,
-    RecordStatus, SnapshotRecord,
+    ContentRef, KindPolicy, Record, RecordDomain, RecordId, RecordKind, RecordStatus,
 };
 pub use store::{CreateRecordParams, RecordStore};

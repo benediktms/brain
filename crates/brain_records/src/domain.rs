@@ -357,115 +357,8 @@ impl From<RecordRow> for Record {
     }
 }
 
-impl From<&RecordRow> for Record {
-    fn from(row: &RecordRow) -> Self {
-        Record::from(row.clone())
-    }
-}
-
-/// The materialized/projected view of an artifact record.
-///
-/// Artifacts are durable work products with known structure and semantics.
-/// The payload is immutable after creation; only metadata is updatable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArtifactRecord {
-    pub artifact_id: String,
-    /// Category of the artifact (report, diff, export, analysis, document).
-    pub kind: String,
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub producer: Option<String>,
-    /// MIME type of the content (e.g. `application/json`, `text/plain`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_type: Option<String>,
-    /// Content encoding applied to the stored bytes (e.g. `gzip`, `identity`).
-    #[serde(default = "default_identity_encoding")]
-    pub content_encoding: String,
-    /// BLAKE3 hex digest of the raw payload bytes.
-    pub content_hash: String,
-    /// Byte length of the stored (possibly encoded) payload.
-    pub size_bytes: u64,
-    /// Byte length of the original (pre-encoding) payload.
-    pub original_size_bytes: u64,
-    /// Scope type (e.g. "task", "brain", "global").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope_type: Option<String>,
-    /// ID of the scoped entity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope_id: Option<String>,
-    /// Retention class hint.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retention_class: Option<String>,
-    /// Whether the artifact is pinned (exempt from GC).
-    pub pinned: bool,
-    /// Whether the payload object is currently available in the object store.
-    pub payload_available: bool,
-    /// Unix seconds when the artifact was created.
-    pub created_at: i64,
-    /// Unix seconds when the artifact was soft-deleted / archived, if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted_at: Option<i64>,
-}
-
 fn default_identity_encoding() -> String {
     "identity".to_string()
-}
-
-/// The materialized/projected view of a snapshot record.
-///
-/// Snapshots are opaque saved state bundles. Brain stores the bytes and
-/// metadata but does not parse or interpret the content.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotRecord {
-    pub snapshot_id: String,
-    /// Always `RecordKind::Snapshot` for snapshots.
-    pub kind: String,
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub producer: Option<String>,
-    /// Schema version of the snapshot's internal format (opaque to Brain core).
-    #[serde(default)]
-    pub schema_version: u32,
-    /// ID of the snapshot this was derived from, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_snapshot_id: Option<String>,
-    /// MIME type of the content (e.g. `application/octet-stream`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_type: Option<String>,
-    /// Content encoding applied to the stored bytes.
-    #[serde(default = "default_identity_encoding")]
-    pub content_encoding: String,
-    /// BLAKE3 hex digest of the raw payload bytes.
-    pub content_hash: String,
-    /// Byte length of the stored (possibly encoded) payload.
-    pub size_bytes: u64,
-    /// Byte length of the original (pre-encoding) payload.
-    pub original_size_bytes: u64,
-    /// Scope type (e.g. "task", "brain", "global").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope_type: Option<String>,
-    /// ID of the scoped entity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope_id: Option<String>,
-    /// Retention class hint.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retention_class: Option<String>,
-    /// Whether the snapshot is pinned (exempt from GC).
-    pub pinned: bool,
-    /// Whether the payload object is currently available in the object store.
-    pub payload_available: bool,
-    /// Unix seconds when the snapshot was created.
-    pub created_at: i64,
-    /// ID of the snapshot that superseded this one, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub superseded_by_snapshot_id: Option<String>,
-    /// Unix seconds when the snapshot was soft-deleted / archived, if applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted_at: Option<i64>,
 }
 
 #[cfg(test)]
@@ -679,75 +572,106 @@ mod tests {
     }
 
     #[test]
-    fn test_artifact_record_serde_round_trip() {
-        let artifact = ArtifactRecord {
-            artifact_id: "BRN-01XXX".to_string(),
-            kind: "report".to_string(),
-            title: "Test Artifact".to_string(),
-            summary: Some("A test artifact".to_string()),
-            producer: Some("test-agent".to_string()),
-            content_type: Some("application/json".to_string()),
-            content_encoding: "identity".to_string(),
-            content_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                .to_string(),
-            size_bytes: 100,
-            original_size_bytes: 100,
-            scope_type: Some("task".to_string()),
-            scope_id: Some("BRN-01YYY".to_string()),
+    fn test_from_record_row_happy_path() {
+        let hash = format!("abc123{}", "0".repeat(58));
+        let row = RecordRow {
+            record_id: "BRN-01XYZ".to_string(),
+            title: "Test".to_string(),
+            kind: "document".to_string(),
+            status: "active".to_string(),
+            description: Some("a description".to_string()),
+            content_hash: hash.clone(),
+            content_size: 100,
+            media_type: Some("text/plain".to_string()),
+            task_id: Some("BRN-task-1".to_string()),
+            actor: "cli".to_string(),
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
             retention_class: Some("permanent".to_string()),
-            pinned: false,
-            payload_available: true,
-            created_at: 1700000000,
-            deleted_at: None,
-        };
-
-        let json = serde_json::to_string(&artifact).unwrap();
-        let back: ArtifactRecord = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.artifact_id, artifact.artifact_id);
-        assert_eq!(back.title, artifact.title);
-        assert_eq!(back.content_hash, artifact.content_hash);
-        assert!(back.deleted_at.is_none());
-    }
-
-    #[test]
-    fn test_snapshot_record_serde_round_trip() {
-        let snapshot = SnapshotRecord {
-            snapshot_id: "BRN-01SNAP".to_string(),
-            kind: "snapshot".to_string(),
-            title: "Test Snapshot".to_string(),
-            summary: None,
-            producer: Some("brain-daemon".to_string()),
-            schema_version: 1,
-            parent_snapshot_id: None,
-            content_type: Some("application/octet-stream".to_string()),
-            content_encoding: "identity".to_string(),
-            content_hash: "abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
-                .to_string(),
-            size_bytes: 4096,
-            original_size_bytes: 4096,
-            scope_type: None,
-            scope_id: None,
-            retention_class: None,
             pinned: true,
             payload_available: true,
-            created_at: 1700000000,
-            superseded_by_snapshot_id: None,
-            deleted_at: None,
+            content_encoding: "zstd".to_string(),
+            original_size: Some(200),
+            trust: "trusted".to_string(),
+            source_tool: Some("brain".to_string()),
         };
-
-        let json = serde_json::to_string(&snapshot).unwrap();
-        let back: SnapshotRecord = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.snapshot_id, snapshot.snapshot_id);
-        assert_eq!(back.schema_version, 1);
-        assert!(back.parent_snapshot_id.is_none());
-        assert!(back.superseded_by_snapshot_id.is_none());
+        let record = Record::from(row);
+        assert_eq!(record.record_id, "BRN-01XYZ");
+        assert_eq!(record.title, "Test");
+        assert_eq!(record.status, RecordStatus::Active);
+        assert_eq!(record.content_ref.hash, hash);
+        assert_eq!(record.content_ref.size, 100u64);
+        assert_eq!(record.content_ref.original_size, Some(200u64));
+        assert_eq!(record.task_id.as_deref(), Some("BRN-task-1"));
+        assert_eq!(record.actor, "cli");
+        assert_eq!(record.created_at, 1_700_000_000);
+        assert_eq!(record.updated_at, 1_700_000_100);
+        assert_eq!(record.retention_class.as_deref(), Some("permanent"));
+        assert!(record.pinned);
+        assert!(record.payload_available);
+        assert_eq!(record.trust, "trusted");
+        assert_eq!(record.source_tool.as_deref(), Some("brain"));
     }
 
     #[test]
-    fn test_snapshot_schema_version_default() {
-        // When deserializing from JSON without schema_version, it should default to 0
-        let json = r#"{"snapshot_id":"s1","kind":"snapshot","title":"T","content_hash":"abc","size_bytes":0,"original_size_bytes":0,"pinned":false,"payload_available":true,"created_at":0,"content_encoding":"identity","actor":"a"}"#;
-        let snap: SnapshotRecord = serde_json::from_str(json).unwrap();
-        assert_eq!(snap.schema_version, 0);
+    fn test_from_record_row_invalid_status_defaults_to_active() {
+        let row = RecordRow {
+            record_id: "BRN-01".to_string(),
+            title: "T".to_string(),
+            kind: "document".to_string(),
+            status: "bogus_unknown_value".to_string(),
+            description: None,
+            content_hash: "a".repeat(64),
+            content_size: 0,
+            media_type: None,
+            task_id: None,
+            actor: "cli".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            retention_class: None,
+            pinned: false,
+            payload_available: false,
+            content_encoding: "identity".to_string(),
+            original_size: None,
+            trust: "trusted".to_string(),
+            source_tool: None,
+        };
+        let record = Record::from(row);
+        assert_eq!(record.status, RecordStatus::Active);
+    }
+
+    #[test]
+    fn test_from_record_row_bundles_content_into_content_ref() {
+        let hash = format!("deadbeef{}", "0".repeat(56));
+        let row = RecordRow {
+            record_id: "BRN-02".to_string(),
+            title: "T".to_string(),
+            kind: "snapshot".to_string(),
+            status: "active".to_string(),
+            description: None,
+            content_hash: hash.clone(),
+            content_size: 4096,
+            media_type: Some("application/zstd".to_string()),
+            task_id: None,
+            actor: "daemon".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            retention_class: None,
+            pinned: false,
+            payload_available: true,
+            content_encoding: "zstd".to_string(),
+            original_size: Some(8192),
+            trust: "trusted".to_string(),
+            source_tool: None,
+        };
+        let record = Record::from(row);
+        assert_eq!(record.content_ref.hash, hash);
+        assert_eq!(record.content_ref.size, 4096);
+        assert_eq!(
+            record.content_ref.media_type.as_deref(),
+            Some("application/zstd")
+        );
+        assert_eq!(record.content_ref.content_encoding, "zstd");
+        assert_eq!(record.content_ref.original_size, Some(8192));
     }
 }

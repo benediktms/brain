@@ -127,15 +127,14 @@ impl RecordSaveSnapshot {
             retention_class: None,
             producer: None,
             actor: "mcp".to_string(),
-            kind_override: None,
         };
 
         let record = match records.create_snapshot(create_params, &ctx.stores.objects) {
             Ok(r) => r,
             Err(e) => return ToolCallResult::error(format!("Failed to save record: {e}")),
         };
-        let record_id = record.record_id.clone();
-        let content_ref = record.content_ref.clone();
+        let record_id = record.record_id;
+        let content_ref = record.content_ref;
 
         // Eagerly write the L0 abstract for FTS and LOD so it is available
         // before the async embed pipeline runs.
