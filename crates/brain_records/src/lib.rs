@@ -1,4 +1,21 @@
 //! Records domain crate.
 //!
-//! Skeleton in this commit; source migrates from `brain_lib::records::*` in
-//! the next stacked commit.
+//! Wave 2 of the workspace decomposition (saga-5df / brn-2fe). Provides the
+//! `RecordStore` repository plus the records domain types (`Record`,
+//! `RecordKind`, `ContentRef`, …). Persistence row types stay behind the
+//! store boundary in `brain_persistence::db::records`.
+
+pub mod capsule;
+pub mod domain;
+pub mod events;
+pub mod integrity;
+pub mod objects;
+pub mod projections;
+pub mod queries;
+mod store;
+
+pub use domain::{
+    ArtifactRecord, ContentRef, KindPolicy, Record, RecordDomain, RecordId, RecordKind,
+    RecordStatus, SnapshotRecord,
+};
+pub use store::RecordStore;
