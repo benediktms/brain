@@ -16,6 +16,34 @@ use crate::objects;
 use crate::projections;
 use crate::queries;
 
+/// Parameters for `RecordStore::create_*` methods.
+///
+/// `kind_override` is only consulted by `create_artifact` — the other
+/// `create_*` methods derive `kind` from their method name. Leave it `None`
+/// outside the artifact path.
+#[derive(Debug, Clone)]
+pub struct CreateRecordParams {
+    pub title: String,
+    pub description: Option<String>,
+    /// Raw payload bytes. The store writes them to the object store
+    /// (compressing past `objects::COMPRESSION_THRESHOLD`) and constructs the
+    /// `ContentRefPayload` internally — callers do not see persistence event
+    /// types.
+    pub body: Vec<u8>,
+    pub media_type: Option<String>,
+    pub task_id: Option<String>,
+    pub tags: Vec<String>,
+    pub scope_type: Option<String>,
+    pub scope_id: Option<String>,
+    pub retention_class: Option<String>,
+    pub producer: Option<String>,
+    /// Actor stamped onto the event (e.g. `"cli"`, `"mcp"`, agent name).
+    pub actor: String,
+    /// Only honored by `create_artifact`. Forces a specific kind string
+    /// (`report`, `diff`, …) when artifacts are stored under a custom kind.
+    pub kind_override: Option<String>,
+}
+
 /// The record store: SQLite is the sole source of truth.
 #[derive(Clone)]
 pub struct RecordStore {
@@ -116,6 +144,127 @@ impl RecordStore {
         self.db
             .with_write_conn(|conn| projections::apply_event(conn, event, &brain_id))
             .into_brain_core()
+    }
+
+    // -- Typed record-creation methods --
+    //
+    // Each `create_*` wraps the boilerplate of:
+    //   1. allocate a new record ID using the brain's project prefix,
+    //   2. write the body to the object store (compressing past the
+    //      threshold),
+    //   3. construct `RecordCreatedPayload` + `ContentRefPayload` internally,
+    //   4. wrap in a `RecordEvent` with the caller's `actor`,
+    //   5. apply the event, then
+    //   6. reload + return the typed `Record`.
+    //
+    // CLI / MCP callers should prefer these over hand-rolled
+    // `RecordEvent::from_payload(...)` + `apply_event(...)` so the wire-format
+    // event types do not leak into application code.
+
+    /// Create a document record.
+    pub fn create_document(
+        &self,
+        params: CreateRecordParams,
+        objects: &objects::ObjectStore,
+    ) -> Result<Record> {
+        self.create_with_kind(params, "document", objects)
+    }
+
+    /// Create an analysis record.
+    pub fn create_analysis(
+        &self,
+        params: CreateRecordParams,
+        objects: &objects::ObjectStore,
+    ) -> Result<Record> {
+        self.create_with_kind(params, "analysis", objects)
+    }
+
+    /// Create a plan record.
+    pub fn create_plan(
+        &self,
+        params: CreateRecordParams,
+        objects: &objects::ObjectStore,
+    ) -> Result<Record> {
+        self.create_with_kind(params, "plan", objects)
+    }
+
+    /// Create a snapshot record.
+    pub fn create_snapshot(
+        &self,
+        params: CreateRecordParams,
+        objects: &objects::ObjectStore,
+    ) -> Result<Record> {
+        self.create_with_kind(params, "snapshot", objects)
+    }
+
+    /// Create an artifact record. The caller chooses the artifact `kind`
+    /// (`report`, `diff`, `export`, etc.) via `params.kind_override`.
+    ///
+    /// Unlike `create_document` / `create_analysis` / `create_plan` /
+    /// `create_snapshot`, artifacts have a customizable kind because the
+    /// `brain artifacts` CLI surface lets users record any free-form artifact
+    /// category. `params.kind_override` must be `Some(...)` here; the other
+    /// methods leave it `None`.
+    pub fn create_artifact(
+        &self,
+        params: CreateRecordParams,
+        objects: &objects::ObjectStore,
+    ) -> Result<Record> {
+        let kind = params.kind_override.as_deref().unwrap_or("artifact");
+        let kind = kind.to_string();
+        self.create_with_kind(params, &kind, objects)
+    }
+
+    fn create_with_kind(
+        &self,
+        params: CreateRecordParams,
+        kind: &str,
+        objects: &objects::ObjectStore,
+    ) -> Result<Record> {
+        let prefix = self.get_project_prefix()?;
+        let record_id = events::new_record_id(&prefix);
+
+        let (content_ref, encoding, original_size) = objects
+            .write_compressed(
+                &params.body,
+                params.media_type.clone(),
+                objects::COMPRESSION_THRESHOLD,
+            )
+            .map_err(|e| {
+                brain_core::error::BrainCoreError::Internal(format!(
+                    "create_{kind}: write object: {e}"
+                ))
+            })?;
+
+        let content_ref_payload = events::ContentRefPayload::compressed(
+            content_ref.hash,
+            content_ref.size,
+            params.media_type,
+            encoding,
+            original_size,
+        );
+
+        let payload = events::RecordCreatedPayload {
+            title: params.title,
+            kind: kind.to_string(),
+            content_ref: content_ref_payload,
+            description: params.description,
+            task_id: params.task_id,
+            tags: params.tags,
+            scope_type: params.scope_type,
+            scope_id: params.scope_id,
+            retention_class: params.retention_class,
+            producer: params.producer,
+        };
+
+        let event = events::RecordEvent::from_payload(&record_id, &params.actor, payload);
+        self.apply_event(&event)?;
+
+        self.get_record(&record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::Internal(format!(
+                "create_{kind}: record {record_id} missing after apply_event"
+            ))
+        })
     }
 
     // -- Query methods --
@@ -614,6 +763,113 @@ mod tests {
     }
 
     // -- pin/unpin tests --
+
+    // -- create_* typed write API tests --
+
+    fn create_params(title: &str, body: &[u8]) -> CreateRecordParams {
+        CreateRecordParams {
+            title: title.to_string(),
+            description: None,
+            body: body.to_vec(),
+            media_type: Some("text/plain".to_string()),
+            task_id: None,
+            tags: vec![],
+            scope_type: None,
+            scope_id: None,
+            retention_class: None,
+            producer: None,
+            actor: "test".to_string(),
+            kind_override: None,
+        }
+    }
+
+    #[test]
+    fn test_create_document_returns_typed_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let params = create_params("hello document", b"document body");
+        let record = store.create_document(params, &objects).unwrap();
+
+        assert_eq!(record.title, "hello document");
+        assert_eq!(record.kind, "document");
+        assert_eq!(record.status, crate::domain::RecordStatus::Active);
+        assert_eq!(record.actor, "test");
+        // Persisted via apply_event — round-trip query confirms it.
+        let reloaded = store.get_record(&record.record_id).unwrap().unwrap();
+        assert_eq!(reloaded.record_id, record.record_id);
+    }
+
+    #[test]
+    fn test_create_analysis_uses_correct_kind() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let record = store
+            .create_analysis(create_params("findings", b"analysis body"), &objects)
+            .unwrap();
+        assert_eq!(record.kind, "analysis");
+    }
+
+    #[test]
+    fn test_create_plan_uses_correct_kind() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let record = store
+            .create_plan(create_params("rollout", b"plan body"), &objects)
+            .unwrap();
+        assert_eq!(record.kind, "plan");
+    }
+
+    #[test]
+    fn test_create_snapshot_uses_correct_kind() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let record = store
+            .create_snapshot(create_params("state-cap", b"snapshot body"), &objects)
+            .unwrap();
+        assert_eq!(record.kind, "snapshot");
+    }
+
+    #[test]
+    fn test_create_artifact_honors_kind_override() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let mut params = create_params("ci-report", b"junit xml");
+        params.kind_override = Some("report".to_string());
+        let record = store.create_artifact(params, &objects).unwrap();
+        assert_eq!(record.kind, "report");
+    }
+
+    #[test]
+    fn test_create_artifact_defaults_kind_when_override_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        // No kind_override — falls back to "artifact".
+        let record = store
+            .create_artifact(create_params("misc", b"binary blob"), &objects)
+            .unwrap();
+        assert_eq!(record.kind, "artifact");
+    }
+
+    #[test]
+    fn test_create_document_populates_content_ref() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let body = b"some content body";
+        let record = store
+            .create_document(create_params("with-content", body), &objects)
+            .unwrap();
+        // BLAKE3 hex digest is 64 chars.
+        assert_eq!(record.content_ref.hash.len(), 64);
+        // The blob exists on disk under that hash.
+        assert!(objects.exists(&record.content_ref.hash));
+    }
 
     #[test]
     fn test_pin_unpin_record() {
