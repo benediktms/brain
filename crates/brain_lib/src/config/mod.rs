@@ -467,8 +467,8 @@ pub fn open_brain_stores(
     String,
     String,
     brain_tasks::TaskStore,
-    crate::records::RecordStore,
-    crate::records::objects::ObjectStore,
+    brain_records::RecordStore,
+    brain_records::objects::ObjectStore,
 )> {
     let stores = crate::stores::BrainStores::from_brain(name_or_id)?;
     Ok((

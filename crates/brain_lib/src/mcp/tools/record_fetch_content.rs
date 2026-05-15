@@ -27,7 +27,7 @@ impl RecordFetchContent {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let remote_brain: Option<(String, crate::records::RecordStore)> =
+        let remote_brain: Option<(String, brain_records::RecordStore)> =
             if let Some(ref brain) = params.brain {
                 let (bid, brain_name) = match ctx.resolve_brain_id(brain) {
                     Ok(r) => r,
@@ -44,7 +44,7 @@ impl RecordFetchContent {
             } else {
                 None
             };
-        let (records, remote_brain_name): (&crate::records::RecordStore, Option<String>) =
+        let (records, remote_brain_name): (&brain_records::RecordStore, Option<String>) =
             match remote_brain {
                 Some((ref name, ref recs)) => (recs, Some(name.clone())),
                 None => (&ctx.stores.records, None),
@@ -63,7 +63,7 @@ impl RecordFetchContent {
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         };
 
-        let raw_bytes = match objects.read_auto(&record.content_hash) {
+        let raw_bytes = match objects.read_auto(&record.content_ref.hash) {
             Ok(b) => b,
             Err(e) => return ToolCallResult::error(format!("Failed to read content: {e}")),
         };
@@ -75,6 +75,7 @@ impl RecordFetchContent {
 
         // Detect text-like content by media_type
         let is_text = record
+            .content_ref
             .media_type
             .as_deref()
             .map(|mt| {
@@ -91,9 +92,9 @@ impl RecordFetchContent {
                     "record_id": compact_id,
                     "title": record.title,
                     "kind": record.kind,
-                    "content_hash": record.content_hash,
-                    "size": record.content_size,
-                    "media_type": record.media_type,
+                    "content_hash": record.content_ref.hash,
+                    "size": record.content_ref.size,
+                    "media_type": record.content_ref.media_type,
                     "encoding": "utf-8",
                     "text": text,
                 }),
@@ -104,9 +105,9 @@ impl RecordFetchContent {
                         "record_id": compact_id,
                         "title": record.title,
                         "kind": record.kind,
-                        "content_hash": record.content_hash,
-                        "size": record.content_size,
-                        "media_type": record.media_type,
+                        "content_hash": record.content_ref.hash,
+                        "size": record.content_ref.size,
+                        "media_type": record.content_ref.media_type,
                         "encoding": "base64",
                         "data": data_b64,
                     })
@@ -118,9 +119,9 @@ impl RecordFetchContent {
                 "record_id": compact_id,
                 "title": record.title,
                 "kind": record.kind,
-                "content_hash": record.content_hash,
-                "size": record.content_size,
-                "media_type": record.media_type,
+                "content_hash": record.content_ref.hash,
+                "size": record.content_ref.size,
+                "media_type": record.content_ref.media_type,
                 "encoding": "base64",
                 "data": data_b64,
             })

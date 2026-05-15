@@ -6,11 +6,8 @@ use serde_json::json;
 
 use brain_lib::l0_abstract::generate_l0_abstract;
 use brain_lib::pipeline::embed_poll::upsert_domain_lod_l0;
-use brain_lib::records::events::{
-    ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id,
-};
-use brain_lib::records::objects::COMPRESSION_THRESHOLD;
 use brain_lib::stores::BrainStores;
+use brain_records::CreateRecordParams;
 use brain_lib::uri::SynapseUri;
 
 pub struct PlanCtx {
@@ -91,48 +88,35 @@ pub fn create(ctx: &PlanCtx, params: CreateParams) -> Result<()> {
     }
     let stores = target_stores.as_ref().unwrap_or(&ctx.stores);
 
-    let (content_ref, encoding, original_size) = stores
-        .objects
-        .write_compressed(&raw_bytes, Some(media_type.clone()), COMPRESSION_THRESHOLD)
-        .context("Failed to write object")?;
-
-    let prefix = stores
-        .records
-        .get_project_prefix()
-        .context("Failed to get project prefix")?;
-    let record_id = new_record_id(&prefix);
-
     let title_for_capsule = params.title.clone();
     let tags_for_capsule = params.tags.clone();
+    let content_for_abstract = String::from_utf8_lossy(&raw_bytes).into_owned();
 
-    let payload = RecordCreatedPayload {
+    let create_params = CreateRecordParams {
         title: params.title.clone(),
-        kind: "plan".to_string(),
-        content_ref: ContentRefPayload::compressed(
-            content_ref.hash.clone(),
-            content_ref.size,
-            Some(media_type),
-            encoding,
-            original_size,
-        ),
         description: params.description,
+        body: raw_bytes,
+        media_type: Some(media_type),
         task_id: params.task,
         tags: params.tags,
         scope_type: None,
         scope_id: None,
         retention_class: None,
         producer: None,
+        actor: "cli".to_string(),
+        kind_override: None,
     };
 
-    let event = RecordEvent::from_payload(&record_id, "cli", payload);
-    stores
+    let record = stores
         .records
-        .apply_event(&event)
+        .create_plan(create_params, &stores.objects)
         .context("Failed to save record")?;
+    let record_id = record.record_id.clone();
+    let content_ref = record.content_ref.clone();
 
-    let content = String::from_utf8_lossy(&raw_bytes);
     let tags_refs: Vec<&str> = tags_for_capsule.iter().map(|s| s.as_str()).collect();
-    let abstract_text = generate_l0_abstract(&title_for_capsule, &content, &tags_refs);
+    let abstract_text =
+        generate_l0_abstract(&title_for_capsule, &content_for_abstract, &tags_refs);
     let record_file_id = format!("record:{record_id}");
     stores
         .upsert_record_chunk(&record_file_id, &abstract_text)

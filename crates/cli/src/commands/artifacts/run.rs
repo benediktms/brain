@@ -6,10 +6,10 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde_json::json;
 
-use brain_lib::records::events::{
+use brain_records::events::{
     LinkPayload, RecordArchivedPayload, RecordEvent, RecordEventType, TagPayload,
 };
-use brain_lib::records::queries::RecordFilter;
+use brain_records::queries::RecordFilter;
 use brain_lib::stores::BrainStores;
 
 use crate::markdown_table::MarkdownTable;
@@ -17,8 +17,8 @@ use crate::markdown_table::MarkdownTable;
 // -- shared context --
 
 pub struct ArtifactCtx {
-    pub(crate) record_store: brain_lib::records::RecordStore,
-    pub(crate) object_store: brain_lib::records::objects::ObjectStore,
+    pub(crate) record_store: brain_records::RecordStore,
+    pub(crate) object_store: brain_records::objects::ObjectStore,
     pub(crate) json: bool,
 }
 
@@ -88,9 +88,9 @@ pub fn list(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
                     "kind": r.kind,
                     "status": r.status,
                     "description": r.description,
-                    "content_hash": r.content_hash,
-                    "content_size": r.content_size,
-                    "media_type": r.media_type,
+                    "content_hash": r.content_ref.hash,
+                    "content_size": r.content_ref.size,
+                    "media_type": r.content_ref.media_type,
                     "task_id": r.task_id,
                     "actor": r.actor,
                     "created_at": r.created_at,
@@ -119,8 +119,8 @@ pub fn list(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
                 short,
                 r.title.clone(),
                 r.kind.clone(),
-                r.status.clone(),
-                format_size(r.content_size),
+                r.status.to_string(),
+                format_size(r.content_ref.size as i64),
                 format_ts(r.created_at),
             ]);
         }
@@ -163,9 +163,9 @@ pub fn get(ctx: &ArtifactCtx, id: &str) -> Result<()> {
             "kind": record.kind,
             "status": record.status,
             "description": record.description,
-            "content_hash": record.content_hash,
-            "content_size": record.content_size,
-            "media_type": record.media_type,
+            "content_hash": record.content_ref.hash,
+            "content_size": record.content_ref.size,
+            "media_type": record.content_ref.media_type,
             "task_id": record.task_id,
             "actor": record.actor,
             "created_at": record.created_at,
@@ -186,9 +186,9 @@ pub fn get(ctx: &ArtifactCtx, id: &str) -> Result<()> {
         if let Some(ref desc) = record.description {
             println!("  Desc:    {desc}");
         }
-        println!("  Size:    {}", format_size(record.content_size));
-        println!("  Hash:    {}", &record.content_hash[..16]);
-        if let Some(ref mt) = record.media_type {
+        println!("  Size:    {}", format_size(record.content_ref.size as i64));
+        println!("  Hash:    {}", &record.content_ref.hash[..16]);
+        if let Some(ref mt) = record.content_ref.media_type {
             println!("  Type:    {mt}");
         }
         if let Some(ref tid) = record.task_id {
@@ -423,7 +423,7 @@ pub fn restore(ctx: &ArtifactCtx, id: &str, output: Option<std::path::PathBuf>) 
         .with_context(|| format!("Artifact not found: {record_id}"))?;
     let bytes = ctx
         .object_store
-        .read_auto(&record.content_hash)
+        .read_auto(&record.content_ref.hash)
         .with_context(|| format!("Failed to read object for artifact {record_id}"))?;
 
     match output {

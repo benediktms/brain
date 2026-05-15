@@ -27,7 +27,7 @@ impl RecordGet {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        let remote_brain: Option<(String, crate::records::RecordStore)> =
+        let remote_brain: Option<(String, brain_records::RecordStore)> =
             if let Some(ref brain) = params.brain {
                 let (bid, brain_name) = match ctx.resolve_brain_id(brain) {
                     Ok(r) => r,
@@ -44,7 +44,7 @@ impl RecordGet {
             } else {
                 None
             };
-        let (records, remote_brain_name): (&crate::records::RecordStore, Option<String>) =
+        let (records, remote_brain_name): (&brain_records::RecordStore, Option<String>) =
             match remote_brain {
                 Some((ref name, ref recs)) => (recs, Some(name.clone())),
                 None => (&ctx.stores.records, None),
@@ -96,9 +96,9 @@ impl RecordGet {
             "kind": record.kind,
             "status": record.status,
             "description": record.description,
-            "content_hash": record.content_hash,
-            "content_size": record.content_size,
-            "media_type": record.media_type,
+            "content_hash": record.content_ref.hash,
+            "content_size": record.content_ref.size,
+            "media_type": record.content_ref.media_type,
             "task_id": record.task_id,
             "actor": record.actor,
             "created_at": record.created_at,

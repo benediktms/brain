@@ -9,8 +9,8 @@ use tempfile::TempDir;
 
 use crate::config;
 use crate::error::{BrainCoreError, Result};
-use crate::records::RecordStore;
-use crate::records::objects::ObjectStore;
+use brain_records::RecordStore;
+use brain_records::objects::ObjectStore;
 use crate::sagas::SagaStore;
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
@@ -892,7 +892,7 @@ mod tests {
         assert!(tasks.is_empty());
 
         // RecordStore round-trip
-        let filter = crate::records::queries::RecordFilter {
+        let filter = brain_records::queries::RecordFilter {
             kind: None,
             status: None,
             tag: None,

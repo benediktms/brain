@@ -14,9 +14,7 @@ use crate::l0_abstract::generate_l0_abstract;
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::pipeline::embed_poll::upsert_domain_lod_l0;
-use crate::records::RecordKind;
-use crate::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent, new_record_id};
-use crate::records::objects::COMPRESSION_THRESHOLD;
+use brain_records::{CreateRecordParams, RecordKind};
 
 use crate::uri::SynapseUri;
 
@@ -109,52 +107,35 @@ impl RecordCreatePlan {
             }
         };
 
-        let (content_ref, encoding, original_size) = match ctx.stores.objects.write_compressed(
-            &raw_bytes,
-            Some(media_type.clone()),
-            COMPRESSION_THRESHOLD,
-        ) {
-            Ok(r) => r,
-            Err(e) => return ToolCallResult::error(format!("Failed to write object: {e}")),
-        };
-
-        let prefix = match records.get_project_prefix() {
-            Ok(p) => p,
-            Err(e) => return ToolCallResult::error(format!("Failed to get project prefix: {e}")),
-        };
-        let record_id = new_record_id(&prefix);
-
         let title_for_capsule = params.title.clone();
         let tags_for_capsule = params.tags.clone();
+        let content_for_abstract = String::from_utf8_lossy(&raw_bytes).into_owned();
 
-        let payload = RecordCreatedPayload {
+        let create_params = CreateRecordParams {
             title: params.title,
-            kind: "plan".to_string(),
-            content_ref: ContentRefPayload::compressed(
-                content_ref.hash.clone(),
-                content_ref.size,
-                Some(media_type),
-                encoding,
-                original_size,
-            ),
             description: params.description,
+            body: raw_bytes,
+            media_type: Some(media_type),
             task_id: params.task_id,
             tags: params.tags,
             scope_type: None,
             scope_id: None,
             retention_class: None,
             producer: None,
+            actor: "mcp".to_string(),
+            kind_override: None,
         };
 
-        let event = RecordEvent::from_payload(&record_id, "mcp", payload);
+        let record = match records.create_plan(create_params, &ctx.stores.objects) {
+            Ok(r) => r,
+            Err(e) => return ToolCallResult::error(format!("Failed to save record: {e}")),
+        };
+        let record_id = record.record_id.clone();
+        let content_ref = record.content_ref.clone();
 
-        if let Err(e) = records.apply_event(&event) {
-            return ToolCallResult::error(format!("Failed to save record: {e}"));
-        }
-
-        let content = String::from_utf8_lossy(&raw_bytes);
         let tags_refs: Vec<&str> = tags_for_capsule.iter().map(|s| s.as_str()).collect();
-        let abstract_text = generate_l0_abstract(&title_for_capsule, &content, &tags_refs);
+        let abstract_text =
+            generate_l0_abstract(&title_for_capsule, &content_for_abstract, &tags_refs);
         let record_file_id = format!("record:{record_id}");
         let policy = RecordKind::from("plan").policy();
         if policy.searchable

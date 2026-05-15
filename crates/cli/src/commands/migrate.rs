@@ -299,7 +299,7 @@ fn migrate_one_brain(
     }
 
     // Replay record JSONL sources.
-    let record_store = brain_lib::records::RecordStore::with_brain_id(db.clone(), brain_id, name)?;
+    let record_store = brain_records::RecordStore::with_brain_id(db.clone(), brain_id, name)?;
 
     let mut total_records = 0usize;
     for path in &jsonl.record_sources {
@@ -442,7 +442,7 @@ fn migrate_one_objects_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
+    use brain_records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
     use brain_persistence::db::Db;
     use brain_persistence::sql::SqlResultExt;
     use brain_tasks::events::TaskCreatedPayload;
@@ -498,7 +498,7 @@ mod tests {
                 producer: None,
             },
         );
-        brain_lib::records::events::append_event(&records_jsonl, &record_event).unwrap();
+        brain_records::events::append_event(&records_jsonl, &record_event).unwrap();
 
         let jsonl = JsonlPaths {
             task_sources: vec![tasks_jsonl],
