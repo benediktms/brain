@@ -17,11 +17,13 @@ pub fn run_cli() -> std::process::ExitCode {
     use std::path::PathBuf;
     use std::process::ExitCode;
 
-    use crate::{DaemonConfig, DefaultDispatcher, UnixSocketServer};
+    use crate::{BrainStoresDispatcher, DaemonConfig, DefaultDispatcher};
 
     let mut args = std::env::args().skip(1);
     let mut socket_path: Option<PathBuf> = None;
     let mut pid_file: Option<PathBuf> = None;
+    let mut sqlite_db: Option<PathBuf> = None;
+    let mut lance_db: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -36,6 +38,20 @@ pub fn run_cli() -> std::process::ExitCode {
                 pid_file = args.next().map(PathBuf::from);
                 if pid_file.is_none() {
                     eprintln!("brain-daemon: --pid-file requires a value");
+                    return ExitCode::from(2);
+                }
+            }
+            "--sqlite-db" => {
+                sqlite_db = args.next().map(PathBuf::from);
+                if sqlite_db.is_none() {
+                    eprintln!("brain-daemon: --sqlite-db requires a value");
+                    return ExitCode::from(2);
+                }
+            }
+            "--lance-db" => {
+                lance_db = args.next().map(PathBuf::from);
+                if lance_db.is_none() {
+                    eprintln!("brain-daemon: --lance-db requires a value");
                     return ExitCode::from(2);
                 }
             }
@@ -62,7 +78,48 @@ pub fn run_cli() -> std::process::ExitCode {
         config = config.with_pid_file(p);
     }
 
-    let server = match UnixSocketServer::bind(&config, DefaultDispatcher) {
+    // Two monomorphizations of `run_server` chosen at runtime by which
+    // args were present. Keeps UnixSocketServer's generic Dispatcher
+    // bound (`D: Dispatcher + Send + Sync + 'static`) clean and avoids
+    // a `Box<dyn Dispatcher>` indirection in the hot path.
+    if let Some(sqlite_path) = sqlite_db {
+        let stores =
+            match brain_lib::stores::BrainStores::from_path(&sqlite_path, lance_db.as_deref()) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("brain-daemon: failed to open stores: {e}");
+                    return ExitCode::from(1);
+                }
+            };
+        run_server(
+            &config,
+            BrainStoresDispatcher::new(stores),
+            &socket_path,
+            "BrainStoresDispatcher",
+        )
+    } else {
+        run_server(
+            &config,
+            DefaultDispatcher,
+            &socket_path,
+            "DefaultDispatcher (Ping + Handshake only — pass --sqlite-db to enable real handlers)",
+        )
+    }
+}
+
+#[cfg(unix)]
+fn run_server<D>(
+    config: &crate::DaemonConfig,
+    dispatcher: D,
+    socket_path: &std::path::Path,
+    dispatcher_label: &str,
+) -> std::process::ExitCode
+where
+    D: crate::Dispatcher + Send + Sync + 'static,
+{
+    use std::process::ExitCode;
+
+    let server = match crate::UnixSocketServer::bind(config, dispatcher) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("brain-daemon: failed to bind socket: {e}");
@@ -70,7 +127,10 @@ pub fn run_cli() -> std::process::ExitCode {
         }
     };
 
-    println!("brain-daemon listening on {}", socket_path.display());
+    println!(
+        "brain-daemon listening on {} (dispatcher: {dispatcher_label})",
+        socket_path.display()
+    );
 
     if let Err(e) = server.run() {
         eprintln!("brain-daemon: server error: {e}");
@@ -83,12 +143,19 @@ pub fn run_cli() -> std::process::ExitCode {
 #[cfg(unix)]
 fn print_usage() {
     eprintln!(
-        "Usage: brain-daemon --socket-path <PATH> [--pid-file <PATH>]\n\
+        "Usage: brain-daemon --socket-path <PATH> \\\n\
+         \x20            [--pid-file <PATH>] \\\n\
+         \x20            [--sqlite-db <PATH>] [--lance-db <PATH>]\n\
          \n\
-         The MVP daemon binds a Unix socket and answers Ping + Handshake\n\
-         requests. Signal handling, real request handlers, file watcher,\n\
-         and job scheduler are deferred to follow-up tickets — see\n\
-         `brain_daemon::NOT_YET_IMPLEMENTED` for the full list."
+         When --sqlite-db is provided, brain-daemon opens the database\n\
+         and serves real Request variants (TasksList, …) via the\n\
+         BrainStoresDispatcher. Without it, the daemon falls back to a\n\
+         minimal dispatcher that only answers Ping + Handshake — useful\n\
+         for smoke tests but rejects every other Request with NotFound.\n\
+         \n\
+         Signal handling, file watcher, and job scheduler are deferred\n\
+         to follow-up tickets — see `brain_daemon::NOT_YET_IMPLEMENTED`\n\
+         in the crate docs."
     );
 }
 

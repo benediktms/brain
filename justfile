@@ -170,7 +170,13 @@ audit-daemon:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "==> brain_daemon architectural gates"
-    forbidden_re='use (rusqlite|lancedb|candle|brain_persistence|brain_lib|brain_tasks|brain_sagas|brain_records|brain_tags|brain_retrieval|brain_embedder)::'
+    # As of brn-2fe.27 the daemon hosts real handlers backed by
+    # BrainStores, so brain_lib / brain_persistence / brain_tasks are
+    # ALLOWED upstream deps (used inside handlers.rs only). rusqlite +
+    # lancedb + candle + the not-yet-allowed brain_* domain crates
+    # remain forbidden — handlers should consume typed domain APIs,
+    # not raw storage adapters.
+    forbidden_re='use (rusqlite|lancedb|candle|brain_sagas|brain_records|brain_tags|brain_retrieval|brain_embedder)::'
     # architecture.rs is the programmatic version of this very gate — it
     # contains the forbidden crate names as data but never imports them.
     # The Rust test skips itself in its walk; the bash recipe does the
@@ -193,12 +199,15 @@ audit-daemon:
         fi
     done
     echo "  ok: port-layer files (config/dispatcher) have no I/O imports"
-    forbidden_dep_re='^(rusqlite|lancedb|candle|brain[_-](persistence|lib|tasks|sagas|records|tags|retrieval|embedder))'
-    if cargo tree -p brain-daemon -e normal --prefix none 2>/dev/null | grep -E "$forbidden_dep_re"; then
-        echo "FAIL: forbidden transitive dep on brain-daemon — see lines above"
-        exit 1
-    fi
-    echo "  ok: cargo tree shows no forbidden transitive deps"
+    # cargo-tree gate intentionally dropped from the daemon audit:
+    # depending on brain-lib (the umbrella crate) transitively pulls
+    # brain_records / brain_sagas / brain_embedder, and brain-persistence
+    # transitively pulls rusqlite / lancedb. The architectural intent
+    # ("no DIRECT misuse of storage adapters") is enforced by the source-
+    # grep check above. A coarse transitive-dep gate would either fail
+    # spuriously or be empty. Re-introduce it when the workspace
+    # decomposes far enough for a meaningful "must not appear even
+    # transitively" set to exist.
     echo "==> All brain_daemon architectural gates passed."
 
 # ── App ───────────────────────────────────────────────────────────────────

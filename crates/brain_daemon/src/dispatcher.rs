@@ -60,6 +60,17 @@ impl Dispatcher for DefaultDispatcher {
             Request::Handshake { .. } => Ok(Response::HandshakeOk {
                 server_version: PROTOCOL_VERSION,
             }),
+            // DefaultDispatcher deliberately doesn't reach into BrainStores
+            // (no brain_lib dep) — that's `BrainStoresDispatcher`'s job in
+            // crate::handlers. Surface a clear error so a misconfigured
+            // daemon (started without DB args) fails loudly rather than
+            // silently dropping requests.
+            Request::TasksList { .. } => Err(RpcError::Unknown {
+                message: "TasksList not handled by DefaultDispatcher \
+                          — start brain-daemon with --sqlite-db and \
+                          --lance-db to use the BrainStores-backed dispatcher"
+                    .into(),
+            }),
         }
     }
 }

@@ -65,6 +65,12 @@ fn echo_once(listener: UnixListener) {
                 server_version: PROTOCOL_VERSION,
             },
             Request::Ping => Response::Pong,
+            // This test echo server only exercises the wire framing for
+            // Handshake + Ping. If we ever wire a TasksList test through
+            // here, this arm should be expanded.
+            Request::TasksList { .. } => {
+                unreachable!("echo_once test server is not configured to respond to TasksList")
+            }
         };
         let mut payload = serde_json::to_vec(&resp).expect("serialize response");
         payload.push(b'\n');

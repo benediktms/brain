@@ -40,6 +40,7 @@ brain-daemon = { path = "../brain_daemon" }
 brain-lib = { path = "../brain_lib", default-features = false }
 brain-persistence = { path = "../brain_persistence" }
 brain-records = { path = "../brain_records" }
+brain-rpc = { path = "../brain_rpc" }
 brain-tasks = { path = "../brain_tasks" }
 tokio = { workspace = true, features = ["signal", "net"] }
 tokio-util = { workspace = true }

@@ -43,6 +43,9 @@
 //!             Request::Handshake { .. } => Ok(Response::HandshakeOk {
 //!                 server_version: brain_rpc::PROTOCOL_VERSION,
 //!             }),
+//!             other => Err(RpcError::Unknown {
+//!                 message: format!("{other:?} not handled by this example transport"),
+//!             }),
 //!         }
 //!     }
 //! }

@@ -39,7 +39,6 @@
 //! - `testing` — mocks (`InMemoryTransport`, `FakeSpawner`) gated behind the
 //!   `test-utils` feature for downstream consumers.
 
-// Module declarations are added story-by-story per the PRD at .omc/prd.json.
 pub mod client;
 pub mod domain;
 pub mod transport;
@@ -53,7 +52,7 @@ pub mod unix;
 pub mod testing;
 
 pub use client::DaemonClient;
-pub use domain::{PROTOCOL_VERSION, Request, Response, RpcError};
+pub use domain::{PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksListParams};
 pub use transport::Transport;
 
 #[cfg(unix)]

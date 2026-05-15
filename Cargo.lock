@@ -672,6 +672,7 @@ dependencies = [
  "brain-lib",
  "brain-persistence",
  "brain-records",
+ "brain-rpc",
  "brain-tasks",
  "chrono",
  "clap",
@@ -709,7 +710,10 @@ version = "0.4.1"
 dependencies = [
  "anyhow",
  "brain-daemon",
+ "brain-lib",
+ "brain-persistence",
  "brain-rpc",
+ "brain-tasks",
  "serde",
  "serde_json",
  "tempfile",

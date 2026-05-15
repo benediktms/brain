@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use brain_tasks::Task;
 use brain_tasks::enrichment::{enrich_task_list, task_row_to_compact_json};
@@ -119,6 +120,9 @@ fn fetch_filtered_tasks(
 // ── list ────────────────────────────────────────────────────
 
 pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
+    if params.remote {
+        return list_remote(params);
+    }
     if let Some(ref brain) = params.brain {
         let (_name, _id, tasks, _records, _objects) = brain_lib::config::open_brain_stores(brain)?;
         let remote_ctx = TaskCtx {
@@ -128,6 +132,96 @@ pub fn list(ctx: &TaskCtx, params: &ListParams) -> Result<()> {
         return list_inner(&remote_ctx, params);
     }
     list_inner(ctx, params)
+}
+
+/// Daemon-side path: connect to brain-daemon over the local Unix socket
+/// and render `Response::TasksList`.
+///
+/// MVP scope — only `status`, `priority`, and `search` filters are
+/// forwarded to the daemon; the rest (label, ready/blocked, group_by,
+/// brain selector, full json output) are deferred to follow-up tickets
+/// that flesh out the wire protocol. Output today is a plain markdown
+/// table matching the local path's columns.
+fn list_remote(params: &ListParams) -> Result<()> {
+    if params.ready || params.blocked {
+        bail!("--ready and --blocked are not yet supported on the --remote path");
+    }
+    if params.label.is_some() {
+        bail!("--label filter is not yet supported on the --remote path");
+    }
+    if params.group_by.is_some() {
+        bail!("--group-by is not yet supported on the --remote path");
+    }
+    if params.brain.is_some() {
+        bail!("--brain selector is not yet supported on the --remote path");
+    }
+
+    let socket_path = default_socket_path()?;
+    let transport =
+        brain_rpc::UnixSocketTransport::connect(&socket_path).map_err(|e| anyhow::anyhow!(
+            "connect to brain-daemon at {}: {e}\n  start the daemon first: brain-daemon --socket-path {} --sqlite-db <PATH> --lance-db <PATH>",
+            socket_path.display(),
+            socket_path.display()
+        ))?;
+
+    let mut client = brain_rpc::DaemonClient::connect(transport)
+        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+
+    let wire_params = brain_rpc::TasksListParams {
+        status: params.status.clone(),
+        priority: params.priority.map(|p| p.clamp(0, u8::MAX as i32) as u8),
+        limit: None,
+        search: params.search.clone(),
+    };
+
+    let resp = client
+        .call(brain_rpc::Request::TasksList {
+            params: wire_params,
+        })
+        .map_err(|e| anyhow::anyhow!("TasksList rpc failed: {e}"))?;
+
+    let tasks = match resp {
+        brain_rpc::Response::TasksList { tasks } => tasks,
+        other => bail!("unexpected response to TasksList: {other:?}"),
+    };
+
+    // Render — same columns as the local path's markdown table, minus
+    // assignee/type which aren't on TaskSummary today (wire-format MVP).
+    let mut table = MarkdownTable::new(vec!["PRI", "STATUS", "ID", "TITLE"]);
+    for t in &tasks {
+        table.add_row(vec![
+            priority_label(t.priority as i32).to_string(),
+            t.status.clone(),
+            t.task_id.clone(),
+            t.title.clone(),
+        ]);
+    }
+    print!("{table}");
+    Ok(())
+}
+
+/// Resolve the default socket path for `brain tasks list --remote`.
+///
+/// Returns `$BRAIN_SOCKET_PATH` if set, else `$BRAIN_HOME/brain-rpc.sock`,
+/// else `$HOME/.brain/brain-rpc.sock`.
+///
+/// The filename is deliberately **NOT** `brain.sock` — that path is
+/// already bound by the legacy `brain_lib::ipc::IpcServer` (a JSON-RPC
+/// 2.0 server reached via `brain watch`/`BrainRouter`) whenever
+/// `just install` has run. Defaulting to the same path would route this
+/// crate's newline-JSON wire format into the legacy daemon's
+/// JSON-RPC dispatcher and surface a useless `RpcError::Protocol`
+/// error. The two daemons coexist on separate sockets until the
+/// legacy IpcServer is retired in a future ticket.
+fn default_socket_path() -> Result<PathBuf> {
+    if let Ok(p) = std::env::var("BRAIN_SOCKET_PATH") {
+        return Ok(PathBuf::from(p));
+    }
+    let home = std::env::var("BRAIN_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".brain")))
+        .map_err(|_| anyhow::anyhow!("neither BRAIN_HOME nor HOME is set"))?;
+    Ok(home.join("brain-rpc.sock"))
 }
 
 fn list_inner(ctx: &TaskCtx, params: &ListParams) -> Result<()> {

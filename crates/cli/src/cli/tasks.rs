@@ -84,6 +84,15 @@ pub(crate) enum TasksAction {
         /// Target brain name or ID (lists tasks from that brain)
         #[arg(long)]
         brain: Option<String>,
+
+        /// Route the request through brain-daemon over the local Unix
+        /// socket instead of opening the database in-process. Requires
+        /// the daemon to be running (`brain-daemon --socket-path …
+        /// --sqlite-db …`). Experimental; only a subset of filters
+        /// (status, priority, search) are honored on the remote path
+        /// — full parity with the local path lands in follow-up work.
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Show details for a specific task

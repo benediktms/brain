@@ -21,16 +21,18 @@ use std::path::{Path, PathBuf};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
-/// Crates whose types may never appear in brain_daemon's import surface
-/// during the MVP. Future tickets will narrow this list (e.g. brain_lib
-/// gets added when real handlers backed by BrainStores land).
+/// Crates whose types may never appear in brain_daemon's import surface.
+///
+/// As of the BrainStoresDispatcher landing, brain_lib / brain_persistence
+/// / brain_tasks are ALLOWED — they're used inside handlers.rs to map
+/// requests onto real domain calls. Direct rusqlite / lancedb / candle
+/// imports remain forbidden (those belong inside brain_persistence and
+/// brain_embedder), as do the not-yet-extracted domain crates whose
+/// types haven't earned a place on the daemon's request surface yet.
 const FORBIDDEN_CRATES: &[&str] = &[
     "rusqlite",
     "lancedb",
     "candle",
-    "brain_persistence",
-    "brain_lib",
-    "brain_tasks",
     "brain_sagas",
     "brain_records",
     "brain_tags",
