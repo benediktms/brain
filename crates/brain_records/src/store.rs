@@ -9,7 +9,6 @@ use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
 
 use brain_core::error::Result;
-use chrono::Utc;
 
 use crate::domain::{ContentRef, Record, RecordKind, RecordLink, RecordStatus};
 use crate::events;
@@ -290,9 +289,9 @@ impl RecordStore {
         };
 
         let event = events::RecordEvent::from_payload(&record_id, &actor, payload);
+        let event_timestamp = event.timestamp;
         self.apply_event(&event)?;
 
-        let now = Utc::now().timestamp();
         Ok(Record {
             record_id,
             title,
@@ -302,8 +301,8 @@ impl RecordStore {
             content_ref: domain_content_ref,
             task_id,
             actor,
-            created_at: now,
-            updated_at: now,
+            created_at: event_timestamp,
+            updated_at: event_timestamp,
             retention_class,
             pinned: false,
             payload_available: true,
@@ -549,13 +548,22 @@ impl RecordStore {
 
     // -- Typed mutation methods --
 
-    /// Mark a record as archived. Idempotent on repeated calls.
+    /// Mark a record as archived.
+    ///
+    /// Idempotent at the **status level**: calling on an already-archived
+    /// record leaves `status = "archived"` unchanged. Every call appends a
+    /// new `RecordArchived` event to the audit log and bumps `updated_at`,
+    /// so callers that need true single-shot semantics must guard externally.
     pub fn archive_record(
         &self,
         record_id: &str,
         reason: Option<String>,
         actor: &str,
     ) -> Result<()> {
+        self.get_record(record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
+
         let event = crate::events::RecordEvent::from_payload(
             record_id,
             actor,
@@ -565,7 +573,7 @@ impl RecordStore {
     }
 
     /// Update mutable record metadata. `title` and `description` are applied
-    /// only when `Some(_)`. Empty title is rejected.
+    /// only when `Some(_)`. Empty title or empty description is rejected.
     pub fn update_record(
         &self,
         record_id: &str,
@@ -580,6 +588,17 @@ impl RecordStore {
                 "title must be non-empty".into(),
             ));
         }
+        if let Some(ref d) = description
+            && d.trim().is_empty()
+        {
+            return Err(brain_core::error::BrainCoreError::Config(
+                "description must be non-empty (use None to skip the update instead)".into(),
+            ));
+        }
+        self.get_record(record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
+
         let payload = crate::events::RecordUpdatedPayload { title, description };
         let event = crate::events::RecordEvent::from_payload(record_id, actor, payload);
         self.apply_event(&event)
@@ -587,6 +606,10 @@ impl RecordStore {
 
     /// Add a tag to a record. Idempotent.
     pub fn add_tag(&self, record_id: &str, tag: &str, actor: &str) -> Result<()> {
+        self.get_record(record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
+
         let event = crate::events::RecordEvent::new(
             record_id,
             actor,
@@ -600,6 +623,10 @@ impl RecordStore {
 
     /// Remove a tag from a record. Idempotent.
     pub fn remove_tag(&self, record_id: &str, tag: &str, actor: &str) -> Result<()> {
+        self.get_record(record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
+
         let event = crate::events::RecordEvent::new(
             record_id,
             actor,
@@ -613,6 +640,10 @@ impl RecordStore {
 
     /// Link a record to a task. Idempotent.
     pub fn link_task(&self, record_id: &str, task_id: &str, actor: &str) -> Result<()> {
+        self.get_record(record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
+
         let event = crate::events::RecordEvent::new(
             record_id,
             actor,
@@ -627,6 +658,10 @@ impl RecordStore {
 
     /// Unlink a record from a task. Idempotent.
     pub fn unlink_task(&self, record_id: &str, task_id: &str, actor: &str) -> Result<()> {
+        self.get_record(record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
+
         let event = crate::events::RecordEvent::new(
             record_id,
             actor,
@@ -641,6 +676,10 @@ impl RecordStore {
 
     /// Link a record to a chunk (memory chunk). Idempotent.
     pub fn link_chunk(&self, record_id: &str, chunk_id: &str, actor: &str) -> Result<()> {
+        self.get_record(record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
+
         let event = crate::events::RecordEvent::new(
             record_id,
             actor,
@@ -655,6 +694,10 @@ impl RecordStore {
 
     /// Unlink a record from a chunk. Idempotent.
     pub fn unlink_chunk(&self, record_id: &str, chunk_id: &str, actor: &str) -> Result<()> {
+        self.get_record(record_id)?.ok_or_else(|| {
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
+        })?;
+
         let event = crate::events::RecordEvent::new(
             record_id,
             actor,
@@ -1204,6 +1247,50 @@ mod tests {
                 .iter()
                 .any(|l| l.chunk_id.as_deref() == Some("chunk-abc")),
             "chunk link should be absent after unlink_chunk"
+        );
+    }
+
+    #[test]
+    fn test_archive_record_on_nonexistent_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let result = store.archive_record("BRN-nonexistent", None, "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("record not found"));
+    }
+
+    #[test]
+    fn test_add_tag_on_nonexistent_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let result = store.add_tag("BRN-nonexistent", "mytag", "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("record not found"));
+    }
+
+    #[test]
+    fn test_link_task_on_nonexistent_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let result = store.link_task("BRN-nonexistent", "BRN-task-1", "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("record not found"));
+    }
+
+    #[test]
+    fn test_update_record_rejects_empty_description() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+        let record = store
+            .create_document(create_params("doc", b"body"), &objects)
+            .unwrap();
+        let result = store.update_record(&record.record_id, None, Some("".to_string()), "test");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("description must be non-empty")
         );
     }
 

@@ -8,12 +8,9 @@
 
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
-use brain_records::RecordStore;
-// Test exercises raw event semantics — explicit cross-layer reach.
-use brain_persistence::db::records::events::{
-    ContentRefPayload, RecordCreatedPayload, RecordEvent,
-};
 use brain_records::RecordQuery;
+use brain_records::RecordStore;
+use brain_records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
 use brain_records::objects::ObjectStore;
 use brain_tasks::TaskStore;
 use brain_tasks::events::{

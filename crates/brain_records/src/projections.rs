@@ -7,10 +7,11 @@
 //! local `rebuild()` wrapper. `rebuild_from_events` is consumed only inside
 //! this module and stays private.
 
-// `apply_event` is the persistence-layer projection step. External callers
-// no longer need it — they reach the same operations via typed `RecordStore`
-// methods. Crate-private so internal store code keeps using `crate::projections::apply_event`.
-pub(crate) use brain_persistence::db::records::projections::apply_event;
+// `apply_event` is the raw projection step. Typed `RecordStore` methods are
+// the preferred path; this function is exposed for migration code that
+// replays preserved events (event_id + timestamp) and for integration
+// tests that exercise raw event semantics.
+pub use brain_persistence::db::records::projections::apply_event;
 
 use brain_persistence::db::records::projections::rebuild_from_events;
 use brain_persistence::sql::SqlResultExt;

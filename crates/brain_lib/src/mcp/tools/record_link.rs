@@ -34,10 +34,18 @@ impl RecordLinkAdd {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        if params.task_id.is_none() && params.chunk_id.is_none() {
-            return ToolCallResult::error(
-                "At least one of task_id or chunk_id must be provided".to_string(),
-            );
+        match (params.task_id.as_deref(), params.chunk_id.as_deref()) {
+            (None, None) => {
+                return ToolCallResult::error(
+                    "must specify either task_id or chunk_id (got neither)".to_string(),
+                );
+            }
+            (Some(_), Some(_)) => {
+                return ToolCallResult::error(
+                    "specify exactly one of task_id or chunk_id (got both)".to_string(),
+                );
+            }
+            _ => {}
         }
 
         let record_id_input = resolve_id(&params.record_id);
@@ -152,10 +160,18 @@ impl RecordLinkRemove {
             Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
         };
 
-        if params.task_id.is_none() && params.chunk_id.is_none() {
-            return ToolCallResult::error(
-                "At least one of task_id or chunk_id must be provided".to_string(),
-            );
+        match (params.task_id.as_deref(), params.chunk_id.as_deref()) {
+            (None, None) => {
+                return ToolCallResult::error(
+                    "must specify either task_id or chunk_id (got neither)".to_string(),
+                );
+            }
+            (Some(_), Some(_)) => {
+                return ToolCallResult::error(
+                    "specify exactly one of task_id or chunk_id (got both)".to_string(),
+                );
+            }
+            _ => {}
         }
 
         let record_id_input = resolve_id(&params.record_id);

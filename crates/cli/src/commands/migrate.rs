@@ -444,14 +444,7 @@ mod tests {
     use super::*;
     use brain_persistence::db::Db;
     use brain_persistence::sql::SqlResultExt;
-    // Legacy event replay: this migration path preserves the original event_id
-    // and timestamps from the source JSONL. The typed `RecordStore::create_*`
-    // methods mint fresh IDs and emit current timestamps, so they cannot
-    // reproduce the historical event log. Direct persistence-layer access is
-    // intentional here — explicit cross-layer reach.
-    use brain_persistence::db::records::events::{
-        ContentRefPayload, RecordCreatedPayload, RecordEvent,
-    };
+    use brain_records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
     use brain_tasks::events::TaskCreatedPayload;
 
     /// Write task events to a JSONL file and migrate via JSONL replay.

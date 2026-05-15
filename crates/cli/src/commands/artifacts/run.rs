@@ -267,8 +267,12 @@ pub fn link_add(
     task: Option<String>,
     chunk: Option<String>,
 ) -> Result<()> {
-    if task.is_none() && chunk.is_none() {
-        anyhow::bail!("Must specify at least one of --task or --chunk");
+    match (task.as_deref(), chunk.as_deref()) {
+        (None, None) => {
+            anyhow::bail!("must specify either --task <id> or --chunk <id> (got neither)")
+        }
+        (Some(_), Some(_)) => anyhow::bail!("specify exactly one of --task or --chunk (got both)"),
+        _ => {}
     }
 
     let record_id = ctx
@@ -313,8 +317,12 @@ pub fn link_remove(
     task: Option<String>,
     chunk: Option<String>,
 ) -> Result<()> {
-    if task.is_none() && chunk.is_none() {
-        anyhow::bail!("Must specify at least one of --task or --chunk");
+    match (task.as_deref(), chunk.as_deref()) {
+        (None, None) => {
+            anyhow::bail!("must specify either --task <id> or --chunk <id> (got neither)")
+        }
+        (Some(_), Some(_)) => anyhow::bail!("specify exactly one of --task or --chunk (got both)"),
+        _ => {}
     }
 
     let record_id = ctx

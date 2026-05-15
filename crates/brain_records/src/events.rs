@@ -10,18 +10,27 @@
 // Adding anything new to the public surface here is a slop signal: typed
 // `RecordStore` methods are the preferred path.
 
-// All persistence-event-payload types are crate-private — they're internal
-// to `RecordStore`'s typed methods, which are the only legitimate construct
-// site. External callers reach the same operations via `RecordStore::create_*`,
-// `archive_record`, `add_tag` etc.
+// Event wire-format types. The persistence layer defines the JSONL/SQLite
+// event schema; brain_records re-publishes the payloads that external
+// consumers legitimately construct. This is an EXPLICIT, BOUNDED contract —
+// not a wildcard re-export. Add new items only with deliberation.
 //
-// The locally-defined file-I/O helpers (`append_event`, `read_all_events`,
-// etc., defined below) remain `pub` — they are this crate's own functions,
-// not persistence re-exports.
+// What's public here:
+//   - RecordEvent + RecordEventType: the event envelope + variant tag.
+//   - All payload types that are constructed at call sites (CLI/MCP/tests).
+//   - new_record_id: the prefix-aware ULID generator.
+// What stays internal:
+//   - PinPayload, PayloadEvictedPayload, RetentionClassSetPayload — only
+//     constructed by RecordStore's typed methods; callers should NEVER
+//     hand-roll these.
+
+pub use brain_persistence::db::records::events::{
+    ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+    RecordEventType, RecordUpdatedPayload, TagPayload, new_record_id,
+};
+
 pub(crate) use brain_persistence::db::records::events::{
-    ContentRefPayload, LinkPayload, PayloadEvictedPayload, PinPayload, RecordArchivedPayload,
-    RecordCreatedPayload, RecordEvent, RecordEventType, RecordUpdatedPayload,
-    RetentionClassSetPayload, TagPayload, new_record_id,
+    PayloadEvictedPayload, PinPayload, RetentionClassSetPayload,
 };
 
 // ---------------------------------------------------------------------------
