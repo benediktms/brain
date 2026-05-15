@@ -252,8 +252,7 @@ mod tests {
         let binary_path = tmp.path().join("brain-daemon");
         std::fs::write(&binary_path, b"#!/bin/sh\nexit 0\n").unwrap();
 
-        let resolved =
-            resolve_binary(None, None, Some(tmp.path()), &[], "brain-daemon").unwrap();
+        let resolved = resolve_binary(None, None, Some(tmp.path()), &[], "brain-daemon").unwrap();
         assert_eq!(resolved, binary_path);
     }
 
@@ -316,7 +315,9 @@ mod tests {
     fn spawn_succeeds_for_existing_binary() {
         // /usr/bin/true exists on macOS and Linux and ignores its args.
         let spawner = StdProcessSpawner::with_hint("/usr/bin/true");
-        spawner.spawn(Path::new("/tmp/brain-rpc-test.sock")).unwrap();
+        spawner
+            .spawn(Path::new("/tmp/brain-rpc-test.sock"))
+            .unwrap();
     }
 
     #[test]

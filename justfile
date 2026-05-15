@@ -153,6 +153,54 @@ audit-rpc:
     echo "  ok: cargo tree shows no forbidden transitive deps"
     echo "==> All brain_rpc architectural gates passed."
 
+# Architectural ratchet for brain_daemon (saga-5df / brn-2fe.26).
+#
+# Verifies that brain_daemon stays a thin RPC-server crate with zero
+# leakage from DB / persistence / domain crates, and that the "inside"
+# of the hex (config.rs, dispatcher.rs) contains zero raw I/O imports.
+# Adapters (server.rs, main.rs, future services/*) are *allowed* to
+# use std::io / std::os / std::process — they live at the edge of the
+# hex.
+#
+# Run before every brain_daemon commit and as a CI gate. The list of
+# forbidden upstream crates intentionally mirrors audit-rpc so a future
+# crate split (brain-mcp etc.) inherits the same discipline.
+[group('dev')]
+audit-daemon:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> brain_daemon architectural gates"
+    forbidden_re='use (rusqlite|lancedb|candle|brain_persistence|brain_lib|brain_tasks|brain_sagas|brain_records|brain_tags|brain_retrieval|brain_embedder)::'
+    # architecture.rs is the programmatic version of this very gate — it
+    # contains the forbidden crate names as data but never imports them.
+    # The Rust test skips itself in its walk; the bash recipe does the
+    # same here via --exclude. If you ever rename architecture.rs,
+    # update both.
+    if grep -rE "$forbidden_re" crates/brain_daemon/src/ crates/brain_daemon/tests/ --exclude=architecture.rs 2>/dev/null; then
+        echo "FAIL: forbidden import found in brain_daemon — see lines above"
+        exit 1
+    fi
+    echo "  ok: no forbidden imports"
+    io_re='use (std::io|std::os|UnixStream|TcpStream|BufRead|BufWriter|std::net|std::process)'
+    port_files=(
+        crates/brain_daemon/src/config.rs
+        crates/brain_daemon/src/dispatcher.rs
+    )
+    for f in "${port_files[@]}"; do
+        if [ -f "$f" ] && grep -E "$io_re" "$f" 2>/dev/null; then
+            echo "FAIL: port-layer file $f leaks I/O imports — see lines above"
+            exit 1
+        fi
+    done
+    echo "  ok: port-layer files (config/dispatcher) have no I/O imports"
+    forbidden_dep_re='^(rusqlite|lancedb|candle|brain[_-](persistence|lib|tasks|sagas|records|tags|retrieval|embedder))'
+    if cargo tree -p brain-daemon -e normal --prefix none 2>/dev/null | grep -E "$forbidden_dep_re"; then
+        echo "FAIL: forbidden transitive dep on brain-daemon — see lines above"
+        exit 1
+    fi
+    echo "  ok: cargo tree shows no forbidden transitive deps"
+    echo "==> All brain_daemon architectural gates passed."
+
 # ── App ───────────────────────────────────────────────────────────────────
 
 [private]

@@ -77,9 +77,11 @@ impl Transport for UnixSocketTransport {
 
 /// Write `payload` to `writer` as one newline-terminated frame.
 ///
-/// Visible to siblings and tests but not to crate consumers — the
-/// trait method [`UnixSocketTransport::call`] is the public surface.
-pub(crate) fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
+/// Public so the daemon-side adapter (`brain_daemon::server`) can use
+/// the same framing implementation. Keeping a single implementation —
+/// one for client-side writes, one for server-side writes — prevents
+/// the wire format from drifting between sender and receiver.
+pub fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
     writer.write_all(payload)?;
     writer.write_all(b"\n")?;
     writer.flush()
@@ -88,9 +90,13 @@ pub(crate) fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Resul
 /// Read one newline-terminated frame from `reader`. The returned
 /// vector does **not** include the trailing `\n`.
 ///
+/// Public so the daemon-side adapter (`brain_daemon::server`) can use
+/// the same framing implementation as [`UnixSocketTransport`] — see
+/// [`write_frame`] for the rationale.
+///
 /// Returns [`io::ErrorKind::UnexpectedEof`] if the reader closes
 /// before a full frame arrives.
-pub(crate) fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Vec<u8>> {
+pub fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     let n = reader.read_until(b'\n', &mut buf)?;
     if n == 0 {

@@ -59,4 +59,4 @@ pub use transport::Transport;
 #[cfg(unix)]
 pub use spawner::{DaemonSpawner, StdProcessSpawner, connect_or_spawn};
 #[cfg(unix)]
-pub use unix::UnixSocketTransport;
+pub use unix::{UnixSocketTransport, read_frame, write_frame};

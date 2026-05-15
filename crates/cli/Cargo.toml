@@ -10,6 +10,17 @@ homepage = "https://github.com/benediktms/brain"
 name = "brain"
 path = "src/main.rs"
 
+# The `brain-daemon` binary lives here, not in the `brain-daemon` crate's
+# own [[bin]], so cargo-dist ships both binaries from a single
+# `brew install benediktms/brain/brain` formula. The forwarder is a
+# one-liner that calls into `brain_daemon::run_cli`; the heavy lifting
+# stays in the brain_daemon library. See the `[package.metadata.dist]
+# dist = false` opt-out in `crates/brain_daemon/Cargo.toml` for the
+# other half of this arrangement.
+[[bin]]
+name = "brain-daemon"
+path = "src/bin/brain-daemon.rs"
+
 [features]
 default = ["embed"]
 # Surfaces the embed-dependent subcommands (`watch`, `backfill-tasks`,
@@ -25,6 +36,7 @@ embed = ["brain-lib/embed"]
 accelerate = ["embed", "brain-lib/accelerate"]
 
 [dependencies]
+brain-daemon = { path = "../brain_daemon" }
 brain-lib = { path = "../brain_lib", default-features = false }
 brain-persistence = { path = "../brain_persistence" }
 brain-records = { path = "../brain_records" }

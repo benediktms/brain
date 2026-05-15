@@ -14,9 +14,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::thread;
 
-use brain_rpc::{
-    DaemonClient, PROTOCOL_VERSION, Request, Response, RpcError, UnixSocketTransport,
-};
+use brain_rpc::{DaemonClient, PROTOCOL_VERSION, Request, Response, RpcError, UnixSocketTransport};
 use tempfile::TempDir;
 
 /// Run `server_fn` on a freshly-bound Unix socket in a temp dir, give
