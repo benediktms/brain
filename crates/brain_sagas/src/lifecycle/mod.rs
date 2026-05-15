@@ -2,6 +2,10 @@ use brain_core::error::{BrainCoreError, Result};
 
 use super::status::SagaStatus;
 
+pub mod members;
+pub mod metadata;
+pub mod state_changes;
+
 /// Validate a lifecycle transition. Returns `Ok(())` for the 6 valid edges;
 /// returns an error for all 10 forbidden transitions.
 ///

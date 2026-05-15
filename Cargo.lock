@@ -795,6 +795,7 @@ dependencies = [
  "brain-core",
  "brain-persistence",
  "brain-sagas",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
