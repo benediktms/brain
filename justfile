@@ -105,6 +105,54 @@ alias l := lint
 fmt:
     cargo fmt --all
 
+# Architectural ratchet for brain_rpc (saga-5df / brn-2fe.25).
+#
+# Verifies that brain_rpc remains a wire-contract crate with zero leakage
+# from DB / persistence / domain crates, and that the "inside" of the hex
+# (domain.rs, transport.rs, client.rs, testing.rs) contains zero raw I/O
+# imports. Adapters (unix.rs, the StdProcessSpawner in spawner.rs) are
+# *allowed* to use std::io / std::os — they live at the edge of the hex.
+#
+# Run before every brain_rpc commit and as a CI gate. See
+# .omc/prd.json for the architectural ratchet's full rule set.
+[group('dev')]
+audit-rpc:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> brain_rpc architectural gates"
+    forbidden_re='use (rusqlite|lancedb|candle|brain_persistence|brain_lib|brain_tasks|brain_sagas|brain_records|brain_tags|brain_retrieval|brain_embedder)::'
+    # architecture.rs is the programmatic version of this very gate — it
+    # contains the forbidden crate names as data (string literals and
+    # rustdoc examples) but never imports them. The Rust test skips
+    # itself in its walk; the bash recipe does the same here via
+    # --exclude. If you ever rename architecture.rs, update both.
+    if grep -rE "$forbidden_re" crates/brain_rpc/src/ crates/brain_rpc/tests/ --exclude=architecture.rs 2>/dev/null; then
+        echo "FAIL: forbidden import found in brain_rpc — see lines above"
+        exit 1
+    fi
+    echo "  ok: no forbidden imports"
+    io_re='use (std::io|std::os|UnixStream|TcpStream|BufRead|BufWriter|std::net|std::process)'
+    port_files=(
+        crates/brain_rpc/src/domain.rs
+        crates/brain_rpc/src/transport.rs
+        crates/brain_rpc/src/client.rs
+        crates/brain_rpc/src/testing.rs
+    )
+    for f in "${port_files[@]}"; do
+        if [ -f "$f" ] && grep -E "$io_re" "$f" 2>/dev/null; then
+            echo "FAIL: port-layer file $f leaks I/O imports — see lines above"
+            exit 1
+        fi
+    done
+    echo "  ok: port-layer files (domain/transport/client/testing) have no I/O imports"
+    forbidden_dep_re='^(rusqlite|lancedb|candle|brain[_-](persistence|lib|tasks|sagas|records|tags|retrieval|embedder))'
+    if cargo tree -p brain-rpc -e normal --prefix none 2>/dev/null | grep -E "$forbidden_dep_re"; then
+        echo "FAIL: forbidden transitive dep on brain-rpc — see lines above"
+        exit 1
+    fi
+    echo "  ok: cargo tree shows no forbidden transitive deps"
+    echo "==> All brain_rpc architectural gates passed."
+
 # ── App ───────────────────────────────────────────────────────────────────
 
 [private]

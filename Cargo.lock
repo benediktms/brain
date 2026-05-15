@@ -809,6 +809,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "brain-rpc"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "brain-rpc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "brain-sagas"
 version = "0.4.1"
 dependencies = [
