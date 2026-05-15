@@ -795,13 +795,9 @@ dependencies = [
  "brain-core",
  "brain-persistence",
  "brain-sagas",
- "chrono",
- "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
- "tracing",
- "ulid",
 ]
 
 [[package]]

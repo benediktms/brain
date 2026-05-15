@@ -163,7 +163,7 @@ mod tests {
 
         ctx.stores
             .sagas
-            .db()
+            .db_for_tests()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
@@ -190,7 +190,7 @@ mod tests {
         let (canonical, _) = ctx.stores.sagas.resolve_short(&sid).unwrap();
         ctx.stores
             .sagas
-            .db()
+            .db_for_tests()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
@@ -216,7 +216,7 @@ mod tests {
         let (canonical, _) = ctx.stores.sagas.resolve_short(&sid).unwrap();
         ctx.stores
             .sagas
-            .db()
+            .db_for_tests()
             .with_write_conn(|conn| {
                 conn.execute(
                     "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
@@ -250,7 +250,7 @@ mod tests {
 
         // Wire tasks into brains via direct DB inserts.
         // tasks.brain_id has a FK to brains, so insert brain rows first.
-        ctx.stores.sagas.db().with_write_conn(|conn| {
+        ctx.stores.sagas.db_for_tests().with_write_conn(|conn| {
             conn.execute(
                 "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES ('brain-x', 'brain-x', 1000)",
                 [],
@@ -321,7 +321,7 @@ mod tests {
 
         // Insert a brain whose `name` differs from its `brain_id`, then a task
         // belonging to that brain joined to saga_a.
-        ctx.stores.sagas.db().with_write_conn(|conn| {
+        ctx.stores.sagas.db_for_tests().with_write_conn(|conn| {
             conn.execute(
                 "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES ('bid-xyz', 'human-name', 1000)",
                 [],

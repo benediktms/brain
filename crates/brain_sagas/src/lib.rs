@@ -551,14 +551,12 @@ impl SagaStore {
             .into_brain_core()
     }
 
-    /// Borrow the underlying `Db` handle.
-    ///
-    /// Exposed for callers that need to open additional read/write
-    /// connections through the store — e.g. MCP tool dispatchers that
-    /// issue their own queries rather than going through wrapper methods.
-    /// The accessor is unconditional (not test-gated) because production
-    /// dispatch sites reach in directly today.
-    pub fn db(&self) -> &Db {
+    /// Test-only accessor for the underlying `Db` handle. Mirrors the
+    /// precedent set by `brain_tasks::TaskStore::db_for_tests` — production
+    /// code must call through the inherent verbs on `SagaStore` (or port
+    /// traits once they exist).
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn db_for_tests(&self) -> &Db {
         &self.db
     }
 
@@ -1880,17 +1878,7 @@ mod tests {
 
         let ids: Vec<String> = store
             .db
-            .with_read_conn(|c| {
-                let mut stmt = c
-                    .prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY task_id")
-                    .unwrap();
-                let ids = stmt
-                    .query_map([saga.saga_id.as_str()], |r| r.get(0))
-                    .unwrap()
-                    .collect::<std::result::Result<Vec<String>, _>>()
-                    .unwrap();
-                Ok(ids)
-            })
+            .with_read_conn(|c| testing::list_saga_task_ids_sorted(c, &saga.saga_id))
             .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"xb-parent".to_string()));
