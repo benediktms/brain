@@ -6,19 +6,16 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde_json::json;
 
-use brain_lib::records::events::{
-    LinkPayload, RecordArchivedPayload, RecordEvent, RecordEventType, TagPayload,
-};
-use brain_lib::records::queries::RecordFilter;
 use brain_lib::stores::BrainStores;
+use brain_records::{RecordKind, RecordQuery, RecordStatus};
 
 use crate::markdown_table::MarkdownTable;
 
 // -- shared context --
 
 pub struct ArtifactCtx {
-    pub(crate) record_store: brain_lib::records::RecordStore,
-    pub(crate) object_store: brain_lib::records::objects::ObjectStore,
+    pub(crate) record_store: brain_records::RecordStore,
+    pub(crate) object_store: brain_records::objects::ObjectStore,
     pub(crate) json: bool,
 }
 
@@ -64,18 +61,22 @@ pub struct ListParams {
 }
 
 pub fn list(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
-    let filter = RecordFilter {
-        kind: params.kind.clone(),
-        status: Some(params.status.clone()),
+    let query = RecordQuery {
+        kind: params.kind.as_deref().map(RecordKind::from),
+        status: Some(
+            params
+                .status
+                .parse::<RecordStatus>()
+                .unwrap_or(RecordStatus::Active),
+        ),
         tag: params.tag.clone(),
         task_id: None,
         limit: Some(params.limit),
-        brain_id: None,
     };
 
     let records = ctx
         .record_store
-        .list_records(&filter)
+        .list_records(&query)
         .context("Failed to list records")?;
 
     if ctx.json {
@@ -88,9 +89,9 @@ pub fn list(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
                     "kind": r.kind,
                     "status": r.status,
                     "description": r.description,
-                    "content_hash": r.content_hash,
-                    "content_size": r.content_size,
-                    "media_type": r.media_type,
+                    "content_hash": r.content_ref.hash,
+                    "content_size": r.content_ref.size,
+                    "media_type": r.content_ref.media_type,
                     "task_id": r.task_id,
                     "actor": r.actor,
                     "created_at": r.created_at,
@@ -118,9 +119,9 @@ pub fn list(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
             table.add_row(vec![
                 short,
                 r.title.clone(),
-                r.kind.clone(),
-                r.status.clone(),
-                format_size(r.content_size),
+                r.kind.to_string(),
+                r.status.to_string(),
+                format_size(r.content_ref.size as i64),
                 format_ts(r.created_at),
             ]);
         }
@@ -163,9 +164,9 @@ pub fn get(ctx: &ArtifactCtx, id: &str) -> Result<()> {
             "kind": record.kind,
             "status": record.status,
             "description": record.description,
-            "content_hash": record.content_hash,
-            "content_size": record.content_size,
-            "media_type": record.media_type,
+            "content_hash": record.content_ref.hash,
+            "content_size": record.content_ref.size,
+            "media_type": record.content_ref.media_type,
             "task_id": record.task_id,
             "actor": record.actor,
             "created_at": record.created_at,
@@ -186,9 +187,9 @@ pub fn get(ctx: &ArtifactCtx, id: &str) -> Result<()> {
         if let Some(ref desc) = record.description {
             println!("  Desc:    {desc}");
         }
-        println!("  Size:    {}", format_size(record.content_size));
-        println!("  Hash:    {}", &record.content_hash[..16]);
-        if let Some(ref mt) = record.media_type {
+        println!("  Size:    {}", format_size(record.content_ref.size as i64));
+        println!("  Hash:    {}", &record.content_ref.hash[..16]);
+        if let Some(ref mt) = record.content_ref.media_type {
             println!("  Type:    {mt}");
         }
         if let Some(ref tid) = record.task_id {
@@ -224,18 +225,9 @@ pub fn tag_add(ctx: &ArtifactCtx, id: &str, tag: &str) -> Result<()> {
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve artifact ID: {id}"))?;
 
-    let event = RecordEvent::new(
-        &record_id,
-        "cli",
-        RecordEventType::TagAdded,
-        &TagPayload {
-            tag: tag.to_string(),
-        },
-    );
-
     ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply tag_add event")?;
+        .add_tag(&record_id, tag, "cli")
+        .context("Failed to add tag")?;
 
     if ctx.json {
         let out = serde_json::json!({ "record_id": record_id, "tag": tag, "action": "added" });
@@ -253,18 +245,9 @@ pub fn tag_remove(ctx: &ArtifactCtx, id: &str, tag: &str) -> Result<()> {
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve artifact ID: {id}"))?;
 
-    let event = RecordEvent::new(
-        &record_id,
-        "cli",
-        RecordEventType::TagRemoved,
-        &TagPayload {
-            tag: tag.to_string(),
-        },
-    );
-
     ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply tag_remove event")?;
+        .remove_tag(&record_id, tag, "cli")
+        .context("Failed to remove tag")?;
 
     if ctx.json {
         let out = serde_json::json!({ "record_id": record_id, "tag": tag, "action": "removed" });
@@ -284,8 +267,12 @@ pub fn link_add(
     task: Option<String>,
     chunk: Option<String>,
 ) -> Result<()> {
-    if task.is_none() && chunk.is_none() {
-        anyhow::bail!("Must specify at least one of --task or --chunk");
+    match (task.as_deref(), chunk.as_deref()) {
+        (None, None) => {
+            anyhow::bail!("must specify either --task <id> or --chunk <id> (got neither)")
+        }
+        (Some(_), Some(_)) => anyhow::bail!("specify exactly one of --task or --chunk (got both)"),
+        _ => {}
     }
 
     let record_id = ctx
@@ -293,19 +280,16 @@ pub fn link_add(
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve artifact ID: {id}"))?;
 
-    let event = RecordEvent::new(
-        &record_id,
-        "cli",
-        RecordEventType::LinkAdded,
-        &LinkPayload {
-            task_id: task.clone(),
-            chunk_id: chunk.clone(),
-        },
-    );
-
-    ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply link_add event")?;
+    if let Some(ref task_id) = task {
+        ctx.record_store
+            .link_task(&record_id, task_id, "cli")
+            .context("Failed to link task")?;
+    }
+    if let Some(ref chunk_id) = chunk {
+        ctx.record_store
+            .link_chunk(&record_id, chunk_id, "cli")
+            .context("Failed to link chunk")?;
+    }
 
     if ctx.json {
         let out = serde_json::json!({
@@ -333,8 +317,12 @@ pub fn link_remove(
     task: Option<String>,
     chunk: Option<String>,
 ) -> Result<()> {
-    if task.is_none() && chunk.is_none() {
-        anyhow::bail!("Must specify at least one of --task or --chunk");
+    match (task.as_deref(), chunk.as_deref()) {
+        (None, None) => {
+            anyhow::bail!("must specify either --task <id> or --chunk <id> (got neither)")
+        }
+        (Some(_), Some(_)) => anyhow::bail!("specify exactly one of --task or --chunk (got both)"),
+        _ => {}
     }
 
     let record_id = ctx
@@ -342,19 +330,16 @@ pub fn link_remove(
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve artifact ID: {id}"))?;
 
-    let event = RecordEvent::new(
-        &record_id,
-        "cli",
-        RecordEventType::LinkRemoved,
-        &LinkPayload {
-            task_id: task.clone(),
-            chunk_id: chunk.clone(),
-        },
-    );
-
-    ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply link_remove event")?;
+    if let Some(ref task_id) = task {
+        ctx.record_store
+            .unlink_task(&record_id, task_id, "cli")
+            .context("Failed to unlink task")?;
+    }
+    if let Some(ref chunk_id) = chunk {
+        ctx.record_store
+            .unlink_chunk(&record_id, chunk_id, "cli")
+            .context("Failed to unlink chunk")?;
+    }
 
     if ctx.json {
         let out = serde_json::json!({
@@ -384,17 +369,9 @@ pub fn archive(ctx: &ArtifactCtx, id: &str, reason: Option<String>) -> Result<()
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve artifact ID: {id}"))?;
 
-    let event = RecordEvent::from_payload(
-        &record_id,
-        "cli",
-        RecordArchivedPayload {
-            reason: reason.clone(),
-        },
-    );
-
     ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply archive event")?;
+        .archive_record(&record_id, reason.clone(), "cli")
+        .context("Failed to archive record")?;
 
     if ctx.json {
         let out = json!({ "archived": record_id, "reason": reason });
@@ -423,7 +400,7 @@ pub fn restore(ctx: &ArtifactCtx, id: &str, output: Option<std::path::PathBuf>) 
         .with_context(|| format!("Artifact not found: {record_id}"))?;
     let bytes = ctx
         .object_store
-        .read_auto(&record.content_hash)
+        .read_auto(&record.content_ref.hash)
         .with_context(|| format!("Failed to read object for artifact {record_id}"))?;
 
     match output {

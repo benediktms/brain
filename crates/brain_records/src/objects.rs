@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::error::{BrainCoreError, Result};
-use crate::records::ContentRef;
+use crate::domain::ContentRef;
+use brain_core::error::{BrainCoreError, Result};
 
 /// Blobs smaller than this are stored uncompressed (zstd header overhead
 /// dominates at small sizes).  256 bytes is a conservative break-even point.

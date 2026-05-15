@@ -9,11 +9,11 @@ use tempfile::TempDir;
 
 use crate::config;
 use crate::error::{BrainCoreError, Result};
-use crate::records::RecordStore;
-use crate::records::objects::ObjectStore;
 use crate::sagas::SagaStore;
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
+use brain_records::RecordStore;
+use brain_records::objects::ObjectStore;
 use brain_tasks::TaskStore;
 
 /// Unified access to all brain stores.
@@ -892,15 +892,14 @@ mod tests {
         assert!(tasks.is_empty());
 
         // RecordStore round-trip
-        let filter = crate::records::queries::RecordFilter {
+        let query = brain_records::RecordQuery {
             kind: None,
             status: None,
             tag: None,
             task_id: None,
             limit: None,
-            brain_id: None,
         };
-        let records = stores.records.list_records(&filter).unwrap();
+        let records = stores.records.list_records(&query).unwrap();
         assert!(records.is_empty());
 
         // ObjectStore — write and read back

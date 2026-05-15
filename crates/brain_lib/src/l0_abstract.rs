@@ -3,7 +3,7 @@
 /// Produces a compact, semantically dense text from a record's metadata and
 /// content. This abstract is used as the embedding source instead of the full
 ///
-/// ⚠️ DEPRECATED: Use `crate::records::capsule::build_record_capsule` instead.
+/// ⚠️ DEPRECATED: Use `build_record_capsule` from the brain_records crate instead.
 /// This function is kept for backward compatibility but may be phased out.
 /// The capsule approach uses description-based summaries (consistent with
 /// episodes/reflections/procedures) rather than content extraction.

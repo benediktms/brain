@@ -63,7 +63,6 @@ pub mod pipeline;
 pub mod ports;
 pub mod query_pipeline;
 pub mod ranking;
-pub mod records;
 pub mod retrieval;
 pub use brain_sagas as sagas;
 pub mod scanner;

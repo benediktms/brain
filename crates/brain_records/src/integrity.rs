@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use crate::error::Result;
+use brain_core::error::Result;
 
-use super::RecordStore;
-use super::objects::ObjectStore;
+use crate::RecordStore;
+use crate::objects::ObjectStore;
 
 // -- Report structs --
 
@@ -216,10 +216,10 @@ mod tests {
 
     use brain_persistence::db::Db;
 
-    use super::super::RecordStore;
-    use super::super::events::*;
-    use super::super::objects::ObjectStore;
     use super::*;
+    use crate::RecordStore;
+    use crate::events::*;
+    use crate::objects::ObjectStore;
 
     fn setup() -> (TempDir, RecordStore, ObjectStore) {
         let dir = TempDir::new().unwrap();

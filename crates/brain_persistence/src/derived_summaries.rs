@@ -38,7 +38,7 @@ pub fn generate_scope_summary(
 ) -> SqlResult<GeneratedScopeSummaryRow> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    // Mirrors brain_lib::records::RecordKind::policy().summarize and must stay in sync.
+    // Mirrors the summarizable kinds defined by each record kind's policy and must stay in sync.
     const SUMMARIZE_RECORD_KINDS_SQL: &str = "'document', 'analysis', 'plan', 'summary'";
 
     let sources: Vec<(String, String, String)> = match scope_type {

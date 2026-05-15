@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::records::events::{RecordEvent, RecordEventType, TagPayload};
 use crate::uri::resolve_id;
 
 use super::{McpTool, json_response};
@@ -40,16 +39,7 @@ impl RecordTagAdd {
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         }
 
-        let event = RecordEvent::new(
-            &record_id,
-            "mcp",
-            RecordEventType::TagAdded,
-            &TagPayload {
-                tag: params.tag.clone(),
-            },
-        );
-
-        if let Err(e) = ctx.stores.records.apply_event(&event) {
+        if let Err(e) = ctx.stores.records.add_tag(&record_id, &params.tag, "mcp") {
             return ToolCallResult::error(format!("Failed to add tag: {e}"));
         }
 
@@ -125,16 +115,11 @@ impl RecordTagRemove {
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         }
 
-        let event = RecordEvent::new(
-            &record_id,
-            "mcp",
-            RecordEventType::TagRemoved,
-            &TagPayload {
-                tag: params.tag.clone(),
-            },
-        );
-
-        if let Err(e) = ctx.stores.records.apply_event(&event) {
+        if let Err(e) = ctx
+            .stores
+            .records
+            .remove_tag(&record_id, &params.tag, "mcp")
+        {
             return ToolCallResult::error(format!("Failed to remove tag: {e}"));
         }
 

@@ -6,12 +6,12 @@
 //! 3. Unified object dedup — identical content from two brains produces one blob.
 //! 4. Brain filtering in stores — `with_brain_id` scopes reads and writes correctly.
 
-use brain_lib::records::RecordStore;
-use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
-use brain_lib::records::objects::ObjectStore;
-use brain_lib::records::queries::RecordFilter;
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
+use brain_records::RecordQuery;
+use brain_records::RecordStore;
+use brain_records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
+use brain_records::objects::ObjectStore;
 use brain_tasks::TaskStore;
 use brain_tasks::events::{
     DependencyPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus,
@@ -239,7 +239,7 @@ fn test_unified_object_dedup() {
     let row_a = store_a.get_record("rec-a1").unwrap().unwrap();
     let row_b = store_b.get_record("rec-b1").unwrap().unwrap();
     assert_eq!(
-        row_a.content_hash, row_b.content_hash,
+        row_a.content_ref.hash, row_b.content_ref.hash,
         "both records must reference the same content hash"
     );
 
@@ -297,27 +297,27 @@ fn test_record_store_brain_id_scoping() {
     create_record(&store_a, "ra2", PLACEHOLDER_HASH, 42);
     create_record(&store_b, "rb1", PLACEHOLDER_HASH, 42);
 
-    let filter = RecordFilter {
+    let query = RecordQuery {
         kind: None,
         status: None,
         tag: None,
         task_id: None,
         limit: None,
-        brain_id: None, // store's own brain_id takes precedence
+        // store's own brain_id takes precedence — no brain filter needed here
     };
 
-    let records_a = store_a.list_records(&filter).unwrap();
+    let records_a = store_a.list_records(&query).unwrap();
     assert_eq!(records_a.len(), 2, "brain-a should see 2 records");
     assert!(records_a.iter().all(|r| r.record_id.starts_with("ra")));
 
-    let records_b = store_b.list_records(&filter).unwrap();
+    let records_b = store_b.list_records(&query).unwrap();
     assert_eq!(records_b.len(), 1, "brain-b should see 1 record");
     assert_eq!(records_b[0].record_id, "rb1");
 
     // Unscoped store sees all records.
     let _records_dir_all = dir.path().join("records_all");
     let store_all = RecordStore::new(db);
-    let all_records = store_all.list_records(&filter).unwrap();
+    let all_records = store_all.list_records(&query).unwrap();
     assert_eq!(
         all_records.len(),
         3,

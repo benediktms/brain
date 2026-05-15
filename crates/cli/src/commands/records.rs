@@ -5,10 +5,10 @@ use serde_json::json;
 
 #[cfg(feature = "embed")]
 use brain_lib::query_pipeline::SearchParams;
-use brain_lib::records::integrity;
 use brain_lib::stores::BrainStores;
 #[cfg(feature = "embed")]
 use brain_lib::uri::SynapseUri;
+use brain_records::integrity;
 
 #[cfg(feature = "embed")]
 use crate::commands::memory::run::MemoryCtx;
@@ -16,8 +16,8 @@ use crate::commands::memory::run::MemoryCtx;
 use crate::markdown_table::MarkdownTable;
 
 pub struct RecordsCtx {
-    pub record_store: brain_lib::records::RecordStore,
-    pub object_store: brain_lib::records::objects::ObjectStore,
+    pub record_store: brain_records::RecordStore,
+    pub object_store: brain_records::objects::ObjectStore,
     pub json: bool,
 }
 

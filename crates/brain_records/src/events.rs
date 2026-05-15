@@ -1,5 +1,37 @@
-// Type definitions and constructors re-exported from brain_persistence.
-pub use brain_persistence::db::records::events::*;
+// Event-layer re-exports.
+//
+// The wildcard `pub use ... events::*;` this module used to carry was an
+// unbounded API surface — every payload struct and helper from the
+// persistence layer leaked through. Now split between the event wire types
+// that external callers need to construct (CLI/MCP archive/tag/link paths
+// + tests) and the payloads only the typed `RecordStore` methods construct
+// internally.
+//
+// Adding anything new to the public surface here is a slop signal: typed
+// `RecordStore` methods are the preferred path.
+
+// Event wire-format types. The persistence layer defines the JSONL/SQLite
+// event schema; brain_records re-publishes the payloads that external
+// consumers legitimately construct. This is an EXPLICIT, BOUNDED contract —
+// not a wildcard re-export. Add new items only with deliberation.
+//
+// What's public here:
+//   - RecordEvent + RecordEventType: the event envelope + variant tag.
+//   - All payload types that are constructed at call sites (CLI/MCP/tests).
+//   - new_record_id: the prefix-aware ULID generator.
+// What stays internal:
+//   - PinPayload, PayloadEvictedPayload, RetentionClassSetPayload — only
+//     constructed by RecordStore's typed methods; callers should NEVER
+//     hand-roll these.
+
+pub use brain_persistence::db::records::events::{
+    ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+    RecordEventType, RecordUpdatedPayload, TagPayload, new_record_id,
+};
+
+pub(crate) use brain_persistence::db::records::events::{
+    PayloadEvictedPayload, PinPayload, RetentionClassSetPayload,
+};
 
 // ---------------------------------------------------------------------------
 // File I/O — stays in brain_lib
@@ -9,7 +41,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
-use crate::error::{BrainCoreError, Result};
+use brain_core::error::{BrainCoreError, Result};
 
 /// Append a single event to the JSONL file.
 ///

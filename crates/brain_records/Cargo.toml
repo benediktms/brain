@@ -1,0 +1,27 @@
+[package]
+name = "brain-records"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# Exposes test-only items (mocks re-exported from upstream crates). Mirrors
+# the pattern in `brain-tasks` / `brain-lib`.
+test-utils = ["brain-persistence/test-utils", "brain-core/test-utils"]
+
+[dependencies]
+brain-core = { path = "../brain_core" }
+brain-persistence = { path = "../brain_persistence" }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+blake3 = { workspace = true }
+ulid = { workspace = true }
+zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3"
+# Self-reference activates the `test-utils` feature for integration tests in
+# `tests/*.rs`. Same pattern as `brain-tasks` / `brain-lib`.
+brain-records = { path = ".", features = ["test-utils"] }
