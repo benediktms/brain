@@ -10,7 +10,7 @@ pub use events::{
     SagaUpdatedPayload, new_saga_event_id, new_saga_id,
 };
 pub use queries::{
-    BrainSummary, CascadeOutcome, CascadeResult, LabelCount, SagaEventInsert, SagaListFilter,
+    BrainSummaryRow, CascadeOutcome, CascadeResult, LabelCount, SagaEventInsert, SagaListFilterRow,
     SagaMemberStub, SagaRow, SagaStatsRow, brains_for_saga, cancel_saga, cascade_member_tasks,
     close_saga, insert_saga_tasks, list_saga_member_stubs, list_saga_task_ids, remove_saga_tasks,
     reopen_saga, saga_has_task, saga_label_histogram, saga_stats, start_saga,

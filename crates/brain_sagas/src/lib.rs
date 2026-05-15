@@ -79,7 +79,7 @@ impl SagaStore {
                 crate::lifecycle::create(conn, &title, description.as_deref(), &actor)
             })
             .into_brain_core()
-            .map(Saga::from)
+            .and_then(Saga::try_from)
     }
 
     /// Update title and/or description. At least one field required. Allowed in any status.
@@ -110,7 +110,7 @@ impl SagaStore {
                 )
             })
             .into_brain_core()
-            .map(Saga::from)
+            .and_then(Saga::try_from)
     }
 
     /// Close a saga. Only `open` sagas can be closed.
@@ -134,11 +134,11 @@ impl SagaStore {
         self.db
             .with_write_conn(move |conn| crate::lifecycle::close(conn, &saga_id, cascade, &actor))
             .into_brain_core()
-            .map(|(row, cascade)| {
-                (
-                    Saga::from(row),
+            .and_then(|(row, cascade)| {
+                Ok((
+                    Saga::try_from(row)?,
                     cascade.into_iter().map(CascadeResult::from).collect(),
-                )
+                ))
             })
     }
 
@@ -160,16 +160,16 @@ impl SagaStore {
                 queries::get_saga(conn, &canonical)
             })
             .into_brain_core()
-            .map(|opt| opt.map(Saga::from))
+            .and_then(|opt| opt.map(Saga::try_from).transpose())
     }
 
     /// List sagas with optional filters.
     pub fn list(&self, filter: SagaListFilter) -> Result<Vec<Saga>> {
-        let filter: brain_persistence::db::sagas::queries::SagaListFilter = filter.into();
+        let filter: brain_persistence::db::sagas::queries::SagaListFilterRow = filter.into();
         self.db
             .with_read_conn(move |conn| queries::list_sagas(conn, &filter))
             .into_brain_core()
-            .map(|rows| rows.into_iter().map(Saga::from).collect())
+            .and_then(|rows| rows.into_iter().map(Saga::try_from).collect())
     }
 
     /// Transition a saga from `planning` to `open`. Emits `SagaStarted`.
@@ -179,7 +179,7 @@ impl SagaStore {
         self.db
             .with_write_conn(move |conn| crate::lifecycle::start(conn, &saga_id, &actor))
             .into_brain_core()
-            .map(Saga::from)
+            .and_then(Saga::try_from)
     }
 
     /// Return the distinct set of brains that have member tasks in this saga.
@@ -252,7 +252,7 @@ impl SagaStore {
                 list_saga_member_stubs(conn, &canonical)
             })
             .into_brain_core()
-            .map(|stubs| stubs.into_iter().map(SagaMember::from).collect())
+            .and_then(|stubs| stubs.into_iter().map(SagaMember::try_from).collect())
     }
 
     /// Return raw task IDs for saga membership without joining `tasks`.
@@ -305,11 +305,11 @@ impl SagaStore {
         self.db
             .with_write_conn(move |conn| crate::lifecycle::cancel(conn, &saga_id, cascade, &actor))
             .into_brain_core()
-            .map(|(row, cascade)| {
-                (
-                    Saga::from(row),
+            .and_then(|(row, cascade)| {
+                Ok((
+                    Saga::try_from(row)?,
                     cascade.into_iter().map(CascadeResult::from).collect(),
-                )
+                ))
             })
     }
 
@@ -394,7 +394,7 @@ impl SagaStore {
         self.db
             .with_write_conn(move |conn| crate::lifecycle::reopen(conn, &saga_id, &actor))
             .into_brain_core()
-            .map(Saga::from)
+            .and_then(Saga::try_from)
     }
 
     /// Force a saga's status directly (test-only).

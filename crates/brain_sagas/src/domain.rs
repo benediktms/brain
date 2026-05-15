@@ -6,17 +6,24 @@
 //! to consumers. Mirrors the `brain_tasks::domain::Task` precedent.
 //!
 //! Every persistence-row type that previously appeared in SagaStore's
-//! public API has a domain counterpart here with a `From<RowType>`
-//! boundary impl. SagaStore methods convert at the persistence boundary
-//! via `.into()`; consumers see only domain types.
+//! public API has a domain counterpart here. Types whose row-to-domain
+//! conversion can fail (status-string parse, task-type parse) expose
+//! `TryFrom<RowType>` returning `BrainCoreError` so the persistence
+//! boundary surfaces corrupt rows rather than silently coercing them.
+//! Types whose conversion cannot fail (pure struct repacking) expose
+//! `From<RowType>`.
+//!
+//! `SagaListFilter` is the lone exception going the other direction —
+//! it's an input filter, so the conversion is domain → row at the call
+//! to `queries::list_sagas`.
 
+use brain_core::error::BrainCoreError;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use brain_persistence::db::sagas::queries::{
-    BrainSummary as BrainSummaryRow, CascadeOutcome as CascadeOutcomeRow,
-    CascadeResult as CascadeResultRow, LabelCount as LabelCountRow,
-    SagaListFilter as SagaListFilterRow, SagaMemberStub, SagaRow, SagaStatsRow,
+    BrainSummaryRow, CascadeOutcome as CascadeOutcomeRow, CascadeResult as CascadeResultRow,
+    LabelCount as LabelCountRow, SagaListFilterRow, SagaMemberStub, SagaRow, SagaStatsRow,
 };
 use brain_tasks::TaskId;
 use brain_tasks::events::{TaskStatus, TaskType};
@@ -27,16 +34,18 @@ use crate::status::SagaStatus;
 ///
 /// Distinct from the user-facing `saga-<hex>` short form, which lives
 /// in `Saga::display_id` (the hex portion without the `saga-` prefix).
+///
+/// `#[serde(transparent)]` makes the wire shape an unwrapped string —
+/// without it the newtype default already produces the same shape, but
+/// the explicit attribute pins the contract against future field
+/// additions.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SagaId(String);
 
 impl SagaId {
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    pub fn into_inner(self) -> String {
-        self.0
     }
 }
 
@@ -66,8 +75,11 @@ impl From<&str> for SagaId {
 
 /// A saga in its domain shape — typed status, parsed timestamps, newtyped ID.
 ///
-/// Converted from `SagaRow` at the persistence boundary via `From<SagaRow>`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Converted from `SagaRow` at the persistence boundary via
+/// `TryFrom<SagaRow>`, which surfaces a `BrainCoreError::Parse` if the
+/// `status` column holds an unknown value rather than silently coercing
+/// to a default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Saga {
     pub id: SagaId,
     /// Short hex display form (no `saga-` prefix). Render via
@@ -82,13 +94,12 @@ pub struct Saga {
     pub closed_at: Option<DateTime<Utc>>,
 }
 
-impl From<SagaRow> for Saga {
-    fn from(row: SagaRow) -> Self {
-        // Defense-in-depth: SagaStore methods pre-validate the status
-        // string before any row is returned; the fallback here exists for
-        // defense against direct-read paths that bypass that validation.
-        let status: SagaStatus = row.status.parse().unwrap_or(SagaStatus::Planning);
-        Saga {
+impl TryFrom<SagaRow> for Saga {
+    type Error = BrainCoreError;
+
+    fn try_from(row: SagaRow) -> Result<Self, Self::Error> {
+        let status: SagaStatus = row.status.parse()?;
+        Ok(Saga {
             id: SagaId::from(row.saga_id),
             display_id: row.display_id,
             title: row.title,
@@ -99,20 +110,17 @@ impl From<SagaRow> for Saga {
             closed_at: row
                 .closed_at
                 .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
-        }
-    }
-}
-
-impl From<&SagaRow> for Saga {
-    fn from(row: &SagaRow) -> Self {
-        Saga::from(row.clone())
+        })
     }
 }
 
 /// Member-task stub for saga membership rendering — task identity + brain +
 /// status snapshot. Cross-domain by design: every saga member lives in some
 /// brain's task table, possibly a different brain than the saga itself.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Conversion from `SagaMemberStub` propagates parse errors on the status
+/// and task_type columns rather than silently coercing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SagaMember {
     pub task_id: TaskId,
     pub brain_id: String,
@@ -121,28 +129,28 @@ pub struct SagaMember {
     pub task_type: TaskType,
 }
 
-impl From<SagaMemberStub> for SagaMember {
-    fn from(stub: SagaMemberStub) -> Self {
-        let status: TaskStatus = stub.status.parse().unwrap_or(TaskStatus::Open);
-        let task_type: TaskType = stub.task_type.parse().unwrap_or(TaskType::Task);
-        SagaMember {
+impl TryFrom<SagaMemberStub> for SagaMember {
+    type Error = BrainCoreError;
+
+    fn try_from(stub: SagaMemberStub) -> Result<Self, Self::Error> {
+        let status: TaskStatus = stub.status.parse().map_err(|_| {
+            BrainCoreError::Parse(format!("unknown task status: {:?}", stub.status))
+        })?;
+        let task_type: TaskType = stub.task_type.parse().map_err(|_| {
+            BrainCoreError::Parse(format!("unknown task type: {:?}", stub.task_type))
+        })?;
+        Ok(SagaMember {
             task_id: TaskId::from(stub.task_id),
             brain_id: stub.brain_id,
             title: stub.title,
             status,
             task_type,
-        }
-    }
-}
-
-impl From<&SagaMemberStub> for SagaMember {
-    fn from(stub: &SagaMemberStub) -> Self {
-        SagaMember::from(stub.clone())
+        })
     }
 }
 
 /// Summary of a brain that has member tasks in a saga.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrainSummary {
     pub brain_id: String,
     pub name: String,
@@ -155,16 +163,6 @@ impl From<BrainSummaryRow> for BrainSummary {
             brain_id: row.brain_id,
             name: row.name,
             prefix: row.prefix,
-        }
-    }
-}
-
-impl From<&BrainSummaryRow> for BrainSummary {
-    fn from(row: &BrainSummaryRow) -> Self {
-        BrainSummary {
-            brain_id: row.brain_id.clone(),
-            name: row.name.clone(),
-            prefix: row.prefix.clone(),
         }
     }
 }

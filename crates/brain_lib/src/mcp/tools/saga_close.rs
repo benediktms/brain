@@ -180,7 +180,11 @@ mod tests {
         );
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
         assert_eq!(parsed["saga"]["status"], "closed");
-        assert!(parsed["saga"]["closed_at"].as_i64().is_some());
+        // Timestamps are RFC 3339 strings (consistent with brain_tasks::Task).
+        let closed_at = parsed["saga"]["closed_at"]
+            .as_str()
+            .expect("closed_at must be a non-null RFC 3339 string");
+        chrono::DateTime::parse_from_rfc3339(closed_at).expect("closed_at must parse as RFC 3339");
     }
 
     #[tokio::test]
