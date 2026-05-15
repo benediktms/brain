@@ -12,6 +12,8 @@ test-utils = ["brain-persistence/test-utils", "brain-core/test-utils"]
 [dependencies]
 brain-core = { path = "../brain_core" }
 brain-persistence = { path = "../brain_persistence" }
+brain-tasks = { path = "../brain_tasks" }
+chrono = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

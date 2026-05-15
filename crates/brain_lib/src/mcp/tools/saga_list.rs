@@ -4,9 +4,10 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use brain_persistence::db::sagas::{SagaListFilter, compact_saga_id};
+use brain_persistence::db::sagas::compact_saga_id;
 #[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
+use brain_sagas::SagaListFilter;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};

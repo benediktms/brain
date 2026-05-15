@@ -56,7 +56,7 @@ impl SagaGet {
             .iter()
             .map(|m| {
                 json!({
-                    "task_id": ctx.stores.tasks.compact_id_or_raw(&m.task_id),
+                    "task_id": ctx.stores.tasks.compact_id_or_raw(m.task_id.as_str()),
                     "brain_id": m.brain_id,
                     "title": m.title,
                     "status": m.status,

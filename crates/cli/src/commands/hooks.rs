@@ -863,7 +863,7 @@ fn render_top_tasks_section(stores: &brain_lib::stores::BrainStores) -> String {
 /// member task IDs and titles (an open saga's frontier). Errors fetching the
 /// frontier for a single saga are logged but do not omit the saga line.
 fn render_sagas_section(stores: &brain_lib::stores::BrainStores) -> String {
-    use brain_persistence::db::sagas::SagaListFilter;
+    use brain_lib::sagas::SagaListFilter;
 
     let sagas = match stores.sagas.list(SagaListFilter::default()) {
         Ok(s) => s,
@@ -878,12 +878,12 @@ fn render_sagas_section(stores: &brain_lib::stores::BrainStores) -> String {
         let saga_id = brain_persistence::db::sagas::compact_saga_id(&s.display_id);
         lines.push(format!("{saga_id} [{}] {}", s.status, s.title));
 
-        let frontier_text = match stores.sagas.frontier(&s.saga_id) {
+        let frontier_text = match stores.sagas.frontier(s.id.as_str()) {
             Ok(f) => f
                 .tasks
                 .iter()
                 .map(|t| {
-                    let short = stores.tasks.compact_id_or_raw(&t.task_id);
+                    let short = stores.tasks.compact_id_or_raw(t.id.as_str());
                     format!("{short} {}", t.title)
                 })
                 .collect::<Vec<_>>()

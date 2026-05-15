@@ -43,7 +43,7 @@ impl SagaFrontier {
             .iter()
             .map(|t| {
                 json!({
-                    "task_id": ctx.stores.tasks.compact_id_or_raw(&t.task_id),
+                    "task_id": ctx.stores.tasks.compact_id_or_raw(t.id.as_str()),
                     "title": t.title,
                     "status": t.status,
                     "priority": t.priority,
