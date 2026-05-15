@@ -240,14 +240,19 @@ mod tests {
             .call(json!({ "saga_id": saga_id }), &ctx)
             .await;
         let initial: Value = serde_json::from_str(&get_result.content[0].text).unwrap();
-        let created_at = initial["saga"]["created_at"].as_i64().unwrap();
+        // Timestamps are RFC 3339 strings (consistent with brain_tasks::Task).
+        let created_at =
+            chrono::DateTime::parse_from_rfc3339(initial["saga"]["created_at"].as_str().unwrap())
+                .unwrap();
 
         // Small delay to ensure timestamp advances
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let result = call_update(json!({ "saga_id": saga_id, "title": "Updated" }), &ctx).await;
         let parsed: Value = serde_json::from_str(&result.content[0].text).unwrap();
-        let updated_at = parsed["saga"]["updated_at"].as_i64().unwrap();
+        let updated_at =
+            chrono::DateTime::parse_from_rfc3339(parsed["saga"]["updated_at"].as_str().unwrap())
+                .unwrap();
         assert!(updated_at >= created_at, "updated_at must be >= created_at");
     }
 

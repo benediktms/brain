@@ -153,7 +153,7 @@ pub fn insert_saga_event(conn: &Connection, ev: &SagaEventInsert<'_>) -> SqlResu
 
 /// Filters for listing sagas.
 #[derive(Debug, Default)]
-pub struct SagaListFilter {
+pub struct SagaListFilterRow {
     pub include_closed: bool,
     pub include_cancelled: bool,
     /// Only return sagas that have at least one member-task in this brain.
@@ -161,7 +161,7 @@ pub struct SagaListFilter {
 }
 
 /// List sagas with optional filters. Single query, no N+1.
-pub fn list_sagas(conn: &Connection, filter: &SagaListFilter) -> SqlResult<Vec<SagaRow>> {
+pub fn list_sagas(conn: &Connection, filter: &SagaListFilterRow) -> SqlResult<Vec<SagaRow>> {
     // Build status exclusion clause.
     let mut where_clauses: Vec<&str> = Vec::new();
     if !filter.include_closed {
@@ -352,7 +352,7 @@ pub fn saga_members_in(
 
 /// Summary of a brain that has member tasks in a saga.
 #[derive(Debug, Clone)]
-pub struct BrainSummary {
+pub struct BrainSummaryRow {
     pub brain_id: String,
     pub name: String,
     pub prefix: Option<String>,
@@ -362,7 +362,7 @@ pub struct BrainSummary {
 ///
 /// Derived at read time via saga_tasks → tasks → brains JOIN.
 /// Returns an empty vec when the saga has no members.
-pub fn brains_for_saga(conn: &Connection, saga_id: &str) -> SqlResult<Vec<BrainSummary>> {
+pub fn brains_for_saga(conn: &Connection, saga_id: &str) -> SqlResult<Vec<BrainSummaryRow>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT b.brain_id, b.name, b.prefix
          FROM saga_tasks st
@@ -373,7 +373,7 @@ pub fn brains_for_saga(conn: &Connection, saga_id: &str) -> SqlResult<Vec<BrainS
     )?;
     let rows = stmt
         .query_map([saga_id], |row| {
-            Ok(BrainSummary {
+            Ok(BrainSummaryRow {
                 brain_id: row.get(0)?,
                 name: row.get(1)?,
                 prefix: row.get(2)?,
@@ -839,7 +839,7 @@ mod tests {
             // brain_id matches → returned
             let by_id = list_sagas(
                 conn,
-                &SagaListFilter {
+                &SagaListFilterRow {
                     include_closed: false,
                     include_cancelled: false,
                     containing_brain: Some("brain-x".into()),
@@ -850,7 +850,7 @@ mod tests {
             // brain name does NOT match — filter is brain_id only
             let by_name = list_sagas(
                 conn,
-                &SagaListFilter {
+                &SagaListFilterRow {
                     include_closed: false,
                     include_cancelled: false,
                     containing_brain: Some("xeno".into()),

@@ -3,8 +3,9 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use serde_json::json;
 
+use brain_lib::sagas::SagaListFilter;
 use brain_lib::stores::BrainStores;
-use brain_persistence::db::sagas::{SagaListFilter, compact_saga_id};
+use brain_persistence::db::sagas::compact_saga_id;
 
 pub struct SagaCtx {
     pub(crate) stores: BrainStores,
@@ -175,7 +176,7 @@ pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
             .iter()
             .map(|t| {
                 json!({
-                    "task_id": compact(&t.task_id),
+                    "task_id": compact(t.id.as_str()),
                     "title": t.title,
                     "status": t.status,
                     "priority": t.priority,
@@ -205,7 +206,7 @@ pub fn frontier(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
         } else {
             println!("Ready tasks in saga {saga_id}:");
             for t in &f.tasks {
-                println!("  [{}] {} ({})", compact(&t.task_id), t.title, t.status);
+                println!("  [{}] {} ({})", compact(t.id.as_str()), t.title, t.status);
             }
         }
         // Mirror the `show` command's brains line.
@@ -500,7 +501,7 @@ pub fn show(ctx: &SagaCtx, saga_id: &str) -> Result<()> {
             .iter()
             .map(|m| {
                 json!({
-                    "task_id": ctx.stores.tasks.compact_id_or_raw(&m.task_id),
+                    "task_id": ctx.stores.tasks.compact_id_or_raw(m.task_id.as_str()),
                     "brain_id": m.brain_id,
                     "title": m.title,
                     "status": m.status,

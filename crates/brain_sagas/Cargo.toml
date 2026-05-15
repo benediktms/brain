@@ -1,0 +1,25 @@
+[package]
+name = "brain-sagas"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+# Exposes test-only items from upstream crates. Chains brain-persistence and
+# brain-core test-utils, matching the pattern in brain-tasks / brain-lib.
+test-utils = ["brain-persistence/test-utils", "brain-core/test-utils"]
+
+[dependencies]
+brain-core = { path = "../brain_core" }
+brain-persistence = { path = "../brain_persistence" }
+brain-tasks = { path = "../brain_tasks" }
+chrono = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+# Self-reference activates the `test-utils` feature for integration tests
+# in `tests/*.rs` if added later. Mirrors brain-tasks / brain-lib.
+brain-sagas = { path = ".", features = ["test-utils"] }
