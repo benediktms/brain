@@ -10,7 +10,7 @@ use brain_persistence::sql::{SqlError, SqlResultExt};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::records::events::{LinkPayload, RecordEvent, RecordEventType};
+use brain_records::events::{LinkPayload, RecordEvent, RecordEventType};
 use crate::uri::resolve_id;
 
 use super::links_add::add_entity_link;

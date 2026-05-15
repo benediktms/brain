@@ -14,7 +14,7 @@ use brain_core::ports::Embed;
 use crate::embedder::embed_batch_async;
 use crate::l0_generate::{generate_episode_l0, generate_procedure_l0};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingOps, EmbeddingResetter};
-use crate::records::capsule::build_record_capsule;
+use brain_records::capsule::build_record_capsule;
 use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use brain_persistence::db::Db;

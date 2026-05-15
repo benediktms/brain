@@ -6,10 +6,10 @@
 //! 3. Unified object dedup — identical content from two brains produces one blob.
 //! 4. Brain filtering in stores — `with_brain_id` scopes reads and writes correctly.
 
-use brain_lib::records::RecordStore;
-use brain_lib::records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
-use brain_lib::records::objects::ObjectStore;
-use brain_lib::records::queries::RecordFilter;
+use brain_records::RecordStore;
+use brain_records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
+use brain_records::objects::ObjectStore;
+use brain_records::queries::RecordFilter;
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
 use brain_tasks::TaskStore;
@@ -239,7 +239,7 @@ fn test_unified_object_dedup() {
     let row_a = store_a.get_record("rec-a1").unwrap().unwrap();
     let row_b = store_b.get_record("rec-b1").unwrap().unwrap();
     assert_eq!(
-        row_a.content_hash, row_b.content_hash,
+        row_a.content_ref.hash, row_b.content_ref.hash,
         "both records must reference the same content hash"
     );
 
