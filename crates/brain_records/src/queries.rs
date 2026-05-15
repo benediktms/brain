@@ -14,7 +14,6 @@
 //! value with no persistence path in scope.
 
 pub(crate) use brain_persistence::db::records::queries::{
-    RecordFilter, RecordLink, RecordRow, compact_record_id, compact_record_ids, count_payload_refs,
-    get_all_content_refs, get_record, get_record_links, get_record_tags, list_records,
-    resolve_record_id,
+    RecordFilter, compact_record_id, compact_record_ids, count_payload_refs, get_all_content_refs,
+    get_record, get_record_links, get_record_tags, list_records, resolve_record_id,
 };

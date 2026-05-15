@@ -573,12 +573,12 @@ impl RecordStore {
         description: Option<String>,
         actor: &str,
     ) -> Result<()> {
-        if let Some(ref t) = title {
-            if t.trim().is_empty() {
-                return Err(brain_core::error::BrainCoreError::Config(
-                    "title must be non-empty".into(),
-                ));
-            }
+        if let Some(ref t) = title
+            && t.trim().is_empty()
+        {
+            return Err(brain_core::error::BrainCoreError::Config(
+                "title must be non-empty".into(),
+            ));
         }
         let payload = crate::events::RecordUpdatedPayload { title, description };
         let event = crate::events::RecordEvent::from_payload(record_id, actor, payload);
