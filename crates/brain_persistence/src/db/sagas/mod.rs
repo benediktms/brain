@@ -1,6 +1,8 @@
 pub mod display_id;
 pub mod events;
 pub mod queries;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
 
 pub use display_id::{compact_saga_id, compact_saga_ids, parse_short_form, resolve_saga_id};
 pub use events::{

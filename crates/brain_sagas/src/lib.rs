@@ -892,12 +892,9 @@ impl SagaStore {
         self.db
             .with_write_conn(move |conn| {
                 let canonical = resolve_saga_id(conn, &saga_id)?;
-                #[allow(clippy::disallowed_macros)]
-                conn.execute(
-                    "UPDATE sagas SET status = ?1, updated_at = ?2 WHERE saga_id = ?3",
-                    rusqlite::params![status_str, ts, canonical],
-                )?;
-                Ok(())
+                brain_persistence::db::sagas::testing::force_saga_status(
+                    conn, &canonical, status_str, ts,
+                )
             })
             .into_brain_core()
     }
@@ -913,12 +910,7 @@ impl SagaStore {
         self.db
             .with_write_conn(move |conn| {
                 let canonical = resolve_saga_id(conn, &saga_id)?;
-                #[allow(clippy::disallowed_macros)]
-                conn.execute(
-                    "UPDATE sagas SET updated_at = ?1, created_at = ?1 WHERE saga_id = ?2",
-                    rusqlite::params![ts, canonical],
-                )?;
-                Ok(())
+                brain_persistence::db::sagas::testing::force_saga_timestamps(conn, &canonical, ts)
             })
             .into_brain_core()
     }
@@ -929,6 +921,7 @@ impl SagaStore {
 mod tests {
     use super::*;
     use brain_persistence::db::Db;
+    use brain_persistence::db::sagas::testing;
 
     fn in_memory_store() -> SagaStore {
         let db = Db::open_in_memory().unwrap();
@@ -986,14 +979,7 @@ mod tests {
         let row = store.create("X", None, "actor").unwrap();
         let (event_type, actor): (String, String) = store
             .db
-            .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT event_type, actor FROM saga_events WHERE saga_id = ?1",
-                    [&row.saga_id],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-                )
-                .map_err(Into::into)
-            })
+            .with_read_conn(|c| testing::first_saga_event_meta(c, &row.saga_id))
             .into_brain_core()
             .unwrap();
         assert!(event_type.contains("saga_created"), "got: {event_type}");
@@ -1018,24 +1004,18 @@ mod tests {
         store
             .db
             .with_write_conn(|conn| {
-                conn.execute(
-                    "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, ?3)",
-                    [row.saga_id.as_str(), "OTHER-BRAIN-TASK-01JXYZ", "1000000"],
-                )?;
-                Ok(())
+                testing::seed_saga_task_link(
+                    conn,
+                    &row.saga_id,
+                    "OTHER-BRAIN-TASK-01JXYZ",
+                    1_000_000,
+                )
             })
             .into_brain_core()
             .unwrap();
         let count: i64 = store
             .db
-            .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1",
-                    [&row.saga_id],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
-            })
+            .with_read_conn(|c| testing::count_saga_tasks(c, &row.saga_id))
             .into_brain_core()
             .unwrap();
         assert_eq!(
@@ -1053,13 +1033,7 @@ mod tests {
         // Manually force-close saga a by direct DB write.
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                    [&a.saga_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::force_saga_status(conn, &a.saga_id, "closed", 0))
             .into_brain_core()
             .unwrap();
 
@@ -1075,13 +1049,7 @@ mod tests {
         store.create("Beta", None, "test").unwrap();
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                    [&a.saga_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::force_saga_status(conn, &a.saga_id, "closed", 0))
             .into_brain_core()
             .unwrap();
 
@@ -1156,15 +1124,8 @@ mod tests {
         store
             .db
             .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                    [&a.saga_id],
-                )?;
-                conn.execute(
-                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
-                    [&b.saga_id],
-                )?;
-                Ok(())
+                testing::force_saga_status(conn, &a.saga_id, "closed", 0)?;
+                testing::force_saga_status(conn, &b.saga_id, "cancelled", 0)
             })
             .into_brain_core()
             .unwrap();
@@ -1187,13 +1148,7 @@ mod tests {
         store.create("Beta", None, "test").unwrap();
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
-                    [&a.saga_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::force_saga_status(conn, &a.saga_id, "cancelled", 0))
             .into_brain_core()
             .unwrap();
 
@@ -1210,13 +1165,7 @@ mod tests {
         store.create("Beta", None, "test").unwrap();
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
-                    [&a.saga_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::force_saga_status(conn, &a.saga_id, "cancelled", 0))
             .into_brain_core()
             .unwrap();
 
@@ -1235,18 +1184,10 @@ mod tests {
         store
             .db
             .with_write_conn(|conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO brains (brain_id, name, created_at) VALUES (?1, ?1, 1000)",
-                    [brain_id],
-                )?;
-                conn.execute(
-                    "INSERT INTO tasks (task_id, brain_id, title, status, priority, task_type, created_at, updated_at)
-                     VALUES (?1, ?2, 'task', 'open', 4, 'task', 1000, 1000)",
-                    [task_id, brain_id],
-                )?;
-                Ok(())
+                testing::seed_brain(conn, brain_id, brain_id, None)?;
+                testing::seed_task(conn, task_id, brain_id, "task")
             })
-                .into_brain_core()
+            .into_brain_core()
             .unwrap();
     }
 
@@ -1254,13 +1195,7 @@ mod tests {
     fn link_task(store: &SagaStore, saga_id: &str, task_id: &str) {
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, ?2, 1000)",
-                    [saga_id, task_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::seed_saga_task_link(conn, saga_id, task_id, 1000))
             .into_brain_core()
             .unwrap();
     }
@@ -1345,13 +1280,7 @@ mod tests {
 
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                    [&b.saga_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::force_saga_status(conn, &b.saga_id, "closed", 0))
             .into_brain_core()
             .unwrap();
 
@@ -1394,13 +1323,7 @@ mod tests {
         let row = store.create("Active", None, "test").unwrap();
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                    [&row.saga_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::force_saga_status(conn, &row.saga_id, "closed", 0))
             .into_brain_core()
             .unwrap();
         let updated = store
@@ -1435,15 +1358,8 @@ mod tests {
             .unwrap();
         let (event_type, payload): (String, String) = store
             .db
-            .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT event_type, payload FROM saga_events WHERE saga_id = ?1 AND event_type LIKE '%updated%'",
-                    [&row.saga_id],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-                )
-                .map_err(Into::into)
-            })
-                .into_brain_core()
+            .with_read_conn(|c| testing::saga_event_by_type_like(c, &row.saga_id, "%updated%"))
+            .into_brain_core()
             .unwrap();
         assert!(event_type.contains("saga_updated"), "got: {event_type}");
         assert!(
@@ -1518,12 +1434,7 @@ mod tests {
         let count: i64 = store
             .db
             .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1 AND task_id = ?2",
-                    [saga.saga_id.as_str(), "good-brain-task01"],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
+                testing::count_saga_task_pair(c, &saga.saga_id, "good-brain-task01")
             })
             .into_brain_core()
             .unwrap();
@@ -1539,13 +1450,7 @@ mod tests {
 
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'closed' WHERE saga_id = ?1",
-                    [&saga.saga_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::force_saga_status(conn, &saga.saga_id, "closed", 0))
             .into_brain_core()
             .unwrap();
 
@@ -1573,13 +1478,7 @@ mod tests {
 
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "UPDATE sagas SET status = 'cancelled' WHERE saga_id = ?1",
-                    [&saga.saga_id],
-                )?;
-                Ok(())
-            })
+            .with_write_conn(|conn| testing::force_saga_status(conn, &saga.saga_id, "cancelled", 0))
             .into_brain_core()
             .unwrap();
 
@@ -1618,17 +1517,7 @@ mod tests {
 
         let ids: Vec<String> = store
             .db
-            .with_read_conn(|c| {
-                let mut stmt = c
-                    .prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY task_id")
-                    .unwrap();
-                let ids = stmt
-                    .query_map([saga.saga_id.as_str()], |r| r.get(0))
-                    .unwrap()
-                    .collect::<std::result::Result<Vec<String>, _>>()
-                    .unwrap();
-                Ok(ids)
-            })
+            .with_read_conn(|c| testing::list_saga_task_ids_sorted(c, &saga.saga_id))
             .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"brain-a-task01".to_string()));
@@ -1661,13 +1550,7 @@ mod tests {
         let event_count: i64 = store
             .db
             .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_events \
-                     WHERE saga_id = ?1 AND event_type = 'saga_task_added'",
-                    [saga.saga_id.as_str()],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
+                testing::count_saga_events_of_type(c, &saga.saga_id, "saga_task_added")
             })
             .into_brain_core()
             .unwrap();
@@ -1734,35 +1617,28 @@ mod tests {
         let saga = store.create("Multi-brain", None, "test").unwrap();
 
         // Insert two brains and tasks directly into the DB.
-        store.db.with_write_conn(|conn| {
-            conn.execute(
-                "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('brain-a', 'Brain A', 'BRA', 0)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('brain-b', 'Brain B', 'BRB', 0)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO tasks (task_id, brain_id, title, status, task_type, priority, created_at, updated_at)
-                 VALUES ('BRA-01TASK0000000000000000001', 'brain-a', 'Task A', 'open', 'task', 2, 0, 0)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO tasks (task_id, brain_id, title, status, task_type, priority, created_at, updated_at)
-                 VALUES ('BRB-01TASK0000000000000000002', 'brain-b', 'Task B', 'open', 'task', 2, 0, 0)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 'BRA-01TASK0000000000000000001', 0)",
-                rusqlite::params![saga.saga_id],
-            )?;
-            conn.execute(
-                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 'BRB-01TASK0000000000000000002', 0)",
-                rusqlite::params![saga.saga_id],
-            )?;
-            Ok(())
-        }).into_brain_core().unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                testing::seed_brain(conn, "brain-a", "Brain A", Some("BRA"))?;
+                testing::seed_brain(conn, "brain-b", "Brain B", Some("BRB"))?;
+                testing::seed_task(conn, "BRA-01TASK0000000000000000001", "brain-a", "Task A")?;
+                testing::seed_task(conn, "BRB-01TASK0000000000000000002", "brain-b", "Task B")?;
+                testing::seed_saga_task_link(
+                    conn,
+                    &saga.saga_id,
+                    "BRA-01TASK0000000000000000001",
+                    0,
+                )?;
+                testing::seed_saga_task_link(
+                    conn,
+                    &saga.saga_id,
+                    "BRB-01TASK0000000000000000002",
+                    0,
+                )
+            })
+            .into_brain_core()
+            .unwrap();
 
         let brains = store.brains_for_saga(&saga.saga_id).unwrap();
         assert_eq!(brains.len(), 2);
@@ -1778,31 +1654,27 @@ mod tests {
             .create("Single Brain Two Tasks", None, "test")
             .unwrap();
 
-        store.db.with_write_conn(|conn| {
-            conn.execute(
-                "INSERT INTO brains (brain_id, name, prefix, created_at) VALUES ('brain-c', 'Brain C', 'BRC', 0)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO tasks (task_id, brain_id, title, status, task_type, priority, created_at, updated_at)
-                 VALUES ('BRC-01TASK0000000000000000003', 'brain-c', 'Task C1', 'open', 'task', 2, 0, 0)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO tasks (task_id, brain_id, title, status, task_type, priority, created_at, updated_at)
-                 VALUES ('BRC-01TASK0000000000000000004', 'brain-c', 'Task C2', 'open', 'task', 2, 0, 0)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 'BRC-01TASK0000000000000000003', 0)",
-                rusqlite::params![saga.saga_id],
-            )?;
-            conn.execute(
-                "INSERT INTO saga_tasks (saga_id, task_id, added_at) VALUES (?1, 'BRC-01TASK0000000000000000004', 0)",
-                rusqlite::params![saga.saga_id],
-            )?;
-            Ok(())
-        }).into_brain_core().unwrap();
+        store
+            .db
+            .with_write_conn(|conn| {
+                testing::seed_brain(conn, "brain-c", "Brain C", Some("BRC"))?;
+                testing::seed_task(conn, "BRC-01TASK0000000000000000003", "brain-c", "Task C1")?;
+                testing::seed_task(conn, "BRC-01TASK0000000000000000004", "brain-c", "Task C2")?;
+                testing::seed_saga_task_link(
+                    conn,
+                    &saga.saga_id,
+                    "BRC-01TASK0000000000000000003",
+                    0,
+                )?;
+                testing::seed_saga_task_link(
+                    conn,
+                    &saga.saga_id,
+                    "BRC-01TASK0000000000000000004",
+                    0,
+                )
+            })
+            .into_brain_core()
+            .unwrap();
 
         let brains = store.brains_for_saga(&saga.saga_id).unwrap();
         assert_eq!(
@@ -1840,14 +1712,7 @@ mod tests {
 
         let member_count: i64 = store
             .db
-            .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1",
-                    [saga.saga_id.as_str()],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
-            })
+            .with_read_conn(|c| testing::count_saga_tasks(c, &saga.saga_id))
             .into_brain_core()
             .unwrap();
         assert_eq!(member_count, 1, "should be exactly 1 saga_tasks row");
@@ -1855,13 +1720,7 @@ mod tests {
         let event_count: i64 = store
             .db
             .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_events \
-                     WHERE saga_id = ?1 AND event_type = 'saga_task_added'",
-                    [saga.saga_id.as_str()],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
+                testing::count_saga_events_of_type(c, &saga.saga_id, "saga_task_added")
             })
             .into_brain_core()
             .unwrap();
@@ -1897,17 +1756,7 @@ mod tests {
         // Both tasks must end up as members.
         let ids: Vec<String> = store
             .db
-            .with_read_conn(|c| {
-                let mut stmt = c
-                    .prepare("SELECT task_id FROM saga_tasks WHERE saga_id = ?1 ORDER BY task_id")
-                    .unwrap();
-                let ids = stmt
-                    .query_map([saga.saga_id.as_str()], |r| r.get(0))
-                    .unwrap()
-                    .collect::<std::result::Result<Vec<String>, _>>()
-                    .unwrap();
-                Ok(ids)
-            })
+            .with_read_conn(|c| testing::list_saga_task_ids_sorted(c, &saga.saga_id))
             .into_brain_core()
             .unwrap();
         assert!(ids.contains(&"idem-task01".to_string()));
@@ -1918,13 +1767,7 @@ mod tests {
         let event_count: i64 = store
             .db
             .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_events \
-                     WHERE saga_id = ?1 AND event_type = 'saga_task_added'",
-                    [saga.saga_id.as_str()],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
+                testing::count_saga_events_of_type(c, &saga.saga_id, "saga_task_added")
             })
             .into_brain_core()
             .unwrap();
@@ -1938,16 +1781,8 @@ mod tests {
     fn link_parent_of(store: &SagaStore, parent_id: &str, child_id: &str) {
         store
             .db
-            .with_write_conn(|conn| {
-                conn.execute(
-                    "INSERT INTO entity_links (id, from_type, from_id, to_type, to_id, edge_kind, created_at, brain_scope)
-                     VALUES (lower(hex(randomblob(16))), 'TASK', ?1, 'TASK', ?2, 'parent_of',
-                             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)",
-                    [parent_id, child_id],
-                )?;
-                Ok(())
-            })
-                .into_brain_core()
+            .with_write_conn(|conn| testing::seed_parent_of_edge(conn, parent_id, child_id))
+            .into_brain_core()
             .unwrap();
     }
 
@@ -1955,14 +1790,7 @@ mod tests {
     fn member_count(store: &SagaStore, saga_id: &str) -> usize {
         store
             .db
-            .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1",
-                    [saga_id],
-                    |r| r.get::<_, i64>(0),
-                )
-                .map_err(Into::into)
-            })
+            .with_read_conn(|c| testing::count_saga_tasks(c, saga_id))
             .into_brain_core()
             .unwrap() as usize
     }
@@ -1998,13 +1826,7 @@ mod tests {
         let event_count: i64 = store
             .db
             .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_events \
-                     WHERE saga_id = ?1 AND event_type = 'saga_task_added'",
-                    [saga.saga_id.as_str()],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
+                testing::count_saga_events_of_type(c, &saga.saga_id, "saga_task_added")
             })
             .into_brain_core()
             .unwrap();
@@ -2121,13 +1943,7 @@ mod tests {
         let removed_events: i64 = store
             .db
             .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_events \
-                     WHERE saga_id = ?1 AND event_type = 'saga_task_removed'",
-                    [saga.saga_id.as_str()],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
+                testing::count_saga_events_of_type(c, &saga.saga_id, "saga_task_removed")
             })
             .into_brain_core()
             .unwrap();
@@ -2273,14 +2089,7 @@ mod tests {
         // Membership must be unchanged.
         let count: i64 = store
             .db
-            .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*) FROM saga_tasks WHERE saga_id = ?1 AND task_id = ?2",
-                    [saga.saga_id.as_str(), "rem-brain-task01"],
-                    |r| r.get(0),
-                )
-                .map_err(Into::into)
-            })
+            .with_read_conn(|c| testing::count_saga_task_pair(c, &saga.saga_id, "rem-brain-task01"))
             .into_brain_core()
             .unwrap();
         assert_eq!(
@@ -2361,13 +2170,7 @@ mod tests {
         let (count, actor): (i64, String) = store
             .db
             .with_read_conn(|c| {
-                c.query_row(
-                    "SELECT COUNT(*), COALESCE(MAX(actor), '') FROM saga_events \
-                     WHERE saga_id = ?1 AND event_type = 'saga_reopened'",
-                    [saga.saga_id.as_str()],
-                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
-                )
-                .map_err(Into::into)
+                testing::count_and_last_actor_for_event_type(c, &saga.saga_id, "saga_reopened")
             })
             .into_brain_core()
             .unwrap();
