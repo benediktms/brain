@@ -10,6 +10,7 @@ use brain_persistence::sql::SqlResultExt;
 
 use brain_core::error::Result;
 
+use crate::domain::Record;
 use crate::events;
 use crate::objects;
 use crate::projections;
@@ -119,10 +120,16 @@ impl RecordStore {
 
     // -- Query methods --
 
-    pub fn get_record(&self, record_id: &str) -> Result<Option<queries::RecordRow>> {
+    /// Get a single record by ID, mapped to the domain `Record` type.
+    ///
+    /// `RecordRow` (the persistence wire shape) is kept behind this boundary
+    /// — callers receive a typed `Record` with parsed `status` and bundled
+    /// `content_ref`.
+    pub fn get_record(&self, record_id: &str) -> Result<Option<Record>> {
         self.db
             .with_read_conn(|conn| queries::get_record(conn, record_id))
             .into_brain_core()
+            .map(|opt| opt.map(Record::from))
     }
 
     /// Return `Some(brain_id)` when this store is scoped to a specific brain,
@@ -135,7 +142,8 @@ impl RecordStore {
         }
     }
 
-    pub fn list_records(&self, filter: &queries::RecordFilter) -> Result<Vec<queries::RecordRow>> {
+    /// List records matching a filter, mapped to the domain `Record` type.
+    pub fn list_records(&self, filter: &queries::RecordFilter) -> Result<Vec<Record>> {
         let scoped = queries::RecordFilter {
             brain_id: self.brain_id_filter().or_else(|| filter.brain_id.clone()),
             kind: filter.kind.clone(),
@@ -147,6 +155,7 @@ impl RecordStore {
         self.db
             .with_read_conn(|conn| queries::list_records(conn, &scoped))
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(Record::from).collect())
     }
 
     pub fn get_record_tags(&self, record_id: &str) -> Result<Vec<String>> {
@@ -283,15 +292,15 @@ impl RecordStore {
         }
 
         let payload = events::PayloadEvictedPayload {
-            content_hash: record.content_hash.clone(),
+            content_hash: record.content_ref.hash.clone(),
             reason: reason.to_string(),
         };
         let event = events::RecordEvent::from_payload(record_id, actor, payload);
         self.apply_event(&event)?;
 
-        let other_refs = self.count_payload_refs(&record.content_hash, record_id)?;
-        if other_refs == 0 && objects.exists(&record.content_hash) {
-            objects.delete(&record.content_hash)?;
+        let other_refs = self.count_payload_refs(&record.content_ref.hash, record_id)?;
+        if other_refs == 0 && objects.exists(&record.content_ref.hash) {
+            objects.delete(&record.content_ref.hash)?;
         }
 
         Ok(())

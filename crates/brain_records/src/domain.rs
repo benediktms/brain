@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use brain_persistence::db::records::queries::RecordRow;
+
 /// A ULID-based record ID, prefixed with the brain's project prefix.
 ///
 /// Format: `"{PREFIX}-{ULID}"`, e.g. `"BRN-01KK7XXXXXXXXXXXXXXXXXXXX"`.
@@ -242,36 +244,61 @@ impl std::str::FromStr for RecordStatus {
 /// A reference to an object in the content-addressed object store.
 ///
 /// The `hash` field is the storage key. Two records with identical payloads
-/// share one object on disk.
+/// share one object on disk. `content_encoding` and `original_size` describe
+/// the transport encoding applied to the bytes on disk (e.g. zstd-compressed
+/// payloads carry `content_encoding = "zstd"` and `original_size = Some(..)`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentRef {
     /// BLAKE3 hex digest of the raw payload bytes (64 hex chars, 256 bits).
     pub hash: String,
-    /// Byte length of the payload.
+    /// Byte length of the stored (possibly encoded) payload.
     pub size: u64,
     /// Optional MIME type hint (e.g. `text/plain`, `application/json`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
+    /// Content encoding applied to the bytes (`identity` for uncompressed,
+    /// `zstd` for compressed). Defaults to `identity` for the 3-arg `new()`
+    /// shorthand.
+    #[serde(default = "default_identity_encoding")]
+    pub content_encoding: String,
+    /// Byte length of the original (pre-encoding) payload. `Some` only when
+    /// `content_encoding != "identity"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_size: Option<u64>,
 }
 
 impl ContentRef {
+    /// Construct a `ContentRef` for an unencoded payload. Defaults
+    /// `content_encoding = "identity"` and `original_size = None`. Encoded
+    /// payloads should use struct-init syntax with all fields set.
     pub fn new(hash: impl Into<String>, size: u64, media_type: Option<String>) -> Self {
         Self {
             hash: hash.into(),
             size,
             media_type,
+            content_encoding: default_identity_encoding(),
+            original_size: None,
         }
     }
 }
 
-/// The materialized/projected view of a record (artifact or snapshot).
+/// The materialized/projected view of a record.
 ///
-/// This is the read model — derived from the event log and stored in the SQLite
-/// projection. It is the struct returned by queries.
+/// This is the read model — derived from the event log and stored in the
+/// SQLite projection. `RecordStore` returns this type from `get_record` /
+/// `list_records`; the persistence `RecordRow` is the wire shape and stays
+/// behind the boundary.
+///
+/// Tags and links live in side-tables and are loaded via dedicated
+/// `get_record_tags` / `get_record_links` calls — they are not bundled here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
     pub record_id: String,
     pub title: String,
+    /// Free-form kind tag (`document`, `analysis`, `plan`, `snapshot`,
+    /// `implementation`, `review`, `summary`, or a custom string). String
+    /// because the open `Custom(String)` variant of `RecordKind` would not
+    /// add type-safety here.
     pub kind: String,
     pub status: RecordStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -280,15 +307,12 @@ pub struct Record {
     /// Soft reference to the task that produced this record.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
-    /// Producer identifier (agent name, tool name, etc.).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub producer: Option<String>,
-    /// Scope type (e.g. "task", "brain", "global").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope_type: Option<String>,
-    /// ID of the scoped entity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope_id: Option<String>,
+    /// The actor who created this record.
+    pub actor: String,
+    /// Unix seconds when the record was created.
+    pub created_at: i64,
+    /// Unix seconds when the record metadata was last updated.
+    pub updated_at: i64,
     /// Retention class hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retention_class: Option<String>,
@@ -296,15 +320,47 @@ pub struct Record {
     pub pinned: bool,
     /// Whether the payload object is currently available in the object store.
     pub payload_available: bool,
-    /// The actor who created this record.
-    pub actor: String,
-    /// Unix seconds when the record was created.
-    pub created_at: i64,
-    /// Unix seconds when the record metadata was last updated.
-    pub updated_at: i64,
-    /// Tags on this record.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
+    /// Provenance trust level. `trusted` for legacy rows.
+    pub trust: String,
+    /// Originating tool. `None` for system-internal rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_tool: Option<String>,
+}
+
+impl From<RecordRow> for Record {
+    fn from(row: RecordRow) -> Self {
+        let status = row.status.parse().unwrap_or(RecordStatus::Active);
+        let content_ref = ContentRef {
+            hash: row.content_hash,
+            size: row.content_size as u64,
+            media_type: row.media_type,
+            content_encoding: row.content_encoding,
+            original_size: row.original_size.map(|v| v as u64),
+        };
+        Record {
+            record_id: row.record_id,
+            title: row.title,
+            kind: row.kind,
+            status,
+            description: row.description,
+            content_ref,
+            task_id: row.task_id,
+            actor: row.actor,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            retention_class: row.retention_class,
+            pinned: row.pinned,
+            payload_available: row.payload_available,
+            trust: row.trust,
+            source_tool: row.source_tool,
+        }
+    }
+}
+
+impl From<&RecordRow> for Record {
+    fn from(row: &RecordRow) -> Self {
+        Record::from(row.clone())
+    }
 }
 
 /// The materialized/projected view of an artifact record.
