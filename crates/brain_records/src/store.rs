@@ -9,8 +9,9 @@ use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
 
 use brain_core::error::Result;
+use chrono::Utc;
 
-use crate::domain::Record;
+use crate::domain::{ContentRef, Record, RecordKind, RecordStatus};
 use crate::events;
 use crate::objects;
 use crate::projections;
@@ -45,7 +46,7 @@ pub struct RecordStore {
     ///
     /// Empty string means "all brains" (legacy / single-brain mode).
     /// Non-empty means filter reads by this brain_id and stamp it on writes.
-    pub brain_id: String,
+    pub(crate) brain_id: String,
 }
 
 impl RecordStore {
@@ -91,6 +92,11 @@ impl RecordStore {
     /// underlying database. Used for cross-brain writes from CLI/MCP.
     pub fn with_remote_brain_id(&self, brain_id: &str, brain_name: &str) -> Result<Self> {
         Self::with_brain_id(self.db.clone(), brain_id, brain_name)
+    }
+
+    /// Returns the brain ID this store is scoped to. Empty string for unscoped/legacy mode.
+    pub fn brain_id(&self) -> &str {
+        &self.brain_id
     }
 
     /// Import events from a JSONL file into the unified SQLite database.
@@ -190,14 +196,40 @@ impl RecordStore {
         self.create_with_kind(params, "snapshot", objects)
     }
 
+    /// # Crash recovery
+    ///
+    /// The blob is written to the object store BEFORE the `RecordCreated` event
+    /// is applied. If `apply_event` fails (FK violation, transaction error), the
+    /// blob remains on disk with no projection row referencing it (a "stale
+    /// blob"). This is the safe direction — no data loss. Running
+    /// `brain records gc` (which calls `integrity::cleanup_orphans`) detects and
+    /// reclaims the stale blob on next sweep.
     fn create_with_kind(
         &self,
         params: CreateRecordParams,
         kind: &str,
         objects: &objects::ObjectStore,
     ) -> Result<Record> {
+        if params.actor.trim().is_empty() {
+            return Err(brain_core::error::BrainCoreError::Config(
+                "actor must be non-empty".into(),
+            ));
+        }
+        if params.title.trim().is_empty() {
+            return Err(brain_core::error::BrainCoreError::Config(
+                "title must be non-empty".into(),
+            ));
+        }
+
         let prefix = self.get_project_prefix()?;
         let record_id = events::new_record_id(&prefix);
+
+        // Clone fields we need after params is partially moved into payload.
+        let title = params.title.clone();
+        let description = params.description.clone();
+        let task_id = params.task_id.clone();
+        let actor = params.actor.clone();
+        let retention_class = params.retention_class.clone();
 
         let (content_ref, encoding, original_size) = objects
             .write_compressed(
@@ -210,6 +242,14 @@ impl RecordStore {
                     "create_{kind}: write object: {e}"
                 ))
             })?;
+
+        let domain_content_ref = ContentRef {
+            hash: content_ref.hash.clone(),
+            size: content_ref.size,
+            media_type: content_ref.media_type.clone(),
+            content_encoding: encoding.clone(),
+            original_size: Some(original_size),
+        };
 
         let content_ref_payload = events::ContentRefPayload::compressed(
             content_ref.hash,
@@ -232,13 +272,26 @@ impl RecordStore {
             producer: params.producer,
         };
 
-        let event = events::RecordEvent::from_payload(&record_id, &params.actor, payload);
+        let event = events::RecordEvent::from_payload(&record_id, &actor, payload);
         self.apply_event(&event)?;
 
-        self.get_record(&record_id)?.ok_or_else(|| {
-            brain_core::error::BrainCoreError::Internal(format!(
-                "create_{kind}: record {record_id} missing after apply_event"
-            ))
+        let now = Utc::now().timestamp();
+        Ok(Record {
+            record_id,
+            title,
+            kind: RecordKind::from(kind),
+            status: RecordStatus::Active,
+            description,
+            content_ref: domain_content_ref,
+            task_id,
+            actor,
+            created_at: now,
+            updated_at: now,
+            retention_class,
+            pinned: false,
+            payload_available: true,
+            trust: "untrusted".to_string(),
+            source_tool: None,
         })
     }
 
@@ -486,7 +539,7 @@ mod tests {
     fn test_record_store_new() {
         let db = brain_persistence::db::Db::open_in_memory().unwrap();
         let store = RecordStore::new(db);
-        assert!(store.brain_id.is_empty());
+        assert!(store.brain_id().is_empty());
     }
 
     #[test]
@@ -758,7 +811,7 @@ mod tests {
         let record = store.create_document(params, &objects).unwrap();
 
         assert_eq!(record.title, "hello document");
-        assert_eq!(record.kind, "document");
+        assert_eq!(record.kind, crate::domain::RecordKind::Document);
         assert_eq!(record.status, crate::domain::RecordStatus::Active);
         assert_eq!(record.actor, "test");
         // Persisted via apply_event — round-trip query confirms it.
@@ -774,7 +827,7 @@ mod tests {
         let record = store
             .create_analysis(create_params("findings", b"analysis body"), &objects)
             .unwrap();
-        assert_eq!(record.kind, "analysis");
+        assert_eq!(record.kind, crate::domain::RecordKind::Analysis);
     }
 
     #[test]
@@ -785,7 +838,7 @@ mod tests {
         let record = store
             .create_plan(create_params("rollout", b"plan body"), &objects)
             .unwrap();
-        assert_eq!(record.kind, "plan");
+        assert_eq!(record.kind, crate::domain::RecordKind::Plan);
     }
 
     #[test]
@@ -796,7 +849,7 @@ mod tests {
         let record = store
             .create_snapshot(create_params("state-cap", b"snapshot body"), &objects)
             .unwrap();
-        assert_eq!(record.kind, "snapshot");
+        assert_eq!(record.kind, crate::domain::RecordKind::Snapshot);
     }
 
     #[test]
@@ -831,5 +884,59 @@ mod tests {
         store.unpin_record("r1", "agent").unwrap();
         let row = store.get_record("r1").unwrap().unwrap();
         assert!(!row.pinned);
+    }
+
+    #[test]
+    fn test_cross_brain_create_uses_correct_prefix() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("brain.db");
+        let db = brain_persistence::db::Db::open(&db_path).unwrap();
+
+        // Register two brains with distinct prefixes.
+        db.upsert_brain(&brain_persistence::db::schema::BrainUpsert {
+            brain_id: "test-a",
+            name: "test-a",
+            prefix: "AAA",
+            roots_json: "[]",
+            notes_json: "[]",
+            aliases_json: "[]",
+            archived: false,
+        })
+        .unwrap();
+        db.upsert_brain(&brain_persistence::db::schema::BrainUpsert {
+            brain_id: "test-b",
+            name: "test-b",
+            prefix: "BBB",
+            roots_json: "[]",
+            notes_json: "[]",
+            aliases_json: "[]",
+            archived: false,
+        })
+        .unwrap();
+
+        let objects_dir = dir.path().join("objects");
+        let objects = crate::objects::ObjectStore::new(&objects_dir).unwrap();
+
+        // Brain A store.
+        let store_a = RecordStore::with_brain_id(db.clone(), "test-a", "test-a").unwrap();
+        let record_a = store_a
+            .create_document(create_params("doc-a", b"body-a"), &objects)
+            .unwrap();
+        assert!(
+            record_a.record_id.starts_with("AAA-"),
+            "expected AAA- prefix, got {}",
+            record_a.record_id
+        );
+
+        // Cross-brain handle scoped to brain B.
+        let store_b = store_a.with_remote_brain_id("test-b", "test-b").unwrap();
+        let record_b = store_b
+            .create_document(create_params("doc-b", b"body-b"), &objects)
+            .unwrap();
+        assert!(
+            record_b.record_id.starts_with("BBB-"),
+            "expected BBB- prefix, got {}",
+            record_b.record_id
+        );
     }
 }

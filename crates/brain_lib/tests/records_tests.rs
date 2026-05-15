@@ -1156,7 +1156,10 @@ fn test_record_status_from_str() {
         RecordStatus::from_str("archived").unwrap(),
         RecordStatus::Archived
     );
-    assert!(RecordStatus::from_str("invalid").is_err());
+    assert_eq!(
+        RecordStatus::from_str("invalid").unwrap(),
+        RecordStatus::Unknown("invalid".to_string())
+    );
 }
 
 mod typed_creation_policy_tests {

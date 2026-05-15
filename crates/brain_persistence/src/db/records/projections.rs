@@ -12,7 +12,7 @@ use super::events::{
 };
 
 fn searchable_for_kind(kind: &str) -> bool {
-    // Mirrors brain_lib::records::RecordKind::policy().searchable and must stay in sync.
+    // Mirrors the searchable flag defined by each record kind's policy and must stay in sync.
     !matches!(kind, "snapshot")
 }
 

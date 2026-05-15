@@ -205,14 +205,19 @@ pub struct KindPolicy {
 }
 
 /// Lifecycle status of a record.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+///
+/// The `Unknown(String)` variant preserves unrecognised status strings
+/// round-trip so that a future `"quarantined"` (or any other new status)
+/// is never silently downgraded to `Active`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum RecordStatus {
     /// The record is current and accessible.
     #[default]
     Active,
     /// The record has been superseded or explicitly archived.
     Archived,
+    /// An unrecognised status string, preserved verbatim.
+    Unknown(String),
 }
 
 impl RecordStatus {
@@ -220,6 +225,7 @@ impl RecordStatus {
         match self {
             RecordStatus::Active => "active",
             RecordStatus::Archived => "archived",
+            RecordStatus::Unknown(s) => s.as_str(),
         }
     }
 }
@@ -231,13 +237,32 @@ impl std::fmt::Display for RecordStatus {
 }
 
 impl std::str::FromStr for RecordStatus {
-    type Err = String;
+    type Err = std::convert::Infallible;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "active" => Ok(RecordStatus::Active),
             "archived" => Ok(RecordStatus::Archived),
-            _ => Err(format!("invalid record status: '{s}'")),
+            other => Ok(RecordStatus::Unknown(other.to_string())),
         }
+    }
+}
+
+impl Serialize for RecordStatus {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RecordStatus {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(s.parse().unwrap_or_else(|e| match e {}))
     }
 }
 
@@ -295,11 +320,10 @@ impl ContentRef {
 pub struct Record {
     pub record_id: String,
     pub title: String,
-    /// Free-form kind tag (`document`, `analysis`, `plan`, `snapshot`,
-    /// `implementation`, `review`, `summary`, or a custom string). String
-    /// because the open `Custom(String)` variant of `RecordKind` would not
-    /// add type-safety here.
-    pub kind: String,
+    /// Typed kind classification. Round-trips through the open `Custom(String)`
+    /// variant for unknown strings. Serializes as a plain string (e.g.
+    /// `"document"`) — JSON output is unchanged from the previous `String` field.
+    pub kind: RecordKind,
     pub status: RecordStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -329,18 +353,18 @@ pub struct Record {
 
 impl From<RecordRow> for Record {
     fn from(row: RecordRow) -> Self {
-        let status = row.status.parse().unwrap_or(RecordStatus::Active);
+        let status: RecordStatus = row.status.parse().unwrap_or_else(|e| match e {});
         let content_ref = ContentRef {
             hash: row.content_hash,
-            size: row.content_size as u64,
+            size: row.content_size.max(0) as u64,
             media_type: row.media_type,
             content_encoding: row.content_encoding,
-            original_size: row.original_size.map(|v| v as u64),
+            original_size: row.original_size.map(|v| v.max(0) as u64),
         };
         Record {
             record_id: row.record_id,
             title: row.title,
-            kind: row.kind,
+            kind: RecordKind::from(row.kind),
             status,
             description: row.description,
             content_ref,
@@ -515,7 +539,10 @@ mod tests {
             RecordStatus::from_str("archived").unwrap(),
             RecordStatus::Archived
         );
-        assert!(RecordStatus::from_str("invalid").is_err());
+        assert_eq!(
+            RecordStatus::from_str("invalid").unwrap(),
+            RecordStatus::Unknown("invalid".to_string())
+        );
     }
 
     #[test]
@@ -525,6 +552,13 @@ mod tests {
         assert_eq!(json, "\"archived\"");
         let back: RecordStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back, status);
+
+        // Unknown variant round-trips as its raw string
+        let unknown = RecordStatus::Unknown("quarantined".to_string());
+        let json = serde_json::to_string(&unknown).unwrap();
+        assert_eq!(json, "\"quarantined\"");
+        let back: RecordStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, unknown);
     }
 
     #[test]
@@ -614,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_record_row_invalid_status_defaults_to_active() {
+    fn test_from_record_row_unknown_status_preserved() {
         let row = RecordRow {
             record_id: "BRN-01".to_string(),
             title: "T".to_string(),
@@ -637,7 +671,10 @@ mod tests {
             source_tool: None,
         };
         let record = Record::from(row);
-        assert_eq!(record.status, RecordStatus::Active);
+        assert_eq!(
+            record.status,
+            RecordStatus::Unknown("bogus_unknown_value".to_string())
+        );
     }
 
     #[test]

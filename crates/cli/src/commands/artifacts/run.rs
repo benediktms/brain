@@ -118,7 +118,7 @@ pub fn list(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
             table.add_row(vec![
                 short,
                 r.title.clone(),
-                r.kind.clone(),
+                r.kind.to_string(),
                 r.status.to_string(),
                 format_size(r.content_ref.size as i64),
                 format_ts(r.created_at),
