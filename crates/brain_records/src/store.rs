@@ -424,9 +424,7 @@ impl RecordStore {
         objects: &objects::ObjectStore,
     ) -> Result<()> {
         let record = self.get_record(record_id)?.ok_or_else(|| {
-            brain_core::error::BrainCoreError::RecordEvent(format!(
-                "record not found: {record_id}"
-            ))
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
         })?;
 
         if !record.payload_available {
@@ -463,9 +461,7 @@ impl RecordStore {
         actor: &str,
     ) -> Result<()> {
         self.get_record(record_id)?.ok_or_else(|| {
-            brain_core::error::BrainCoreError::RecordEvent(format!(
-                "record not found: {record_id}"
-            ))
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
         })?;
 
         let payload = events::RetentionClassSetPayload {
@@ -478,9 +474,7 @@ impl RecordStore {
     /// Pin a record, preventing it from being evicted.
     pub fn pin_record(&self, record_id: &str, actor: &str) -> Result<()> {
         self.get_record(record_id)?.ok_or_else(|| {
-            brain_core::error::BrainCoreError::RecordEvent(format!(
-                "record not found: {record_id}"
-            ))
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
         })?;
 
         let event = events::RecordEvent::new(
@@ -495,9 +489,7 @@ impl RecordStore {
     /// Unpin a record, allowing it to be evicted again.
     pub fn unpin_record(&self, record_id: &str, actor: &str) -> Result<()> {
         self.get_record(record_id)?.ok_or_else(|| {
-            brain_core::error::BrainCoreError::RecordEvent(format!(
-                "record not found: {record_id}"
-            ))
+            brain_core::error::BrainCoreError::RecordEvent(format!("record not found: {record_id}"))
         })?;
 
         let event = events::RecordEvent::new(

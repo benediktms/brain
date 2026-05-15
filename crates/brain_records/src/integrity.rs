@@ -216,10 +216,10 @@ mod tests {
 
     use brain_persistence::db::Db;
 
+    use super::*;
     use crate::RecordStore;
     use crate::events::*;
     use crate::objects::ObjectStore;
-    use super::*;
 
     fn setup() -> (TempDir, RecordStore, ObjectStore) {
         let dir = TempDir::new().unwrap();

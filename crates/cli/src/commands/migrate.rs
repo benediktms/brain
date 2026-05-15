@@ -442,9 +442,9 @@ fn migrate_one_objects_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brain_records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
     use brain_persistence::db::Db;
     use brain_persistence::sql::SqlResultExt;
+    use brain_records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
     use brain_tasks::events::TaskCreatedPayload;
 
     /// Write task events to a JSONL file and migrate via JSONL replay.

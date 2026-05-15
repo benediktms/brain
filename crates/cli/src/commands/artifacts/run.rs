@@ -6,11 +6,11 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde_json::json;
 
+use brain_lib::stores::BrainStores;
 use brain_records::events::{
     LinkPayload, RecordArchivedPayload, RecordEvent, RecordEventType, TagPayload,
 };
 use brain_records::queries::RecordFilter;
-use brain_lib::stores::BrainStores;
 
 use crate::markdown_table::MarkdownTable;
 

@@ -7,8 +7,8 @@ use serde_json::json;
 use brain_lib::l0_abstract::generate_l0_abstract;
 use brain_lib::pipeline::embed_poll::upsert_domain_lod_l0;
 use brain_lib::stores::BrainStores;
-use brain_records::CreateRecordParams;
 use brain_lib::uri::SynapseUri;
+use brain_records::CreateRecordParams;
 
 pub struct PlanCtx {
     pub(crate) stores: BrainStores,
@@ -115,8 +115,7 @@ pub fn create(ctx: &PlanCtx, params: CreateParams) -> Result<()> {
     let content_ref = record.content_ref.clone();
 
     let tags_refs: Vec<&str> = tags_for_capsule.iter().map(|s| s.as_str()).collect();
-    let abstract_text =
-        generate_l0_abstract(&title_for_capsule, &content_for_abstract, &tags_refs);
+    let abstract_text = generate_l0_abstract(&title_for_capsule, &content_for_abstract, &tags_refs);
     let record_file_id = format!("record:{record_id}");
     stores
         .upsert_record_chunk(&record_file_id, &abstract_text)

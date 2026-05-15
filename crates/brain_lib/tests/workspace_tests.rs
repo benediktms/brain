@@ -6,12 +6,12 @@
 //! 3. Unified object dedup — identical content from two brains produces one blob.
 //! 4. Brain filtering in stores — `with_brain_id` scopes reads and writes correctly.
 
+use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
 use brain_records::RecordStore;
 use brain_records::events::{ContentRefPayload, RecordCreatedPayload, RecordEvent};
 use brain_records::objects::ObjectStore;
 use brain_records::queries::RecordFilter;
-use brain_persistence::db::Db;
-use brain_persistence::sql::SqlResultExt;
 use brain_tasks::TaskStore;
 use brain_tasks::events::{
     DependencyPayload, EventType, TaskCreatedPayload, TaskEvent, TaskStatus,

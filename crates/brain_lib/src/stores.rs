@@ -9,11 +9,11 @@ use tempfile::TempDir;
 
 use crate::config;
 use crate::error::{BrainCoreError, Result};
-use brain_records::RecordStore;
-use brain_records::objects::ObjectStore;
 use crate::sagas::SagaStore;
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
+use brain_records::RecordStore;
+use brain_records::objects::ObjectStore;
 use brain_tasks::TaskStore;
 
 /// Unified access to all brain stores.

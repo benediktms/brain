@@ -5,10 +5,10 @@ use serde_json::json;
 
 #[cfg(feature = "embed")]
 use brain_lib::query_pipeline::SearchParams;
-use brain_records::integrity;
 use brain_lib::stores::BrainStores;
 #[cfg(feature = "embed")]
 use brain_lib::uri::SynapseUri;
+use brain_records::integrity;
 
 #[cfg(feature = "embed")]
 use crate::commands::memory::run::MemoryCtx;

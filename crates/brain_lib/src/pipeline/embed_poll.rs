@@ -14,7 +14,6 @@ use brain_core::ports::Embed;
 use crate::embedder::embed_batch_async;
 use crate::l0_generate::{generate_episode_l0, generate_procedure_l0};
 use crate::ports::{ChunkIndexWriter, ChunkMetaWriter, EmbeddingOps, EmbeddingResetter};
-use brain_records::capsule::build_record_capsule;
 use crate::tokens::estimate_tokens;
 use crate::uri::SynapseUri;
 use brain_persistence::db::Db;
@@ -23,6 +22,7 @@ use brain_persistence::db::summaries::SummaryPollRow;
 use brain_persistence::db::tasks::queries::{TaskPollRow, get_labels_for_tasks};
 #[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
+use brain_records::capsule::build_record_capsule;
 use brain_tasks::capsule::{build_outcome_capsule, build_task_capsule};
 
 // ── Tasks ───────────────────────────────────────────────────────────────────

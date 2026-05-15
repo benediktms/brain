@@ -115,8 +115,7 @@ pub fn create(ctx: &AnalysisCtx, params: CreateParams) -> Result<()> {
     let content_ref = record.content_ref.clone();
 
     let tags_refs: Vec<&str> = tags_for_capsule.iter().map(|s| s.as_str()).collect();
-    let abstract_text =
-        generate_l0_abstract(&title_for_capsule, &content_for_abstract, &tags_refs);
+    let abstract_text = generate_l0_abstract(&title_for_capsule, &content_for_abstract, &tags_refs);
     let record_file_id = format!("record:{record_id}");
     stores
         .upsert_record_chunk(&record_file_id, &abstract_text)

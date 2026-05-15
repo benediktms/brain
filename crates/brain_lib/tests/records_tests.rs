@@ -22,6 +22,11 @@ use brain_lib::mcp::protocol::ToolCallResult;
 use brain_lib::mcp::tools::ToolRegistry;
 use brain_lib::metrics::Metrics;
 use brain_lib::ports::mock::MockEmbedder;
+use brain_lib::search_service::SearchService;
+use brain_lib::stores::BrainStores;
+use brain_persistence::db::Db;
+use brain_persistence::sql::SqlResultExt;
+use brain_persistence::store::{Store, StoreReader};
 use brain_records::events::{
     ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
     RecordEventType, RecordUpdatedPayload, TagPayload, append_event, new_record_id,
@@ -30,11 +35,6 @@ use brain_records::events::{
 use brain_records::objects::ObjectStore;
 use brain_records::projections::{apply_event, rebuild};
 use brain_records::{RecordStatus, RecordStore};
-use brain_lib::search_service::SearchService;
-use brain_lib::stores::BrainStores;
-use brain_persistence::db::Db;
-use brain_persistence::sql::SqlResultExt;
-use brain_persistence::store::{Store, StoreReader};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

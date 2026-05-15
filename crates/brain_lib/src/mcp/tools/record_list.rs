@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use brain_records::queries::RecordFilter;
 use crate::uri::SynapseUri;
+use brain_records::queries::RecordFilter;
 
 use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
