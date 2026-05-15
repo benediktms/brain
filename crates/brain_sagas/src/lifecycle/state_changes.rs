@@ -26,7 +26,7 @@ use crate::status::SagaStatus;
 
 /// Transition a saga from `planning` to `open`. Emits `SagaStarted`.
 pub fn start(conn: &Connection, saga_id: &str, actor: &str) -> SqlResult<SagaRow> {
-    // unchecked_ ok: caller holds the writer mutex via with_write_conn, single writer guaranteed.
+    // unchecked_ ok: caller MUST hold the writer mutex (typically via Db::with_write_conn), single writer guaranteed.
     let tx = conn.unchecked_transaction()?;
     let canonical = resolve_saga_id(&tx, saga_id)?;
 
@@ -92,7 +92,7 @@ pub fn close(
     cascade: bool,
     actor: &str,
 ) -> SqlResult<(SagaRow, Vec<CascadeResult>)> {
-    // unchecked_ ok: caller holds the writer mutex via with_write_conn, single writer guaranteed.
+    // unchecked_ ok: caller MUST hold the writer mutex (typically via Db::with_write_conn), single writer guaranteed.
     let tx = conn.unchecked_transaction()?;
     let canonical = resolve_saga_id(&tx, saga_id)?;
 
@@ -155,7 +155,7 @@ pub fn cancel(
     cascade: bool,
     actor: &str,
 ) -> SqlResult<(SagaRow, Vec<CascadeResult>)> {
-    // unchecked_ ok: caller holds the writer mutex via with_write_conn, single writer guaranteed.
+    // unchecked_ ok: caller MUST hold the writer mutex (typically via Db::with_write_conn), single writer guaranteed.
     let tx = conn.unchecked_transaction()?;
     let canonical = resolve_saga_id(&tx, saga_id)?;
 
@@ -224,7 +224,7 @@ pub fn cancel(
 /// Reopen a closed or cancelled saga, setting status back to `open`.
 /// Clears `closed_at`. Emits `SagaReopened`. Rejected from `planning` or `open`.
 pub fn reopen(conn: &Connection, saga_id: &str, actor: &str) -> SqlResult<SagaRow> {
-    // unchecked_ ok: caller holds the writer mutex via with_write_conn, single writer guaranteed.
+    // unchecked_ ok: caller MUST hold the writer mutex (typically via Db::with_write_conn), single writer guaranteed.
     let tx = conn.unchecked_transaction()?;
     let canonical = resolve_saga_id(&tx, saga_id)?;
 

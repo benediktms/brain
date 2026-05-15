@@ -70,6 +70,8 @@ pub fn create(
 /// - `None` = don't touch description
 /// - `Some(None)` = set description to NULL
 /// - `Some(Some("text"))` = set description to "text"
+/// - `Some(Some(""))` is canonicalized to `Some(None)` so empty strings
+///   are stored as NULL, keeping the column shape consistent.
 pub fn update(
     conn: &Connection,
     saga_id: &str,
@@ -102,8 +104,10 @@ pub fn update(
 
     // H1: wrap projection write + event insert in one SQLite tx so a
     // failure between the two cannot leave the projection mutated
-    // without a corresponding saga_events row. `with_write_conn` only
-    // locks the writer mutex; it does NOT open a transaction.
+    // without a corresponding saga_events row.
+    //
+    // unchecked_ ok: caller MUST hold the writer mutex (typically via
+    // Db::with_write_conn), single writer guaranteed.
     let tx = conn.unchecked_transaction()?;
     let canonical = resolve_saga_id(&tx, saga_id)?;
 

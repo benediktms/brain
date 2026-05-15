@@ -13,7 +13,7 @@ pub use brain_persistence::db::sagas::queries::BrainSummary;
 
 use brain_core::error::{BrainCoreError, Result};
 
-pub mod lifecycle;
+pub(crate) mod lifecycle;
 pub mod status;
 pub use lifecycle::validate_transition;
 pub use status::SagaStatus;
@@ -82,7 +82,7 @@ impl SagaStore {
         let actor = actor.to_string();
         self.db
             .with_write_conn(move |conn| {
-                crate::lifecycle::metadata::create(conn, &title, description.as_deref(), &actor)
+                crate::lifecycle::create(conn, &title, description.as_deref(), &actor)
             })
             .into_brain_core()
     }
@@ -106,7 +106,7 @@ impl SagaStore {
         let actor = actor.to_string();
         self.db
             .with_write_conn(move |conn| {
-                crate::lifecycle::metadata::update(
+                crate::lifecycle::update(
                     conn,
                     &saga_id,
                     title.as_deref(),
@@ -136,9 +136,7 @@ impl SagaStore {
         let saga_id = saga_id.to_string();
         let actor = actor.to_string();
         self.db
-            .with_write_conn(move |conn| {
-                crate::lifecycle::state_changes::close(conn, &saga_id, cascade, &actor)
-            })
+            .with_write_conn(move |conn| crate::lifecycle::close(conn, &saga_id, cascade, &actor))
             .into_brain_core()
     }
 
@@ -174,9 +172,7 @@ impl SagaStore {
         let saga_id = saga_id.to_string();
         let actor = actor.to_string();
         self.db
-            .with_write_conn(move |conn| {
-                crate::lifecycle::state_changes::start(conn, &saga_id, &actor)
-            })
+            .with_write_conn(move |conn| crate::lifecycle::start(conn, &saga_id, &actor))
             .into_brain_core()
     }
 
@@ -299,9 +295,7 @@ impl SagaStore {
         let saga_id = saga_id.to_string();
         let actor = actor.to_string();
         self.db
-            .with_write_conn(move |conn| {
-                crate::lifecycle::state_changes::cancel(conn, &saga_id, cascade, &actor)
-            })
+            .with_write_conn(move |conn| crate::lifecycle::cancel(conn, &saga_id, cascade, &actor))
             .into_brain_core()
     }
 
@@ -336,12 +330,16 @@ impl SagaStore {
         cascade: bool,
         actor: &str,
     ) -> Result<Vec<String>> {
+        // Short-circuit empty batches before acquiring the writer mutex.
+        if task_ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let saga_id = saga_id.to_string();
         let task_ids = task_ids.to_vec();
         let actor = actor.to_string();
         self.db
             .with_write_conn(move |conn| {
-                crate::lifecycle::members::add_tasks(conn, &saga_id, &task_ids, cascade, &actor)
+                crate::lifecycle::add_tasks(conn, &saga_id, &task_ids, cascade, &actor)
             })
             .into_brain_core()
     }
@@ -361,11 +359,15 @@ impl SagaStore {
         cascade: bool,
         actor: &str,
     ) -> Result<Vec<String>> {
+        // Short-circuit empty batches before acquiring the writer mutex.
+        if task_ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let saga_id = saga_id.to_string();
         let actor = actor.to_string();
         self.db
             .with_write_conn(move |conn| {
-                crate::lifecycle::members::remove_tasks(conn, &saga_id, task_ids, cascade, &actor)
+                crate::lifecycle::remove_tasks(conn, &saga_id, task_ids, cascade, &actor)
             })
             .into_brain_core()
     }
@@ -376,9 +378,7 @@ impl SagaStore {
         let saga_id = saga_id.to_string();
         let actor = actor.to_string();
         self.db
-            .with_write_conn(move |conn| {
-                crate::lifecycle::state_changes::reopen(conn, &saga_id, &actor)
-            })
+            .with_write_conn(move |conn| crate::lifecycle::reopen(conn, &saga_id, &actor))
             .into_brain_core()
     }
 

@@ -2,9 +2,17 @@ use brain_core::error::{BrainCoreError, Result};
 
 use super::status::SagaStatus;
 
-pub mod members;
-pub mod metadata;
-pub mod state_changes;
+pub(crate) mod members;
+pub(crate) mod metadata;
+pub(crate) mod state_changes;
+
+// Flatten the verb surface to one level so call sites read
+// `lifecycle::close(...)` instead of `lifecycle::state_changes::close(...)`.
+// The submodules remain as the implementation home; this re-export only
+// affects how callers spell the path.
+pub(crate) use members::{add_tasks, remove_tasks};
+pub(crate) use metadata::{create, update};
+pub(crate) use state_changes::{cancel, close, reopen, start};
 
 /// Validate a lifecycle transition. Returns `Ok(())` for the 6 valid edges;
 /// returns an error for all 10 forbidden transitions.

@@ -31,7 +31,7 @@ use crate::status::SagaStatus;
 /// for the duration of the insert/delete + per-row event emission. This cap
 /// restores the same protection intent that the MCP input cap provides for
 /// non-cascade calls.
-pub const MAX_EXPANDED_BATCH: usize = 2000;
+pub(crate) const MAX_EXPANDED_BATCH: usize = 2000;
 
 /// Atomically add one or more tasks to a saga (atomic batch + idempotent —
 /// already-member tasks are skipped).
@@ -59,8 +59,8 @@ pub fn add_tasks(
         return Ok(Vec::new());
     }
 
-    // unchecked_ ok: caller holds the writer mutex via with_write_conn,
-    // single writer guaranteed.
+    // unchecked_ ok: caller MUST hold the writer mutex (typically via
+    // Db::with_write_conn), single writer guaranteed.
     let tx = conn.unchecked_transaction()?;
     let canonical = resolve_saga_id(&tx, saga_id)?;
 
@@ -191,8 +191,8 @@ pub fn remove_tasks(
     // between the SELECT and DELETE cannot create a member that is
     // then deleted without a SagaTaskRemoved event being emitted.
     //
-    // unchecked_ ok: caller holds the writer mutex via with_write_conn,
-    // single writer guaranteed.
+    // unchecked_ ok: caller MUST hold the writer mutex (typically via
+    // Db::with_write_conn), single writer guaranteed.
     let tx = conn.unchecked_transaction()?;
     let canonical = resolve_saga_id(&tx, saga_id)?;
 
