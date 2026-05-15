@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::uri::{SynapseUri, resolve_id};
-use brain_records::events::{RecordArchivedPayload, RecordEvent};
 
 use super::{McpTool, json_response};
 
@@ -39,13 +38,11 @@ impl RecordArchive {
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         }
 
-        let payload = RecordArchivedPayload {
-            reason: params.reason,
-        };
-
-        let event = RecordEvent::from_payload(&record_id, "mcp", payload);
-
-        if let Err(e) = ctx.stores.records.apply_event(&event) {
+        if let Err(e) = ctx
+            .stores
+            .records
+            .archive_record(&record_id, params.reason, "mcp")
+        {
             return ToolCallResult::error(format!("Failed to archive record: {e}"));
         }
 

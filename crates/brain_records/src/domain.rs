@@ -385,6 +385,34 @@ fn default_identity_encoding() -> String {
     "identity".to_string()
 }
 
+/// A link between a record and a task or memory chunk.
+///
+/// Mirrors the persistence `RecordLink` row shape but lives at the domain
+/// boundary — `RecordStore::get_record_links` returns this typed value, with
+/// the persistence type confined behind the `From<>` impl below. At most one
+/// of `task_id` / `chunk_id` is set per link.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordLink {
+    pub record_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_id: Option<String>,
+    /// Unix seconds when the link was created.
+    pub created_at: i64,
+}
+
+impl From<brain_persistence::db::records::queries::RecordLink> for RecordLink {
+    fn from(row: brain_persistence::db::records::queries::RecordLink) -> Self {
+        RecordLink {
+            record_id: row.record_id,
+            task_id: row.task_id,
+            chunk_id: row.chunk_id,
+            created_at: row.created_at,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

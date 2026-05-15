@@ -11,10 +11,14 @@ pub mod events;
 pub mod integrity;
 pub mod objects;
 pub mod projections;
-pub mod queries;
+// `queries` is intentionally crate-private — the persistence row shape and
+// raw query functions must not leak past the domain boundary. External
+// consumers reach the same surface via typed `RecordStore` methods +
+// `RecordQuery`.
+pub(crate) mod queries;
 mod store;
 
 pub use domain::{
-    ContentRef, KindPolicy, Record, RecordDomain, RecordId, RecordKind, RecordStatus,
+    ContentRef, KindPolicy, Record, RecordDomain, RecordId, RecordKind, RecordLink, RecordStatus,
 };
-pub use store::{CreateRecordParams, RecordStore};
+pub use store::{CreateRecordParams, RecordQuery, RecordStore};

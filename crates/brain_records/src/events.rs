@@ -1,5 +1,28 @@
-// Type definitions and constructors re-exported from brain_persistence.
-pub use brain_persistence::db::records::events::*;
+// Event-layer re-exports.
+//
+// The wildcard `pub use ... events::*;` this module used to carry was an
+// unbounded API surface — every payload struct and helper from the
+// persistence layer leaked through. Now split between the event wire types
+// that external callers need to construct (CLI/MCP archive/tag/link paths
+// + tests) and the payloads only the typed `RecordStore` methods construct
+// internally.
+//
+// Adding anything new to the public surface here is a slop signal: typed
+// `RecordStore` methods are the preferred path.
+
+// All persistence-event-payload types are crate-private — they're internal
+// to `RecordStore`'s typed methods, which are the only legitimate construct
+// site. External callers reach the same operations via `RecordStore::create_*`,
+// `archive_record`, `add_tag` etc.
+//
+// The locally-defined file-I/O helpers (`append_event`, `read_all_events`,
+// etc., defined below) remain `pub` — they are this crate's own functions,
+// not persistence re-exports.
+pub(crate) use brain_persistence::db::records::events::{
+    ContentRefPayload, LinkPayload, PayloadEvictedPayload, PinPayload, RecordArchivedPayload,
+    RecordCreatedPayload, RecordEvent, RecordEventType, RecordUpdatedPayload,
+    RetentionClassSetPayload, TagPayload, new_record_id,
+};
 
 // ---------------------------------------------------------------------------
 // File I/O — stays in brain_lib

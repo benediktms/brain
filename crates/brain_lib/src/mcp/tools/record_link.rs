@@ -11,7 +11,6 @@ use brain_persistence::sql::{SqlError, SqlResultExt};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::uri::resolve_id;
-use brain_records::events::{LinkPayload, RecordEvent, RecordEventType};
 
 use super::links_add::add_entity_link;
 use super::links_remove::remove_entity_link;
@@ -53,19 +52,16 @@ impl RecordLinkAdd {
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         }
 
-        // Emit RecordEvent::LinkAdded so the projection dual-write fires.
+        // Emit typed link event so the projection dual-write fires.
         // This produces both record_links (legacy) + entity_links (polymorphic) rows.
-        let event = RecordEvent::new(
-            &record_id,
-            "mcp",
-            RecordEventType::LinkAdded,
-            &LinkPayload {
-                task_id: params.task_id.clone(),
-                chunk_id: params.chunk_id.clone(),
-            },
-        );
-
-        if let Err(e) = ctx.stores.records.apply_event(&event) {
+        let link_result = if let Some(ref task_id) = params.task_id {
+            ctx.stores.records.link_task(&record_id, task_id, "mcp")
+        } else {
+            ctx.stores
+                .records
+                .link_chunk(&record_id, params.chunk_id.as_deref().unwrap(), "mcp")
+        };
+        if let Err(e) = link_result {
             return ToolCallResult::error(format!("Failed to add link: {e}"));
         }
 
@@ -174,19 +170,16 @@ impl RecordLinkRemove {
             Err(e) => return ToolCallResult::error(format!("Failed to get record: {e}")),
         }
 
-        // Emit RecordEvent::LinkRemoved so the projection dual-write fires.
+        // Emit typed unlink event so the projection dual-write fires.
         // This removes from both record_links (legacy) and entity_links (polymorphic).
-        let event = RecordEvent::new(
-            &record_id,
-            "mcp",
-            RecordEventType::LinkRemoved,
-            &LinkPayload {
-                task_id: params.task_id.clone(),
-                chunk_id: params.chunk_id.clone(),
-            },
-        );
-
-        if let Err(e) = ctx.stores.records.apply_event(&event) {
+        let unlink_result = if let Some(ref task_id) = params.task_id {
+            ctx.stores.records.unlink_task(&record_id, task_id, "mcp")
+        } else {
+            ctx.stores
+                .records
+                .unlink_chunk(&record_id, params.chunk_id.as_deref().unwrap(), "mcp")
+        };
+        if let Err(e) = unlink_result {
             return ToolCallResult::error(format!("Failed to remove link: {e}"));
         }
 

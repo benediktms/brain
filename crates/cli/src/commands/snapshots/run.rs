@@ -6,11 +6,7 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 
 use brain_lib::stores::BrainStores;
-use brain_records::CreateRecordParams;
-use brain_records::events::{
-    LinkPayload, RecordArchivedPayload, RecordEvent, RecordEventType, TagPayload,
-};
-use brain_records::queries::RecordFilter;
+use brain_records::{CreateRecordParams, RecordKind, RecordQuery, RecordStatus};
 
 use crate::markdown_table::MarkdownTable;
 
@@ -154,18 +150,17 @@ pub struct ListParams {
 }
 
 pub fn list(ctx: &SnapshotCtx, params: &ListParams) -> Result<()> {
-    let filter = RecordFilter {
-        kind: Some("snapshot".to_string()),
-        status: Some(params.status.clone()),
+    let query = RecordQuery {
+        kind: Some(RecordKind::Snapshot),
+        status: Some(params.status.parse::<RecordStatus>().unwrap()),
         tag: params.tag.clone(),
         task_id: None,
         limit: Some(params.limit),
-        brain_id: None,
     };
 
     let records = ctx
         .record_store
-        .list_records(&filter)
+        .list_records(&query)
         .context("Failed to list snapshots")?;
 
     if ctx.json {
@@ -355,18 +350,9 @@ pub fn tag_add(ctx: &SnapshotCtx, id: &str, tag: &str) -> Result<()> {
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
 
-    let event = RecordEvent::new(
-        &record_id,
-        "cli",
-        RecordEventType::TagAdded,
-        &TagPayload {
-            tag: tag.to_string(),
-        },
-    );
-
     ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply tag_add event")?;
+        .add_tag(&record_id, tag, "cli")
+        .context("Failed to add tag")?;
 
     if ctx.json {
         let out = serde_json::json!({ "record_id": record_id, "tag": tag, "action": "added" });
@@ -384,18 +370,9 @@ pub fn tag_remove(ctx: &SnapshotCtx, id: &str, tag: &str) -> Result<()> {
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
 
-    let event = RecordEvent::new(
-        &record_id,
-        "cli",
-        RecordEventType::TagRemoved,
-        &TagPayload {
-            tag: tag.to_string(),
-        },
-    );
-
     ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply tag_remove event")?;
+        .remove_tag(&record_id, tag, "cli")
+        .context("Failed to remove tag")?;
 
     if ctx.json {
         let out = serde_json::json!({ "record_id": record_id, "tag": tag, "action": "removed" });
@@ -424,19 +401,16 @@ pub fn link_add(
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
 
-    let event = RecordEvent::new(
-        &record_id,
-        "cli",
-        RecordEventType::LinkAdded,
-        &LinkPayload {
-            task_id: task.clone(),
-            chunk_id: chunk.clone(),
-        },
-    );
-
-    ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply link_add event")?;
+    if let Some(ref t) = task {
+        ctx.record_store
+            .link_task(&record_id, t, "cli")
+            .context("Failed to link task")?;
+    }
+    if let Some(ref c) = chunk {
+        ctx.record_store
+            .link_chunk(&record_id, c, "cli")
+            .context("Failed to link chunk")?;
+    }
 
     if ctx.json {
         let out = serde_json::json!({
@@ -473,19 +447,16 @@ pub fn link_remove(
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
 
-    let event = RecordEvent::new(
-        &record_id,
-        "cli",
-        RecordEventType::LinkRemoved,
-        &LinkPayload {
-            task_id: task.clone(),
-            chunk_id: chunk.clone(),
-        },
-    );
-
-    ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply link_remove event")?;
+    if let Some(ref t) = task {
+        ctx.record_store
+            .unlink_task(&record_id, t, "cli")
+            .context("Failed to unlink task")?;
+    }
+    if let Some(ref c) = chunk {
+        ctx.record_store
+            .unlink_chunk(&record_id, c, "cli")
+            .context("Failed to unlink chunk")?;
+    }
 
     if ctx.json {
         let out = serde_json::json!({
@@ -515,17 +486,9 @@ pub fn archive(ctx: &SnapshotCtx, id: &str, reason: Option<String>) -> Result<()
         .resolve_record_id(id)
         .with_context(|| format!("Could not resolve snapshot ID: {id}"))?;
 
-    let event = RecordEvent::from_payload(
-        &record_id,
-        "cli",
-        RecordArchivedPayload {
-            reason: reason.clone(),
-        },
-    );
-
     ctx.record_store
-        .apply_event(&event)
-        .context("Failed to apply archive event")?;
+        .archive_record(&record_id, reason.clone(), "cli")
+        .context("Failed to archive snapshot")?;
 
     if ctx.json {
         let out = json!({ "archived": record_id, "reason": reason });

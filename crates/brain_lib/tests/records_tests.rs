@@ -27,14 +27,17 @@ use brain_lib::stores::BrainStores;
 use brain_persistence::db::Db;
 use brain_persistence::sql::SqlResultExt;
 use brain_persistence::store::{Store, StoreReader};
-use brain_records::events::{
-    ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
-    RecordEventType, RecordUpdatedPayload, TagPayload, append_event, new_record_id,
-    read_all_events,
-};
 use brain_records::objects::ObjectStore;
-use brain_records::projections::{apply_event, rebuild};
+use brain_records::projections::rebuild;
 use brain_records::{RecordStatus, RecordStore};
+// Tests raw event-log semantics — explicit cross-layer reach into persistence.
+use brain_persistence::db::records::events::{
+    ContentRefPayload, LinkPayload, RecordArchivedPayload, RecordCreatedPayload, RecordEvent,
+    RecordEventType, RecordUpdatedPayload, TagPayload, new_record_id,
+};
+use brain_persistence::db::records::projections::apply_event;
+// File I/O helpers live in brain_records::events (not in persistence).
+use brain_records::events::{append_event, read_all_events};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

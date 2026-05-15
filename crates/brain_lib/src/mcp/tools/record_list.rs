@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 use crate::uri::SynapseUri;
-use brain_records::queries::RecordFilter;
+use brain_records::{RecordKind, RecordQuery, RecordStatus};
 
 use super::scope::{BRAINS_PARAM_DESCRIPTION, BrainRef, resolve_scope};
 use super::{McpTool, Warning, inject_warnings, json_response, store_or_warn};
@@ -81,13 +81,12 @@ impl RecordList {
         } else {
             Some(params.limit)
         };
-        let filter = RecordFilter {
-            kind: params.kind.clone(),
-            status: Some(params.status.clone()),
+        let query = RecordQuery {
+            kind: params.kind.as_deref().map(RecordKind::from),
+            status: params.status.parse::<RecordStatus>().ok(),
             tag: params.tag.clone(),
             task_id: params.task_id.clone(),
             limit: per_brain_limit,
-            brain_id: None,
         };
 
         let mut warnings: Vec<Warning> = Vec::new();
@@ -95,7 +94,7 @@ impl RecordList {
 
         for (brain_ref, scoped_ctx) in &per_brain {
             let records = &scoped_ctx.stores.records;
-            let record_list = match records.list_records(&filter) {
+            let record_list = match records.list_records(&query) {
                 Ok(r) => r,
                 Err(e) => {
                     return ToolCallResult::error(format!(

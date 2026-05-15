@@ -11,11 +11,28 @@ use brain_persistence::sql::SqlResultExt;
 use brain_core::error::Result;
 use chrono::Utc;
 
-use crate::domain::{ContentRef, Record, RecordKind, RecordStatus};
+use crate::domain::{ContentRef, Record, RecordKind, RecordLink, RecordStatus};
 use crate::events;
 use crate::objects;
 use crate::projections;
 use crate::queries;
+
+/// Domain-level query for listing records. Replaces the persistence
+/// `RecordFilter` shape on the public surface of `RecordStore`. The store
+/// maps `RecordQuery` → `RecordFilter` internally.
+#[derive(Debug, Clone, Default)]
+pub struct RecordQuery {
+    /// Filter by record kind (typed). `None` = no filter.
+    pub kind: Option<RecordKind>,
+    /// Filter by lifecycle status (typed). `None` = no filter.
+    pub status: Option<RecordStatus>,
+    /// Filter by tag (exact match on a single tag).
+    pub tag: Option<String>,
+    /// Filter by linked task ID.
+    pub task_id: Option<String>,
+    /// Result row limit. `None` = no limit.
+    pub limit: Option<usize>,
+}
 
 /// Parameters for `RecordStore::create_*` methods.
 #[derive(Debug, Clone)]
@@ -319,18 +336,18 @@ impl RecordStore {
         }
     }
 
-    /// List records matching a filter, mapped to the domain `Record` type.
-    pub fn list_records(&self, filter: &queries::RecordFilter) -> Result<Vec<Record>> {
-        let scoped = queries::RecordFilter {
-            brain_id: self.brain_id_filter().or_else(|| filter.brain_id.clone()),
-            kind: filter.kind.clone(),
-            status: filter.status.clone(),
-            tag: filter.tag.clone(),
-            task_id: filter.task_id.clone(),
-            limit: filter.limit,
+    /// List records matching a query, mapped to the domain `Record` type.
+    pub fn list_records(&self, query: &RecordQuery) -> Result<Vec<Record>> {
+        let filter = crate::queries::RecordFilter {
+            brain_id: self.brain_id_filter(),
+            kind: query.kind.as_ref().map(|k| k.as_str().to_string()),
+            status: query.status.as_ref().map(|s| s.as_str().to_string()),
+            tag: query.tag.clone(),
+            task_id: query.task_id.clone(),
+            limit: query.limit,
         };
         self.db
-            .with_read_conn(|conn| queries::list_records(conn, &scoped))
+            .with_read_conn(|conn| crate::queries::list_records(conn, &filter))
             .into_brain_core()
             .map(|rows| rows.into_iter().map(Record::from).collect())
     }
@@ -341,10 +358,11 @@ impl RecordStore {
             .into_brain_core()
     }
 
-    pub fn get_record_links(&self, record_id: &str) -> Result<Vec<queries::RecordLink>> {
+    pub fn get_record_links(&self, record_id: &str) -> Result<Vec<RecordLink>> {
         self.db
             .with_read_conn(|conn| queries::get_record_links(conn, record_id))
             .into_brain_core()
+            .map(|rows| rows.into_iter().map(RecordLink::from).collect())
     }
 
     pub fn resolve_record_id(&self, input: &str) -> Result<String> {
@@ -525,6 +543,126 @@ impl RecordStore {
             actor,
             events::RecordEventType::RecordUnpinned,
             &events::PinPayload {},
+        );
+        self.apply_event(&event)
+    }
+
+    // -- Typed mutation methods --
+
+    /// Mark a record as archived. Idempotent on repeated calls.
+    pub fn archive_record(
+        &self,
+        record_id: &str,
+        reason: Option<String>,
+        actor: &str,
+    ) -> Result<()> {
+        let event = crate::events::RecordEvent::from_payload(
+            record_id,
+            actor,
+            crate::events::RecordArchivedPayload { reason },
+        );
+        self.apply_event(&event)
+    }
+
+    /// Update mutable record metadata. `title` and `description` are applied
+    /// only when `Some(_)`. Empty title is rejected.
+    pub fn update_record(
+        &self,
+        record_id: &str,
+        title: Option<String>,
+        description: Option<String>,
+        actor: &str,
+    ) -> Result<()> {
+        if let Some(ref t) = title {
+            if t.trim().is_empty() {
+                return Err(brain_core::error::BrainCoreError::Config(
+                    "title must be non-empty".into(),
+                ));
+            }
+        }
+        let payload = crate::events::RecordUpdatedPayload { title, description };
+        let event = crate::events::RecordEvent::from_payload(record_id, actor, payload);
+        self.apply_event(&event)
+    }
+
+    /// Add a tag to a record. Idempotent.
+    pub fn add_tag(&self, record_id: &str, tag: &str, actor: &str) -> Result<()> {
+        let event = crate::events::RecordEvent::new(
+            record_id,
+            actor,
+            crate::events::RecordEventType::TagAdded,
+            &crate::events::TagPayload {
+                tag: tag.to_string(),
+            },
+        );
+        self.apply_event(&event)
+    }
+
+    /// Remove a tag from a record. Idempotent.
+    pub fn remove_tag(&self, record_id: &str, tag: &str, actor: &str) -> Result<()> {
+        let event = crate::events::RecordEvent::new(
+            record_id,
+            actor,
+            crate::events::RecordEventType::TagRemoved,
+            &crate::events::TagPayload {
+                tag: tag.to_string(),
+            },
+        );
+        self.apply_event(&event)
+    }
+
+    /// Link a record to a task. Idempotent.
+    pub fn link_task(&self, record_id: &str, task_id: &str, actor: &str) -> Result<()> {
+        let event = crate::events::RecordEvent::new(
+            record_id,
+            actor,
+            crate::events::RecordEventType::LinkAdded,
+            &crate::events::LinkPayload {
+                task_id: Some(task_id.to_string()),
+                chunk_id: None,
+            },
+        );
+        self.apply_event(&event)
+    }
+
+    /// Unlink a record from a task. Idempotent.
+    pub fn unlink_task(&self, record_id: &str, task_id: &str, actor: &str) -> Result<()> {
+        let event = crate::events::RecordEvent::new(
+            record_id,
+            actor,
+            crate::events::RecordEventType::LinkRemoved,
+            &crate::events::LinkPayload {
+                task_id: Some(task_id.to_string()),
+                chunk_id: None,
+            },
+        );
+        self.apply_event(&event)
+    }
+
+    /// Link a record to a chunk (memory chunk). Idempotent.
+    pub fn link_chunk(&self, record_id: &str, chunk_id: &str, actor: &str) -> Result<()> {
+        let event = crate::events::RecordEvent::new(
+            record_id,
+            actor,
+            crate::events::RecordEventType::LinkAdded,
+            &crate::events::LinkPayload {
+                task_id: None,
+                chunk_id: Some(chunk_id.to_string()),
+            },
+        );
+        self.apply_event(&event)
+    }
+
+    /// Unlink a record from a chunk. Idempotent.
+    pub fn unlink_chunk(&self, record_id: &str, chunk_id: &str, actor: &str) -> Result<()> {
+        let event = crate::events::RecordEvent::new(
+            record_id,
+            actor,
+            crate::events::RecordEventType::LinkRemoved,
+            &crate::events::LinkPayload {
+                task_id: None,
+                chunk_id: Some(chunk_id.to_string()),
+            },
         );
         self.apply_event(&event)
     }
@@ -938,5 +1076,183 @@ mod tests {
             "expected BBB- prefix, got {}",
             record_b.record_id
         );
+    }
+
+    // -- Typed mutation method tests --
+
+    #[test]
+    fn test_archive_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert_eq!(row.status, crate::domain::RecordStatus::Active);
+
+        store
+            .archive_record("r1", Some("superseded".to_string()), "agent")
+            .unwrap();
+
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert_eq!(row.status, crate::domain::RecordStatus::Archived);
+    }
+
+    #[test]
+    fn test_update_record_title_and_description() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        store
+            .update_record(
+                "r1",
+                Some("Updated Title".to_string()),
+                Some("Updated description".to_string()),
+                "agent",
+            )
+            .unwrap();
+
+        let row = store.get_record("r1").unwrap().unwrap();
+        assert_eq!(row.title, "Updated Title");
+        assert_eq!(row.description.as_deref(), Some("Updated description"));
+    }
+
+    #[test]
+    fn test_update_record_rejects_empty_title() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        let result = store.update_record("r1", Some("".into()), None, "agent");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("title must be non-empty"),
+            "expected non-empty title error"
+        );
+    }
+
+    #[test]
+    fn test_add_tag_then_remove_tag() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        store.add_tag("r1", "important", "agent").unwrap();
+        let tags = store.get_record_tags("r1").unwrap();
+        assert!(
+            tags.contains(&"important".to_string()),
+            "tag should be present after add"
+        );
+
+        store.remove_tag("r1", "important", "agent").unwrap();
+        let tags = store.get_record_tags("r1").unwrap();
+        assert!(
+            !tags.contains(&"important".to_string()),
+            "tag should be absent after remove"
+        );
+    }
+
+    #[test]
+    fn test_link_task_and_unlink_task() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        store.link_task("r1", "t1", "agent").unwrap();
+        let links = store.get_record_links("r1").unwrap();
+        assert!(
+            links.iter().any(|l| l.task_id.as_deref() == Some("t1")),
+            "task link should be present after link_task"
+        );
+
+        store.unlink_task("r1", "t1", "agent").unwrap();
+        let links = store.get_record_links("r1").unwrap();
+        assert!(
+            !links.iter().any(|l| l.task_id.as_deref() == Some("t1")),
+            "task link should be absent after unlink_task"
+        );
+    }
+
+    #[test]
+    fn test_link_chunk_and_unlink_chunk() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, _objects) = make_store_with_objects(&dir);
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        create_record_in_store(&store, "r1", hash, 42);
+
+        store.link_chunk("r1", "chunk-abc", "agent").unwrap();
+        let links = store.get_record_links("r1").unwrap();
+        assert!(
+            links
+                .iter()
+                .any(|l| l.chunk_id.as_deref() == Some("chunk-abc")),
+            "chunk link should be present after link_chunk"
+        );
+
+        store.unlink_chunk("r1", "chunk-abc", "agent").unwrap();
+        let links = store.get_record_links("r1").unwrap();
+        assert!(
+            !links
+                .iter()
+                .any(|l| l.chunk_id.as_deref() == Some("chunk-abc")),
+            "chunk link should be absent after unlink_chunk"
+        );
+    }
+
+    #[test]
+    fn test_list_records_by_query_filters_kind() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        store
+            .create_document(create_params("doc-1", b"body"), &objects)
+            .unwrap();
+        store
+            .create_analysis(create_params("analysis-1", b"body"), &objects)
+            .unwrap();
+        store
+            .create_plan(create_params("plan-1", b"body"), &objects)
+            .unwrap();
+
+        let query = RecordQuery {
+            kind: Some(crate::domain::RecordKind::Document),
+            ..Default::default()
+        };
+        let results = store.list_records(&query).unwrap();
+        assert_eq!(results.len(), 1, "should return exactly one document");
+        assert_eq!(results[0].kind, crate::domain::RecordKind::Document);
+        assert_eq!(results[0].title, "doc-1");
+    }
+
+    #[test]
+    fn test_list_records_by_query_filters_status() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (store, objects) = make_store_with_objects(&dir);
+
+        let r1 = store
+            .create_document(create_params("active-doc", b"body"), &objects)
+            .unwrap();
+        let r2 = store
+            .create_document(create_params("archived-doc", b"body"), &objects)
+            .unwrap();
+
+        store.archive_record(&r2.record_id, None, "agent").unwrap();
+
+        let query = RecordQuery {
+            status: Some(crate::domain::RecordStatus::Active),
+            ..Default::default()
+        };
+        let results = store.list_records(&query).unwrap();
+        assert_eq!(results.len(), 1, "should return only the active record");
+        assert_eq!(results[0].record_id, r1.record_id);
+        assert_eq!(results[0].status, crate::domain::RecordStatus::Active);
     }
 }

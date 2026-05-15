@@ -892,15 +892,14 @@ mod tests {
         assert!(tasks.is_empty());
 
         // RecordStore round-trip
-        let filter = brain_records::queries::RecordFilter {
+        let query = brain_records::RecordQuery {
             kind: None,
             status: None,
             tag: None,
             task_id: None,
             limit: None,
-            brain_id: None,
         };
-        let records = stores.records.list_records(&filter).unwrap();
+        let records = stores.records.list_records(&query).unwrap();
         assert!(records.is_empty());
 
         // ObjectStore — write and read back
