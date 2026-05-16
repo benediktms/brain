@@ -78,11 +78,61 @@ impl<D: Dispatcher + Send + Sync + 'static> UnixSocketServer<D> {
     /// Bind a Unix socket at `config.socket_path` and return a ready
     /// server. The listener is set non-blocking so `run` can poll the
     /// shutdown flag.
+    ///
+    /// Handles two pre-existing-file cases before binding:
+    ///
+    /// - If a live daemon already owns the socket (a probe-connect
+    ///   succeeds), refuse with `RpcError::Transport` carrying
+    ///   `AddrInUse` semantics. Starting two daemons on the same
+    ///   path is a misconfiguration, not a stale-file recovery.
+    /// - If the file exists but no one accepts a connection
+    ///   (probe-connect fails), unlink it — a previous daemon
+    ///   crashed and left the socket file orphaned. Without this
+    ///   the next `bind` would fail with `EADDRINUSE` forever.
+    ///
+    /// After bind, the socket is `chmod 0o600` so only the owner
+    /// can open it. Default umask leaves it world-readable, which
+    /// is a meaningful threat-model leak on shared-user machines.
+    /// (Both behaviors are ports of `brain_lib::ipc::server::IpcServer::bind`,
+    /// which solved the same problems for the legacy JSON-RPC daemon.)
     pub fn bind(config: &DaemonConfig, dispatcher: D) -> Result<Self, RpcError> {
+        use std::os::unix::fs::PermissionsExt;
+
+        if config.socket_path.exists() {
+            // Probe whether a live daemon is on the other end.
+            match std::os::unix::net::UnixStream::connect(&config.socket_path) {
+                Ok(_) => {
+                    return Err(RpcError::Transport {
+                        message: format!(
+                            "bind({}): daemon already running on this socket",
+                            config.socket_path.display()
+                        ),
+                    });
+                }
+                Err(_) => {
+                    // Stale socket from a crashed previous daemon — clean it up.
+                    std::fs::remove_file(&config.socket_path).map_err(|e| RpcError::Transport {
+                        message: format!(
+                            "remove stale socket {}: {e}",
+                            config.socket_path.display()
+                        ),
+                    })?;
+                }
+            }
+        }
+
         let listener =
             UnixListener::bind(&config.socket_path).map_err(|e| RpcError::Transport {
                 message: format!("bind({}): {e}", config.socket_path.display()),
             })?;
+
+        // Owner-only. Default umask leaves the socket file 0o755 (world-
+        // readable). For a personal-data daemon this is wrong by default.
+        std::fs::set_permissions(&config.socket_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| RpcError::Transport {
+                message: format!("chmod 0o600 {}: {e}", config.socket_path.display()),
+            })?;
+
         listener
             .set_nonblocking(true)
             .map_err(|e| RpcError::Transport {

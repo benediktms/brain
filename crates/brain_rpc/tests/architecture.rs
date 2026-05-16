@@ -151,6 +151,40 @@ fn port_layer_files_have_no_io_imports() {
 }
 
 #[test]
+fn cargo_toml_has_no_forbidden_direct_dependencies() {
+    // Companion gate to the source-grep check above. The cargo-tree
+    // recipe in audit-rpc catches transitive appearances of forbidden
+    // crates; this catches the dual-protection case: a forbidden crate
+    // added as a *direct* dep without ever being imported (so source
+    // grep wouldn't catch it). Parses the literal [dependencies] table
+    // of Cargo.toml — dev-deps / build-deps are excluded by design.
+    let manifest_path = Path::new(CRATE_ROOT).join("Cargo.toml");
+    let raw = fs::read_to_string(&manifest_path).expect("read Cargo.toml");
+    let parsed: toml::Value = raw.parse().expect("Cargo.toml is valid TOML");
+
+    let deps = parsed
+        .get("dependencies")
+        .and_then(|v| v.as_table())
+        .expect("Cargo.toml has [dependencies] table");
+
+    let mut violations = Vec::new();
+    for key in deps.keys() {
+        // Normalize kebab → snake to match FORBIDDEN_CRATES (which is
+        // spelled as the Rust crate path, snake_case).
+        let normalized = key.replace('-', "_");
+        if FORBIDDEN_CRATES.contains(&normalized.as_str()) {
+            violations.push(key.clone());
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "\n\nForbidden DIRECT dependencies in brain_rpc/Cargo.toml [dependencies]: {:?}\n\nThe wire-contract crate must stay decoupled from internal storage. If a forbidden crate is genuinely needed in this tree, the architectural ratchet needs an explicit relaxation (matching crates/brain_daemon's brn-2fe.27 precedent) — don't just add it.\n",
+        violations
+    );
+}
+
+#[test]
 fn first_use_segment_handles_expected_forms() {
     assert_eq!(
         first_use_segment("use rusqlite::Connection;"),

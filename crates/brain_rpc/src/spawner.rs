@@ -148,11 +148,24 @@ pub(crate) fn resolve_binary(
         return Ok(h.to_path_buf());
     }
 
-    // 2. BRAIN_DAEMON_BIN — trust the env.
+    // 2. BRAIN_DAEMON_BIN — trust the env, but only if it points at
+    //    an actual file. A stale or mistyped value should surface
+    //    here ("daemon binary not installed") rather than at
+    //    `Command::spawn()` time ("No such file or directory") where
+    //    the error is one level removed from the misconfiguration.
     if let Some(env) = env_override
         && !env.is_empty()
     {
-        return Ok(PathBuf::from(OsString::from(env)));
+        let path = PathBuf::from(OsString::from(env));
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(RpcError::NotFound {
+            id: format!(
+                "BRAIN_DAEMON_BIN={} (path does not exist or is not a file)",
+                path.display()
+            ),
+        });
     }
 
     // 3. Sibling of current_exe, only if it actually exists as a file.
@@ -232,10 +245,37 @@ mod tests {
 
     #[test]
     fn resolve_uses_env_when_hint_absent() {
-        let env = OsString::from("/from/env");
+        // env path must point at a real file now (is_file check). Build
+        // one in a temp dir.
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = tmp.path().join("brain-daemon");
+        std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        let env: OsString = binary.clone().into();
         let resolved =
             resolve_binary(None, Some(env.as_os_str()), None, &[], "brain-daemon").unwrap();
-        assert_eq!(resolved, PathBuf::from("/from/env"));
+        assert_eq!(resolved, binary);
+    }
+
+    #[test]
+    fn resolve_returns_not_found_when_env_path_missing() {
+        // BRAIN_DAEMON_BIN points at a nonexistent file → NotFound,
+        // not a silent passthrough. Catches typos at resolve time
+        // instead of at spawn time.
+        let env = OsString::from("/nonexistent/brain-daemon-not-there");
+        let result = resolve_binary(None, Some(env.as_os_str()), None, &[], "brain-daemon");
+        match result {
+            Err(RpcError::NotFound { id }) => {
+                assert!(
+                    id.contains("BRAIN_DAEMON_BIN"),
+                    "error should mention the env var name; got: {id}"
+                );
+                assert!(
+                    id.contains("/nonexistent/brain-daemon-not-there"),
+                    "error should mention the bad path; got: {id}"
+                );
+            }
+            other => panic!("expected NotFound for missing-file env, got {other:?}"),
+        }
     }
 
     #[test]

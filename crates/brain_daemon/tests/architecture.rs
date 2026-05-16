@@ -150,6 +150,40 @@ fn port_layer_files_have_no_io_imports() {
 }
 
 #[test]
+fn cargo_toml_has_no_forbidden_direct_dependencies() {
+    // Companion gate to the source-grep check above. brain_daemon's
+    // audit-daemon recipe deliberately dropped its cargo-tree gate
+    // when brain-lib became a dep (transitives include rusqlite /
+    // lancedb / candle), so the architectural ratchet relies on the
+    // source grep PLUS this gate to catch a regression where someone
+    // adds `rusqlite = "..."` directly to [dependencies] without
+    // ever `use rusqlite::...`-ing it. Dev-deps / build-deps are
+    // excluded by design.
+    let manifest_path = Path::new(CRATE_ROOT).join("Cargo.toml");
+    let raw = fs::read_to_string(&manifest_path).expect("read Cargo.toml");
+    let parsed: toml::Value = raw.parse().expect("Cargo.toml is valid TOML");
+
+    let deps = parsed
+        .get("dependencies")
+        .and_then(|v| v.as_table())
+        .expect("Cargo.toml has [dependencies] table");
+
+    let mut violations = Vec::new();
+    for key in deps.keys() {
+        let normalized = key.replace('-', "_");
+        if FORBIDDEN_CRATES.contains(&normalized.as_str()) {
+            violations.push(key.clone());
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "\n\nForbidden DIRECT dependencies in brain_daemon/Cargo.toml [dependencies]: {:?}\n\nbrain_daemon allows brain-lib / brain-persistence / brain-tasks (for real handlers backed by BrainStores), but rusqlite / lancedb / candle and the not-yet-allowed brain_* domain crates remain forbidden directly. If a forbidden crate is genuinely needed, relax FORBIDDEN_CRATES in this file AND in the audit-daemon recipe at the same time.\n",
+        violations
+    );
+}
+
+#[test]
 fn first_use_segment_handles_expected_forms() {
     // Mirror brain_rpc's parser tests — both gates share the same parser
     // logic and break together if it regresses.
