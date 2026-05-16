@@ -23,7 +23,7 @@
 //!   `connect()` — meaning the handshake is exercised by every external
 //!   test that constructs a client.
 
-use crate::domain::{PROTOCOL_VERSION, Request, Response, RpcError};
+use crate::domain::{PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksListParams};
 use crate::transport::Transport;
 
 /// Typed RPC client. Wraps a [`Transport`] and exposes typed
@@ -80,8 +80,67 @@ impl<T: Transport> DaemonClient<T> {
 
     /// Send `req` and return the matching response, surfacing any
     /// [`RpcError`] the transport produces.
+    ///
+    /// This is the **untyped** escape hatch — useful for tests and for
+    /// experimental wire variants that don't yet have a typed wrapper.
+    /// Prefer the typed methods (e.g. [`Self::tasks_list`]) at call sites
+    /// where one exists: they narrow the `Response` enum to the specific
+    /// variant the request expects and return [`RpcError::Protocol`] on
+    /// shape mismatch, so consumers never have to paste the same
+    /// `match resp { Response::X { .. } => …, other => bail!() }` block.
     pub fn call(&mut self, req: Request) -> Result<Response, RpcError> {
         self.transport.call(req)
+    }
+
+    /// Probe daemon liveness. Sends [`Request::Ping`] and returns `Ok(())`
+    /// iff the daemon replies with [`Response::Pong`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than `Pong` (e.g. an out-of-order response after a previous
+    ///   request failed mid-flight).
+    /// - Any error the underlying transport raises.
+    pub fn ping(&mut self) -> Result<(), RpcError> {
+        match self.call(Request::Ping)? {
+            Response::Pong => Ok(()),
+            other => Err(RpcError::Protocol {
+                message: format!("expected Pong in reply to Ping, got {other:?}"),
+            }),
+        }
+    }
+
+    /// List tasks via [`Request::TasksList`] and return the unwrapped
+    /// [`TaskSummary`] vector.
+    ///
+    /// Equivalent to:
+    ///
+    /// ```ignore
+    /// match client.call(Request::TasksList { params })? {
+    ///     Response::TasksList { tasks } => Ok(tasks),
+    ///     other => Err(RpcError::Protocol { … }),
+    /// }
+    /// ```
+    ///
+    /// hoisted into a single typed call. Use this at every consumer site
+    /// instead of pasting the `match` block — the audit flagged the
+    /// duplication as a multiplier risk once more wire variants land.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than `Response::TasksList`.
+    /// - Any error the dispatcher surfaces (e.g. an unknown `status`
+    ///   filter today drops the connection, which surfaces as
+    ///   [`RpcError::Transport`] — that will tighten to a wire-level
+    ///   error envelope in a follow-up ticket).
+    pub fn tasks_list(&mut self, params: TasksListParams) -> Result<Vec<TaskSummary>, RpcError> {
+        match self.call(Request::TasksList { params })? {
+            Response::TasksList { tasks } => Ok(tasks),
+            other => Err(RpcError::Protocol {
+                message: format!("expected TasksList in reply to TasksList, got {other:?}"),
+            }),
+        }
     }
 }
 
@@ -191,6 +250,143 @@ mod tests {
                 Err(RpcError::NotFound { id }) => assert_eq!(id, format!("call-{expected}")),
                 other => panic!("expected NotFound, got {other:?}"),
             }
+        }
+    }
+
+    // ── typed-method coverage ─────────────────────────────────────────
+    //
+    // These tests use `from_transport` to skip the handshake — we're
+    // exercising the variant-narrowing logic in the typed wrappers, not
+    // re-testing connect(). The public-facing integration test in
+    // tests/client_in_memory.rs covers the happy path through `connect`.
+
+    #[test]
+    fn ping_returns_ok_on_pong() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::Ping => Ok(Response::Pong),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        client.ping().expect("ping should succeed");
+    }
+
+    #[test]
+    fn ping_returns_protocol_error_on_wrong_response_shape() {
+        // Daemon replies HandshakeOk to a Ping — protocol violation.
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|_| {
+            Ok(Response::HandshakeOk {
+                server_version: PROTOCOL_VERSION,
+            })
+        }));
+        match client.ping() {
+            Ok(()) => panic!("expected Protocol error, got Ok"),
+            Err(RpcError::Protocol { message }) => {
+                assert!(
+                    message.contains("Pong"),
+                    "message should mention Pong, got: {message}"
+                );
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ping_propagates_transport_error() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|_| {
+            Err(RpcError::Transport {
+                message: "synthetic".into(),
+            })
+        }));
+        match client.ping() {
+            Err(RpcError::Transport { message }) => assert_eq!(message, "synthetic"),
+            other => panic!("expected Transport, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tasks_list_returns_unwrapped_payload() {
+        let expected = vec![
+            TaskSummary {
+                task_id: "brn-001".into(),
+                title: "first".into(),
+                status: "open".into(),
+                priority: 0,
+                brain_id: "eAx".into(),
+            },
+            TaskSummary {
+                task_id: "brn-002".into(),
+                title: "second".into(),
+                status: "in_progress".into(),
+                priority: 1,
+                brain_id: "eAx".into(),
+            },
+        ];
+        let expected_clone = expected.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::TasksList { .. } => Ok(Response::TasksList {
+                    tasks: expected_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .tasks_list(TasksListParams::default())
+            .expect("tasks_list");
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn tasks_list_forwards_params_unchanged() {
+        // Verify the params struct round-trips through the wire wrapper
+        // without the typed method silently dropping fields.
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksList { params } => {
+                assert_eq!(params.status.as_deref(), Some("open"));
+                assert_eq!(params.priority, Some(2));
+                assert_eq!(params.limit, Some(50));
+                assert_eq!(params.search.as_deref(), Some("daemon"));
+                Ok(Response::TasksList { tasks: vec![] })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let params = TasksListParams {
+            status: Some("open".into()),
+            priority: Some(2),
+            limit: Some(50),
+            search: Some("daemon".into()),
+        };
+        let got = client.tasks_list(params).expect("tasks_list");
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn tasks_list_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_list(TasksListParams::default()) {
+            Ok(_) => panic!("expected Protocol error, got Ok"),
+            Err(RpcError::Protocol { message }) => {
+                assert!(
+                    message.contains("TasksList"),
+                    "message should mention TasksList, got: {message}"
+                );
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tasks_list_propagates_dispatcher_error() {
+        // A dispatcher rejecting a bad filter today returns RpcError::Unknown
+        // (the wire-level error envelope ticket will swap this for a more
+        // specific variant). The typed wrapper must surface it unchanged.
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|_| {
+            Err(RpcError::Unknown {
+                message: "unknown status".into(),
+            })
+        }));
+        match client.tasks_list(TasksListParams::default()) {
+            Err(RpcError::Unknown { message }) => assert_eq!(message, "unknown status"),
+            other => panic!("expected Unknown, got {other:?}"),
         }
     }
 }
