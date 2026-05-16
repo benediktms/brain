@@ -123,7 +123,11 @@ jobs:
     #   brain-lib — heaviest crate (embed stack lives here)
     #   cli       — `brain` binary + assert_cmd integration tests (also pulls
     #                brain-lib transitively, hence its own shard)
-    #   leaves    — brain_core, brain_embedder, brain_persistence, brain_tasks
+    #   leaves    — every remaining workspace member, including:
+    #                brain_core, brain_embedder, brain_persistence,
+    #                brain_tasks, brain_sagas, brain_records, brain_rpc.
+    #                Configured via `--workspace --exclude brain-lib --exclude brain`
+    #                so new leaf crates are picked up automatically.
     name: Test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     strategy:

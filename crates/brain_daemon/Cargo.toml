@@ -1,0 +1,51 @@
+[package]
+name = "brain-daemon"
+version.workspace = true
+edition.workspace = true
+
+# cargo-dist: do NOT publish brain-daemon as its own release / Homebrew
+# formula. The `brain-daemon` binary is shipped by the `brain` cli crate
+# (see crates/cli/Cargo.toml — it declares a forwarder `[[bin]]` that
+# routes to `brain_daemon::run_cli`). One Homebrew formula, two binaries,
+# guaranteed-coherent versions. See US-009 in the brn-2fe.26 PRD.
+[package.metadata.dist]
+dist = false
+
+[features]
+default = []
+# Exposes mock implementations of the `Dispatcher` port for tests in
+# downstream consumers. Mirrors the test-utils pattern from brain-rpc /
+# brain-tasks / brain-sagas.
+test-utils = []
+
+[[bin]]
+name = "brain-daemon"
+path = "src/main.rs"
+
+# Architectural ratchet — see crates/brain_daemon/src/lib.rs doc comment.
+#
+# brain_rpc stays the wire contract; its decoupling from internal
+# storage is the load-bearing invariant. brain_daemon now hosts real
+# Request handlers backed by BrainStores, so brain_lib / brain_persistence
+# / brain_tasks are allowed here. They are restricted to the handler
+# impl files (handlers.rs) — port-layer files (config.rs, dispatcher.rs)
+# remain framework-free.
+#
+# default-features = false on brain-lib drops the candle embedder from
+# the daemon's compile path — the MVP daemon answers TasksList only,
+# which doesn't need embeddings.
+[dependencies]
+brain-rpc = { path = "../brain_rpc" }
+brain-lib = { path = "../brain_lib", default-features = false }
+brain-persistence = { path = "../brain_persistence" }
+brain-tasks = { path = "../brain_tasks" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+# Self-reference activates the `test-utils` feature for integration tests
+# in `tests/*.rs` — same pattern as brain-rpc / brain-tasks.
+brain-daemon = { path = ".", features = ["test-utils"] }

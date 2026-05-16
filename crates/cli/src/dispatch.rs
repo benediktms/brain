@@ -493,6 +493,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     include_description,
                     group_by,
                     brain,
+                    remote,
                 } => {
                     let params = ListParams {
                         status,
@@ -506,6 +507,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         include_description,
                         group_by,
                         brain,
+                        remote,
                     };
                     commands::tasks::run::list(&ctx, &params)?;
                 }
@@ -678,6 +680,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             include_description: false,
                             group_by: None,
                             brain: None,
+                            remote: false,
                         },
                     )?;
                 }
@@ -696,6 +699,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             include_description: false,
                             group_by: None,
                             brain: None,
+                            remote: false,
                         },
                     )?;
                 }

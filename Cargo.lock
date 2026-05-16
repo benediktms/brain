@@ -668,9 +668,11 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "blake3",
+ "brain-daemon",
  "brain-lib",
  "brain-persistence",
  "brain-records",
+ "brain-rpc",
  "brain-tasks",
  "chrono",
  "clap",
@@ -700,6 +702,22 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "brain-daemon"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "brain-daemon",
+ "brain-lib",
+ "brain-persistence",
+ "brain-rpc",
+ "brain-tasks",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -806,6 +824,18 @@ dependencies = [
  "tracing",
  "ulid",
  "zstd",
+]
+
+[[package]]
+name = "brain-rpc"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "brain-rpc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

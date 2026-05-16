@@ -75,6 +75,9 @@ pub struct ListParams {
     pub include_description: bool,
     pub group_by: Option<String>,
     pub brain: Option<String>,
+    /// Experimental: route the request through brain-daemon over the
+    /// local Unix socket. See `brain tasks list --remote` for usage.
+    pub remote: bool,
 }
 
 pub struct UpdateParams {

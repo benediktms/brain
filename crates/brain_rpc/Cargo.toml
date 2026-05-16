@@ -1,0 +1,33 @@
+[package]
+name = "brain-rpc"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+# Exposes mock implementations (InMemoryTransport, FakeSpawner) and the
+# `testing` module for integration tests in downstream consumers
+# (brain_daemon, cli, brain_mcp). Mirrors the test-utils pattern from
+# brain-tasks / brain-sagas.
+#
+# brain_rpc has no upstream brain_* deps so the feature is self-contained
+# (no chained activations needed).
+test-utils = []
+
+# Architectural ratchet — see crates/brain_rpc/src/lib.rs doc comment.
+# This crate is the wire contract between thin clients (CLI, brain-mcp)
+# and the daemon. It must NEVER take a transitive dep on rusqlite, lancedb,
+# candle, brain_persistence, brain_lib, or any domain crate.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+# Self-reference activates the `test-utils` feature for integration tests
+# in `tests/*.rs` — same pattern as brain-tasks / brain-sagas. Without this
+# the mocks gated by `#[cfg(any(test, feature = "test-utils"))]` would not
+# be visible to integration tests.
+brain-rpc = { path = ".", features = ["test-utils"] }
