@@ -12,7 +12,9 @@
 //! self-reference in `crates/brain_rpc/Cargo.toml`.
 
 use brain_rpc::testing::InMemoryTransport;
-use brain_rpc::{DaemonClient, PROTOCOL_VERSION, Request, Response, RpcError};
+use brain_rpc::{
+    DaemonClient, PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksListParams,
+};
 
 #[test]
 fn connect_and_ping_pong() {
@@ -57,4 +59,40 @@ fn errors_after_handshake_propagate_unchanged() {
         Err(RpcError::Transport { message }) => assert_eq!(message, "synthetic failure"),
         other => panic!("expected Transport error, got {other:?}"),
     }
+}
+
+#[test]
+fn typed_ping_and_tasks_list_round_trip_through_public_api() {
+    // Lock the public surface: a consumer constructs a client via the
+    // public `connect()` path and then calls the typed methods. No
+    // pub(crate) escape hatches, no manual `match resp` blocks.
+    let mut client = DaemonClient::connect(InMemoryTransport::new(|req| match req {
+        Request::Handshake { .. } => Ok(Response::HandshakeOk {
+            server_version: PROTOCOL_VERSION,
+        }),
+        Request::Ping => Ok(Response::Pong),
+        Request::TasksList { params } => {
+            // Mirror back the params via the title so the test asserts
+            // that params travelled end-to-end through the typed method.
+            let echo = TaskSummary {
+                task_id: "brn-test".into(),
+                title: format!("status={:?}", params.status),
+                status: "open".into(),
+                priority: 0,
+                brain_id: "eAx".into(),
+            };
+            Ok(Response::TasksList { tasks: vec![echo] })
+        }
+    }))
+    .expect("connect");
+
+    client.ping().expect("typed ping");
+    let tasks = client
+        .tasks_list(TasksListParams {
+            status: Some("open".into()),
+            ..TasksListParams::default()
+        })
+        .expect("typed tasks_list");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].title, "status=Some(\"open\")");
 }
