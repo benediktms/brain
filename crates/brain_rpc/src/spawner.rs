@@ -87,6 +87,12 @@ impl StdProcessSpawner {
     }
 }
 
+impl Default for StdProcessSpawner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DaemonSpawner for StdProcessSpawner {
     fn spawn(&self, socket_path: &Path) -> Result<(), RpcError> {
         let binary = self.binary_path()?;
@@ -143,10 +149,10 @@ pub(crate) fn resolve_binary(
     }
 
     // 2. BRAIN_DAEMON_BIN — trust the env.
-    if let Some(env) = env_override {
-        if !env.is_empty() {
-            return Ok(PathBuf::from(OsString::from(env)));
-        }
+    if let Some(env) = env_override
+        && !env.is_empty()
+    {
+        return Ok(PathBuf::from(OsString::from(env)));
     }
 
     // 3. Sibling of current_exe, only if it actually exists as a file.
