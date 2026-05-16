@@ -46,6 +46,12 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Used by tests/architecture.rs to parse Cargo.toml and gate forbidden
+# DIRECT deps. brain_daemon's allowed-direct-dep set is narrower than
+# brain_rpc's (we let brain-lib / brain-persistence / brain-tasks in to
+# host real handlers, but rusqlite / lancedb / candle / the not-yet-
+# allowed domain crates remain forbidden directly).
+toml = { workspace = true }
 # Self-reference activates the `test-utils` feature for integration tests
 # in `tests/*.rs` — same pattern as brain-rpc / brain-tasks.
 brain-daemon = { path = ".", features = ["test-utils"] }

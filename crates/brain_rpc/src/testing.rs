@@ -89,11 +89,20 @@ impl Transport for InMemoryTransport {
 /// before binding, fail with a specific error, count invocations across
 /// multiple spawns. A single closure handler covers every case with no
 /// API surface bloat.
+/// Erased closure type for [`FakeSpawner`]'s behavior slot.
+///
+/// Extracted as a `type` alias because clippy's `type_complexity`
+/// lint flags inline trait-object types of this shape under
+/// `--all-features` (which activates the `test-utils` feature and
+/// compiles this module).
+#[cfg(unix)]
+pub type FakeSpawnBehavior = Box<dyn Fn(&Path) -> Result<(), RpcError> + Send + Sync>;
+
 #[cfg(unix)]
 pub struct FakeSpawner {
     binary: PathBuf,
     spawn_calls: AtomicU32,
-    behavior: Box<dyn Fn(&Path) -> Result<(), RpcError> + Send + Sync>,
+    behavior: FakeSpawnBehavior,
 }
 
 #[cfg(unix)]

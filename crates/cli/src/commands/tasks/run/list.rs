@@ -174,16 +174,9 @@ fn list_remote(params: &ListParams) -> Result<()> {
         search: params.search.clone(),
     };
 
-    let resp = client
-        .call(brain_rpc::Request::TasksList {
-            params: wire_params,
-        })
+    let tasks = client
+        .tasks_list(wire_params)
         .map_err(|e| anyhow::anyhow!("TasksList rpc failed: {e}"))?;
-
-    let tasks = match resp {
-        brain_rpc::Response::TasksList { tasks } => tasks,
-        other => bail!("unexpected response to TasksList: {other:?}"),
-    };
 
     // Render — same columns as the local path's markdown table, minus
     // assignee/type which aren't on TaskSummary today (wire-format MVP).

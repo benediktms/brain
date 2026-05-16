@@ -13,32 +13,15 @@
 
 #![cfg(unix)]
 
+mod common;
+
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use brain_rpc::{DaemonClient, Request, Response, UnixSocketTransport};
+use common::{ChildGuard, brain_daemon_binary};
 use tempfile::TempDir;
-
-/// Path to the brain-daemon binary built by cargo for this test run.
-/// Cargo guarantees the binary exists at `target/<profile>/brain-daemon`
-/// when running `cargo test -p brain-daemon`, because the [[bin]] is in
-/// the same crate.
-fn brain_daemon_binary() -> std::path::PathBuf {
-    // CARGO_BIN_EXE_<name> is set by cargo for tests in a crate that
-    // has [[bin]] targets — the standard, documented way to locate
-    // them. Falls back to a manual lookup if the env var is missing
-    // (some test runners don't propagate it).
-    if let Some(path) = option_env!("CARGO_BIN_EXE_brain-daemon") {
-        return std::path::PathBuf::from(path);
-    }
-    // Fallback: derive from current_exe (test binary in target/debug/deps).
-    let me = std::env::current_exe().expect("current_exe");
-    me.parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("brain-daemon"))
-        .expect("derive brain-daemon path")
-}
 
 /// Wait up to `budget` for `UnixSocketTransport::connect` to succeed.
 /// Returns the connected transport or the last error.
@@ -92,16 +75,6 @@ fn binary_serves_ping_pong() {
     let mut client = DaemonClient::connect(transport).expect("handshake");
     let resp = client.call(Request::Ping).expect("ping");
     assert_eq!(resp, Response::Pong);
-}
-
-/// Drop-guard that kills + reaps an owned subprocess. Used by tests
-/// that spawn `brain-daemon` so assertion panics don't leak children.
-struct ChildGuard(std::process::Child);
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 #[test]

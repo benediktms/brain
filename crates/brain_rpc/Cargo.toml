@@ -26,6 +26,11 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Used by tests/architecture.rs to parse Cargo.toml and gate forbidden
+# DIRECT deps. The cargo-tree audit gate in audit-rpc covers transitive
+# deps; this catches the dual-protection case: a forbidden crate added
+# directly but never imported (so the source-grep wouldn't catch it).
+toml = { workspace = true }
 # Self-reference activates the `test-utils` feature for integration tests
 # in `tests/*.rs` — same pattern as brain-tasks / brain-sagas. Without this
 # the mocks gated by `#[cfg(any(test, feature = "test-utils"))]` would not
