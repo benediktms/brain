@@ -14,34 +14,18 @@
 
 #![cfg(unix)]
 
+mod common;
+
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use brain_rpc::{DaemonClient, Request, Response, TasksListParams, UnixSocketTransport};
+use common::{ChildGuard, brain_daemon_binary};
 use tempfile::TempDir;
 
 const CONCURRENT_CLIENTS: usize = 8;
 const CALLS_PER_CLIENT: usize = 4;
-
-fn brain_daemon_binary() -> std::path::PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_brain-daemon") {
-        return std::path::PathBuf::from(path);
-    }
-    let me = std::env::current_exe().expect("current_exe");
-    me.parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("brain-daemon"))
-        .expect("derive brain-daemon path")
-}
-
-struct ChildGuard(std::process::Child);
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
 
 fn wait_for_socket(path: &std::path::Path, budget: Duration) -> bool {
     let start = Instant::now();
