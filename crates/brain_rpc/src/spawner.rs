@@ -57,10 +57,19 @@ pub trait DaemonSpawner {
     /// Resolve the path to the daemon binary.
     ///
     /// Implementations may or may not validate that the path is
-    /// executable — [`StdProcessSpawner`] checks `is_file` for the
-    /// discovery-based resolution steps but trusts explicit overrides
-    /// (hint, env var). Validation failures surface as
-    /// [`RpcError::Transport`] when [`Self::spawn`] is invoked.
+    /// executable. [`StdProcessSpawner`] validates as follows:
+    ///
+    /// - Explicit `hint` (set via [`StdProcessSpawner::with_hint`]) is
+    ///   trusted verbatim — callers passing a hint own their input.
+    /// - `BRAIN_DAEMON_BIN` is **validated**: the value must point at an
+    ///   existing file, otherwise [`RpcError::NotFound`] is returned
+    ///   here (not deferred to [`Self::spawn`]). This makes a stale or
+    ///   mistyped env var surface as a clear "daemon binary not
+    ///   installed" error rather than as an opaque transport failure
+    ///   one call later.
+    /// - Discovery-based resolution (`current_exe` sibling, `$PATH`)
+    ///   already checks `is_file` and returns [`RpcError::NotFound`] if
+    ///   nothing resolves.
     fn binary_path(&self) -> Result<PathBuf, RpcError>;
 }
 

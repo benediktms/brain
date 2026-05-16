@@ -168,11 +168,25 @@ fn cargo_toml_has_no_forbidden_direct_dependencies() {
         .expect("Cargo.toml has [dependencies] table");
 
     let mut violations = Vec::new();
-    for key in deps.keys() {
+    for (key, val) in deps {
+        // A renamed dep (`alias = { package = "real-name", ... }`) puts
+        // the real crate name in the `package` field, and the key is
+        // just an alias the rest of the code `use`s. Check BOTH so an
+        // alias can't smuggle a forbidden crate past the gate.
         // Normalize kebab → snake to match FORBIDDEN_CRATES (which is
         // spelled as the Rust crate path, snake_case).
-        let normalized = key.replace('-', "_");
-        if FORBIDDEN_CRATES.contains(&normalized.as_str()) {
+        let normalized_key = key.replace('-', "_");
+        let normalized_package = val
+            .as_table()
+            .and_then(|t| t.get("package"))
+            .and_then(|p| p.as_str())
+            .map(|p| p.replace('-', "_"));
+
+        let forbidden = FORBIDDEN_CRATES.contains(&normalized_key.as_str())
+            || normalized_package
+                .as_deref()
+                .is_some_and(|p| FORBIDDEN_CRATES.contains(&p));
+        if forbidden {
             violations.push(key.clone());
         }
     }

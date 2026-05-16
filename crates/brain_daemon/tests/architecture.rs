@@ -169,9 +169,22 @@ fn cargo_toml_has_no_forbidden_direct_dependencies() {
         .expect("Cargo.toml has [dependencies] table");
 
     let mut violations = Vec::new();
-    for key in deps.keys() {
-        let normalized = key.replace('-', "_");
-        if FORBIDDEN_CRATES.contains(&normalized.as_str()) {
+    for (key, val) in deps {
+        // A renamed dep (`alias = { package = "real-name", ... }`) puts
+        // the real crate name in the `package` field. Check BOTH so an
+        // alias can't smuggle a forbidden crate past the gate.
+        let normalized_key = key.replace('-', "_");
+        let normalized_package = val
+            .as_table()
+            .and_then(|t| t.get("package"))
+            .and_then(|p| p.as_str())
+            .map(|p| p.replace('-', "_"));
+
+        let forbidden = FORBIDDEN_CRATES.contains(&normalized_key.as_str())
+            || normalized_package
+                .as_deref()
+                .is_some_and(|p| FORBIDDEN_CRATES.contains(&p));
+        if forbidden {
             violations.push(key.clone());
         }
     }
