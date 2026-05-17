@@ -2221,12 +2221,7 @@ impl BrainStoresDispatcher {
             match self.stores.tasks.list_newly_unblocked(&task_id) {
                 Ok(ids) => ids
                     .iter()
-                    .map(|id| {
-                        self.stores
-                            .tasks
-                            .compact_id(id)
-                            .unwrap_or_else(|_| id.clone())
-                    })
+                    .map(|id| self.stores.tasks.compact_id_or_raw(id))
                     .collect(),
                 Err(e) => {
                     warnings.push(serde_json::json!({
@@ -2240,11 +2235,7 @@ impl BrainStoresDispatcher {
             Vec::new()
         };
 
-        let short_id = self
-            .stores
-            .tasks
-            .compact_id(&task_id)
-            .unwrap_or_else(|_| task_id.clone());
+        let short_id = self.stores.tasks.compact_id_or_raw(&task_id);
         let uri =
             brain_lib::uri::SynapseUri::for_task(&self.stores.brain_name, &short_id).to_string();
 
