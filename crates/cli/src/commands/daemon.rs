@@ -1,12 +1,27 @@
 use std::fs;
+// `AsRawFd` is consumed by `start()` (embed-only) AND by the in-module test
+// suite (flock test). Use `any(feature = "embed", test)` so the import is
+// present in both the embed build and the cargo-test build, without
+// triggering an unused-import warning in the `--no-default-features` bin.
+#[cfg(any(feature = "embed", test))]
 use std::os::unix::io::AsRawFd;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "embed")]
+use std::path::Path;
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+#[cfg(feature = "embed")]
+use anyhow::bail;
+use anyhow::{Context, Result};
 
 pub struct Daemon {
     pid_path: PathBuf,
+    // `log_dir` and `lock_path` are only consumed by `start()`, which is
+    // itself gated on `embed`. Marking them allow(dead_code) keeps the type
+    // shape identical across feature configurations so `stop()` / `status()`
+    // / `signal_reload()` can stay un-gated.
+    #[allow(dead_code)]
     log_dir: PathBuf,
+    #[allow(dead_code)]
     lock_path: PathBuf,
 }
 
@@ -34,6 +49,7 @@ impl Daemon {
     /// If `notes_path` is `Some`, the call bails immediately — single-brain
     /// daemon mode is no longer supported. Register the project with
     /// `brain link` and use `brain watch PATH` instead.
+    #[cfg(feature = "embed")]
     pub fn start(
         &self,
         notes_path: Option<&Path>,
@@ -144,17 +160,19 @@ impl Daemon {
                 // returns on error.
                 use std::os::unix::process::CommandExt;
                 let daemon_bin = brain_daemon_path();
+                // Use chained `.arg()` calls (which accept `AsRef<OsStr>`)
+                // instead of `.args()` over `&str`, so non-UTF-8 path bytes
+                // flow through unchanged. `PathBuf: AsRef<OsStr>` already, so
+                // no conversion happens at all.
                 let err = std::process::Command::new(&daemon_bin)
-                    .args([
-                        "--socket-path",
-                        &socket_path.to_string_lossy(),
-                        "--pid-file",
-                        &pid_path.to_string_lossy(),
-                        "--sqlite-db",
-                        &sqlite_db.to_string_lossy(),
-                        "--lance-db",
-                        &lance_db.to_string_lossy(),
-                    ])
+                    .arg("--socket-path")
+                    .arg(&socket_path)
+                    .arg("--pid-file")
+                    .arg(&pid_path)
+                    .arg("--sqlite-db")
+                    .arg(&sqlite_db)
+                    .arg("--lance-db")
+                    .arg(&lance_db)
                     .exec();
                 eprintln!(
                     "brain daemon: failed to exec {}: {err}",

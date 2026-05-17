@@ -24,6 +24,7 @@ pub fn run_cli() -> std::process::ExitCode {
     let mut pid_file: Option<PathBuf> = None;
     let mut sqlite_db: Option<PathBuf> = None;
     let mut lance_db: Option<PathBuf> = None;
+    #[cfg(feature = "embed")]
     let mut no_watcher = false;
 
     while let Some(arg) = args.next() {
@@ -56,6 +57,7 @@ pub fn run_cli() -> std::process::ExitCode {
                     return ExitCode::from(2);
                 }
             }
+            #[cfg(feature = "embed")]
             "--no-watcher" => {
                 no_watcher = true;
             }
@@ -113,8 +115,14 @@ pub fn run_cli() -> std::process::ExitCode {
     } else {
         (None, None)
     };
-    #[cfg(not(feature = "embed"))]
-    let _ = no_watcher;
+
+    // Shared flag the supervisor thread sets if its tokio runtime fails to
+    // build or `bootstrap_and_run` returns Err. After the accept loop exits
+    // and the watcher thread joins, we check this and force a non-zero exit
+    // so the process surfaces "daemon running degraded" instead of looking
+    // healthy with a silently-dead watcher.
+    #[cfg(feature = "embed")]
+    let supervisor_failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Two monomorphizations of `run_with_server` chosen at runtime by which
     // args were present. Keeps UnixSocketServer's generic Dispatcher
@@ -140,6 +148,8 @@ pub fn run_cli() -> std::process::ExitCode {
             "BrainStoresDispatcher",
             #[cfg(feature = "embed")]
             supervisor_rx,
+            #[cfg(feature = "embed")]
+            std::sync::Arc::clone(&supervisor_failed),
         )
     } else {
         run_with_server(
@@ -149,6 +159,8 @@ pub fn run_cli() -> std::process::ExitCode {
             "DefaultDispatcher (Ping + Handshake only — pass --sqlite-db to enable real handlers)",
             #[cfg(feature = "embed")]
             None,
+            #[cfg(feature = "embed")]
+            std::sync::Arc::clone(&supervisor_failed),
         )
     };
 
@@ -166,6 +178,13 @@ pub fn run_cli() -> std::process::ExitCode {
         && let Err(e) = thread.join()
     {
         eprintln!("brain-daemon: watcher thread join failed: {e:?}");
+    }
+
+    #[cfg(feature = "embed")]
+    if supervisor_failed.load(std::sync::atomic::Ordering::SeqCst) {
+        // Override whatever the accept loop reported: the watcher dying is
+        // a daemon-wide failure regardless of how the RPC server exited.
+        return ExitCode::from(1);
     }
 
     exit_code
@@ -194,6 +213,7 @@ fn run_with_server<D>(
     #[cfg(feature = "embed")] supervisor_rx: Option<
         tokio::sync::mpsc::Receiver<crate::watcher::ControlMessage>,
     >,
+    #[cfg(feature = "embed")] supervisor_failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> (std::process::ExitCode, Option<std::thread::JoinHandle<()>>)
 where
     D: crate::Dispatcher + Send + Sync + 'static,
@@ -211,6 +231,7 @@ where
     #[cfg(feature = "embed")]
     let supervisor_thread = supervisor_rx.and_then(|rx| {
         let rpc_shutdown = server.shutdown_handle();
+        let failed_flag = std::sync::Arc::clone(&supervisor_failed);
         match std::thread::Builder::new()
             .name("brain-watcher".into())
             .spawn(move || {
@@ -221,12 +242,16 @@ where
                     Ok(rt) => rt,
                     Err(e) => {
                         eprintln!("brain-daemon: failed to build watcher runtime: {e}");
+                        // Signal failure and wake the accept loop so the
+                        // daemon doesn't sit healthy with a dead watcher.
+                        failed_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                        rpc_shutdown.request();
                         return;
                     }
                 };
                 match rt.block_on(crate::watcher::Supervisor::bootstrap_and_run(
                     rx,
-                    rpc_shutdown,
+                    rpc_shutdown.clone(),
                 )) {
                     Ok(outcome) => {
                         eprintln!(
@@ -236,12 +261,17 @@ where
                     }
                     Err(e) => {
                         eprintln!("brain-daemon: watcher exited with error: {e}");
+                        failed_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                        rpc_shutdown.request();
                     }
                 }
             }) {
             Ok(t) => Some(t),
             Err(e) => {
                 eprintln!("brain-daemon: failed to spawn watcher thread: {e}");
+                // Spawn failure also counts as a degraded daemon when a
+                // watcher was expected; flip the flag so the caller knows.
+                supervisor_failed.store(true, std::sync::atomic::Ordering::SeqCst);
                 None
             }
         }
@@ -264,6 +294,7 @@ where
 
 #[cfg(unix)]
 fn print_usage() {
+    #[cfg(feature = "embed")]
     eprintln!(
         "Usage: brain-daemon --socket-path <PATH> \\\n\
          \x20            [--pid-file <PATH>] \\\n\
@@ -285,6 +316,23 @@ fn print_usage() {
          --no-watcher disables the watcher and job scheduler, leaving\n\
          only the RPC dispatcher running. Used by `brain mcp` so each\n\
          per-session subprocess stays lightweight."
+    );
+    #[cfg(not(feature = "embed"))]
+    eprintln!(
+        "Usage: brain-daemon --socket-path <PATH> \\\n\
+         \x20            [--pid-file <PATH>] \\\n\
+         \x20            [--sqlite-db <PATH>] [--lance-db <PATH>]\n\
+         \n\
+         When --sqlite-db is omitted, brain-daemon resolves it from\n\
+         $BRAIN_HOME/brain.db (or $HOME/.brain/brain.db). Similarly,\n\
+         --lance-db defaults to $BRAIN_HOME/lancedb (or\n\
+         $HOME/.brain/lancedb). If neither $BRAIN_HOME nor $HOME is\n\
+         set, the daemon falls back to a minimal dispatcher that only\n\
+         answers Ping + Handshake.\n\
+         \n\
+         This binary was built without the `embed` feature, so the\n\
+         file watcher and job scheduler are unavailable; the RPC\n\
+         dispatcher serves typed requests only."
     );
 }
 

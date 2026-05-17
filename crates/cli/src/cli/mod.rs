@@ -170,6 +170,7 @@ pub(crate) enum Command {
             Connects to brain-daemon (spawning it if needed) and registers the path \
             for watching. With no path, lists all currently watched directories."
     )]
+    #[cfg(feature = "embed")]
     Watch {
         /// Path to the notes directory; omit to list current watches
         #[arg(value_hint = ValueHint::DirPath)]

@@ -63,6 +63,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Index { notes_path } => {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
+        #[cfg(feature = "embed")]
         Command::Watch { notes_path } => commands::watch::run(notes_path)?,
         Command::Daemon { action } => {
             let daemon = commands::daemon::Daemon::new()?;

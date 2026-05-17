@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::*;
+#[cfg(feature = "embed")]
 use crate::commands::daemon::Daemon;
 
 mod cli;
@@ -57,6 +58,12 @@ fn main() -> Result<()> {
     let mut cli = Cli::parse();
     resolve_defaults(&mut cli);
 
+    // Gated on `embed`: the forked `brain-daemon` child runs the watcher
+    // supervisor, which only exists in embed builds. In `--no-default-features`
+    // builds we fall through to `dispatch::async_main`, where the
+    // `DaemonAction::Start` arm already bails with a clear "rebuild with
+    // `embed`" message.
+    #[cfg(feature = "embed")]
     if let Command::Daemon {
         action: DaemonAction::Start { notes_path, .. },
     } = &cli.command
@@ -101,6 +108,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_watch() {
         let cli = Cli::try_parse_from(["brain", "watch", "./notes"]).unwrap();
@@ -109,6 +117,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "embed")]
     #[test]
     fn parse_watch_no_path() {
         let cli = Cli::try_parse_from(["brain", "watch"]).unwrap();
