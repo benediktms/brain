@@ -6,11 +6,124 @@ use brain_tasks::events::*;
 
 use crate::hooks::{OutputFormat, build_hook_envelope};
 
+use super::list::default_socket_path;
 use super::{TaskCtx, UpdateParams, priority_label};
 
 // ── update ──────────────────────────────────────────────────
 
+fn update_remote(ctx: &TaskCtx, params: &UpdateParams) -> Result<()> {
+    // Status-only changes go through TasksMutate on the remote path.
+    // Field updates go through TasksUpdate. When both are present we run
+    // mutate first, then update — matching the local path's ordering.
+    let has_status = params.status.is_some();
+    let has_field_updates = params.title.is_some()
+        || params.description.is_some()
+        || params.priority.is_some()
+        || params.task_type.is_some()
+        || params.assignee.is_some()
+        || params.blocked_reason.is_some();
+
+    if !has_status && !has_field_updates {
+        bail!("no updates specified");
+    }
+
+    // blocked_reason is not on the wire UpdateParams today; bail clearly.
+    if params.blocked_reason.is_some() {
+        bail!("--blocked-reason is not yet supported on the --remote path");
+    }
+    // task_type is not on the wire UpdateParams today; bail clearly.
+    if params.task_type.is_some() {
+        bail!("--task-type is not yet supported on the --remote path");
+    }
+
+    let socket_path = default_socket_path()?;
+    let spawner = brain_rpc::StdProcessSpawner::new();
+    let binary_hint = {
+        use brain_rpc::DaemonSpawner as _;
+        spawner
+            .binary_path()
+            .map(|p| format!("resolved to: {}", p.display()))
+            .unwrap_or_else(|re| {
+                format!(
+                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
+                )
+            })
+    };
+    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
+        anyhow::anyhow!(
+            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
+            socket_path.display(),
+        )
+    })?;
+
+    let mut client = brain_rpc::DaemonClient::connect(transport)
+        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+
+    // Status change via TasksMutate
+    let mut last_task = None;
+    let mut last_event_id = String::new();
+
+    if let Some(ref status) = params.status {
+        let action = match status.as_str() {
+            "done" => "close",
+            "open" => "open",
+            "blocked" => "block",
+            "in_progress" => "in_progress",
+            "cancelled" => "cancel",
+            other => bail!("unknown status for --remote path: {other}"),
+        };
+        let (task, event_id) = client
+            .tasks_mutate(brain_rpc::TasksMutateParams {
+                id: params.id.clone(),
+                action: action.to_string(),
+            })
+            .map_err(|e| anyhow::anyhow!("TasksMutate rpc failed: {e}"))?;
+        last_event_id = event_id;
+        last_task = Some(task);
+    }
+
+    if has_field_updates {
+        let (task, event_id) = client
+            .tasks_update(brain_rpc::TasksUpdateParams {
+                id: params.id.clone(),
+                title: params.title.clone(),
+                description: params.description.clone(),
+                priority: params.priority.map(|p| p.clamp(0, u8::MAX as i32) as u8),
+                assignee: params.assignee.clone(),
+            })
+            .map_err(|e| anyhow::anyhow!("TasksUpdate rpc failed: {e}"))?;
+        last_event_id = event_id;
+        last_task = Some(task);
+    }
+
+    let task = last_task.expect("at least one RPC was called");
+
+    if ctx.output.is_json_mode() {
+        let out = json!({
+            "event_id": last_event_id,
+            "task": {
+                "task_id": task.task_id,
+                "title": task.title,
+                "status": task.status,
+                "priority": task.priority,
+                "brain_id": task.brain_id,
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Updated task {}", task.task_id);
+        println!("  Title: {}", task.title);
+        println!("  Status: {}", task.status);
+        println!("  Priority: {}", priority_label(task.priority as i32));
+    }
+
+    Ok(())
+}
+
 pub fn update(ctx: &TaskCtx, mut params: UpdateParams) -> Result<()> {
+    if params.remote {
+        return update_remote(ctx, &params);
+    }
     params.id = ctx.store.resolve_task_id(&params.id)?;
     let display_id = ctx.store.compact_id_or_raw(&params.id);
     let has_status = params.status.is_some();

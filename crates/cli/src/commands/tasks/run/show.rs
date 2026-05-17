@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::json;
 
 use brain_tasks::enrichment::{
@@ -6,11 +6,87 @@ use brain_tasks::enrichment::{
     note_links_to_json, task_row_to_compact_json,
 };
 
-use super::{TaskCtx, format_ts, format_ts_short, priority_label};
+use super::list::default_socket_path;
+use super::{ShowParams, TaskCtx, format_ts, format_ts_short, priority_label};
 
 // ── show ────────────────────────────────────────────────────
 
-pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
+pub fn show(ctx: &TaskCtx, params: ShowParams) -> Result<()> {
+    if params.remote {
+        return show_remote(ctx, &params);
+    }
+    show_local(ctx, &params.id, params.brain.as_deref())
+}
+
+fn show_remote(ctx: &TaskCtx, params: &ShowParams) -> Result<()> {
+    if params.brain.is_some() {
+        bail!("--brain selector is not yet supported on the --remote path");
+    }
+
+    let socket_path = default_socket_path()?;
+    let spawner = brain_rpc::StdProcessSpawner::new();
+    let binary_hint = {
+        use brain_rpc::DaemonSpawner as _;
+        spawner
+            .binary_path()
+            .map(|p| format!("resolved to: {}", p.display()))
+            .unwrap_or_else(|re| {
+                format!(
+                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
+                )
+            })
+    };
+    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
+        anyhow::anyhow!(
+            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
+            socket_path.display(),
+        )
+    })?;
+
+    let mut client = brain_rpc::DaemonClient::connect(transport)
+        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+
+    let task = client
+        .tasks_show(params.id.clone())
+        .map_err(|e| anyhow::anyhow!("TasksShow rpc failed: {e}"))?;
+
+    match task {
+        None => {
+            if ctx.output.is_json_mode() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "task": null }))?
+                );
+            } else {
+                bail!("task not found: {}", params.id);
+            }
+        }
+        Some(t) => {
+            if ctx.output.is_json_mode() {
+                let out = json!({
+                    "task": {
+                        "task_id": t.task_id,
+                        "title": t.title,
+                        "status": t.status,
+                        "priority": t.priority,
+                        "brain_id": t.brain_id,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!("Task: {}", t.task_id);
+                println!("Title: {}", t.title);
+                println!("Status: {}", t.status);
+                println!("Priority: {}", priority_label(t.priority as i32));
+                println!("Brain: {}", t.brain_id);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn show_local(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
     let id = ctx.store.resolve_task_id(id)?;
     let task = ctx
         .store

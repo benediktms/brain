@@ -62,11 +62,21 @@ impl Dispatcher for DefaultDispatcher {
             }),
             // DefaultDispatcher deliberately doesn't reach into BrainStores
             // (no brain_lib dep) — that's `BrainStoresDispatcher`'s job in
-            // crate::handlers. Surface a clear error so a misconfigured
-            // daemon (started without DB args) fails loudly rather than
-            // silently dropping requests.
-            Request::TasksList { .. } => Err(RpcError::Unknown {
-                message: "TasksList not handled by DefaultDispatcher \
+            // crate::handlers. Surface a clear error for every tasks_* op
+            // so a misconfigured daemon (started without DB args) fails
+            // loudly rather than silently dropping requests.
+            Request::TasksList { .. }
+            | Request::TasksShow { .. }
+            | Request::TasksNext
+            | Request::TasksCreate { .. }
+            | Request::TasksUpdate { .. }
+            | Request::TasksMutate { .. }
+            | Request::TasksAddDep { .. }
+            | Request::TasksRemoveDep { .. }
+            | Request::TasksAddLabel { .. }
+            | Request::TasksRemoveLabel { .. }
+            | Request::TasksTransfer { .. } => Err(RpcError::Unknown {
+                message: "tasks_* requests not handled by DefaultDispatcher \
                           — start brain-daemon with --sqlite-db and \
                           --lance-db to use the BrainStores-backed dispatcher"
                     .into(),

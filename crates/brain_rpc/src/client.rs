@@ -23,7 +23,10 @@
 //!   `connect()` — meaning the handshake is exercised by every external
 //!   test that constructs a client.
 
-use crate::domain::{PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksListParams};
+use crate::domain::{
+    PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksCreateParams, TasksListParams,
+    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+};
 use crate::transport::Transport;
 
 /// Typed RPC client. Wraps a [`Transport`] and exposes typed
@@ -139,6 +142,199 @@ impl<T: Transport> DaemonClient<T> {
             Response::TasksList { tasks } => Ok(tasks),
             other => Err(RpcError::Protocol {
                 message: format!("expected TasksList in reply to TasksList, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Fetch a single task by ID. Returns `None` when the task does not
+    /// exist on the daemon side.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksShow`].
+    /// - Any error the underlying transport raises.
+    pub fn tasks_show(&mut self, id: String) -> Result<Option<TaskSummary>, RpcError> {
+        match self.call(Request::TasksShow { id })? {
+            Response::TasksShow { task } => Ok(task),
+            other => Err(RpcError::Protocol {
+                message: format!("expected TasksShow in reply to TasksShow, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Return the next highest-priority actionable task, or `None` if
+    /// there are no ready tasks.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksNext`].
+    pub fn tasks_next(&mut self) -> Result<Option<TaskSummary>, RpcError> {
+        match self.call(Request::TasksNext)? {
+            Response::TasksNext { task } => Ok(task),
+            other => Err(RpcError::Protocol {
+                message: format!("expected TasksNext in reply to TasksNext, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Create a new task. Returns the freshly created [`TaskSummary`]
+    /// plus the originating `event_id` (callers needing audit-log
+    /// correlation should retain it).
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksCreate`].
+    pub fn tasks_create(
+        &mut self,
+        params: TasksCreateParams,
+    ) -> Result<(TaskSummary, String), RpcError> {
+        match self.call(Request::TasksCreate { params })? {
+            Response::TasksCreate { task, event_id } => Ok((task, event_id)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected TasksCreate in reply to TasksCreate, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Update non-status fields of an existing task.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksUpdate`].
+    pub fn tasks_update(
+        &mut self,
+        params: TasksUpdateParams,
+    ) -> Result<(TaskSummary, String), RpcError> {
+        match self.call(Request::TasksUpdate { params })? {
+            Response::TasksUpdate { task, event_id } => Ok((task, event_id)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected TasksUpdate in reply to TasksUpdate, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Apply a status-mutating action ("close" / "open" / "block" /
+    /// "in_progress" / "cancel") to a task.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksMutate`].
+    pub fn tasks_mutate(
+        &mut self,
+        params: TasksMutateParams,
+    ) -> Result<(TaskSummary, String), RpcError> {
+        match self.call(Request::TasksMutate { params })? {
+            Response::TasksMutate { task, event_id } => Ok((task, event_id)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected TasksMutate in reply to TasksMutate, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Add a dependency edge: `task_id` depends on
+    /// `depends_on_task_id`. Returns the originating `event_id`.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksDepAdded`].
+    pub fn tasks_add_dep(
+        &mut self,
+        task_id: String,
+        depends_on_task_id: String,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::TasksAddDep {
+            task_id,
+            depends_on_task_id,
+        })? {
+            Response::TasksDepAdded { event_id } => Ok(event_id),
+            other => Err(RpcError::Protocol {
+                message: format!("expected TasksDepAdded in reply to TasksAddDep, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Remove a dependency edge.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksDepRemoved`].
+    pub fn tasks_remove_dep(
+        &mut self,
+        task_id: String,
+        depends_on_task_id: String,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::TasksRemoveDep {
+            task_id,
+            depends_on_task_id,
+        })? {
+            Response::TasksDepRemoved { event_id } => Ok(event_id),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TasksDepRemoved in reply to TasksRemoveDep, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Add a label to a task.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksLabelAdded`].
+    pub fn tasks_add_label(&mut self, task_id: String, label: String) -> Result<String, RpcError> {
+        match self.call(Request::TasksAddLabel { task_id, label })? {
+            Response::TasksLabelAdded { event_id } => Ok(event_id),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TasksLabelAdded in reply to TasksAddLabel, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Remove a label from a task.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksLabelRemoved`].
+    pub fn tasks_remove_label(
+        &mut self,
+        task_id: String,
+        label: String,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::TasksRemoveLabel { task_id, label })? {
+            Response::TasksLabelRemoved { event_id } => Ok(event_id),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TasksLabelRemoved in reply to TasksRemoveLabel, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Transfer a task to a different brain (preserve-ID move).
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksTransfer`].
+    pub fn tasks_transfer(
+        &mut self,
+        params: TasksTransferParams,
+    ) -> Result<(TaskSummary, String), RpcError> {
+        match self.call(Request::TasksTransfer { params })? {
+            Response::TasksTransfer { task, event_id } => Ok((task, event_id)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected TasksTransfer in reply to TasksTransfer, got {other:?}"),
             }),
         }
     }
@@ -387,6 +583,378 @@ mod tests {
         match client.tasks_list(TasksListParams::default()) {
             Err(RpcError::Unknown { message }) => assert_eq!(message, "unknown status"),
             other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    fn sample_summary() -> TaskSummary {
+        TaskSummary {
+            task_id: "brn-2fe.27".into(),
+            title: "vertical slice".into(),
+            status: "in_progress".into(),
+            priority: 0,
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    // ── tasks_show ─────────────────────────────────────────────
+
+    #[test]
+    fn tasks_show_returns_some_payload() {
+        let summary = sample_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::TasksShow { .. } => Ok(Response::TasksShow {
+                    task: Some(summary_clone.clone()),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.tasks_show("brn-2fe.27".into()).expect("tasks_show");
+        assert_eq!(got, Some(summary));
+    }
+
+    #[test]
+    fn tasks_show_returns_none_when_not_found() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|_| {
+            Ok(Response::TasksShow { task: None })
+        }));
+        let got = client.tasks_show("missing".into()).expect("tasks_show");
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn tasks_show_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_show("x".into()) {
+            Ok(_) => panic!("expected Protocol error, got Ok"),
+            Err(RpcError::Protocol { message }) => {
+                assert!(
+                    message.contains("TasksShow"),
+                    "message should mention TasksShow, got: {message}"
+                );
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── tasks_next ─────────────────────────────────────────────
+
+    #[test]
+    fn tasks_next_returns_some_payload() {
+        let summary = sample_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::TasksNext => Ok(Response::TasksNext {
+                    task: Some(summary_clone.clone()),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.tasks_next().expect("tasks_next");
+        assert_eq!(got, Some(summary));
+    }
+
+    #[test]
+    fn tasks_next_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_next() {
+            Ok(_) => panic!("expected Protocol error, got Ok"),
+            Err(RpcError::Protocol { message }) => {
+                assert!(
+                    message.contains("TasksNext"),
+                    "message should mention TasksNext, got: {message}"
+                );
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── tasks_create ───────────────────────────────────────────
+
+    fn sample_create_params() -> TasksCreateParams {
+        TasksCreateParams {
+            title: "new task".into(),
+            description: None,
+            priority: 2,
+            task_type: "task".into(),
+            assignee: None,
+            parent: None,
+        }
+    }
+
+    #[test]
+    fn tasks_create_returns_summary_and_event_id() {
+        let summary = sample_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::TasksCreate { params } => {
+                    assert_eq!(params.title, "new task");
+                    Ok(Response::TasksCreate {
+                        task: summary_clone.clone(),
+                        event_id: "evt-123".into(),
+                    })
+                }
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (task, event_id) = client
+            .tasks_create(sample_create_params())
+            .expect("tasks_create");
+        assert_eq!(task, summary);
+        assert_eq!(event_id, "evt-123");
+    }
+
+    #[test]
+    fn tasks_create_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_create(sample_create_params()) {
+            Ok(_) => panic!("expected Protocol error, got Ok"),
+            Err(RpcError::Protocol { message }) => {
+                assert!(
+                    message.contains("TasksCreate"),
+                    "message should mention TasksCreate, got: {message}"
+                );
+            }
+            Err(other) => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── tasks_update ───────────────────────────────────────────
+
+    fn sample_update_params() -> TasksUpdateParams {
+        TasksUpdateParams {
+            id: "brn-2fe.27".into(),
+            title: Some("renamed".into()),
+            description: None,
+            priority: None,
+            assignee: None,
+        }
+    }
+
+    #[test]
+    fn tasks_update_returns_summary_and_event_id() {
+        let summary = sample_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::TasksUpdate { .. } => Ok(Response::TasksUpdate {
+                    task: summary_clone.clone(),
+                    event_id: "evt".into(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (task, event_id) = client
+            .tasks_update(sample_update_params())
+            .expect("tasks_update");
+        assert_eq!(task, summary);
+        assert_eq!(event_id, "evt");
+    }
+
+    #[test]
+    fn tasks_update_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_update(sample_update_params()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("TasksUpdate"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── tasks_mutate ───────────────────────────────────────────
+
+    #[test]
+    fn tasks_mutate_returns_summary_and_event_id() {
+        let summary = sample_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::TasksMutate { params } => {
+                    assert_eq!(params.action, "close");
+                    Ok(Response::TasksMutate {
+                        task: summary_clone.clone(),
+                        event_id: "evt".into(),
+                    })
+                }
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (task, event_id) = client
+            .tasks_mutate(TasksMutateParams {
+                id: "brn-2fe.27".into(),
+                action: "close".into(),
+            })
+            .expect("tasks_mutate");
+        assert_eq!(task, summary);
+        assert_eq!(event_id, "evt");
+    }
+
+    #[test]
+    fn tasks_mutate_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_mutate(TasksMutateParams {
+            id: "x".into(),
+            action: "close".into(),
+        }) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("TasksMutate"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── tasks_add_dep / tasks_remove_dep ───────────────────────
+
+    #[test]
+    fn tasks_add_dep_returns_event_id() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksAddDep { .. } => Ok(Response::TasksDepAdded {
+                event_id: "evt".into(),
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let event_id = client
+            .tasks_add_dep("a".into(), "b".into())
+            .expect("tasks_add_dep");
+        assert_eq!(event_id, "evt");
+    }
+
+    #[test]
+    fn tasks_add_dep_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_add_dep("a".into(), "b".into()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("TasksDepAdded"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tasks_remove_dep_returns_event_id() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksRemoveDep { .. } => Ok(Response::TasksDepRemoved {
+                event_id: "evt".into(),
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let event_id = client
+            .tasks_remove_dep("a".into(), "b".into())
+            .expect("tasks_remove_dep");
+        assert_eq!(event_id, "evt");
+    }
+
+    #[test]
+    fn tasks_remove_dep_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_remove_dep("a".into(), "b".into()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("TasksDepRemoved"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── tasks_add_label / tasks_remove_label ───────────────────
+
+    #[test]
+    fn tasks_add_label_returns_event_id() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksAddLabel { .. } => Ok(Response::TasksLabelAdded {
+                event_id: "evt".into(),
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let event_id = client
+            .tasks_add_label("a".into(), "blocked".into())
+            .expect("tasks_add_label");
+        assert_eq!(event_id, "evt");
+    }
+
+    #[test]
+    fn tasks_add_label_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_add_label("a".into(), "blocked".into()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("TasksLabelAdded"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tasks_remove_label_returns_event_id() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksRemoveLabel { .. } => Ok(Response::TasksLabelRemoved {
+                event_id: "evt".into(),
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let event_id = client
+            .tasks_remove_label("a".into(), "blocked".into())
+            .expect("tasks_remove_label");
+        assert_eq!(event_id, "evt");
+    }
+
+    #[test]
+    fn tasks_remove_label_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_remove_label("a".into(), "blocked".into()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("TasksLabelRemoved"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── tasks_transfer ─────────────────────────────────────────
+
+    #[test]
+    fn tasks_transfer_returns_summary_and_event_id() {
+        let summary = sample_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::TasksTransfer { params } => {
+                    assert_eq!(params.task_id, "brn-2fe.27");
+                    assert_eq!(params.target_brain, "other");
+                    Ok(Response::TasksTransfer {
+                        task: summary_clone.clone(),
+                        event_id: "evt".into(),
+                    })
+                }
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (task, event_id) = client
+            .tasks_transfer(TasksTransferParams {
+                task_id: "brn-2fe.27".into(),
+                target_brain: "other".into(),
+            })
+            .expect("tasks_transfer");
+        assert_eq!(task, summary);
+        assert_eq!(event_id, "evt");
+    }
+
+    #[test]
+    fn tasks_transfer_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.tasks_transfer(TasksTransferParams {
+            task_id: "x".into(),
+            target_brain: "other".into(),
+        }) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("TasksTransfer"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
         }
     }
 }

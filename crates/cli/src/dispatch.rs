@@ -448,7 +448,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             markdown: _,
             action,
         } => {
-            use commands::tasks::run::{CreateParams, ListParams, TaskCtx, UpdateParams};
+            use commands::tasks::run::{
+                CreateParams, ListParams, NextParams, ShowParams, TaskCtx, UpdateParams,
+            };
             let output = match output_arg {
                 Some(OutputFormatArg::HookEnvelope) => OutputFormat::HookEnvelope,
                 Some(OutputFormatArg::Json) => OutputFormat::Json,
@@ -467,6 +469,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     assignee,
                     parent,
                     brain,
+                    remote,
                 } => {
                     commands::tasks::run::create(
                         &ctx,
@@ -478,6 +481,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             assignee,
                             parent,
                             brain,
+                            remote,
                         },
                     )?;
                 }
@@ -511,8 +515,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     };
                     commands::tasks::run::list(&ctx, &params)?;
                 }
-                TasksAction::Show { id, brain } => {
-                    commands::tasks::run::show(&ctx, &id, brain.as_deref())?;
+                TasksAction::Show { id, brain, remote } => {
+                    commands::tasks::run::show(&ctx, ShowParams { id, brain, remote })?;
                 }
                 TasksAction::Update {
                     id,
@@ -523,6 +527,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     task_type,
                     assignee,
                     blocked_reason,
+                    remote,
                 } => {
                     commands::tasks::run::update(
                         &ctx,
@@ -535,6 +540,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             task_type: task_type.map(Into::into),
                             assignee,
                             blocked_reason,
+                            remote,
                         },
                     )?;
                 }
@@ -542,14 +548,16 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     DepAction::Add {
                         task_id,
                         depends_on,
+                        remote,
                     } => {
-                        commands::tasks::run::dep_add(&ctx, &task_id, &depends_on)?;
+                        commands::tasks::run::dep_add(&ctx, &task_id, &depends_on, remote)?;
                     }
                     DepAction::Remove {
                         task_id,
                         depends_on,
+                        remote,
                     } => {
-                        commands::tasks::run::dep_remove(&ctx, &task_id, &depends_on)?;
+                        commands::tasks::run::dep_remove(&ctx, &task_id, &depends_on, remote)?;
                     }
                     DepAction::AddChain { task_ids } => {
                         commands::tasks::run::dep_add_chain(&ctx, &task_ids)?;
@@ -601,19 +609,28 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         task_id,
                         label,
                         brain,
+                        remote,
                     } => {
-                        commands::tasks::run::label_add(&ctx, &task_id, &label, brain.as_deref())?;
+                        commands::tasks::run::label_add(
+                            &ctx,
+                            &task_id,
+                            &label,
+                            brain.as_deref(),
+                            remote,
+                        )?;
                     }
                     LabelAction::Remove {
                         task_id,
                         label,
                         brain,
+                        remote,
                     } => {
                         commands::tasks::run::label_remove(
                             &ctx,
                             &task_id,
                             &label,
                             brain.as_deref(),
+                            remote,
                         )?;
                     }
                     LabelAction::BatchAdd {
@@ -709,20 +726,21 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 TasksAction::Labels => {
                     commands::tasks::run::labels(&ctx)?;
                 }
-                TasksAction::Next { k } => {
-                    commands::tasks::run::next(&ctx, k)?;
+                TasksAction::Next { k, remote } => {
+                    commands::tasks::run::next(&ctx, NextParams { k, remote })?;
                 }
                 TasksAction::Transfer {
                     task_id,
                     to,
                     dry_run,
+                    remote,
                 } => {
                     use commands::tasks::run::TransferParams;
                     // Open a writable LanceDB handle so vector rows are
                     // re-stamped to the target brain. If the open fails (e.g.
                     // path missing in tests), proceed without — `transfer_task`
                     // tolerates `None` and logs a warning if vectors drift.
-                    let vector_store = if dry_run {
+                    let vector_store = if dry_run || remote {
                         None
                     } else {
                         brain_persistence::store::Store::open_or_create(&cli.lance_db)
@@ -735,6 +753,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             task_id,
                             to,
                             dry_run,
+                            remote,
                         },
                         vector_store.as_ref(),
                     )

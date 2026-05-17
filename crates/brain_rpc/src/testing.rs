@@ -59,11 +59,21 @@ impl InMemoryTransport {
                 server_version: PROTOCOL_VERSION,
             }),
             // echo is a minimal mock for liveness + handshake tests.
-            // Tests that need TasksList behavior should build their
+            // Tests that need tasks_* behavior should build their
             // own InMemoryTransport with a custom closure rather
             // than rely on this convenience constructor.
-            Request::TasksList { .. } => Err(RpcError::Unknown {
-                message: "InMemoryTransport::echo does not handle TasksList \
+            Request::TasksList { .. }
+            | Request::TasksShow { .. }
+            | Request::TasksNext
+            | Request::TasksCreate { .. }
+            | Request::TasksUpdate { .. }
+            | Request::TasksMutate { .. }
+            | Request::TasksAddDep { .. }
+            | Request::TasksRemoveDep { .. }
+            | Request::TasksAddLabel { .. }
+            | Request::TasksRemoveLabel { .. }
+            | Request::TasksTransfer { .. } => Err(RpcError::Unknown {
+                message: "InMemoryTransport::echo does not handle tasks_* requests \
                           — use InMemoryTransport::new with a custom handler"
                     .into(),
             }),

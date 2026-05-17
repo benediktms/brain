@@ -4,10 +4,55 @@ use serde_json::json;
 use brain_tasks::events::*;
 
 use super::TaskCtx;
+use super::list::default_socket_path;
+
+// ── remote helpers ──────────────────────────────────────────
+
+fn make_client() -> Result<brain_rpc::DaemonClient<impl brain_rpc::Transport>> {
+    let socket_path = default_socket_path()?;
+    let spawner = brain_rpc::StdProcessSpawner::new();
+    let binary_hint = {
+        use brain_rpc::DaemonSpawner as _;
+        spawner
+            .binary_path()
+            .map(|p| format!("resolved to: {}", p.display()))
+            .unwrap_or_else(|re| {
+                format!(
+                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
+                )
+            })
+    };
+    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
+        anyhow::anyhow!(
+            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
+            socket_path.display(),
+        )
+    })?;
+    brain_rpc::DaemonClient::connect(transport)
+        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))
+}
 
 // ── dep add / dep remove ────────────────────────────────────
 
-pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
+pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> Result<()> {
+    if remote {
+        let mut client = make_client()?;
+        let event_id = client
+            .tasks_add_dep(task_id.to_string(), depends_on.to_string())
+            .map_err(|e| anyhow::anyhow!("TasksAddDep rpc failed: {e}"))?;
+        if ctx.output.is_json_mode() {
+            let out = json!({
+                "event_id": event_id,
+                "task_id": task_id,
+                "depends_on": depends_on,
+                "action": "added",
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("Added dependency: {task_id} depends on {depends_on}");
+        }
+        return Ok(());
+    }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let depends_on = &ctx.store.resolve_task_id(depends_on)?;
     let display_task_id = ctx.store.compact_id_or_raw(task_id);
@@ -37,7 +82,25 @@ pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
+pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> Result<()> {
+    if remote {
+        let mut client = make_client()?;
+        let event_id = client
+            .tasks_remove_dep(task_id.to_string(), depends_on.to_string())
+            .map_err(|e| anyhow::anyhow!("TasksRemoveDep rpc failed: {e}"))?;
+        if ctx.output.is_json_mode() {
+            let out = json!({
+                "event_id": event_id,
+                "task_id": task_id,
+                "depends_on": depends_on,
+                "action": "removed",
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("Removed dependency: {task_id} no longer depends on {depends_on}");
+        }
+        return Ok(());
+    }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let depends_on = &ctx.store.resolve_task_id(depends_on)?;
     let display_task_id = ctx.store.compact_id_or_raw(task_id);

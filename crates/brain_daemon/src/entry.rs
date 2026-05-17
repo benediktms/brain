@@ -73,6 +73,14 @@ pub fn run_cli() -> std::process::ExitCode {
         return ExitCode::from(2);
     };
 
+    // If --sqlite-db / --lance-db were not supplied, derive them from
+    // $BRAIN_HOME (or $HOME/.brain/ if BRAIN_HOME is unset). This lets
+    // `connect_or_spawn` auto-start the daemon without needing to
+    // forward explicit DB paths through the spawner.
+    let brain_home = resolve_brain_home();
+    let sqlite_db = sqlite_db.or_else(|| brain_home.as_ref().map(|h| h.join("brain.db")));
+    let lance_db = lance_db.or_else(|| brain_home.as_ref().map(|h| h.join("lancedb")));
+
     let mut config = DaemonConfig::new(&socket_path);
     if let Some(p) = pid_file {
         config = config.with_pid_file(p);
@@ -147,16 +155,118 @@ fn print_usage() {
          \x20            [--pid-file <PATH>] \\\n\
          \x20            [--sqlite-db <PATH>] [--lance-db <PATH>]\n\
          \n\
-         When --sqlite-db is provided, brain-daemon opens the database\n\
-         and serves real Request variants (TasksList, …) via the\n\
-         BrainStoresDispatcher. Without it, the daemon falls back to a\n\
-         minimal dispatcher that only answers Ping + Handshake — useful\n\
-         for smoke tests but rejects every other Request with NotFound.\n\
+         When --sqlite-db is omitted, brain-daemon resolves it from\n\
+         $BRAIN_HOME/brain.db (or $HOME/.brain/brain.db). Similarly,\n\
+         --lance-db defaults to $BRAIN_HOME/lancedb (or\n\
+         $HOME/.brain/lancedb). If neither $BRAIN_HOME nor $HOME is\n\
+         set, the daemon falls back to a minimal dispatcher that only\n\
+         answers Ping + Handshake.\n\
          \n\
          Signal handling, file watcher, and job scheduler are deferred\n\
          to follow-up tickets — see `brain_daemon::NOT_YET_IMPLEMENTED`\n\
          in the crate docs."
     );
+}
+
+/// Resolve `$BRAIN_HOME`, falling back to `$HOME/.brain/`.
+///
+/// Returns `None` only when neither env var is set — callers treat
+/// `None` as "no default available, use the minimal dispatcher".
+#[cfg(unix)]
+pub(crate) fn resolve_brain_home() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("BRAIN_HOME")
+        && !p.is_empty()
+    {
+        return Some(std::path::PathBuf::from(p));
+    }
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .map(|h| std::path::PathBuf::from(h).join(".brain"))
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+mod tests {
+    use super::resolve_brain_home;
+    use std::path::PathBuf;
+
+    /// Helper: run a closure with specific env vars set, restoring
+    /// originals afterwards. Uses a mutex guard from `std::sync` to
+    /// serialise env mutations across tests in the same process — env
+    /// state is global and cargo-nextest runs tests in parallel.
+    fn with_env<F>(vars: &[(&str, Option<&str>)], f: F)
+    where
+        F: FnOnce(),
+    {
+        // Save and set.
+        let saved: Vec<(&str, Option<String>)> = vars
+            .iter()
+            .map(|(k, _)| (*k, std::env::var(k).ok()))
+            .collect();
+        for (k, v) in vars {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
+
+        f();
+
+        // Restore.
+        for (k, v) in &saved {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
+    }
+
+    #[test]
+    fn brain_home_env_takes_priority() {
+        with_env(
+            &[
+                ("BRAIN_HOME", Some("/custom/brain")),
+                ("HOME", Some("/home/user")),
+            ],
+            || {
+                assert_eq!(resolve_brain_home(), Some(PathBuf::from("/custom/brain")));
+            },
+        );
+    }
+
+    #[test]
+    fn falls_back_to_home_dot_brain() {
+        with_env(
+            &[("BRAIN_HOME", None), ("HOME", Some("/home/testuser"))],
+            || {
+                assert_eq!(
+                    resolve_brain_home(),
+                    Some(PathBuf::from("/home/testuser/.brain"))
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn returns_none_when_neither_var_set() {
+        with_env(&[("BRAIN_HOME", None), ("HOME", None)], || {
+            assert_eq!(resolve_brain_home(), None);
+        });
+    }
+
+    #[test]
+    fn ignores_empty_brain_home_falls_back_to_home() {
+        with_env(
+            &[("BRAIN_HOME", Some("")), ("HOME", Some("/home/fallback"))],
+            || {
+                assert_eq!(
+                    resolve_brain_home(),
+                    Some(PathBuf::from("/home/fallback/.brain"))
+                );
+            },
+        );
+    }
 }
 
 #[cfg(not(unix))]

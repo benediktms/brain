@@ -52,7 +52,10 @@ pub mod unix;
 pub mod testing;
 
 pub use client::DaemonClient;
-pub use domain::{PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksListParams};
+pub use domain::{
+    PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksCreateParams, TasksListParams,
+    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+};
 pub use transport::Transport;
 
 #[cfg(unix)]

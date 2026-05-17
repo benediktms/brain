@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::json;
 use tracing::debug;
 
@@ -7,6 +7,7 @@ use brain_tasks::events::*;
 use crate::markdown_table::MarkdownTable;
 
 use super::TaskCtx;
+use super::list::default_socket_path;
 
 /// Attempt a cross-brain label write via daemon IPC, returning `Ok(true)` if
 /// the daemon handled it, `Ok(false)` if the caller should fall back to direct
@@ -136,7 +137,70 @@ pub fn labels(ctx: &TaskCtx) -> Result<()> {
 
 // ── label add / label remove ────────────────────────────────
 
-pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
+fn label_remote(ctx: &TaskCtx, task_id: &str, label: &str, add: bool) -> Result<()> {
+    let socket_path = default_socket_path()?;
+    let spawner = brain_rpc::StdProcessSpawner::new();
+    let binary_hint = {
+        use brain_rpc::DaemonSpawner as _;
+        spawner
+            .binary_path()
+            .map(|p| format!("resolved to: {}", p.display()))
+            .unwrap_or_else(|re| {
+                format!(
+                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
+                )
+            })
+    };
+    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
+        anyhow::anyhow!(
+            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
+            socket_path.display(),
+        )
+    })?;
+    let mut client = brain_rpc::DaemonClient::connect(transport)
+        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+
+    let event_id = if add {
+        client
+            .tasks_add_label(task_id.to_string(), label.to_string())
+            .map_err(|e| anyhow::anyhow!("TasksAddLabel rpc failed: {e}"))?
+    } else {
+        client
+            .tasks_remove_label(task_id.to_string(), label.to_string())
+            .map_err(|e| anyhow::anyhow!("TasksRemoveLabel rpc failed: {e}"))?
+    };
+
+    let action = if add { "added" } else { "removed" };
+    if ctx.output.is_json_mode() {
+        let out = json!({
+            "event_id": event_id,
+            "task_id": task_id,
+            "label": label,
+            "action": action,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else if add {
+        println!("Added label \"{label}\" to task {task_id}");
+    } else {
+        println!("Removed label \"{label}\" from task {task_id}");
+    }
+
+    Ok(())
+}
+
+pub fn label_add(
+    ctx: &TaskCtx,
+    task_id: &str,
+    label: &str,
+    brain: Option<&str>,
+    remote: bool,
+) -> Result<()> {
+    if remote {
+        if brain.is_some() {
+            bail!("--brain selector is not yet supported on the --remote path");
+        }
+        return label_remote(ctx, task_id, label, true);
+    }
     if let Some(target_brain) = brain {
         if try_ipc_label_event(ctx, target_brain, task_id, label, "label_added", "Added")? {
             return Ok(());
@@ -148,7 +212,7 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
             store: tasks,
             output: ctx.output,
         };
-        return label_add(&remote_ctx, task_id, label, None);
+        return label_add(&remote_ctx, task_id, label, None, false);
     }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let display_id = ctx.store.compact_id_or_raw(task_id);
@@ -177,7 +241,19 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
     Ok(())
 }
 
-pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
+pub fn label_remove(
+    ctx: &TaskCtx,
+    task_id: &str,
+    label: &str,
+    brain: Option<&str>,
+    remote: bool,
+) -> Result<()> {
+    if remote {
+        if brain.is_some() {
+            bail!("--brain selector is not yet supported on the --remote path");
+        }
+        return label_remote(ctx, task_id, label, false);
+    }
     if let Some(target_brain) = brain {
         if try_ipc_label_event(
             ctx,
@@ -195,7 +271,7 @@ pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&st
             store: tasks,
             output: ctx.output,
         };
-        return label_remove(&remote_ctx, task_id, label, None);
+        return label_remove(&remote_ctx, task_id, label, None, false);
     }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let display_id = ctx.store.compact_id_or_raw(task_id);

@@ -1,13 +1,70 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
+use serde_json::json;
 
 use brain_persistence::store::Store;
 
 use super::TaskCtx;
+use super::list::default_socket_path;
 
 pub struct TransferParams {
     pub task_id: String,
     pub to: String,
     pub dry_run: bool,
+    pub remote: bool,
+}
+
+async fn transfer_remote(ctx: &TaskCtx, params: &TransferParams) -> Result<()> {
+    if params.dry_run {
+        bail!("--dry-run is not yet supported on the --remote path");
+    }
+
+    let socket_path = default_socket_path()?;
+    let spawner = brain_rpc::StdProcessSpawner::new();
+    let binary_hint = {
+        use brain_rpc::DaemonSpawner as _;
+        spawner
+            .binary_path()
+            .map(|p| format!("resolved to: {}", p.display()))
+            .unwrap_or_else(|re| {
+                format!(
+                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
+                )
+            })
+    };
+    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
+        anyhow::anyhow!(
+            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
+            socket_path.display(),
+        )
+    })?;
+
+    let mut client = brain_rpc::DaemonClient::connect(transport)
+        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+
+    let (task, event_id) = client
+        .tasks_transfer(brain_rpc::TasksTransferParams {
+            task_id: params.task_id.clone(),
+            target_brain: params.to.clone(),
+        })
+        .map_err(|e| anyhow::anyhow!("TasksTransfer rpc failed: {e}"))?;
+
+    if ctx.output.is_json_mode() {
+        let out = json!({
+            "event_id": event_id,
+            "task": {
+                "task_id": task.task_id,
+                "title": task.title,
+                "status": task.status,
+                "priority": task.priority,
+                "brain_id": task.brain_id,
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("{} → brain '{}'", task.task_id, task.brain_id);
+    }
+
+    Ok(())
 }
 
 pub async fn transfer(
@@ -15,6 +72,9 @@ pub async fn transfer(
     params: TransferParams,
     vector_store: Option<&Store>,
 ) -> Result<()> {
+    if params.remote {
+        return transfer_remote(ctx, &params).await;
+    }
     // Resolve the source task ID (may be a short prefix).
     let task_id = ctx.store.resolve_task_id(&params.task_id)?;
 

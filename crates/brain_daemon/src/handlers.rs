@@ -14,9 +14,15 @@
 //! about whether to expose it on the wire.
 
 use brain_lib::stores::BrainStores;
-use brain_rpc::{PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksListParams};
+use brain_rpc::{
+    PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksCreateParams, TasksListParams,
+    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+};
 use brain_tasks::Task;
-use brain_tasks::events::TaskStatus;
+use brain_tasks::events::{
+    DependencyPayload, EventType, LabelPayload, StatusChangedPayload, TaskCreatedPayload,
+    TaskEvent, TaskStatus, TaskType, TaskUpdatedPayload,
+};
 
 use crate::dispatcher::Dispatcher;
 
@@ -89,6 +95,450 @@ impl BrainStoresDispatcher {
         Ok(Response::TasksList { tasks: summaries })
     }
 
+    fn handle_tasks_show(&self, id: String) -> Result<Response, RpcError> {
+        // Best-effort prefix resolution. A bad / unknown id is treated as
+        // "not found" (Option::None) rather than a Protocol error — the
+        // wire-shape contract for TasksShow is "None when absent".
+        let resolved = match self.stores.tasks.resolve_task_id(&id) {
+            Ok(r) => r,
+            Err(_) => return Ok(Response::TasksShow { task: None }),
+        };
+        let task = self
+            .stores
+            .tasks
+            .get_task(&resolved)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("get task: {e}"),
+            })?;
+        Ok(Response::TasksShow {
+            task: task.as_ref().map(|t| self.task_to_summary(t)),
+        })
+    }
+
+    fn handle_tasks_next(&self) -> Result<Response, RpcError> {
+        let mut tasks =
+            self.stores
+                .tasks
+                .list_ready_actionable()
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("list ready actionable: {e}"),
+                })?;
+
+        // Same sort order as `brain tasks next`: in-progress first,
+        // then priority ascending (0=critical), then earliest due_at.
+        let status_ord =
+            |s: &TaskStatus| -> u8 { if *s == TaskStatus::InProgress { 0 } else { 1 } };
+        tasks.sort_by(|a, b| {
+            status_ord(&a.status)
+                .cmp(&status_ord(&b.status))
+                .then(a.priority.cmp(&b.priority))
+                .then_with(|| match (a.due_at, b.due_at) {
+                    (Some(a_ts), Some(b_ts)) => a_ts.cmp(&b_ts),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                })
+                .then(a.id.as_str().cmp(b.id.as_str()))
+        });
+
+        Ok(Response::TasksNext {
+            task: tasks.first().map(|t| self.task_to_summary(t)),
+        })
+    }
+
+    fn handle_tasks_create(&self, params: TasksCreateParams) -> Result<Response, RpcError> {
+        let task_type: TaskType =
+            params
+                .task_type
+                .parse()
+                .map_err(|e: String| RpcError::Protocol {
+                    message: format!("invalid task_type: {e}"),
+                })?;
+
+        let prefix = self
+            .stores
+            .tasks
+            .get_project_prefix()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("get project prefix: {e}"),
+            })?;
+        let task_id = brain_tasks::events::new_task_id(&prefix);
+
+        // Resolve parent if provided.
+        let parent = match params.parent.as_deref() {
+            Some(p) => {
+                Some(
+                    self.stores
+                        .tasks
+                        .resolve_task_id(p)
+                        .map_err(|e| RpcError::Protocol {
+                            message: format!("resolve parent task id: {e}"),
+                        })?,
+                )
+            }
+            None => None,
+        };
+
+        let event = TaskEvent::from_payload(
+            &task_id,
+            "daemon",
+            TaskCreatedPayload {
+                title: params.title,
+                description: params.description,
+                priority: i32::from(params.priority),
+                status: TaskStatus::Open,
+                due_ts: None,
+                task_type: Some(task_type),
+                assignee: params.assignee,
+                defer_until: None,
+                parent_task_id: parent,
+                display_id: None,
+            },
+        );
+        let event_id = event.event_id.clone();
+
+        self.stores
+            .tasks
+            .append(&event)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("append create event: {e}"),
+            })?;
+
+        let task = self
+            .stores
+            .tasks
+            .get_task(&task_id)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("refetch created task: {e}"),
+            })?
+            .ok_or_else(|| RpcError::Unknown {
+                message: format!("task vanished after create: {task_id}"),
+            })?;
+
+        Ok(Response::TasksCreate {
+            task: self.task_to_summary(&task),
+            event_id,
+        })
+    }
+
+    fn handle_tasks_update(&self, params: TasksUpdateParams) -> Result<Response, RpcError> {
+        let resolved =
+            self.stores
+                .tasks
+                .resolve_task_id(&params.id)
+                .map_err(|_| RpcError::NotFound {
+                    id: params.id.clone(),
+                })?;
+
+        let event = TaskEvent::from_payload(
+            &resolved,
+            "daemon",
+            TaskUpdatedPayload {
+                title: params.title,
+                description: params.description,
+                priority: params.priority.map(i32::from),
+                due_ts: None,
+                blocked_reason: None,
+                task_type: None,
+                assignee: params.assignee,
+                defer_until: None,
+            },
+        );
+        let event_id = event.event_id.clone();
+
+        self.stores
+            .tasks
+            .append(&event)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("append update event: {e}"),
+            })?;
+
+        let task = self
+            .stores
+            .tasks
+            .get_task(&resolved)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("refetch updated task: {e}"),
+            })?
+            .ok_or(RpcError::NotFound { id: resolved })?;
+
+        Ok(Response::TasksUpdate {
+            task: self.task_to_summary(&task),
+            event_id,
+        })
+    }
+
+    fn handle_tasks_mutate(&self, params: TasksMutateParams) -> Result<Response, RpcError> {
+        let new_status = match params.action.as_str() {
+            "close" => TaskStatus::Done,
+            "open" => TaskStatus::Open,
+            "block" => TaskStatus::Blocked,
+            "in_progress" => TaskStatus::InProgress,
+            "cancel" => TaskStatus::Cancelled,
+            other => {
+                return Err(RpcError::Protocol {
+                    message: format!(
+                        "unknown mutate action: {other:?} (expected close|open|block|in_progress|cancel)"
+                    ),
+                });
+            }
+        };
+
+        let resolved =
+            self.stores
+                .tasks
+                .resolve_task_id(&params.id)
+                .map_err(|_| RpcError::NotFound {
+                    id: params.id.clone(),
+                })?;
+
+        let event =
+            TaskEvent::from_payload(&resolved, "daemon", StatusChangedPayload { new_status });
+        let event_id = event.event_id.clone();
+
+        self.stores
+            .tasks
+            .append(&event)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("append status event: {e}"),
+            })?;
+
+        let task = self
+            .stores
+            .tasks
+            .get_task(&resolved)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("refetch mutated task: {e}"),
+            })?
+            .ok_or(RpcError::NotFound { id: resolved })?;
+
+        Ok(Response::TasksMutate {
+            task: self.task_to_summary(&task),
+            event_id,
+        })
+    }
+
+    fn handle_tasks_add_dep(
+        &self,
+        task_id: String,
+        depends_on_task_id: String,
+    ) -> Result<Response, RpcError> {
+        let task_resolved =
+            self.stores
+                .tasks
+                .resolve_task_id(&task_id)
+                .map_err(|_| RpcError::NotFound {
+                    id: task_id.clone(),
+                })?;
+        let dep_resolved = self
+            .stores
+            .tasks
+            .resolve_task_id(&depends_on_task_id)
+            .map_err(|_| RpcError::NotFound {
+                id: depends_on_task_id.clone(),
+            })?;
+
+        let event = TaskEvent::new(
+            &task_resolved,
+            "daemon",
+            EventType::DependencyAdded,
+            &DependencyPayload {
+                depends_on_task_id: dep_resolved,
+            },
+        );
+        let event_id = event.event_id.clone();
+
+        self.stores
+            .tasks
+            .append(&event)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("append dep_added event: {e}"),
+            })?;
+
+        Ok(Response::TasksDepAdded { event_id })
+    }
+
+    fn handle_tasks_remove_dep(
+        &self,
+        task_id: String,
+        depends_on_task_id: String,
+    ) -> Result<Response, RpcError> {
+        let task_resolved =
+            self.stores
+                .tasks
+                .resolve_task_id(&task_id)
+                .map_err(|_| RpcError::NotFound {
+                    id: task_id.clone(),
+                })?;
+        let dep_resolved = self
+            .stores
+            .tasks
+            .resolve_task_id(&depends_on_task_id)
+            .map_err(|_| RpcError::NotFound {
+                id: depends_on_task_id.clone(),
+            })?;
+
+        let event = TaskEvent::new(
+            &task_resolved,
+            "daemon",
+            EventType::DependencyRemoved,
+            &DependencyPayload {
+                depends_on_task_id: dep_resolved,
+            },
+        );
+        let event_id = event.event_id.clone();
+
+        self.stores
+            .tasks
+            .append(&event)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("append dep_removed event: {e}"),
+            })?;
+
+        Ok(Response::TasksDepRemoved { event_id })
+    }
+
+    fn handle_tasks_add_label(&self, task_id: String, label: String) -> Result<Response, RpcError> {
+        let resolved =
+            self.stores
+                .tasks
+                .resolve_task_id(&task_id)
+                .map_err(|_| RpcError::NotFound {
+                    id: task_id.clone(),
+                })?;
+
+        let event = TaskEvent::new(
+            &resolved,
+            "daemon",
+            EventType::LabelAdded,
+            &LabelPayload { label },
+        );
+        let event_id = event.event_id.clone();
+
+        self.stores
+            .tasks
+            .append(&event)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("append label_added event: {e}"),
+            })?;
+
+        Ok(Response::TasksLabelAdded { event_id })
+    }
+
+    fn handle_tasks_remove_label(
+        &self,
+        task_id: String,
+        label: String,
+    ) -> Result<Response, RpcError> {
+        let resolved =
+            self.stores
+                .tasks
+                .resolve_task_id(&task_id)
+                .map_err(|_| RpcError::NotFound {
+                    id: task_id.clone(),
+                })?;
+
+        let event = TaskEvent::new(
+            &resolved,
+            "daemon",
+            EventType::LabelRemoved,
+            &LabelPayload { label },
+        );
+        let event_id = event.event_id.clone();
+
+        self.stores
+            .tasks
+            .append(&event)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("append label_removed event: {e}"),
+            })?;
+
+        Ok(Response::TasksLabelRemoved { event_id })
+    }
+
+    fn handle_tasks_transfer(&self, params: TasksTransferParams) -> Result<Response, RpcError> {
+        let resolved = self
+            .stores
+            .tasks
+            .resolve_task_id(&params.task_id)
+            .map_err(|_| RpcError::NotFound {
+                id: params.task_id.clone(),
+            })?;
+
+        let (target_brain_id, target_brain_name) = self
+            .stores
+            .tasks
+            .resolve_brain(&params.target_brain)
+            .map_err(|e| RpcError::Protocol {
+                message: format!("resolve target brain: {e}"),
+            })?;
+
+        // TaskStore::transfer_task is `async fn` only because the Lance
+        // re-stamp branch (taken when `vector_store: Some(_)`) calls an
+        // async store API. The MVP daemon passes `None`, so the returned
+        // future is non-yielding — driving it once with a no-op waker
+        // completes it without needing a tokio runtime. The brain_daemon
+        // crate does not depend on tokio; this keeps it that way.
+        let result = block_on_no_yield(self.stores.tasks.transfer_task(
+            &resolved,
+            &target_brain_id,
+            None,
+        ))
+        .map_err(|e| RpcError::Unknown {
+            message: format!("transfer task: {e}"),
+        })?;
+
+        // Re-fetch from a store scoped to the target brain. Required
+        // because `self.stores.tasks` is scoped to the daemon's local
+        // brain and a successful transfer moves the task OUT of that
+        // scope.
+        let target_store = self
+            .stores
+            .tasks
+            .with_remote_brain_id(&target_brain_id, &target_brain_name)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("open target brain store: {e}"),
+            })?;
+        let task = target_store
+            .get_task(&resolved)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("refetch transferred task: {e}"),
+            })?
+            .ok_or_else(|| RpcError::Unknown {
+                message: format!("task vanished after transfer: {resolved}"),
+            })?;
+
+        // The summary's brain_id field must reflect the post-transfer
+        // brain — `task_to_summary` reads `self.stores.brain_id` (the
+        // daemon's local scope), so build the summary inline here.
+        let summary = TaskSummary {
+            task_id: task
+                .display_id
+                .clone()
+                .unwrap_or_else(|| task.id.as_str().to_string()),
+            title: task.title.clone(),
+            status: status_to_wire_string(&task.status),
+            priority: task.priority.as_i32().clamp(0, u8::MAX as i32) as u8,
+            brain_id: result.to_brain_id.clone(),
+        };
+
+        // `transfer_task_inner` inserts the task_transferred event row
+        // internally and does not return the row's event_id. Surface a
+        // correlation key derived from the stable display_id pair so
+        // callers can locate the matching row in the event log; this is
+        // explicit in the wire contract for transfer (see brain_rpc
+        // module rustdoc) rather than a synthesized "row id".
+        let event_id = format!(
+            "transfer:{}->{}",
+            result.from_display_id, result.to_display_id
+        );
+
+        Ok(Response::TasksTransfer {
+            task: summary,
+            event_id,
+        })
+    }
+
     /// Map an internal [`Task`] into the wire-format [`TaskSummary`].
     /// This is the anti-corruption-layer translation point — if the
     /// internal type gains fields, this function decides whether to
@@ -115,6 +565,26 @@ impl Dispatcher for BrainStoresDispatcher {
                 server_version: PROTOCOL_VERSION,
             }),
             Request::TasksList { params } => self.handle_tasks_list(params),
+            Request::TasksShow { id } => self.handle_tasks_show(id),
+            Request::TasksNext => self.handle_tasks_next(),
+            Request::TasksCreate { params } => self.handle_tasks_create(params),
+            Request::TasksUpdate { params } => self.handle_tasks_update(params),
+            Request::TasksMutate { params } => self.handle_tasks_mutate(params),
+            Request::TasksAddDep {
+                task_id,
+                depends_on_task_id,
+            } => self.handle_tasks_add_dep(task_id, depends_on_task_id),
+            Request::TasksRemoveDep {
+                task_id,
+                depends_on_task_id,
+            } => self.handle_tasks_remove_dep(task_id, depends_on_task_id),
+            Request::TasksAddLabel { task_id, label } => {
+                self.handle_tasks_add_label(task_id, label)
+            }
+            Request::TasksRemoveLabel { task_id, label } => {
+                self.handle_tasks_remove_label(task_id, label)
+            }
+            Request::TasksTransfer { params } => self.handle_tasks_transfer(params),
         }
     }
 }
@@ -131,6 +601,45 @@ fn status_to_wire_string(s: &TaskStatus) -> String {
         TaskStatus::Cancelled => "cancelled",
     }
     .to_string()
+}
+
+/// Drive a future to completion under the assumption that it never
+/// yields. Used by [`BrainStoresDispatcher::handle_tasks_transfer`] for
+/// `TaskStore::transfer_task` with `vector_store: None` — that path
+/// only does synchronous `with_write_conn` work and never awaits
+/// anything that could pend.
+///
+/// Panics if the future returns `Pending` — that means an assumption
+/// upstream broke, and we'd rather fail loudly than hang the daemon.
+fn block_on_no_yield<F: std::future::Future>(future: F) -> F::Output {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+    // SAFETY: the no-op vtable holds no state; `clone` returns the same
+    // singleton, `wake` / `wake_by_ref` / `drop` are inert. Standard
+    // pattern for a "we promise this future never yields" executor.
+    const VTABLE: &RawWakerVTable = &RawWakerVTable::new(
+        |_| RawWaker::new(std::ptr::null(), VTABLE),
+        |_| {},
+        |_| {},
+        |_| {},
+    );
+    let raw = RawWaker::new(std::ptr::null(), VTABLE);
+    let waker = unsafe { Waker::from_raw(raw) };
+    let mut cx = Context::from_waker(&waker);
+
+    let mut future = Box::pin(future);
+    match Pin::new(&mut future).poll(&mut cx) {
+        Poll::Ready(out) => out,
+        Poll::Pending => {
+            panic!(
+                "block_on_no_yield: future yielded — this call site assumes \
+                 a synchronous path (TaskStore::transfer_task with vector_store=None). \
+                 An async branch crept in; replace this helper with a real runtime."
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +704,143 @@ mod tests {
                 );
             }
             other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_show_returns_none_for_missing_task() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d
+            .dispatch(Request::TasksShow {
+                id: "no-such-task".into(),
+            })
+            .unwrap();
+        match res {
+            Response::TasksShow { task } => assert!(task.is_none()),
+            other => panic!("expected TasksShow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_next_returns_none_on_empty_store() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksNext).unwrap();
+        match res {
+            Response::TasksNext { task } => assert!(task.is_none()),
+            other => panic!("expected TasksNext, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_mutate_rejects_unknown_action() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksMutate {
+            params: TasksMutateParams {
+                id: "x".into(),
+                action: "bogus".into(),
+            },
+        });
+        match res {
+            Err(RpcError::Protocol { message }) => {
+                assert!(
+                    message.contains("bogus"),
+                    "error should mention the bad action, got: {message}"
+                );
+            }
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_create_rejects_invalid_task_type() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksCreate {
+            params: TasksCreateParams {
+                title: "t".into(),
+                description: None,
+                priority: 2,
+                task_type: "bogus".into(),
+                assignee: None,
+                parent: None,
+            },
+        });
+        match res {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("task_type"));
+            }
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_update_returns_not_found_for_missing_task() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksUpdate {
+            params: TasksUpdateParams {
+                id: "no-such-task".into(),
+                title: Some("renamed".into()),
+                description: None,
+                priority: None,
+                assignee: None,
+            },
+        });
+        match res {
+            Err(RpcError::NotFound { id }) => assert_eq!(id, "no-such-task"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_add_dep_returns_not_found_for_missing_task() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksAddDep {
+            task_id: "missing-a".into(),
+            depends_on_task_id: "missing-b".into(),
+        });
+        match res {
+            Err(RpcError::NotFound { .. }) => {}
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_add_label_returns_not_found_for_missing_task() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksAddLabel {
+            task_id: "missing".into(),
+            label: "blocked".into(),
+        });
+        match res {
+            Err(RpcError::NotFound { .. }) => {}
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_remove_label_returns_not_found_for_missing_task() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksRemoveLabel {
+            task_id: "missing".into(),
+            label: "blocked".into(),
+        });
+        match res {
+            Err(RpcError::NotFound { .. }) => {}
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tasks_transfer_returns_not_found_for_missing_task() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d.dispatch(Request::TasksTransfer {
+            params: TasksTransferParams {
+                task_id: "missing".into(),
+                target_brain: "other".into(),
+            },
+        });
+        match res {
+            Err(RpcError::NotFound { .. }) => {}
+            other => panic!("expected NotFound, got {other:?}"),
         }
     }
 

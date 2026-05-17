@@ -157,12 +157,27 @@ fn list_remote(params: &ListParams) -> Result<()> {
     }
 
     let socket_path = default_socket_path()?;
-    let transport =
-        brain_rpc::UnixSocketTransport::connect(&socket_path).map_err(|e| anyhow::anyhow!(
-            "connect to brain-daemon at {}: {e}\n  start the daemon first: brain-daemon --socket-path {} --sqlite-db <PATH> --lance-db <PATH>",
+    let spawner = brain_rpc::StdProcessSpawner::new();
+    // Resolve the binary path up-front so we can include it in any error
+    // message without needing the DaemonSpawner trait in scope at the
+    // error-formatting site.
+    let binary_hint = {
+        use brain_rpc::DaemonSpawner as _;
+        spawner
+            .binary_path()
+            .map(|p| format!("resolved to: {}", p.display()))
+            .unwrap_or_else(|re| {
+                format!(
+                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
+                )
+            })
+    };
+    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
+        anyhow::anyhow!(
+            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
             socket_path.display(),
-            socket_path.display()
-        ))?;
+        )
+    })?;
 
     let mut client = brain_rpc::DaemonClient::connect(transport)
         .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
@@ -206,7 +221,7 @@ fn list_remote(params: &ListParams) -> Result<()> {
 /// JSON-RPC dispatcher and surface a useless `RpcError::Protocol`
 /// error. The two daemons coexist on separate sockets until the
 /// legacy IpcServer is retired in a future ticket.
-fn default_socket_path() -> Result<PathBuf> {
+pub(super) fn default_socket_path() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("BRAIN_SOCKET_PATH") {
         return Ok(PathBuf::from(p));
     }

@@ -42,6 +42,43 @@ pub enum Request {
     /// List tasks with optional filters. Server returns
     /// [`Response::TasksList`].
     TasksList { params: TasksListParams },
+    /// Fetch a single task by ID. Server returns
+    /// [`Response::TasksShow`] with `None` when the task is not found.
+    TasksShow { id: String },
+    /// Return the next highest-priority actionable task. Server returns
+    /// [`Response::TasksNext`] with `None` when there are no ready tasks.
+    TasksNext,
+    /// Create a new task. Server returns [`Response::TasksCreate`] with
+    /// the newly-created `TaskSummary` and the originating `event_id`.
+    TasksCreate { params: TasksCreateParams },
+    /// Update non-status fields of an existing task. Server returns
+    /// [`Response::TasksUpdate`].
+    TasksUpdate { params: TasksUpdateParams },
+    /// Apply a status-mutating action to a task (close / open / block /
+    /// in_progress / cancel). Server returns [`Response::TasksMutate`].
+    /// Modeled separately from `TasksUpdate` because status changes are
+    /// a distinct event type in the underlying log.
+    TasksMutate { params: TasksMutateParams },
+    /// Add a dependency edge: `task_id` depends on `depends_on_task_id`.
+    /// Server returns [`Response::TasksDepAdded`].
+    TasksAddDep {
+        task_id: String,
+        depends_on_task_id: String,
+    },
+    /// Remove a dependency edge previously added via
+    /// [`Request::TasksAddDep`]. Server returns [`Response::TasksDepRemoved`].
+    TasksRemoveDep {
+        task_id: String,
+        depends_on_task_id: String,
+    },
+    /// Add a label to a task. Server returns [`Response::TasksLabelAdded`].
+    TasksAddLabel { task_id: String, label: String },
+    /// Remove a label from a task. Server returns
+    /// [`Response::TasksLabelRemoved`].
+    TasksRemoveLabel { task_id: String, label: String },
+    /// Transfer a task to a different brain (preserve-ID move). Server
+    /// returns [`Response::TasksTransfer`] with the updated summary.
+    TasksTransfer { params: TasksTransferParams },
 }
 
 /// Optional filter and pagination params for [`Request::TasksList`].
@@ -62,6 +99,60 @@ pub struct TasksListParams {
     pub search: Option<String>,
 }
 
+/// Wire-format params for [`Request::TasksCreate`].
+///
+/// Mirrors the user-facing field set of `brain tasks create`. `priority`
+/// is `u8` on the wire (0=critical .. 4=backlog) — the daemon maps it
+/// onto the internal `i32` field at the boundary. `task_type` is a
+/// stringly-typed enum on the wire ("task" / "bug" / "feature" / "epic"
+/// / "spike") for the same forward-compatibility reason
+/// [`TaskSummary::status`] is a string.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct TasksCreateParams {
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: u8,
+    pub task_type: String,
+    pub assignee: Option<String>,
+    pub parent: Option<String>,
+}
+
+/// Wire-format params for [`Request::TasksUpdate`].
+///
+/// Each field is optional; only set fields are applied. Status changes
+/// go through [`Request::TasksMutate`] instead (they're a different
+/// event type in the underlying log).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct TasksUpdateParams {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub priority: Option<u8>,
+    pub assignee: Option<String>,
+}
+
+/// Wire-format params for [`Request::TasksMutate`].
+///
+/// `action` is one of `"close"`, `"open"`, `"block"`, `"in_progress"`,
+/// or `"cancel"`. The dispatcher maps each value onto the corresponding
+/// internal `TaskStatus` and emits a `StatusChanged` event.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct TasksMutateParams {
+    pub id: String,
+    pub action: String,
+}
+
+/// Wire-format params for [`Request::TasksTransfer`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct TasksTransferParams {
+    pub task_id: String,
+    pub target_brain: String,
+}
+
 /// A server-originated reply to a [`Request`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -72,6 +163,28 @@ pub enum Response {
     Pong,
     /// Reply to [`Request::TasksList`].
     TasksList { tasks: Vec<TaskSummary> },
+    /// Reply to [`Request::TasksShow`]. `task` is `None` when the
+    /// requested task does not exist.
+    TasksShow { task: Option<TaskSummary> },
+    /// Reply to [`Request::TasksNext`]. `task` is `None` when there
+    /// are no ready actionable tasks.
+    TasksNext { task: Option<TaskSummary> },
+    /// Reply to [`Request::TasksCreate`].
+    TasksCreate { task: TaskSummary, event_id: String },
+    /// Reply to [`Request::TasksUpdate`].
+    TasksUpdate { task: TaskSummary, event_id: String },
+    /// Reply to [`Request::TasksMutate`].
+    TasksMutate { task: TaskSummary, event_id: String },
+    /// Reply to [`Request::TasksAddDep`].
+    TasksDepAdded { event_id: String },
+    /// Reply to [`Request::TasksRemoveDep`].
+    TasksDepRemoved { event_id: String },
+    /// Reply to [`Request::TasksAddLabel`].
+    TasksLabelAdded { event_id: String },
+    /// Reply to [`Request::TasksRemoveLabel`].
+    TasksLabelRemoved { event_id: String },
+    /// Reply to [`Request::TasksTransfer`].
+    TasksTransfer { task: TaskSummary, event_id: String },
 }
 
 /// Wire-format summary of a single task.
@@ -393,5 +506,380 @@ mod tests {
         };
         let json = serde_json::to_string(&err).unwrap();
         assert_eq!(json, r#"{"kind":"version_mismatch","client":1,"server":2}"#);
+    }
+
+    // ── tasks_show ─────────────────────────────────────────────
+
+    fn sample_summary() -> TaskSummary {
+        TaskSummary {
+            task_id: "brn-2fe.27".into(),
+            title: "vertical slice".into(),
+            status: "in_progress".into(),
+            priority: 0,
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    #[test]
+    fn request_tasks_show_roundtrips() {
+        let req = Request::TasksShow {
+            id: "brn-2fe.27".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_tasks_show_wire_format_is_stable() {
+        let req = Request::TasksShow {
+            id: "brn-2fe.27".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"tasks_show","id":"brn-2fe.27"}"#);
+    }
+
+    #[test]
+    fn response_tasks_show_some_roundtrips() {
+        let res = Response::TasksShow {
+            task: Some(sample_summary()),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_tasks_show_none_roundtrips() {
+        let res = Response::TasksShow { task: None };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_tasks_show_wire_format_is_stable() {
+        let res = Response::TasksShow { task: None };
+        let json = serde_json::to_string(&res).unwrap();
+        assert_eq!(json, r#"{"type":"tasks_show","task":null}"#);
+    }
+
+    // ── tasks_next ─────────────────────────────────────────────
+
+    #[test]
+    fn request_tasks_next_roundtrips() {
+        let req = Request::TasksNext;
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_tasks_next_wire_format_is_stable() {
+        let req = Request::TasksNext;
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"tasks_next"}"#);
+    }
+
+    #[test]
+    fn response_tasks_next_roundtrips() {
+        let res = Response::TasksNext {
+            task: Some(sample_summary()),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_tasks_next_none_wire_format_is_stable() {
+        let res = Response::TasksNext { task: None };
+        let json = serde_json::to_string(&res).unwrap();
+        assert_eq!(json, r#"{"type":"tasks_next","task":null}"#);
+    }
+
+    // ── tasks_create ───────────────────────────────────────────
+
+    fn sample_create_params() -> TasksCreateParams {
+        TasksCreateParams {
+            title: "new task".into(),
+            description: Some("body".into()),
+            priority: 2,
+            task_type: "task".into(),
+            assignee: Some("alice".into()),
+            parent: None,
+        }
+    }
+
+    #[test]
+    fn request_tasks_create_roundtrips() {
+        let req = Request::TasksCreate {
+            params: sample_create_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_tasks_create_wire_format_is_stable() {
+        let req = Request::TasksCreate {
+            params: TasksCreateParams {
+                title: "t".into(),
+                description: None,
+                priority: 2,
+                task_type: "task".into(),
+                assignee: None,
+                parent: None,
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"tasks_create","params":{"title":"t","description":null,"priority":2,"task_type":"task","assignee":null,"parent":null}}"#
+        );
+    }
+
+    #[test]
+    fn response_tasks_create_roundtrips() {
+        let res = Response::TasksCreate {
+            task: sample_summary(),
+            event_id: "01JABCDE".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_tasks_create_wire_format_is_stable() {
+        let res = Response::TasksCreate {
+            task: sample_summary(),
+            event_id: "01JABCDE".into(),
+        };
+        let json = serde_json::to_string(&res).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"tasks_create","task":{"task_id":"brn-2fe.27","title":"vertical slice","status":"in_progress","priority":0,"brain_id":"eAx_dEFA"},"event_id":"01JABCDE"}"#
+        );
+    }
+
+    // ── tasks_update ───────────────────────────────────────────
+
+    #[test]
+    fn request_tasks_update_roundtrips() {
+        let req = Request::TasksUpdate {
+            params: TasksUpdateParams {
+                id: "brn-2fe.27".into(),
+                title: Some("renamed".into()),
+                description: None,
+                priority: Some(1),
+                assignee: None,
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_tasks_update_wire_format_is_stable() {
+        let req = Request::TasksUpdate {
+            params: TasksUpdateParams {
+                id: "brn-2fe.27".into(),
+                title: None,
+                description: None,
+                priority: Some(1),
+                assignee: None,
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"tasks_update","params":{"id":"brn-2fe.27","title":null,"description":null,"priority":1,"assignee":null}}"#
+        );
+    }
+
+    #[test]
+    fn response_tasks_update_roundtrips() {
+        let res = Response::TasksUpdate {
+            task: sample_summary(),
+            event_id: "evt".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── tasks_mutate ───────────────────────────────────────────
+
+    #[test]
+    fn request_tasks_mutate_roundtrips() {
+        let req = Request::TasksMutate {
+            params: TasksMutateParams {
+                id: "brn-2fe.27".into(),
+                action: "close".into(),
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_tasks_mutate_wire_format_is_stable() {
+        let req = Request::TasksMutate {
+            params: TasksMutateParams {
+                id: "brn-2fe.27".into(),
+                action: "in_progress".into(),
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"tasks_mutate","params":{"id":"brn-2fe.27","action":"in_progress"}}"#
+        );
+    }
+
+    #[test]
+    fn response_tasks_mutate_roundtrips() {
+        let res = Response::TasksMutate {
+            task: sample_summary(),
+            event_id: "evt".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── tasks_add_dep / tasks_remove_dep ───────────────────────
+
+    #[test]
+    fn request_tasks_add_dep_roundtrips() {
+        let req = Request::TasksAddDep {
+            task_id: "brn-2fe.27".into(),
+            depends_on_task_id: "brn-2fe.28".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_tasks_add_dep_wire_format_is_stable() {
+        let req = Request::TasksAddDep {
+            task_id: "brn-2fe.27".into(),
+            depends_on_task_id: "brn-2fe.28".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"tasks_add_dep","task_id":"brn-2fe.27","depends_on_task_id":"brn-2fe.28"}"#
+        );
+    }
+
+    #[test]
+    fn request_tasks_remove_dep_roundtrips() {
+        let req = Request::TasksRemoveDep {
+            task_id: "brn-2fe.27".into(),
+            depends_on_task_id: "brn-2fe.28".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_tasks_dep_added_roundtrips() {
+        let res = Response::TasksDepAdded {
+            event_id: "evt".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_tasks_dep_added_wire_format_is_stable() {
+        let res = Response::TasksDepAdded {
+            event_id: "evt".into(),
+        };
+        let json = serde_json::to_string(&res).unwrap();
+        assert_eq!(json, r#"{"type":"tasks_dep_added","event_id":"evt"}"#);
+    }
+
+    #[test]
+    fn response_tasks_dep_removed_roundtrips() {
+        let res = Response::TasksDepRemoved {
+            event_id: "evt".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── tasks_add_label / tasks_remove_label ───────────────────
+
+    #[test]
+    fn request_tasks_add_label_roundtrips() {
+        let req = Request::TasksAddLabel {
+            task_id: "brn-2fe.27".into(),
+            label: "blocked".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_tasks_add_label_wire_format_is_stable() {
+        let req = Request::TasksAddLabel {
+            task_id: "brn-2fe.27".into(),
+            label: "blocked".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"tasks_add_label","task_id":"brn-2fe.27","label":"blocked"}"#
+        );
+    }
+
+    #[test]
+    fn request_tasks_remove_label_roundtrips() {
+        let req = Request::TasksRemoveLabel {
+            task_id: "brn-2fe.27".into(),
+            label: "blocked".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_tasks_label_added_roundtrips() {
+        let res = Response::TasksLabelAdded {
+            event_id: "evt".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_tasks_label_added_wire_format_is_stable() {
+        let res = Response::TasksLabelAdded {
+            event_id: "evt".into(),
+        };
+        let json = serde_json::to_string(&res).unwrap();
+        assert_eq!(json, r#"{"type":"tasks_label_added","event_id":"evt"}"#);
+    }
+
+    #[test]
+    fn response_tasks_label_removed_roundtrips() {
+        let res = Response::TasksLabelRemoved {
+            event_id: "evt".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── tasks_transfer ─────────────────────────────────────────
+
+    #[test]
+    fn request_tasks_transfer_roundtrips() {
+        let req = Request::TasksTransfer {
+            params: TasksTransferParams {
+                task_id: "brn-2fe.27".into(),
+                target_brain: "other".into(),
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_tasks_transfer_wire_format_is_stable() {
+        let req = Request::TasksTransfer {
+            params: TasksTransferParams {
+                task_id: "brn-2fe.27".into(),
+                target_brain: "other".into(),
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"tasks_transfer","params":{"task_id":"brn-2fe.27","target_brain":"other"}}"#
+        );
+    }
+
+    #[test]
+    fn response_tasks_transfer_roundtrips() {
+        let res = Response::TasksTransfer {
+            task: sample_summary(),
+            event_id: "evt".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
     }
 }
