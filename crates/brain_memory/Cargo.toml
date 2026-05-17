@@ -1,0 +1,38 @@
+[package]
+name = "brain-memory"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["embed"]
+embed = ["dep:brain-embedder", "brain-retrieval/embed"]
+test-utils = [
+    "brain-persistence/test-utils",
+    "brain-core/test-utils",
+    "brain-retrieval/test-utils",
+    "brain-records/test-utils",
+    "brain-tasks/test-utils",
+    "brain-tags/test-utils",
+]
+
+[dependencies]
+brain-core = { path = "../brain_core" }
+brain-embedder = { path = "../brain_embedder", optional = true }
+brain-persistence = { path = "../brain_persistence" }
+brain-records = { path = "../brain_records" }
+brain-retrieval = { path = "../brain_retrieval", default-features = false }
+brain-tags = { path = "../brain_tags", default-features = false }
+brain-tasks = { path = "../brain_tasks", default-features = false }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+blake3 = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
+rusqlite = { workspace = true }
+brain-memory = { path = ".", features = ["test-utils"] }

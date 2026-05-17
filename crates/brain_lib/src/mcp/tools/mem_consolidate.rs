@@ -1,40 +1,12 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
 use super::{McpTool, json_response};
-
-fn default_limit() -> usize {
-    50
-}
-
-fn default_auto_summarize() -> bool {
-    false
-}
-
-#[derive(Deserialize)]
-struct Params {
-    #[serde(default = "default_limit")]
-    limit: usize,
-    #[serde(default)]
-    brain_id: Option<String>,
-    /// Gap in seconds between episodes that triggers a cluster boundary.
-    /// Default: 3600 (1 hour).
-    #[serde(default = "default_gap_seconds")]
-    gap_seconds: i64,
-    #[serde(default = "default_auto_summarize")]
-    auto_summarize: bool,
-}
-
-fn default_gap_seconds() -> i64 {
-    3600
-}
 
 pub(super) struct MemConsolidate;
 
@@ -87,62 +59,20 @@ impl McpTool for MemConsolidate {
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            let params: Params = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
-            };
+            let params: brain_memory::consolidate::ConsolidateParams =
+                match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+                };
 
-            let effective_brain_id = match params.brain_id.as_deref() {
-                Some(brain_id) => brain_id,
-                None => ctx.brain_id(),
-            };
-
-            let limit = params.limit.min(500);
-            let episodes = match ctx.stores.list_episodes(limit, effective_brain_id) {
-                Ok(rows) => rows,
-                Err(e) => return ToolCallResult::error(format!("Failed to list episodes: {e}")),
-            };
-
-            let result = consolidate_episodes(episodes, params.gap_seconds);
-            let jobs_enqueued = if params.auto_summarize {
-                match enqueue_cluster_summarization(
-                    &ctx.stores,
-                    &result.clusters,
-                    effective_brain_id,
-                ) {
-                    Ok(count) => count,
-                    Err(e) => {
-                        return ToolCallResult::error(format!(
-                            "Failed to enqueue consolidation jobs: {e}"
-                        ));
-                    }
-                }
-            } else {
-                0
-            };
-
-            let clusters_json: Vec<Value> = result
-                .clusters
-                .iter()
-                .map(|c| {
-                    json!({
-                        "episode_ids": c.episode_ids,
-                        "episode_count": c.episodes.len(),
-                        "suggested_title": c.suggested_title,
-                        "summary": c.summary,
-                        "oldest_ts": c.episodes.iter().map(|e| e.created_at).min(),
-                        "newest_ts": c.episodes.iter().map(|e| e.created_at).max(),
-                    })
-                })
-                .collect();
-
-            let response = json!({
-                "cluster_count": clusters_json.len(),
-                "jobs_enqueued": jobs_enqueued,
-                "clusters": clusters_json,
-            });
-
-            json_response(&response)
+            match brain_memory::consolidate::run_as_json(
+                ctx.stores.inner_db(),
+                ctx.brain_id(),
+                params,
+            ) {
+                Ok(v) => json_response(&v),
+                Err(e) => ToolCallResult::error(format!("Failed to consolidate: {e}")),
+            }
         })
     }
 }

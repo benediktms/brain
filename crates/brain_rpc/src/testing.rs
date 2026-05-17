@@ -113,9 +113,25 @@ impl InMemoryTransport {
             | Request::ProviderList
             | Request::WatchAdd { .. }
             | Request::WatchRemove { .. }
-            | Request::WatchList => Err(RpcError::Unknown {
+            | Request::WatchList
+            | Request::LinksAdd { .. }
+            | Request::LinksRemove { .. }
+            | Request::LinksForEntity { .. }
+            | Request::RecordsArchive { .. }
+            | Request::RecordsLinkAdd { .. }
+            | Request::RecordsLinkRemove { .. }
+            | Request::RecordsTagAdd { .. }
+            | Request::RecordsTagRemove { .. }
+            | Request::TasksApplyEvent { .. }
+            | Request::TasksDepsBatch { .. }
+            | Request::TasksLabelsBatch { .. }
+            | Request::TasksLabelsSummary
+            | Request::MemoryWalkThread { .. }
+            | Request::TagsRecluster { .. }
+            | Request::BrainsList { .. } => Err(RpcError::Unknown {
                 message: "InMemoryTransport::echo does not handle tasks_* / records_* / \
-                          sagas_* / memory_* / <kind>_* / watch_* requests — use \
+                          sagas_* / memory_* / <kind>_* / watch_* / links_* / brains_* / \
+                          tags_recluster requests — use \
                           InMemoryTransport::new with a custom handler"
                     .into(),
             }),

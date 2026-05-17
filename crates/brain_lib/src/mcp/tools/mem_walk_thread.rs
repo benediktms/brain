@@ -1,101 +1,36 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::warn;
-
-use brain_persistence::db::links::collect_thread_episode_rows;
-#[allow(unused_imports)]
-use brain_persistence::sql::SqlResultExt;
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::uri::SynapseUri;
 
 use super::{McpTool, json_response};
-
-/// Default BFS depth bound when the caller does not specify `max_depth`.
-/// Threads are linear via DAG-validated `continues` edges, so 32 hops
-/// covers the long tail of typical agent saga lengths without risking
-/// pathological neighbourhoods.
-const DEFAULT_MAX_DEPTH: u32 = 32;
-
-#[derive(Deserialize)]
-struct Params {
-    seed_summary_id: String,
-    #[serde(default)]
-    max_depth: Option<u32>,
-}
 
 pub(super) struct MemWalkThread;
 
 impl MemWalkThread {
     fn execute(&self, params: Value, ctx: &McpContext) -> ToolCallResult {
-        let params: Params = match serde_json::from_value(params) {
-            Ok(p) => p,
-            Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
-        };
+        let params: brain_memory::walk_thread::WalkThreadParams =
+            match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            };
 
         if params.seed_summary_id.is_empty() {
             return ToolCallResult::error("seed_summary_id must not be empty");
         }
 
-        let max_depth = params.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
-
-        // Single hydration: the helper returns sorted rows + a truncation
-        // flag. No re-query, no re-sort.
-        let result = match ctx.stores.inner_db().with_read_conn(|conn| {
-            collect_thread_episode_rows(conn, &params.seed_summary_id, max_depth)
-        }) {
-            Ok(r) => r,
-            Err(e) => return ToolCallResult::error(format!("Failed to walk thread: {e}")),
-        };
-
-        // Defense in depth: filter cross-brain rows even though the typed
-        // `continues` parameter on `memory.write_episode` rejects cross-brain
-        // predecessors. Direct DB writes or future writers could produce
-        // edges crossing brain boundaries; we never surface them here.
-        let current_brain_id = ctx.brain_id();
-        let total_before_filter = result.rows.len();
-        let rows: Vec<_> = result
-            .rows
-            .into_iter()
-            .filter(|row| row.brain_id == current_brain_id)
-            .collect();
-        if rows.len() < total_before_filter {
-            warn!(
-                seed = %params.seed_summary_id,
-                brain_id = %current_brain_id,
-                dropped = total_before_filter - rows.len(),
-                "memory.walk_thread: dropped cross-brain rows from thread"
-            );
+        match brain_memory::walk_thread::run_as_json(
+            ctx.stores.inner_db(),
+            ctx.brain_id(),
+            ctx.brain_name(),
+            params,
+        ) {
+            Ok(v) => json_response(&v),
+            Err(e) => ToolCallResult::error(format!("Failed to walk thread: {e}")),
         }
-
-        let episodes: Vec<Value> = rows
-            .into_iter()
-            .map(|row| {
-                let uri = SynapseUri::for_episode(ctx.brain_name(), &row.summary_id).to_string();
-                json!({
-                    "summary_id": row.summary_id,
-                    "uri": uri,
-                    "kind": "episode",
-                    "title": row.title,
-                    "content": row.content,
-                    "tags": row.tags,
-                    "importance": row.importance,
-                    "created_at": row.created_at,
-                })
-            })
-            .collect();
-
-        let count = episodes.len();
-        json_response(&json!({
-            "seed_summary_id": params.seed_summary_id,
-            "count": count,
-            "truncated": result.truncated,
-            "thread": episodes,
-        }))
     }
 }
 

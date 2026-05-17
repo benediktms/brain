@@ -10,11 +10,13 @@ use brain_persistence::db::links::{EntityRef, EntityType};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-use crate::uri::SynapseUri;
-
 use super::links_add::{InlineLinkInput, apply_inline_links, inline_links_schema};
 use super::{McpTool, json_response};
 
+/// Wrapper params: the typed brain_memory params plus the MCP-only
+/// `links` field. Deserialised here at the MCP boundary because the
+/// inline-link handling is MCP-specific framing and never crosses into
+/// brain_memory.
 #[derive(Deserialize)]
 struct Params {
     title: String,
@@ -82,34 +84,37 @@ impl McpTool for MemWriteProcedure {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            let importance = params.importance.clamp(0.0, 1.0);
+            let core_params = brain_memory::write_procedure::WriteProcedureParams {
+                title: params.title.clone(),
+                steps: params.steps,
+                tags: params.tags.clone(),
+                importance: params.importance,
+            };
 
-            let summary_id = match ctx.stores.store_procedure(
-                &params.title,
-                &params.steps,
-                &params.tags,
-                importance,
+            let result = match brain_memory::write_procedure::run(
+                ctx.stores.inner_db(),
                 ctx.brain_id(),
+                ctx.brain_name(),
+                core_params,
             ) {
-                Ok(id) => id,
+                Ok(r) => r,
                 Err(e) => {
                     error!(error = %e, "failed to store procedure");
                     return ToolCallResult::error(format!("Failed to store procedure: {e}"));
                 }
             };
 
-            let uri = SynapseUri::for_procedure(ctx.brain_name(), &summary_id).to_string();
             let mut response = json!({
                 "status": "stored",
-                "summary_id": summary_id,
-                "uri": uri,
-                "title": params.title,
-                "tags": params.tags,
-                "importance": params.importance
+                "summary_id": result.summary_id,
+                "uri": result.uri,
+                "title": result.title,
+                "tags": result.tags,
+                "importance": result.importance
             });
 
             if !params.links.is_empty() {
-                let from_ref = EntityRef::new(EntityType::Procedure, summary_id.clone())
+                let from_ref = EntityRef::new(EntityType::Procedure, result.summary_id.clone())
                     .expect("summary_id is non-empty");
                 let links_block = apply_inline_links(from_ref, params.links.clone(), ctx);
                 response["links"] = links_block;

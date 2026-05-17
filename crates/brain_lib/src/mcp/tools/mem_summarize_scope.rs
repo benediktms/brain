@@ -1,36 +1,12 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::hierarchy::{ScopeType, generate_scope_summary_with_options, get_scope_summary};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
 use super::{McpTool, json_response};
-
-fn default_regenerate() -> bool {
-    false
-}
-
-fn default_async_llm() -> bool {
-    true
-}
-
-#[derive(Deserialize)]
-struct Params {
-    /// "directory" or "tag"
-    scope_type: String,
-    /// The directory path or tag name.
-    scope_value: String,
-    /// When true, force regeneration even if a summary already exists.
-    #[serde(default = "default_regenerate")]
-    regenerate: bool,
-    /// When true, enqueue an async LLM job to replace the placeholder summary.
-    #[serde(default = "default_async_llm")]
-    async_llm: bool,
-}
 
 pub(super) struct MemSummarizeScope;
 
@@ -87,87 +63,15 @@ impl McpTool for MemSummarizeScope {
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            let params: Params = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
-            };
+            let params: brain_memory::summarize_scope::SummarizeScopeParams =
+                match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+                };
 
-            let scope_type = match params.scope_type.as_str() {
-                "directory" => ScopeType::Directory,
-                "tag" => ScopeType::Tag,
-                other => {
-                    return ToolCallResult::error(format!(
-                        "Invalid scope_type \"{other}\": must be \"directory\" or \"tag\""
-                    ));
-                }
-            };
-
-            let stores = &ctx.stores;
-
-            let mut llm_pending = false;
-
-            if params.regenerate {
-                // Force-generate a fresh summary.
-                match generate_scope_summary_with_options(
-                    stores,
-                    &scope_type,
-                    &params.scope_value,
-                    params.async_llm,
-                ) {
-                    Err(e) => {
-                        return ToolCallResult::error(format!("Failed to generate summary: {e}"));
-                    }
-                    Ok(generation) => llm_pending = generation.llm_pending,
-                }
-            }
-
-            // Retrieve the (possibly just-generated) summary.
-            match get_scope_summary(stores, &scope_type, &params.scope_value) {
-                Err(e) => ToolCallResult::error(format!("Failed to retrieve summary: {e}")),
-                Ok(None) => {
-                    // No existing summary — generate one now.
-                    match generate_scope_summary_with_options(
-                        stores,
-                        &scope_type,
-                        &params.scope_value,
-                        params.async_llm,
-                    ) {
-                        Err(e) => ToolCallResult::error(format!("Failed to generate summary: {e}")),
-                        Ok(generation) => {
-                            llm_pending = generation.llm_pending;
-                            match get_scope_summary(stores, &scope_type, &params.scope_value) {
-                                Err(e) => ToolCallResult::error(format!(
-                                    "Failed to retrieve summary after generation: {e}"
-                                )),
-                                Ok(None) => {
-                                    ToolCallResult::error("Summary generation produced no result")
-                                }
-                                Ok(Some(summary)) => {
-                                    let response = json!({
-                                        "scope_type": summary.scope_type,
-                                        "scope_value": summary.scope_value,
-                                        "content": summary.content,
-                                        "stale": summary.stale,
-                                        "llm_pending": llm_pending,
-                                        "generated_at": summary.generated_at,
-                                    });
-                                    json_response(&response)
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok(Some(summary)) => {
-                    let response = json!({
-                        "scope_type": summary.scope_type,
-                        "scope_value": summary.scope_value,
-                        "content": summary.content,
-                        "stale": summary.stale,
-                        "llm_pending": llm_pending,
-                        "generated_at": summary.generated_at,
-                    });
-                    json_response(&response)
-                }
+            match brain_memory::summarize_scope::run_as_json(&ctx.stores, params) {
+                Ok(v) => json_response(&v),
+                Err(e) => ToolCallResult::error(format!("Failed to summarize scope: {e}")),
             }
         })
     }
@@ -215,7 +119,6 @@ mod tests {
                 &ctx,
             )
             .await;
-        // Empty scope still produces a valid (empty-content) response.
         assert!(
             result.is_error.is_none(),
             "unexpected error: {:?}",

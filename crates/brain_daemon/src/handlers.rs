@@ -24,14 +24,14 @@ use brain_records::{
 use brain_rpc::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
     JobSummary, JobsStatusReport, MemoryConsolidateParams, MemoryReflectParams,
-    MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWriteEpisodeParams,
-    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
-    RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response, RpcError,
-    SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
-    SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
-    SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
-    TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams,
+    MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
+    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
+    ProviderSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request,
+    Response, RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult,
+    SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
+    SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
+    TagAliasesStatusReport, TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams,
+    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
 };
 use brain_sagas::{
     BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
@@ -55,15 +55,17 @@ use crate::dispatcher::Dispatcher;
 /// [`crate::UnixSocketServer`] is satisfied.
 pub struct BrainStoresDispatcher {
     stores: BrainStores,
-    /// Tokio current-thread runtime for memory handlers that go through
-    /// `ToolRegistry::dispatch` (async LanceDB + embedder). Created
-    /// lazily on first use to keep daemon startup fast for callers that
-    /// never touch semantic memory.
+    /// Tokio current-thread runtime for memory handlers that drive the
+    /// async `brain_memory::retrieve` / `reflect` pipelines (async
+    /// LanceDB + embedder). Created lazily on first use to keep daemon
+    /// startup fast for callers that never touch semantic memory.
     runtime: OnceLock<tokio::runtime::Runtime>,
-    /// Shared MCP context (BrainStores + SearchService + Metrics) for
-    /// semantic memory tools. Built lazily on first retrieve / reflect
-    /// call from `self.stores.brain_home` so a daemon launched without
-    /// the embedder model on disk still answers everything else.
+    /// Bootstrapped semantic-memory resource holder (BrainStores +
+    /// SearchService + Metrics). Memory handlers borrow this into a
+    /// `brain_memory::context::SemanticContext` for each call. Built
+    /// lazily so a daemon launched without the embedder model on disk
+    /// still answers everything else. Keeps its historical
+    /// `McpContext` name until brain_lib::mcp leaves in PR2.
     mcp_ctx: OnceLock<Arc<brain_lib::mcp::McpContext>>,
     /// Handle to the file-watcher supervisor. `None` when the daemon was
     /// started without a supervisor (e.g. no `--watch-dir` flag). Used
@@ -1468,92 +1470,215 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_memory_retrieve(&self, params: MemoryRetrieveParams) -> Result<Response, RpcError> {
-        // Mirror the wire params back into the JSON the MCP tool expects.
-        // Field-for-field translation keeps the brain_lib::mcp tool
-        // contract decoupled from `MemoryRetrieveParams`.
-        let json_params = serde_json::json!({
-            "query": params.query,
-            "uri": params.uri,
-            "lod": params.lod,
-            "count": params.count,
-            "strategy": params.strategy,
-            "brains": params.brains,
-            "time_scope": params.time_scope,
-            "time_after": params.time_after,
-            "time_before": params.time_before,
-            "tags": params.tags,
-            "tags_require": params.tags_require,
-            "tags_exclude": params.tags_exclude,
-            "kinds": params.kinds,
-            "explain": params.explain,
-        });
-        let result_json = self.dispatch_memory_tool("memory.retrieve", json_params)?;
-        Ok(Response::MemoryRetrieve { result_json })
+        let mcp_ctx = self.mcp_ctx()?;
+        let semantic_ctx = brain_memory::context::SemanticContext {
+            db: mcp_ctx.stores.inner_db(),
+            brain_id: mcp_ctx.brain_id(),
+            brain_name: mcp_ctx.brain_name(),
+            store: mcp_ctx.store(),
+            embedder: mcp_ctx.embedder(),
+            metrics: &mcp_ctx.metrics,
+        };
+
+        let kinds: Vec<brain_lib::retrieval::MemoryKind> = params
+            .kinds
+            .iter()
+            .filter_map(|k| serde_json::from_value(serde_json::Value::String(k.clone())).ok())
+            .collect();
+
+        let retrieve_params = brain_memory::retrieve::RetrieveParams {
+            query: params.query,
+            uri: params.uri.clone(),
+            lod: params.lod.clone(),
+            count: params.count,
+            strategy: params.strategy,
+            brain: None,
+            brains: params.brains.clone(),
+            time_scope: params.time_scope,
+            tags: params.tags,
+            kinds,
+            time_after: params.time_after,
+            time_before: params.time_before,
+            tags_require: params.tags_require,
+            tags_exclude: params.tags_exclude,
+            explain: params.explain,
+            vector_search_mode: None,
+        };
+
+        let lod = brain_lib::lod::LodLevel::parse(&retrieve_params.lod.to_uppercase()).ok_or_else(
+            || RpcError::Protocol {
+                message: format!(
+                    "Invalid lod value {:?}: must be one of L0, L1, L2",
+                    retrieve_params.lod
+                ),
+            },
+        )?;
+
+        // URI mode is sync and skips the search layer entirely.
+        if let Some(uri_str) = retrieve_params.uri.as_deref() {
+            let value = brain_memory::retrieve::run_uri_mode_as_json(
+                &semantic_ctx,
+                uri_str,
+                lod,
+                retrieve_params.explain,
+            )
+            .map_err(|e| RpcError::Unknown {
+                message: format!("memory.retrieve: {e}"),
+            })?;
+            return wrap_memory_retrieve_value(value);
+        }
+
+        // Query mode runs the async pipeline on the daemon's runtime.
+        let runtime = self.runtime()?;
+        let brains_pre = if retrieve_params.brains.is_empty() {
+            Vec::new()
+        } else {
+            self.build_federated_brain_list(&mcp_ctx, &retrieve_params.brains, runtime)?
+        };
+
+        let value = runtime
+            .block_on(brain_memory::retrieve::run_query_as_json(
+                &semantic_ctx,
+                retrieve_params,
+                brains_pre,
+            ))
+            .map_err(|e| RpcError::Unknown {
+                message: format!("memory.retrieve: {e}"),
+            })?;
+        wrap_memory_retrieve_value(value)
     }
 
     fn handle_memory_reflect(&self, params: MemoryReflectParams) -> Result<Response, RpcError> {
-        // Map wire params back into the MCP tool's JSON shape. The tool
-        // dispatches on `mode` ("prepare" vs "commit"), driven from
-        // `commit: bool` on the wire.
-        let mut json_params = serde_json::json!({
-            "mode": if params.commit { "commit" } else { "prepare" },
-        });
-        if let Some(topic) = params.topic {
-            json_params["topic"] = serde_json::Value::String(topic);
-        }
-        json_params["budget"] = serde_json::Value::from(params.budget);
-        json_params["brains"] = serde_json::Value::from(params.brains);
-        if let Some(title) = params.title {
-            json_params["title"] = serde_json::Value::String(title);
-        }
-        if let Some(content) = params.content {
-            json_params["content"] = serde_json::Value::String(content);
-        }
-        json_params["source_ids"] = serde_json::Value::from(params.source_ids);
-        json_params["tags"] = serde_json::Value::from(params.tags);
-        if let Some(millis) = params.importance_millis {
-            json_params["importance"] = serde_json::Value::from(millis_to_unit(millis));
-        }
-        let result_json = self.dispatch_memory_tool("memory.reflect", json_params)?;
+        let mcp_ctx = self.mcp_ctx()?;
+        let semantic_ctx = brain_memory::context::SemanticContext {
+            db: mcp_ctx.stores.inner_db(),
+            brain_id: mcp_ctx.brain_id(),
+            brain_name: mcp_ctx.brain_name(),
+            store: mcp_ctx.store(),
+            embedder: mcp_ctx.embedder(),
+            metrics: &mcp_ctx.metrics,
+        };
+
+        let reflect_params = brain_memory::reflect::ReflectParams {
+            mode: if params.commit { "commit" } else { "prepare" }.to_string(),
+            topic: params.topic.unwrap_or_default(),
+            budget_tokens: params.budget as u64,
+            brains: params.brains,
+            title: params.title.unwrap_or_default(),
+            content: params.content.unwrap_or_default(),
+            source_ids: params.source_ids,
+            tags: params.tags,
+            importance: params.importance_millis.map(millis_to_unit),
+        };
+
+        let runtime = self.runtime()?;
+        let value = runtime
+            .block_on(brain_memory::reflect::run_as_json(
+                &semantic_ctx,
+                reflect_params,
+            ))
+            .map_err(|e| RpcError::Unknown {
+                message: format!("memory.reflect: {e}"),
+            })?;
+        let result_json = serde_json::to_string(&value).map_err(|e| RpcError::Protocol {
+            message: format!("serialize reflect result: {e}"),
+        })?;
         Ok(Response::MemoryReflect { result_json })
     }
 
-    /// Run an MCP memory tool via the shared ToolRegistry on the
-    /// daemon's tokio runtime. Returns the tool's JSON content text
-    /// (or surfaces its error as `RpcError::Unknown`). All semantic
-    /// memory handlers share this dispatcher so a future protocol
-    /// change to the on-the-wire result envelope is a single edit.
-    fn dispatch_memory_tool(
+    fn handle_memory_walk_thread(
         &self,
-        tool_name: &str,
-        json_params: serde_json::Value,
-    ) -> Result<String, RpcError> {
-        use brain_lib::mcp::tools::ToolRegistry;
+        params: MemoryWalkThreadParams,
+    ) -> Result<Response, RpcError> {
+        let walk_params: brain_memory::walk_thread::WalkThreadParams =
+            serde_json::from_value(params.params_json).map_err(|e| RpcError::Protocol {
+                message: format!("invalid memory.walk_thread params: {e}"),
+            })?;
+        let value = brain_memory::walk_thread::run_as_json(
+            self.stores.inner_db(),
+            &self.stores.brain_id,
+            &self.stores.brain_name,
+            walk_params,
+        )
+        .map_err(|e| RpcError::Unknown {
+            message: format!("memory.walk_thread: {e}"),
+        })?;
+        let result_json = serde_json::to_string(&value).map_err(|e| RpcError::Protocol {
+            message: format!("serialize walk_thread result: {e}"),
+        })?;
+        Ok(Response::MemoryWalkThread { result_json })
+    }
 
-        let ctx = self.mcp_ctx()?;
-        let runtime = self.runtime()?;
-        let call_result = runtime.block_on(async {
-            let registry = ToolRegistry::new();
-            registry.dispatch(tool_name, json_params, &ctx).await
-        });
+    /// Resolve federated brain keys to a `(name, id, Option<StoreReader>)`
+    /// list suitable for `brain_memory::retrieve::run_query_as_json`.
+    ///
+    /// Mirrors the brain_lib `build_federated_brains` helper but lives
+    /// here so the daemon doesn't reach into the about-to-be-deleted
+    /// `brain_lib::mcp::tools` module.
+    fn build_federated_brain_list(
+        &self,
+        mcp_ctx: &brain_lib::mcp::McpContext,
+        brain_keys_input: &[String],
+        runtime: &tokio::runtime::Runtime,
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            Option<brain_persistence::store::StoreReader>,
+        )>,
+        RpcError,
+    > {
+        let store = mcp_ctx.store().ok_or_else(|| RpcError::Unknown {
+            message: "memory.retrieve: search layer unavailable".into(),
+        })?;
+        let embedder = mcp_ctx.embedder().ok_or_else(|| RpcError::Unknown {
+            message: "memory.retrieve: embedder unavailable".into(),
+        })?;
 
-        if call_result.is_error == Some(true) {
-            let msg = call_result
-                .content
-                .first()
-                .map(|c| c.text.as_str())
-                .unwrap_or("tool dispatch failed");
-            return Err(RpcError::Unknown {
-                message: format!("{tool_name}: {msg}"),
-            });
+        let brain_keys: Vec<String> = if brain_keys_input.iter().any(|b| b == "all") {
+            self.stores
+                .list_brain_keys()
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("list brains: {e}"),
+                })?
+                .into_iter()
+                .map(|(name, _id)| name)
+                .collect()
+        } else {
+            brain_keys_input.to_vec()
+        };
+
+        let mut brains: Vec<(
+            String,
+            String,
+            Option<brain_persistence::store::StoreReader>,
+        )> = Vec::new();
+        brains.push((
+            mcp_ctx.brain_name().to_string(),
+            mcp_ctx.brain_id().to_string(),
+            Some(store.clone()),
+        ));
+
+        for key in &brain_keys {
+            if key == mcp_ctx.brain_name() {
+                continue;
+            }
+            let remote_result = runtime.block_on(brain_lib::config::open_remote_search_context(
+                mcp_ctx.brain_home(),
+                key,
+                std::path::Path::new(""),
+                embedder,
+            ));
+            match remote_result {
+                Ok(Some(remote)) => {
+                    brains.push((remote.brain_name, remote.brain_id, remote.store));
+                }
+                Ok(None) => {}
+                Err(_) => {}
+            }
         }
-        let text = call_result
-            .content
-            .into_iter()
-            .next()
-            .map(|c| c.text)
-            .unwrap_or_else(|| "{}".to_string());
-        Ok(text)
+
+        Ok(brains)
     }
 
     // ── tags handlers ────────────────────────────────────────────────────────
@@ -1951,6 +2076,55 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::WatchAdd { path } => self.handle_watch_add(path),
             Request::WatchRemove { path } => self.handle_watch_remove(path),
             Request::WatchList => self.handle_watch_list(),
+
+            // ── Stub dispatchers for the new wire variants ───────────────
+            // Real implementations land in a follow-up commit once
+            // brain_memory's per-operation modules are populated. Until
+            // then these return a structured error so the workspace
+            // compiles and existing wire variants stay untouched.
+            Request::LinksAdd { .. } => Err(RpcError::Unknown {
+                message: "LinksAdd: handler pending wire-up".into(),
+            }),
+            Request::LinksRemove { .. } => Err(RpcError::Unknown {
+                message: "LinksRemove: handler pending wire-up".into(),
+            }),
+            Request::LinksForEntity { .. } => Err(RpcError::Unknown {
+                message: "LinksForEntity: handler pending wire-up".into(),
+            }),
+            Request::RecordsArchive { .. } => Err(RpcError::Unknown {
+                message: "RecordsArchive: handler pending wire-up".into(),
+            }),
+            Request::RecordsLinkAdd { .. } => Err(RpcError::Unknown {
+                message: "RecordsLinkAdd: handler pending wire-up".into(),
+            }),
+            Request::RecordsLinkRemove { .. } => Err(RpcError::Unknown {
+                message: "RecordsLinkRemove: handler pending wire-up".into(),
+            }),
+            Request::RecordsTagAdd { .. } => Err(RpcError::Unknown {
+                message: "RecordsTagAdd: handler pending wire-up".into(),
+            }),
+            Request::RecordsTagRemove { .. } => Err(RpcError::Unknown {
+                message: "RecordsTagRemove: handler pending wire-up".into(),
+            }),
+            Request::TasksApplyEvent { .. } => Err(RpcError::Unknown {
+                message: "TasksApplyEvent: handler pending wire-up".into(),
+            }),
+            Request::TasksDepsBatch { .. } => Err(RpcError::Unknown {
+                message: "TasksDepsBatch: handler pending wire-up".into(),
+            }),
+            Request::TasksLabelsBatch { .. } => Err(RpcError::Unknown {
+                message: "TasksLabelsBatch: handler pending wire-up".into(),
+            }),
+            Request::TasksLabelsSummary => Err(RpcError::Unknown {
+                message: "TasksLabelsSummary: handler pending wire-up".into(),
+            }),
+            Request::MemoryWalkThread { params } => self.handle_memory_walk_thread(params),
+            Request::TagsRecluster { .. } => Err(RpcError::Unknown {
+                message: "TagsRecluster: handler pending wire-up".into(),
+            }),
+            Request::BrainsList { .. } => Err(RpcError::Unknown {
+                message: "BrainsList: handler pending wire-up".into(),
+            }),
         }
     }
 }
@@ -1967,6 +2141,16 @@ fn status_to_wire_string(s: &TaskStatus) -> String {
         TaskStatus::Cancelled => "cancelled",
     }
     .to_string()
+}
+
+/// Wrap a `memory.retrieve` JSON value into the wire `Response::MemoryRetrieve`
+/// envelope. Mirrors the `result_json: String` shape the MCP layer
+/// expects (the daemon serialises; the wire echoes the JSON string).
+fn wrap_memory_retrieve_value(value: serde_json::Value) -> Result<Response, RpcError> {
+    let result_json = serde_json::to_string(&value).map_err(|e| RpcError::Protocol {
+        message: format!("serialize retrieve result: {e}"),
+    })?;
+    Ok(Response::MemoryRetrieve { result_json })
 }
 
 /// Map [`integrity::IntegrityReport`] onto the wire-format

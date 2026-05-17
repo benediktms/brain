@@ -113,11 +113,27 @@ impl Dispatcher for DefaultDispatcher {
             | Request::TagsAliasesStatus
             | Request::JobsStatus
             | Request::BrainStatus
-            | Request::ProviderList => Err(RpcError::Unknown {
+            | Request::ProviderList
+            | Request::LinksAdd { .. }
+            | Request::LinksRemove { .. }
+            | Request::LinksForEntity { .. }
+            | Request::RecordsArchive { .. }
+            | Request::RecordsLinkAdd { .. }
+            | Request::RecordsLinkRemove { .. }
+            | Request::RecordsTagAdd { .. }
+            | Request::RecordsTagRemove { .. }
+            | Request::TasksApplyEvent { .. }
+            | Request::TasksDepsBatch { .. }
+            | Request::TasksLabelsBatch { .. }
+            | Request::TasksLabelsSummary
+            | Request::MemoryWalkThread { .. }
+            | Request::TagsRecluster { .. }
+            | Request::BrainsList { .. } => Err(RpcError::Unknown {
                 message: "tasks_* / records_* / <kind>_* / sagas_* / memory_* / tags_* / \
-                          jobs_* / status / provider_* requests not handled by \
-                          DefaultDispatcher — start brain-daemon with --sqlite-db \
-                          and --lance-db to use the BrainStores-backed dispatcher"
+                          jobs_* / status / provider_* / links_* / brains_* requests not \
+                          handled by DefaultDispatcher — start brain-daemon with \
+                          --sqlite-db and --lance-db to use the BrainStores-backed \
+                          dispatcher"
                     .into(),
             }),
             Request::WatchAdd { path } => Err(RpcError::Unknown {
