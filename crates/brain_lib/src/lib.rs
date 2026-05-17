@@ -69,15 +69,18 @@ pub mod scanner;
 pub mod search_service;
 pub mod stores;
 pub mod summarizer;
-pub(crate) mod tags;
-// Targeted public re-exports from `tags` so integration tests and `.7.2.5`'s
-// future MCP/CLI surface can reach the recluster job without exposing the
-// module namespace itself (preserves a deliberate review gate on what becomes
-// public API).
-pub use crate::tags::{ClusterParams, ReclusterReport, run_recluster};
+// Back-compat re-exports so existing callers (`brain_lib::ClusterParams`,
+// `brain_lib::run_recluster`) keep resolving after the tags domain moved
+// to its own crate. Domain types (`TagAlias`, `ClusterRun`, `AliasCoverage`)
+// are also re-exported so brain_lib consumers can reach them without a
+// direct `brain_tags` import — matches the `pub use brain_sagas as sagas`
+// precedent at the top of this file.
 pub use brain_core::tokens;
 pub use brain_core::uri;
 pub use brain_core::utils;
+pub use brain_tags::{
+    AliasCoverage, ClusterParams, ClusterRun, ReclusterReport, TagAlias, run_recluster,
+};
 pub mod watcher;
 pub mod work_queue;
 

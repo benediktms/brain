@@ -1,0 +1,40 @@
+[package]
+name = "brain-tags"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["embed"]
+# Pulls in the candle-backed embedder helper (`embed_batch_async`). Mirrors
+# the same gate in `brain-lib` and `brain-tasks`; disabling `embed` via
+# `--no-default-features` substitutes a stub that errors at runtime. The
+# recluster code path is only reached behind an upstream
+# `Option<Arc<dyn Embed>>` soft-gate, so the stub is unreachable in practice.
+embed = ["dep:brain-embedder"]
+# Exposes test-only items (mocks re-exported from upstream crates). Chains
+# `brain-persistence/test-utils` and `brain-core/test-utils`, matching the
+# pattern in `brain-tasks`.
+test-utils = ["brain-persistence/test-utils", "brain-core/test-utils"]
+
+[dependencies]
+brain-core = { path = "../brain_core" }
+brain-embedder = { path = "../brain_embedder", optional = true }
+brain-persistence = { path = "../brain_persistence" }
+serde = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+blake3 = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
+# Tests query the in-memory Db directly for cross-brain assertions on
+# `tag_aliases`. rusqlite is only needed in test code, so dev-dep is
+# sufficient — production code never names rusqlite types.
+rusqlite = { workspace = true }
+# Self-reference activates the `test-utils` feature for integration tests in
+# `tests/*.rs`. Cargo compiles `brain-tags` as a regular dependency for
+# those tests (cfg(test) = false), so without this the upstream mocks gated
+# by `#[cfg(any(test, feature = "test-utils"))]` would be invisible.
+brain-tags = { path = ".", features = ["test-utils"] }

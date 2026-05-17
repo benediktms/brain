@@ -3,15 +3,15 @@
 //! Given a set of `(tag, embedding, reference_count)` candidates, group near-
 //! duplicate tags together via cosine-similarity connected components and pick
 //! a canonical label for each cluster. The function is deterministic and pure:
-//! no DB, no embedder, no IO. It is the algorithm core that
-//! `brn-83a.7.2.3` (job orchestration) plugs into.
+//! no DB, no embedder, no IO. It is the algorithm core that the recluster
+//! orchestrator plugs into.
 //!
 //! # Inputs
 //!
 //! Embeddings are expected to be **L2-normalized** (unit length). The brain
 //! embedder produces unit vectors, so callers in this codebase do not need to
 //! normalize. With unit-length inputs, cosine similarity reduces to a dot
-//! product (see [`crate::dedup`] for the same precondition).
+//! product.
 //!
 //! # Algorithm
 //!
@@ -26,10 +26,8 @@
 //!        is unconstrained and we only need a deterministic tiebreak)
 //!     3. lexicographic (`tag.cmp`)
 //! 4. `cluster_id` is the blake3 hash of `members.sort().join('\0')`,
-//!    truncated to 16 hex chars. The ticket text says "SHA-256" but the
-//!    property required is "stable hash of sorted member set" — blake3 is
-//!    already a workspace dependency (see `crate::utils::content_hash`), so
-//!    we avoid pulling in `sha2` for one call site.
+//!    truncated to 16 hex chars. blake3 is already a workspace dependency,
+//!    so we avoid pulling in `sha2` for one call site.
 
 /// A single tag candidate fed into [`cluster_tags`].
 #[derive(Debug, Clone)]
