@@ -1,7 +1,6 @@
 use anyhow::{Result, bail};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 
 use brain_tasks::Task;
 use brain_tasks::enrichment::{enrich_task_list, task_row_to_compact_json};
@@ -156,31 +155,7 @@ fn list_remote(params: &ListParams) -> Result<()> {
         bail!("--brain selector is not yet supported on the --remote path");
     }
 
-    let socket_path = default_socket_path()?;
-    let spawner = brain_rpc::StdProcessSpawner::new();
-    // Resolve the binary path up-front so we can include it in any error
-    // message without needing the DaemonSpawner trait in scope at the
-    // error-formatting site.
-    let binary_hint = {
-        use brain_rpc::DaemonSpawner as _;
-        spawner
-            .binary_path()
-            .map(|p| format!("resolved to: {}", p.display()))
-            .unwrap_or_else(|re| {
-                format!(
-                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
-                )
-            })
-    };
-    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
-        anyhow::anyhow!(
-            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
-            socket_path.display(),
-        )
-    })?;
-
-    let mut client = brain_rpc::DaemonClient::connect(transport)
-        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
 
     let wire_params = brain_rpc::TasksListParams {
         status: params.status.clone(),
@@ -206,30 +181,6 @@ fn list_remote(params: &ListParams) -> Result<()> {
     }
     print!("{table}");
     Ok(())
-}
-
-/// Resolve the default socket path for `brain tasks list --remote`.
-///
-/// Returns `$BRAIN_SOCKET_PATH` if set, else `$BRAIN_HOME/brain-rpc.sock`,
-/// else `$HOME/.brain/brain-rpc.sock`.
-///
-/// The filename is deliberately **NOT** `brain.sock` — that path is
-/// already bound by the legacy `brain_lib::ipc::IpcServer` (a JSON-RPC
-/// 2.0 server reached via `brain watch`/`BrainRouter`) whenever
-/// `just install` has run. Defaulting to the same path would route this
-/// crate's newline-JSON wire format into the legacy daemon's
-/// JSON-RPC dispatcher and surface a useless `RpcError::Protocol`
-/// error. The two daemons coexist on separate sockets until the
-/// legacy IpcServer is retired in a future ticket.
-pub(super) fn default_socket_path() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("BRAIN_SOCKET_PATH") {
-        return Ok(PathBuf::from(p));
-    }
-    let home = std::env::var("BRAIN_HOME")
-        .map(PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".brain")))
-        .map_err(|_| anyhow::anyhow!("neither BRAIN_HOME nor HOME is set"))?;
-    Ok(home.join("brain-rpc.sock"))
 }
 
 fn list_inner(ctx: &TaskCtx, params: &ListParams) -> Result<()> {

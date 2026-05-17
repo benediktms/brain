@@ -4,39 +4,12 @@ use serde_json::json;
 use brain_tasks::events::*;
 
 use super::TaskCtx;
-use super::list::default_socket_path;
-
-// ── remote helpers ──────────────────────────────────────────
-
-fn make_client() -> Result<brain_rpc::DaemonClient<impl brain_rpc::Transport>> {
-    let socket_path = default_socket_path()?;
-    let spawner = brain_rpc::StdProcessSpawner::new();
-    let binary_hint = {
-        use brain_rpc::DaemonSpawner as _;
-        spawner
-            .binary_path()
-            .map(|p| format!("resolved to: {}", p.display()))
-            .unwrap_or_else(|re| {
-                format!(
-                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
-                )
-            })
-    };
-    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
-        anyhow::anyhow!(
-            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
-            socket_path.display(),
-        )
-    })?;
-    brain_rpc::DaemonClient::connect(transport)
-        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))
-}
 
 // ── dep add / dep remove ────────────────────────────────────
 
 pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> Result<()> {
     if remote {
-        let mut client = make_client()?;
+        let mut client = crate::commands::rpc_client::connect_daemon()?;
         let event_id = client
             .tasks_add_dep(task_id.to_string(), depends_on.to_string())
             .map_err(|e| anyhow::anyhow!("TasksAddDep rpc failed: {e}"))?;
@@ -84,7 +57,7 @@ pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> 
 
 pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> Result<()> {
     if remote {
-        let mut client = make_client()?;
+        let mut client = crate::commands::rpc_client::connect_daemon()?;
         let event_id = client
             .tasks_remove_dep(task_id.to_string(), depends_on.to_string())
             .map_err(|e| anyhow::anyhow!("TasksRemoveDep rpc failed: {e}"))?;

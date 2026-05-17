@@ -9,7 +9,6 @@ use brain_tasks::events::TaskType;
 
 use crate::markdown_table::MarkdownTable;
 
-use super::list::default_socket_path;
 use super::{NextParams, TaskCtx, priority_label};
 
 pub fn next(ctx: &TaskCtx, params: NextParams) -> Result<()> {
@@ -20,28 +19,7 @@ pub fn next(ctx: &TaskCtx, params: NextParams) -> Result<()> {
 }
 
 fn next_remote(ctx: &TaskCtx, _params: &NextParams) -> Result<()> {
-    let socket_path = default_socket_path()?;
-    let spawner = brain_rpc::StdProcessSpawner::new();
-    let binary_hint = {
-        use brain_rpc::DaemonSpawner as _;
-        spawner
-            .binary_path()
-            .map(|p| format!("resolved to: {}", p.display()))
-            .unwrap_or_else(|re| {
-                format!(
-                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
-                )
-            })
-    };
-    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
-        anyhow::anyhow!(
-            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
-            socket_path.display(),
-        )
-    })?;
-
-    let mut client = brain_rpc::DaemonClient::connect(transport)
-        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
 
     let task = client
         .tasks_next()

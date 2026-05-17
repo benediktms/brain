@@ -26,7 +26,6 @@ use brain_tasks::enrichment::task_row_to_compact_json;
 use brain_tasks::events::{self, *};
 
 use crate::hooks::OutputFormat;
-use list::default_socket_path;
 
 // ── shared context ─────────────────────────────────────────
 
@@ -135,28 +134,7 @@ fn create_remote(ctx: &TaskCtx, params: &CreateParams) -> Result<()> {
         bail!("--brain selector is not yet supported on the --remote path");
     }
 
-    let socket_path = default_socket_path()?;
-    let spawner = brain_rpc::StdProcessSpawner::new();
-    let binary_hint = {
-        use brain_rpc::DaemonSpawner as _;
-        spawner
-            .binary_path()
-            .map(|p| format!("resolved to: {}", p.display()))
-            .unwrap_or_else(|re| {
-                format!(
-                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
-                )
-            })
-    };
-    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
-        anyhow::anyhow!(
-            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
-            socket_path.display(),
-        )
-    })?;
-
-    let mut client = brain_rpc::DaemonClient::connect(transport)
-        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
 
     let wire_params = brain_rpc::TasksCreateParams {
         title: params.title.clone(),

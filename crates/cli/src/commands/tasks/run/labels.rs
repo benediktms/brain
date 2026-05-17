@@ -7,7 +7,6 @@ use brain_tasks::events::*;
 use crate::markdown_table::MarkdownTable;
 
 use super::TaskCtx;
-use super::list::default_socket_path;
 
 /// Attempt a cross-brain label write via daemon IPC, returning `Ok(true)` if
 /// the daemon handled it, `Ok(false)` if the caller should fall back to direct
@@ -138,27 +137,7 @@ pub fn labels(ctx: &TaskCtx) -> Result<()> {
 // ── label add / label remove ────────────────────────────────
 
 fn label_remote(ctx: &TaskCtx, task_id: &str, label: &str, add: bool) -> Result<()> {
-    let socket_path = default_socket_path()?;
-    let spawner = brain_rpc::StdProcessSpawner::new();
-    let binary_hint = {
-        use brain_rpc::DaemonSpawner as _;
-        spawner
-            .binary_path()
-            .map(|p| format!("resolved to: {}", p.display()))
-            .unwrap_or_else(|re| {
-                format!(
-                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
-                )
-            })
-    };
-    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
-        anyhow::anyhow!(
-            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
-            socket_path.display(),
-        )
-    })?;
-    let mut client = brain_rpc::DaemonClient::connect(transport)
-        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
 
     let event_id = if add {
         client

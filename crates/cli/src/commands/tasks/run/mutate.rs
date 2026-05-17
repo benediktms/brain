@@ -6,7 +6,6 @@ use brain_tasks::events::*;
 
 use crate::hooks::{OutputFormat, build_hook_envelope};
 
-use super::list::default_socket_path;
 use super::{TaskCtx, UpdateParams, priority_label};
 
 // ── update ──────────────────────────────────────────────────
@@ -36,28 +35,7 @@ fn update_remote(ctx: &TaskCtx, params: &UpdateParams) -> Result<()> {
         bail!("--task-type is not yet supported on the --remote path");
     }
 
-    let socket_path = default_socket_path()?;
-    let spawner = brain_rpc::StdProcessSpawner::new();
-    let binary_hint = {
-        use brain_rpc::DaemonSpawner as _;
-        spawner
-            .binary_path()
-            .map(|p| format!("resolved to: {}", p.display()))
-            .unwrap_or_else(|re| {
-                format!(
-                    "not found — checked: $BRAIN_DAEMON_BIN, sibling of current_exe, $PATH ({re})"
-                )
-            })
-    };
-    let transport = brain_rpc::connect_or_spawn(&socket_path, &spawner).map_err(|e| {
-        anyhow::anyhow!(
-            "could not connect to or start brain-daemon at {}: {e}\n  brain-daemon binary: {binary_hint}",
-            socket_path.display(),
-        )
-    })?;
-
-    let mut client = brain_rpc::DaemonClient::connect(transport)
-        .map_err(|e| anyhow::anyhow!("daemon handshake failed: {e}"))?;
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
 
     // Status change via TasksMutate
     let mut last_task = None;
