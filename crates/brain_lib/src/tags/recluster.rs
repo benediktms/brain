@@ -34,8 +34,8 @@ use tracing::{debug, error, info, warn};
 use crate::embedder::{Embed, embed_batch_async};
 use crate::error::Result;
 use crate::ports::{TagAliasReader, TagAliasWriter};
-use crate::stores::BrainStores;
 use crate::tags::clustering::{ClusterParams, TagCandidate, cluster_tags};
+use brain_persistence::db::Db;
 
 /// Hard cap on the size of `tag_cluster_runs.notes` the failure path
 /// writes. Keeps a runaway error-message size from blowing up an audit row.
@@ -92,7 +92,8 @@ pub struct ReclusterReport {
     fields(run_id = tracing::field::Empty, threshold = params.cosine_threshold),
 )]
 pub async fn run_recluster(
-    stores: &BrainStores,
+    db: &Db,
+    brain_id: &str,
     embedder: &Arc<dyn Embed>,
     params: ClusterParams,
 ) -> Result<ReclusterReport> {
@@ -103,7 +104,7 @@ pub async fn run_recluster(
     let embedder_version = embedder.version().to_string();
 
     info!(
-        brain_id = %stores.brain_id,
+        brain_id = %brain_id,
         run_id = %run_id,
         threshold = params.cosine_threshold,
         embedder_version = %embedder_version,
@@ -111,19 +112,24 @@ pub async fn run_recluster(
     );
 
     let outcome = run_inner(
-        stores,
-        embedder,
-        &embedder_version,
+        RunResources {
+            db,
+            brain_id,
+            embedder,
+        },
+        RunMetadata {
+            run_id: run_id.clone(),
+            started_at_iso,
+            started_at,
+            embedder_version: embedder_version.clone(),
+        },
         params,
-        run_id.clone(),
-        started_at_iso,
-        started_at,
     )
     .await;
 
     if let Err(ref e) = outcome {
         error!(
-            brain_id = %stores.brain_id,
+            brain_id = %brain_id,
             run_id = %run_id,
             error = %e,
             "recluster run failed; recording on tag_cluster_runs",
@@ -136,9 +142,9 @@ pub async fn run_recluster(
         // failure-recording itself is broken (e.g. mutex poisoned).
         let now = chrono::Utc::now().to_rfc3339();
         let notes = truncate_utf8(&e.to_string(), MAX_NOTES_BYTES);
-        if let Err(tx3_err) = stores.inner_db().record_run_failure(&run_id, &now, &notes) {
+        if let Err(tx3_err) = db.record_run_failure(&run_id, &now, &notes) {
             warn!(
-                brain_id = %stores.brain_id,
+                brain_id = %brain_id,
                 run_id = %run_id,
                 tx3_error = %tx3_err,
                 "Tx-3 failed to record run failure on tag_cluster_runs",
@@ -149,35 +155,61 @@ pub async fn run_recluster(
     outcome
 }
 
-async fn run_inner(
-    stores: &BrainStores,
-    embedder: &Arc<dyn Embed>,
-    embedder_version: &str,
-    params: ClusterParams,
+/// Borrowed references to the resources `run_inner` operates over.
+///
+/// Kept separate from [`RunMetadata`] so the function signature stays at a
+/// readable three parameters (resources, metadata, params) rather than the
+/// eight individual values it threads through. Borrows + owned together
+/// would also force a single lifetime parameter on the metadata.
+struct RunResources<'a> {
+    db: &'a Db,
+    brain_id: &'a str,
+    embedder: &'a Arc<dyn Embed>,
+}
+
+/// Owned metadata recorded on `tag_cluster_runs` and the final report.
+struct RunMetadata {
     run_id: String,
     started_at_iso: String,
     started_at: std::time::Instant,
+    embedder_version: String,
+}
+
+async fn run_inner(
+    resources: RunResources<'_>,
+    meta: RunMetadata,
+    params: ClusterParams,
 ) -> Result<ReclusterReport> {
-    let db = stores.inner_db();
+    let RunResources {
+        db,
+        brain_id,
+        embedder,
+    } = resources;
+    let RunMetadata {
+        run_id,
+        started_at_iso,
+        started_at,
+        embedder_version,
+    } = meta;
 
     // ---- Tx-1: insert the run row (FK precondition for Tx-2). -----------
     db.insert_run(InsertRun {
         run_id: run_id.clone(),
-        brain_id: stores.brain_id.clone(),
+        brain_id: brain_id.to_string(),
         started_at_iso,
-        embedder_version: embedder_version.to_string(),
+        embedder_version: embedder_version.clone(),
         threshold: params.cosine_threshold,
         triggered_by: "manual".to_string(),
     })?;
 
     // ---- Compute phase (no DB locks held). ------------------------------
-    let raw_tags: Vec<DedupedRawTag> = db.collect_raw_tags(&stores.brain_id)?;
-    let snapshot: HashMap<String, ExistingAlias> = db.read_alias_snapshot(&stores.brain_id)?;
+    let raw_tags: Vec<DedupedRawTag> = db.collect_raw_tags(brain_id)?;
+    let snapshot: HashMap<String, ExistingAlias> = db.read_alias_snapshot(brain_id)?;
 
-    let candidates = build_candidates(&raw_tags, &snapshot, embedder, embedder_version).await?;
+    let candidates = build_candidates(&raw_tags, &snapshot, embedder, &embedder_version).await?;
 
     debug!(
-        brain_id = %stores.brain_id,
+        brain_id = %brain_id,
         run_id = %run_id,
         source_count = raw_tags.len(),
         snapshot_size = snapshot.len(),
@@ -197,8 +229,8 @@ async fn run_inner(
         &clusters,
         &candidates_by_tag,
         &snapshot,
-        &stores.brain_id,
-        embedder_version,
+        brain_id,
+        &embedder_version,
     );
 
     // Stale rows: in this brain's snapshot but absent from the freshly
@@ -215,7 +247,7 @@ async fn run_inner(
     // ---- Tx-2: atomic UPSERT + DELETE stale + finalize the run row. ----
     let finished_at_iso = chrono::Utc::now().to_rfc3339();
     db.apply_alias_upserts(
-        &stores.brain_id,
+        brain_id,
         upserts,
         stale,
         FinalizeRun {
@@ -234,12 +266,12 @@ async fn run_inner(
         updated_aliases,
         stale_aliases,
         duration_ms: started_at.elapsed().as_millis() as u64,
-        embedder_version: embedder_version.to_string(),
+        embedder_version,
     };
 
     if report.stale_aliases > 0 {
         warn!(
-            brain_id = %stores.brain_id,
+            brain_id = %brain_id,
             run_id = %report.run_id,
             stale = report.stale_aliases,
             "recluster: pruned stale aliases",
@@ -247,7 +279,7 @@ async fn run_inner(
     }
 
     info!(
-        brain_id = %stores.brain_id,
+        brain_id = %brain_id,
         run_id = %report.run_id,
         duration_ms = report.duration_ms,
         source_count = report.source_count,
@@ -393,6 +425,7 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> String {
 mod tests {
     use super::*;
     use crate::ports::mock::MockEmbedder;
+    use crate::stores::BrainStores;
     use brain_persistence::db::tag_aliases as ta;
 
     /// Seed three records and two tasks producing distinct raw tags
@@ -419,9 +452,14 @@ mod tests {
         seed_demo_brain(&stores);
 
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
-        let report = run_recluster(&stores, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        let report = run_recluster(
+            stores.inner_db(),
+            &stores.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.source_count, 3, "{report:?}");
         assert!(report.cluster_count >= 1);
@@ -467,17 +505,27 @@ mod tests {
 
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
 
-        let r1 = run_recluster(&stores, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        let r1 = run_recluster(
+            stores.inner_db(),
+            &stores.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
         let snapshot_before = stores
             .inner_db()
             .read_alias_snapshot(&stores.brain_id)
             .unwrap();
 
-        let r2 = run_recluster(&stores, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        let r2 = run_recluster(
+            stores.inner_db(),
+            &stores.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
         let snapshot_after = stores
             .inner_db()
             .read_alias_snapshot(&stores.brain_id)
@@ -524,18 +572,28 @@ mod tests {
 
         // First run uses embedder version "v1": writes fresh alias rows.
         let v1: Arc<dyn Embed> = Arc::new(VersionedMockEmbedder("v1"));
-        let r1 = run_recluster(&stores, &v1, ClusterParams::default())
-            .await
-            .unwrap();
+        let r1 = run_recluster(
+            stores.inner_db(),
+            &stores.brain_id,
+            &v1,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
         assert!(r1.new_aliases > 0);
         assert_eq!(r1.embedder_version, "v1");
 
         // Second run swaps to "v2": every cached row's embedder_version
         // mismatches, so all should be marked updated and re-stamped.
         let v2: Arc<dyn Embed> = Arc::new(VersionedMockEmbedder("v2"));
-        let r2 = run_recluster(&stores, &v2, ClusterParams::default())
-            .await
-            .unwrap();
+        let r2 = run_recluster(
+            stores.inner_db(),
+            &stores.brain_id,
+            &v2,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(r2.new_aliases, 0, "rows already exist");
         assert_eq!(
             r2.updated_aliases, r1.source_count,
@@ -582,7 +640,13 @@ mod tests {
         seed_demo_brain(&stores);
 
         let embedder: Arc<dyn Embed> = Arc::new(FailingEmbedder);
-        let outcome = run_recluster(&stores, &embedder, ClusterParams::default()).await;
+        let outcome = run_recluster(
+            stores.inner_db(),
+            &stores.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await;
         assert!(outcome.is_err(), "FailingEmbedder must propagate");
 
         let snapshot = stores
@@ -629,9 +693,14 @@ mod tests {
             .unwrap();
 
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
-        let report = run_recluster(&stores_a, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        let report = run_recluster(
+            stores_a.inner_db(),
+            &stores_a.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.source_count, 1, "brain-a sees only its own tag");
 
@@ -680,9 +749,14 @@ mod tests {
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
 
         // First run: 3 new aliases, 0 stale.
-        let r1 = run_recluster(&stores, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        let r1 = run_recluster(
+            stores.inner_db(),
+            &stores.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(r1.source_count, 3);
         assert_eq!(r1.new_aliases, 3);
         assert_eq!(r1.stale_aliases, 0);
@@ -707,9 +781,14 @@ mod tests {
             .into_brain_core()
             .unwrap();
 
-        let r2 = run_recluster(&stores, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        let r2 = run_recluster(
+            stores.inner_db(),
+            &stores.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(r2.source_count, 2);
         assert_eq!(r2.new_aliases, 0);
         assert_eq!(r2.stale_aliases, 1, "gamma should be pruned");
@@ -746,12 +825,22 @@ mod tests {
         let stores_b = stores_a.with_brain_id("brain-b", "brain-b").unwrap();
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
 
-        run_recluster(&stores_a, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
-        run_recluster(&stores_b, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        run_recluster(
+            stores_a.inner_db(),
+            &stores_a.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
+        run_recluster(
+            stores_b.inner_db(),
+            &stores_b.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
 
         // Sanity: each brain has its own row.
         assert!(
@@ -783,9 +872,14 @@ mod tests {
             .into_brain_core()
             .unwrap();
 
-        let r = run_recluster(&stores_a, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        let r = run_recluster(
+            stores_a.inner_db(),
+            &stores_a.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.stale_aliases, 0, "brain-a has no stale tags");
 
         let snap_b = stores_a.inner_db().read_alias_snapshot("brain-b").unwrap();
@@ -815,12 +909,22 @@ mod tests {
         let stores_b = stores_a.with_brain_id("brain-b", "brain-b").unwrap();
         let embedder: Arc<dyn Embed> = Arc::new(MockEmbedder);
 
-        run_recluster(&stores_a, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
-        run_recluster(&stores_b, &embedder, ClusterParams::default())
-            .await
-            .unwrap();
+        run_recluster(
+            stores_a.inner_db(),
+            &stores_a.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
+        run_recluster(
+            stores_b.inner_db(),
+            &stores_b.brain_id,
+            &embedder,
+            ClusterParams::default(),
+        )
+        .await
+        .unwrap();
 
         // Composite PK lets both brains coexist with the same raw_tag.
         let pairs: Vec<(String, String)> = stores_a

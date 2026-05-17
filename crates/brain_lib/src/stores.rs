@@ -233,7 +233,7 @@ impl BrainStores {
         ))
     }
 
-    pub(crate) fn inner_db(&self) -> &Db {
+    pub fn inner_db(&self) -> &Db {
         &self.db
     }
 
