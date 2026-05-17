@@ -6,10 +6,14 @@
 use std::collections::HashMap;
 use tracing::warn;
 
+use brain_core::uri::SynapseUri;
+use brain_core::utils::content_hash;
+use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload};
+use brain_persistence::ports::JobQueue;
+
 use crate::lod::{LodChunkStore, LodLevel};
 use crate::ranking::RankedResult;
 use crate::retrieval::derive_kind;
-use crate::uri::SynapseUri;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -77,7 +81,7 @@ pub fn resolve_lod_batch<S>(
     brain_id: &str,
 ) -> (Vec<LodResolution>, LodDiagnostics)
 where
-    S: LodChunkStore + crate::ports::JobQueue,
+    S: LodChunkStore + JobQueue,
 {
     let mut resolutions = Vec::with_capacity(ranked.len());
     let mut diag = LodDiagnostics::default();
@@ -106,7 +110,7 @@ fn resolve_single<S>(
     diag: &mut LodDiagnostics,
 ) -> LodResolution
 where
-    S: LodChunkStore + crate::ports::JobQueue,
+    S: LodChunkStore + JobQueue,
 {
     match requested_lod {
         LodLevel::L2 => {
@@ -123,7 +127,7 @@ where
 
         LodLevel::L0 => {
             let uri = build_object_uri(ranked, brain_name);
-            let source_hash = crate::utils::content_hash(&ranked.content);
+            let source_hash = content_hash(&ranked.content);
 
             match store.get_lod_chunk(&uri, LodLevel::L0) {
                 Ok(Some(chunk)) => {
@@ -165,7 +169,7 @@ where
 
         LodLevel::L1 => {
             let uri = build_object_uri(ranked, brain_name);
-            let source_hash = crate::utils::content_hash(&ranked.content);
+            let source_hash = content_hash(&ranked.content);
 
             match store.get_lod_chunk(&uri, LodLevel::L1) {
                 Ok(Some(chunk)) => {
@@ -227,7 +231,7 @@ fn l1_miss_fallback<S>(
     diag: &mut LodDiagnostics,
 ) -> LodResolution
 where
-    S: LodChunkStore + crate::ports::JobQueue,
+    S: LodChunkStore + JobQueue,
 {
     let enqueued = try_enqueue_l1(store, uri, brain_id, &ranked.content, source_hash, diag);
 
@@ -269,20 +273,14 @@ where
 /// Attempt to enqueue an L1 summarization job. Best-effort: logs on error.
 /// Returns `true` if a job was actually enqueued.
 fn try_enqueue_l1(
-    queue: &dyn crate::ports::JobQueue,
+    queue: &dyn JobQueue,
     object_uri: &str,
     brain_id: &str,
     source_content: &str,
     source_hash: &str,
     diag: &mut LodDiagnostics,
 ) -> bool {
-    match crate::pipeline::job_worker::enqueue_l1_summarize(
-        queue,
-        object_uri,
-        brain_id,
-        source_content,
-        source_hash,
-    ) {
+    match enqueue_l1_summarize(queue, object_uri, brain_id, source_content, source_hash) {
         Ok(Some(_job_id)) => {
             diag.lod_generation_enqueued += 1;
             true
@@ -317,7 +315,7 @@ pub fn resolve_lod_batch_federated<S>(
     brain_id_resolver: &dyn Fn(&str) -> Option<String>,
 ) -> (Vec<LodResolution>, LodDiagnostics)
 where
-    S: LodChunkStore + crate::ports::JobQueue,
+    S: LodChunkStore + JobQueue,
 {
     let mut resolutions = Vec::with_capacity(ranked.len());
     let mut diag = LodDiagnostics::default();
@@ -362,7 +360,7 @@ pub fn resolve_single_lod<S>(
     brain_id: &str,
 ) -> (LodResolution, LodDiagnostics)
 where
-    S: LodChunkStore + crate::ports::JobQueue,
+    S: LodChunkStore + JobQueue,
 {
     let mut diag = LodDiagnostics::default();
 
@@ -533,6 +531,51 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Job enqueue helpers
+// ---------------------------------------------------------------------------
+//
+// Inlined from brain_lib::pipeline::job_worker so brain_retrieval does not
+// take a back-dep on brain_lib. The helper builds the L1-summarize job
+// payload and submits it through the `JobQueue` port.
+
+fn enqueue_l1_summarize(
+    queue: &dyn JobQueue,
+    object_uri: &str,
+    brain_id: &str,
+    source_content: &str,
+    source_hash: &str,
+) -> brain_core::error::Result<Option<String>> {
+    if source_content.len() > 100_000 {
+        warn!(
+            object_uri = %object_uri,
+            content_len = source_content.len(),
+            "enqueue_l1_summarize: rejecting source_content exceeding 100K chars"
+        );
+        return Ok(None);
+    }
+
+    if queue.has_active_lod_job(object_uri)? {
+        return Ok(None);
+    }
+
+    let input = EnqueueJobInput {
+        payload: JobPayload::LodSummarize {
+            object_uri: object_uri.to_string(),
+            brain_id: brain_id.to_string(),
+            source_content: source_content.to_string(),
+            source_hash: source_hash.to_string(),
+        },
+        priority: jobs::priority::BACKGROUND,
+        retry_config: None,
+        stuck_threshold_secs: None,
+        metadata: serde_json::json!({}),
+        scheduled_at: 0,
+    };
+    let job_id = queue.enqueue_job(&input)?;
+    Ok(Some(job_id))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -620,7 +663,7 @@ mod tests {
         let db = open_db();
         let ranked = vec![make_ranked("chunk:abc:0", "source content")];
         let uri = build_object_uri(&ranked[0], "brain");
-        let source_hash = crate::utils::content_hash("source content");
+        let source_hash = content_hash("source content");
 
         seed_lod(&db, &uri, LodLevel::L0, "l0 abstract content", &source_hash);
 
@@ -662,7 +705,7 @@ mod tests {
         let db = open_db();
         let ranked = vec![make_ranked("chunk:abc:0", "source content")];
         let uri = build_object_uri(&ranked[0], "brain");
-        let source_hash = crate::utils::content_hash("source content");
+        let source_hash = content_hash("source content");
 
         // Seed only L0, no L1.
         seed_lod(&db, &uri, LodLevel::L0, "l0 fallback content", &source_hash);
@@ -707,7 +750,7 @@ mod tests {
     fn test_resolve_single_lod_l0_hit() {
         let db = open_db();
         let uri = "synapse://brain/memory/chunk:abc:0";
-        let source_hash = crate::utils::content_hash("source content");
+        let source_hash = content_hash("source content");
         seed_lod(&db, uri, LodLevel::L0, "l0 abstract", &source_hash);
 
         let (resolution, diag) = resolve_single_lod(
@@ -780,7 +823,7 @@ mod tests {
         ];
 
         let uri_hit = build_object_uri(&ranked[0], "brain");
-        let hash_hit = crate::utils::content_hash("content hit");
+        let hash_hit = content_hash("content hit");
         seed_lod(&db, &uri_hit, LodLevel::L0, "abstract hit", &hash_hit);
 
         let (_, diag) = resolve_lod_batch(&db, &ranked, LodLevel::L0, "brain", "brain-id");
@@ -805,8 +848,8 @@ mod tests {
         // Seed L0 for alpha using brain-a URI, and for beta using brain-b URI.
         let uri_a = build_object_uri(&ranked[0], "brain-a");
         let uri_b = build_object_uri(&ranked[1], "brain-b");
-        let hash_a = crate::utils::content_hash("alpha content");
-        let hash_b = crate::utils::content_hash("beta content");
+        let hash_a = content_hash("alpha content");
+        let hash_b = content_hash("beta content");
 
         seed_lod(&db, &uri_a, LodLevel::L0, "alpha L0", &hash_a);
         seed_lod(&db, &uri_b, LodLevel::L0, "beta L0", &hash_b);
@@ -849,7 +892,7 @@ mod tests {
 
         // Seed L0 under brain-a's URI.
         let uri = build_object_uri(&ranked[0], "brain-a");
-        let hash = crate::utils::content_hash("content");
+        let hash = content_hash("content");
         seed_lod(&db, &uri, LodLevel::L0, "L0 for brain-a", &hash);
 
         // But attribute the chunk to brain-b → URI mismatch → miss.

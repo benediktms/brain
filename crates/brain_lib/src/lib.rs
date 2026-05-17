@@ -1,4 +1,3 @@
-pub mod capsule;
 pub mod chunker;
 pub mod config;
 pub mod consolidation;
@@ -47,13 +46,10 @@ pub use brain_persistence::error;
 pub mod fs_permissions;
 pub mod git;
 pub mod hash_gate;
-pub mod hierarchy;
 pub mod ipc;
 pub mod l0_abstract;
 pub mod l0_generate;
 pub mod llm;
-pub mod lod;
-pub mod lod_resolver;
 pub use brain_persistence::links;
 pub mod mcp;
 pub use brain_core::metrics;
@@ -61,9 +57,14 @@ pub use brain_persistence::pagerank;
 pub mod parser;
 pub mod pipeline;
 pub mod ports;
-pub mod query_pipeline;
-pub mod ranking;
-pub mod retrieval;
+// Back-compat module re-exports so existing callers
+// (`brain_lib::hierarchy`, `brain_lib::query_pipeline`, etc.) keep resolving
+// after the read-engine moved to its own crate in brn-2fe.9. Mirrors the
+// `pub use brain_tags::{...}` pattern from brn-2fe.5.
+pub use brain_retrieval::{
+    ReflectedEpisode, VectorSearchStrategy, capsule, hierarchy, lod, lod_resolver, query_pipeline,
+    ranking, retrieval,
+};
 pub use brain_sagas as sagas;
 pub mod scanner;
 pub mod search_service;

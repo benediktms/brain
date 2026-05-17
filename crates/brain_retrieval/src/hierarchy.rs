@@ -12,9 +12,10 @@
 //! port trait so that callers are not coupled to the concrete `Db` type.
 
 use brain_core::error::Result;
-
-use crate::pipeline::job_worker::enqueue_scope_summary;
-use crate::ports::JobQueue;
+use brain_persistence::db::Db;
+use brain_persistence::db::jobs::{self, EnqueueJobInput, JobPayload};
+use brain_persistence::ports::JobQueue;
+use brain_persistence::sql::SqlResultExt;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -209,4 +210,142 @@ pub fn search_derived_summaries(
     limit: usize,
 ) -> Result<Vec<DerivedSummary>> {
     store.search_derived_summaries(query, limit)
+}
+
+// ─── `DerivedSummaryStore` impl for the concrete `Db` ───────────────────────
+//
+// The trait lives in this module; per Rust's orphan rule, the impl for
+// brain_persistence's `Db` must live in this crate. Delegates to typed SQL
+// writers in `brain_persistence::derived_summaries`.
+
+impl DerivedSummaryStore for Db {
+    fn generate_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<GeneratedScopeSummary> {
+        let scope_type = scope_type.as_str().to_string();
+        let scope_value = scope_value.to_string();
+        let generated = self
+            .with_write_conn(move |conn| {
+                brain_persistence::derived_summaries::generate_scope_summary(
+                    conn,
+                    &scope_type,
+                    &scope_value,
+                )
+            })
+            .into_brain_core()?;
+
+        Ok(GeneratedScopeSummary {
+            id: generated.id,
+            source_content: generated.source_content,
+            content_changed: generated.content_changed,
+        })
+    }
+
+    fn get_scope_summary(
+        &self,
+        scope_type: &ScopeType,
+        scope_value: &str,
+    ) -> Result<Option<DerivedSummary>> {
+        let scope_type = scope_type.as_str().to_string();
+        let scope_value = scope_value.to_string();
+        let row = self
+            .with_read_conn(move |conn| {
+                brain_persistence::derived_summaries::get_scope_summary(
+                    conn,
+                    &scope_type,
+                    &scope_value,
+                )
+            })
+            .into_brain_core()?;
+
+        Ok(row.map(|summary| DerivedSummary {
+            id: summary.id,
+            scope_type: summary.scope_type,
+            scope_value: summary.scope_value,
+            content: summary.content,
+            stale: summary.stale,
+            generated_at: summary.generated_at,
+        }))
+    }
+
+    fn mark_scope_stale(&self, scope_type: &ScopeType, scope_value: &str) -> Result<usize> {
+        let scope_type = scope_type.as_str().to_string();
+        let scope_value = scope_value.to_string();
+        self.with_write_conn(move |conn| {
+            brain_persistence::derived_summaries::mark_scope_stale(conn, &scope_type, &scope_value)
+        })
+        .into_brain_core()
+    }
+
+    fn search_derived_summaries(&self, query: &str, limit: usize) -> Result<Vec<DerivedSummary>> {
+        let query = query.to_string();
+        let rows = self
+            .with_read_conn(move |conn| {
+                brain_persistence::derived_summaries::search_derived_summaries(conn, &query, limit)
+            })
+            .into_brain_core()?;
+
+        Ok(rows
+            .into_iter()
+            .map(|summary| DerivedSummary {
+                id: summary.id,
+                scope_type: summary.scope_type,
+                scope_value: summary.scope_value,
+                content: summary.content,
+                stale: summary.stale,
+                generated_at: summary.generated_at,
+            })
+            .collect())
+    }
+
+    fn list_stale_summaries(&self, limit: usize) -> Result<Vec<DerivedSummary>> {
+        let rows = self
+            .with_read_conn(move |conn| {
+                brain_persistence::derived_summaries::list_stale_summaries(conn, limit)
+            })
+            .into_brain_core()?;
+
+        Ok(rows
+            .into_iter()
+            .map(|summary| DerivedSummary {
+                id: summary.id,
+                scope_type: summary.scope_type,
+                scope_value: summary.scope_value,
+                content: summary.content,
+                stale: summary.stale,
+                generated_at: summary.generated_at,
+            })
+            .collect())
+    }
+}
+
+// ─── Job enqueue helper ──────────────────────────────────────────────────────
+//
+// Inlined from brain_lib::pipeline::job_worker so brain_retrieval does not
+// take a back-dep on brain_lib. Builds the scope-summarize job payload and
+// submits it through the `JobQueue` port.
+
+fn enqueue_scope_summary(
+    queue: &dyn JobQueue,
+    summary_id: &str,
+    scope_type: &str,
+    scope_value: &str,
+    content: &str,
+) -> Result<String> {
+    let input = EnqueueJobInput {
+        payload: JobPayload::SummarizeScope {
+            summary_id: summary_id.to_string(),
+            scope_type: scope_type.to_string(),
+            scope_value: scope_value.to_string(),
+            content: content.to_string(),
+        },
+        priority: jobs::priority::NORMAL,
+        retry_config: None,
+        stuck_threshold_secs: None,
+        metadata: serde_json::json!({}),
+        scheduled_at: 0,
+    };
+    queue.enqueue_job(&input)
 }

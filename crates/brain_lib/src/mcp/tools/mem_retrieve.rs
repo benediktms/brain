@@ -13,7 +13,7 @@ use crate::query_pipeline::SearchParams;
 use crate::ranking::resolve_intent;
 use crate::retrieval::{MemoryKind, derive_kind};
 use crate::uri::{Domain, SynapseUri};
-use brain_persistence::store::VectorSearchMode;
+use brain_retrieval::VectorSearchStrategy;
 
 use super::{McpTool, json_response};
 
@@ -381,11 +381,11 @@ impl McpTool for MemRetrieve {
             };
 
             let mode = match params.vector_search_mode.as_deref() {
-                Some(s) => match s.parse::<VectorSearchMode>() {
+                Some(s) => match s.parse::<VectorSearchStrategy>() {
                     Ok(m) => m,
                     Err(e) => return ToolCallResult::error(e),
                 },
-                None => VectorSearchMode::default(),
+                None => VectorSearchStrategy::default(),
             };
 
             // Resolve time_scope → time_after (overrides explicit time_after if set).
