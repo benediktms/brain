@@ -355,8 +355,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             api_key.as_deref(),
                         )?;
                     }
-                    ProviderAction::List => {
-                        commands::provider::run_list(&cli.sqlite_db, Some(&cli.lance_db))?;
+                    ProviderAction::List { remote } => {
+                        commands::provider::run_list(&cli.sqlite_db, Some(&cli.lance_db), remote)?;
                     }
                     ProviderAction::Remove { target } => {
                         commands::provider::run_remove(
@@ -1024,6 +1024,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         cluster_id,
                         limit,
                         offset,
+                        remote,
                     } => {
                         commands::tags::run::aliases_list(
                             &ctx,
@@ -1032,12 +1033,13 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                                 cluster_id,
                                 limit,
                                 offset,
+                                remote,
                             },
                         )?;
                     }
                 },
-                TagsAction::Status => {
-                    commands::tags::run::status(&ctx, Some(&cli.model_dir))?;
+                TagsAction::Status { remote } => {
+                    commands::tags::run::status(&ctx, Some(&cli.model_dir), remote)?;
                 }
             }
         }
@@ -1357,12 +1359,12 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::Status { json } => {
-            commands::status::run(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+        Command::Status { json, remote } => {
+            commands::status::run(&cli.sqlite_db, Some(&cli.lance_db), json, remote)?;
         }
         Command::Jobs { action } => match action {
-            JobsAction::Status { json } => {
-                commands::jobs::run_status(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+            JobsAction::Status { json, remote } => {
+                commands::jobs::run_status(&cli.sqlite_db, Some(&cli.lance_db), json, remote)?;
             }
             JobsAction::Retry { job_id } => {
                 commands::jobs::run_retry(&cli.sqlite_db, Some(&cli.lance_db), &job_id)?;

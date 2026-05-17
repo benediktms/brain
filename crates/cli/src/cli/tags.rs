@@ -30,7 +30,11 @@ pub(crate) enum TagsAction {
     },
 
     /// Show health summary for the synonym-clustering subsystem
-    Status,
+    Status {
+        /// Route through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -52,5 +56,9 @@ pub(crate) enum AliasesAction {
         /// Row offset for pagination
         #[arg(long, default_value = "0")]
         offset: i64,
+
+        /// Route through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 }

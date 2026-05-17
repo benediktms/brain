@@ -24,14 +24,15 @@
 //!   test that constructs a client.
 
 use crate::domain::{
-    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary,
-    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams,
-    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
-    RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response, RpcError,
-    SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount, SagaStatsReport,
-    SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary,
-    TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams, TasksTransferParams,
-    TasksUpdateParams,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
+    JobsStatusReport, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
+    MemorySummarizeScopeParams, MemoryWriteEpisodeParams, MemoryWriteProcedureParams,
+    PROTOCOL_VERSION, PlanSummary, ProviderSummary, RecordsCreateParams, RecordsListParams,
+    RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary, SagaCascadeResult,
+    SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
+    SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
+    TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams,
 };
 use crate::transport::Transport;
 
@@ -997,6 +998,88 @@ impl<T: Transport> DaemonClient<T> {
             Response::MemoryReflect { result_json } => Ok(result_json),
             other => Err(RpcError::Protocol {
                 message: format!("expected MemoryReflect in reply to MemoryReflect, got {other:?}"),
+            }),
+        }
+    }
+
+    /// List tag_aliases rows via [`Request::TagsAliasesList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TagsAliasesList`].
+    pub fn tags_aliases_list(
+        &mut self,
+        params: TagsAliasesListParams,
+    ) -> Result<Vec<TagAliasSummary>, RpcError> {
+        match self.call(Request::TagsAliasesList { params })? {
+            Response::TagsAliasesList { rows } => Ok(rows),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TagsAliasesList in reply to TagsAliasesList, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Get tag-clustering health summary via [`Request::TagsAliasesStatus`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TagsAliasesStatus`].
+    pub fn tags_aliases_status(&mut self) -> Result<TagAliasesStatusReport, RpcError> {
+        match self.call(Request::TagsAliasesStatus)? {
+            Response::TagsAliasesStatus { report } => Ok(report),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TagsAliasesStatus in reply to TagsAliasesStatus, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Get job queue health summary via [`Request::JobsStatus`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::JobsStatus`].
+    pub fn jobs_status(&mut self) -> Result<JobsStatusReport, RpcError> {
+        match self.call(Request::JobsStatus)? {
+            Response::JobsStatus { report } => Ok(report),
+            other => Err(RpcError::Protocol {
+                message: format!("expected JobsStatus in reply to JobsStatus, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Get brain health status via [`Request::BrainStatus`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::BrainStatus`].
+    pub fn brain_status(&mut self) -> Result<BrainStatusReport, RpcError> {
+        match self.call(Request::BrainStatus)? {
+            Response::BrainStatus { report } => Ok(report),
+            other => Err(RpcError::Protocol {
+                message: format!("expected BrainStatus in reply to BrainStatus, got {other:?}"),
+            }),
+        }
+    }
+
+    /// List configured providers via [`Request::ProviderList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::ProviderList`].
+    pub fn provider_list(&mut self) -> Result<Vec<ProviderSummary>, RpcError> {
+        match self.call(Request::ProviderList)? {
+            Response::ProviderList { providers } => Ok(providers),
+            other => Err(RpcError::Protocol {
+                message: format!("expected ProviderList in reply to ProviderList, got {other:?}"),
             }),
         }
     }

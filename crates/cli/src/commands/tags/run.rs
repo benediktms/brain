@@ -13,6 +13,7 @@ use brain_lib::stores::BrainStores;
 #[cfg(feature = "embed")]
 use brain_lib::{ClusterParams, run_recluster};
 
+use crate::commands::rpc_client;
 use crate::markdown_table::MarkdownTable;
 
 // ---------------------------------------------------------------------------
@@ -74,9 +75,99 @@ pub struct AliasesListParams {
     pub cluster_id: Option<String>,
     pub limit: i64,
     pub offset: i64,
+    pub remote: bool,
+}
+
+// ---------------------------------------------------------------------------
+// remote helpers
+// ---------------------------------------------------------------------------
+
+fn aliases_list_remote(ctx: &TagsCtx, params: &AliasesListParams) -> Result<()> {
+    let mut client = rpc_client::connect_daemon()?;
+    let rows = client
+        .tags_aliases_list(brain_rpc::TagsAliasesListParams {
+            canonical: params.canonical.clone(),
+            cluster_id: params.cluster_id.clone(),
+            limit: params.limit,
+            offset: params.offset,
+        })
+        .map_err(|e| anyhow::anyhow!("TagsAliasesList rpc failed: {e}"))?;
+
+    if ctx.json {
+        let body = json!({
+            "filters": {
+                "canonical": params.canonical,
+                "cluster_id": params.cluster_id,
+                "limit": params.limit,
+                "offset": params.offset,
+            },
+            "aliases": rows.iter().map(|r| json!({
+                "raw_tag": r.raw_tag,
+                "canonical_tag": r.canonical_tag,
+                "cluster_id": r.cluster_id,
+                "updated_at": r.updated_at,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else if rows.is_empty() {
+        println!("(no alias rows match)");
+    } else {
+        let mut table =
+            MarkdownTable::new(vec!["raw_tag", "canonical", "cluster_id", "updated_at"]);
+        for row in &rows {
+            table.add_row(vec![
+                row.raw_tag.clone(),
+                row.canonical_tag.clone(),
+                row.cluster_id.clone(),
+                row.updated_at.clone(),
+            ]);
+        }
+        print!("{table}");
+    }
+    Ok(())
+}
+
+fn status_remote(ctx: &TagsCtx) -> Result<()> {
+    let mut client = rpc_client::connect_daemon()?;
+    let report = client
+        .tags_aliases_status()
+        .map_err(|e| anyhow::anyhow!("TagsAliasesStatus rpc failed: {e}"))?;
+
+    if ctx.json {
+        let body = json!({
+            "total_aliases": report.total_aliases,
+            "total_clusters": report.total_clusters,
+            "canonical_count": report.canonical_count,
+            "last_run_id": report.last_run_id,
+            "last_run_started_at": report.last_run_started_at,
+            "last_run_embedder_version": report.last_run_embedder_version,
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        println!("Tag clustering status (daemon)");
+        match &report.last_run_id {
+            None => println!("  Last run:      (none — no recluster has been performed)"),
+            Some(run_id) => {
+                println!("  Last run:      {run_id}");
+                if let Some(ts) = &report.last_run_started_at {
+                    println!("    started_at:    {ts}");
+                }
+                if let Some(ev) = &report.last_run_embedder_version {
+                    println!("    embedder:      {ev}");
+                }
+            }
+        }
+        println!("  Total aliases:   {}", report.total_aliases);
+        println!("  Canonical tags:  {}", report.canonical_count);
+        println!("  Clusters:        {}", report.total_clusters);
+    }
+    Ok(())
 }
 
 pub fn aliases_list(ctx: &TagsCtx, params: AliasesListParams) -> Result<()> {
+    if params.remote {
+        return aliases_list_remote(ctx, &params);
+    }
     let rows = ctx
         .stores
         .list_tag_aliases(
@@ -120,7 +211,10 @@ pub fn aliases_list(ctx: &TagsCtx, params: AliasesListParams) -> Result<()> {
 // status
 // ---------------------------------------------------------------------------
 
-pub fn status(ctx: &TagsCtx, model_dir: Option<&Path>) -> Result<()> {
+pub fn status(ctx: &TagsCtx, model_dir: Option<&Path>, remote: bool) -> Result<()> {
+    if remote {
+        return status_remote(ctx);
+    }
     let last_run = ctx
         .stores
         .latest_tag_cluster_run()

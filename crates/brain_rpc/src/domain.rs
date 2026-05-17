@@ -188,6 +188,28 @@ pub enum Request {
     /// Retrieve source material for reflection (prepare) or store a
     /// reflection (commit). Server returns [`Response::MemoryReflect`].
     MemoryReflect { params: MemoryReflectParams },
+
+    // ── tags ────────────────────────────────────────────────────────────
+    /// List tag_aliases rows with optional filtering. Server returns
+    /// [`Response::TagsAliasesList`].
+    TagsAliasesList { params: TagsAliasesListParams },
+    /// Show tag-clustering health summary. Server returns
+    /// [`Response::TagsAliasesStatus`].
+    TagsAliasesStatus,
+
+    // ── jobs ────────────────────────────────────────────────────────────
+    /// Show job queue health summary. Server returns
+    /// [`Response::JobsStatus`].
+    JobsStatus,
+
+    // ── status ──────────────────────────────────────────────────────────
+    /// Show brain health status. Server returns [`Response::BrainStatus`].
+    BrainStatus,
+
+    // ── provider ────────────────────────────────────────────────────────
+    /// List configured providers. Server returns
+    /// [`Response::ProviderList`].
+    ProviderList,
 }
 
 /// Optional filter and pagination params for [`Request::TasksList`].
@@ -542,6 +564,24 @@ pub enum Response {
     /// Reply to [`Request::MemoryReflect`]. `result_json` carries the
     /// serialized reflect report.
     MemoryReflect { result_json: String },
+
+    // ── tags ────────────────────────────────────────────────────────────
+    /// Reply to [`Request::TagsAliasesList`].
+    TagsAliasesList { rows: Vec<TagAliasSummary> },
+    /// Reply to [`Request::TagsAliasesStatus`].
+    TagsAliasesStatus { report: TagAliasesStatusReport },
+
+    // ── jobs ────────────────────────────────────────────────────────────
+    /// Reply to [`Request::JobsStatus`].
+    JobsStatus { report: JobsStatusReport },
+
+    // ── status ──────────────────────────────────────────────────────────
+    /// Reply to [`Request::BrainStatus`].
+    BrainStatus { report: BrainStatusReport },
+
+    // ── provider ────────────────────────────────────────────────────────
+    /// Reply to [`Request::ProviderList`].
+    ProviderList { providers: Vec<ProviderSummary> },
 }
 
 /// Wire-format summary of a single task.
@@ -861,6 +901,102 @@ pub struct MemoryReflectParams {
     pub tags: Vec<String>,
     /// Importance scaled to 0–1000 (millis), or `None` to use the default.
     pub importance_millis: Option<u32>,
+}
+
+// ── tags wire types ──────────────────────────────────────────────────────────
+
+/// Filter / pagination params for [`Request::TagsAliasesList`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct TagsAliasesListParams {
+    /// Filter to rows whose `canonical_tag` equals this value.
+    pub canonical: Option<String>,
+    /// Filter to rows in the given `cluster_id`.
+    pub cluster_id: Option<String>,
+    /// Maximum rows to return.
+    pub limit: i64,
+    /// Row offset for pagination.
+    pub offset: i64,
+}
+
+/// One row from the `tag_aliases` table, returned by
+/// [`Response::TagsAliasesList`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TagAliasSummary {
+    pub raw_tag: String,
+    pub canonical_tag: String,
+    pub cluster_id: String,
+    pub updated_at: String,
+}
+
+/// Clustering health summary returned by [`Response::TagsAliasesStatus`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TagAliasesStatusReport {
+    /// Total alias rows (raw_count from the store).
+    pub total_aliases: u64,
+    /// Number of distinct clusters.
+    pub total_clusters: u64,
+    /// Number of distinct canonical tags.
+    pub canonical_count: u64,
+    /// `run_id` of the most recent clustering run, or `None` if never run.
+    pub last_run_id: Option<String>,
+    /// ISO 8601 timestamp of the last run's `started_at`, or `None`.
+    pub last_run_started_at: Option<String>,
+    /// Embedder version stamp from the last run, or `None`.
+    pub last_run_embedder_version: Option<String>,
+}
+
+// ── jobs wire types ───────────────────────────────────────────────────────────
+
+/// Job queue health summary returned by [`Response::JobsStatus`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct JobsStatusReport {
+    pub pending: u64,
+    pub running: u64,
+    pub ready: u64,
+    pub done: u64,
+    pub failed: u64,
+    /// Up to 10 most recently failed jobs.
+    pub recent_failures: Vec<JobSummary>,
+    /// Jobs that appear stuck (InProgress beyond timeout).
+    pub stuck_jobs: Vec<JobSummary>,
+}
+
+/// Wire summary of a single job row.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct JobSummary {
+    pub job_id: String,
+    pub kind: String,
+    pub ref_id: String,
+    pub attempts: u32,
+    pub last_error: Option<String>,
+    pub updated_at: String,
+}
+
+// ── status wire types ─────────────────────────────────────────────────────────
+
+/// Brain health status returned by [`Response::BrainStatus`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct BrainStatusReport {
+    pub brain_name: String,
+    pub brain_id: String,
+    pub tasks_open: u64,
+    pub tasks_in_progress: u64,
+    pub tasks_blocked: u64,
+    pub tasks_done: u64,
+    pub stuck_files: u64,
+    pub stale_hashes_prevented: u64,
+}
+
+// ── provider wire types ───────────────────────────────────────────────────────
+
+/// Wire summary of a configured provider, returned by
+/// [`Response::ProviderList`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSummary {
+    pub id: String,
+    pub name: String,
+    /// First 8 characters of the key hash (masked display).
+    pub key_hash_prefix: String,
 }
 
 /// Structured wire-format error.

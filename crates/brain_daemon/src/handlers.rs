@@ -22,14 +22,16 @@ use brain_records::{
     CreateRecordParams, Record, RecordKind, RecordQuery, RecordStatus, RecordStore, integrity,
 };
 use brain_rpc::{
-    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary,
-    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams,
-    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
+    JobSummary, JobsStatusReport, MemoryConsolidateParams, MemoryReflectParams,
+    MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWriteEpisodeParams,
+    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
     RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response, RpcError,
     SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
     SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
-    SagasListParams, SagasUpdateParams, SnapshotSummary, TaskSummary, TasksCreateParams,
-    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
+    TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams,
 };
 use brain_sagas::{
     BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
@@ -1525,6 +1527,220 @@ impl BrainStoresDispatcher {
             .unwrap_or_else(|| "{}".to_string());
         Ok(text)
     }
+
+    // ── tags handlers ────────────────────────────────────────────────────────
+
+    fn handle_tags_aliases_list(
+        &self,
+        params: TagsAliasesListParams,
+    ) -> Result<Response, RpcError> {
+        let rows = self
+            .stores
+            .list_tag_aliases(
+                params.canonical.as_deref(),
+                params.cluster_id.as_deref(),
+                params.limit,
+                params.offset,
+            )
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_tag_aliases failed: {e}"),
+            })?;
+
+        let wire_rows: Vec<TagAliasSummary> = rows
+            .into_iter()
+            .map(|r| TagAliasSummary {
+                raw_tag: r.raw_tag,
+                canonical_tag: r.canonical_tag,
+                cluster_id: r.cluster_id,
+                updated_at: r.updated_at,
+            })
+            .collect();
+
+        Ok(Response::TagsAliasesList { rows: wire_rows })
+    }
+
+    fn handle_tags_aliases_status(&self) -> Result<Response, RpcError> {
+        let last_run = self
+            .stores
+            .latest_tag_cluster_run()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("latest_tag_cluster_run failed: {e}"),
+            })?;
+        let counts = self
+            .stores
+            .count_tag_aliases()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("count_tag_aliases failed: {e}"),
+            })?;
+
+        let report = TagAliasesStatusReport {
+            total_aliases: counts.raw_count as u64,
+            total_clusters: counts.cluster_count as u64,
+            canonical_count: counts.canonical_count as u64,
+            last_run_id: last_run.as_ref().map(|r| r.run_id.clone()),
+            last_run_started_at: last_run.as_ref().map(|r| r.started_at.clone()),
+            last_run_embedder_version: last_run.as_ref().map(|r| r.embedder_version.clone()),
+        };
+
+        Ok(Response::TagsAliasesStatus { report })
+    }
+
+    // ── jobs handlers ────────────────────────────────────────────────────────
+
+    fn handle_jobs_status(&self) -> Result<Response, RpcError> {
+        use brain_persistence::db::job::JobStatus;
+
+        let pending = self
+            .stores
+            .count_jobs_by_status(&JobStatus::Pending)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("count_jobs_by_status(Pending) failed: {e}"),
+            })?;
+        let running = self
+            .stores
+            .count_jobs_by_status(&JobStatus::InProgress)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("count_jobs_by_status(InProgress) failed: {e}"),
+            })?;
+        let done = self
+            .stores
+            .count_jobs_by_status(&JobStatus::Done)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("count_jobs_by_status(Done) failed: {e}"),
+            })?;
+        let failed = self
+            .stores
+            .count_jobs_by_status(&JobStatus::Failed)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("count_jobs_by_status(Failed) failed: {e}"),
+            })?;
+        let ready = self
+            .stores
+            .count_jobs_by_status(&JobStatus::Ready)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("count_jobs_by_status(Ready) failed: {e}"),
+            })?;
+
+        let recent_jobs = self
+            .stores
+            .list_jobs_by_status(&JobStatus::Failed, 10)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_jobs_by_status(Failed) failed: {e}"),
+            })?;
+        let stuck_jobs = self
+            .stores
+            .list_stuck_jobs()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_stuck_jobs failed: {e}"),
+            })?;
+
+        let to_wire = |j: &brain_persistence::db::job::Job| JobSummary {
+            job_id: j.job_id.clone(),
+            kind: j.kind().to_string(),
+            ref_id: j.payload.ref_id().to_string(),
+            attempts: j.attempts,
+            last_error: j.last_error.clone(),
+            updated_at: epoch_seconds_to_iso(j.updated_at),
+        };
+
+        let report = JobsStatusReport {
+            pending: pending as u64,
+            running: running as u64,
+            ready: ready as u64,
+            done: done as u64,
+            failed: failed as u64,
+            recent_failures: recent_jobs.iter().map(to_wire).collect(),
+            stuck_jobs: stuck_jobs.iter().map(to_wire).collect(),
+        };
+
+        Ok(Response::JobsStatus { report })
+    }
+
+    // ── status handler ───────────────────────────────────────────────────────
+
+    fn handle_brain_status(&self) -> Result<Response, RpcError> {
+        let open = self
+            .stores
+            .tasks
+            .list_open()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_open failed: {e}"),
+            })?
+            .len() as u64;
+        let in_progress = self
+            .stores
+            .tasks
+            .list_in_progress()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_in_progress failed: {e}"),
+            })?
+            .len() as u64;
+        let blocked = self
+            .stores
+            .tasks
+            .list_blocked()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_blocked failed: {e}"),
+            })?
+            .len() as u64;
+        let done = self
+            .stores
+            .tasks
+            .list_done()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_done failed: {e}"),
+            })?
+            .len() as u64;
+        let stuck_files = self
+            .stores
+            .count_stuck_files()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("count_stuck_files failed: {e}"),
+            })?;
+        let stale_hashes_prevented =
+            self.stores
+                .stale_hashes_prevented()
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("stale_hashes_prevented failed: {e}"),
+                })?;
+
+        let report = BrainStatusReport {
+            brain_name: self.stores.brain_name.clone(),
+            brain_id: self.stores.brain_id.clone(),
+            tasks_open: open,
+            tasks_in_progress: in_progress,
+            tasks_blocked: blocked,
+            tasks_done: done,
+            stuck_files,
+            stale_hashes_prevented,
+        };
+
+        Ok(Response::BrainStatus { report })
+    }
+
+    // ── provider handler ─────────────────────────────────────────────────────
+
+    fn handle_provider_list(&self) -> Result<Response, RpcError> {
+        use brain_lib::ports::ProviderStore;
+
+        let providers = self
+            .stores
+            .list_providers()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_providers failed: {e}"),
+            })?;
+
+        let wire: Vec<ProviderSummary> = providers
+            .into_iter()
+            .map(|p| ProviderSummary {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                key_hash_prefix: p.api_key_hash.chars().take(8).collect(),
+            })
+            .collect();
+
+        Ok(Response::ProviderList { providers: wire })
+    }
 }
 
 /// Convert the wire-format `importance_millis` (0..=1000) into the
@@ -1603,6 +1819,11 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::MemoryConsolidate { params } => self.handle_memory_consolidate(params),
             Request::MemorySummarizeScope { params } => self.handle_memory_summarize_scope(params),
             Request::MemoryReflect { params } => self.handle_memory_reflect(params),
+            Request::TagsAliasesList { params } => self.handle_tags_aliases_list(params),
+            Request::TagsAliasesStatus => self.handle_tags_aliases_status(),
+            Request::JobsStatus => self.handle_jobs_status(),
+            Request::BrainStatus => self.handle_brain_status(),
+            Request::ProviderList => self.handle_provider_list(),
         }
     }
 }

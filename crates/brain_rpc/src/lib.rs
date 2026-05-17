@@ -53,14 +53,16 @@ pub mod testing;
 
 pub use client::DaemonClient;
 pub use domain::{
-    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary,
-    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams,
-    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
+    JobSummary, JobsStatusReport, MemoryConsolidateParams, MemoryReflectParams,
+    MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWriteEpisodeParams,
+    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
     RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response, RpcError,
     SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
     SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
-    SagasListParams, SagasUpdateParams, SnapshotSummary, TaskSummary, TasksCreateParams,
-    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
+    TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams,
 };
 pub use transport::Transport;
 

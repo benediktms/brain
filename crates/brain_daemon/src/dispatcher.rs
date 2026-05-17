@@ -108,9 +108,15 @@ impl Dispatcher for DefaultDispatcher {
             | Request::MemoryRetrieve { .. }
             | Request::MemoryConsolidate { .. }
             | Request::MemorySummarizeScope { .. }
-            | Request::MemoryReflect { .. } => Err(RpcError::Unknown {
-                message: "tasks_* / records_* / <kind>_* / sagas_* / memory_* requests not \
-                          handled by DefaultDispatcher — start brain-daemon with --sqlite-db \
+            | Request::MemoryReflect { .. }
+            | Request::TagsAliasesList { .. }
+            | Request::TagsAliasesStatus
+            | Request::JobsStatus
+            | Request::BrainStatus
+            | Request::ProviderList => Err(RpcError::Unknown {
+                message: "tasks_* / records_* / <kind>_* / sagas_* / memory_* / tags_* / \
+                          jobs_* / status / provider_* requests not handled by \
+                          DefaultDispatcher — start brain-daemon with --sqlite-db \
                           and --lance-db to use the BrainStores-backed dispatcher"
                     .into(),
             }),
