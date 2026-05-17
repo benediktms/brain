@@ -205,9 +205,18 @@ mod tests {
             .map(|(k, _)| (*k, std::env::var(k).ok()))
             .collect();
         for (k, v) in vars {
-            match v {
-                Some(val) => std::env::set_var(k, val),
-                None => std::env::remove_var(k),
+            // SAFETY: test-only env mutation. Rust 2024 marks set_var /
+            // remove_var unsafe because they race with concurrent reads
+            // from other threads. These tests run single-threaded (no
+            // env reads happen on other threads during the with_env
+            // closure), and cargo-nextest isolates each test binary in
+            // its own process — so the global env mutation is bounded
+            // to this test's scope.
+            unsafe {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
             }
         }
 
@@ -215,9 +224,13 @@ mod tests {
 
         // Restore.
         for (k, v) in &saved {
-            match v {
-                Some(val) => std::env::set_var(k, val),
-                None => std::env::remove_var(k),
+            // SAFETY: see the env-mutation block above — same conditions
+            // apply on restore.
+            unsafe {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
             }
         }
     }
