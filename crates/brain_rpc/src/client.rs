@@ -26,7 +26,9 @@
 use crate::domain::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
     PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
-    RpcError, SnapshotSummary, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
+    RpcError, SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount,
+    SagaStatsReport, SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams,
+    SnapshotSummary, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
     TasksTransferParams, TasksUpdateParams,
 };
 use crate::transport::Transport;
@@ -612,6 +614,260 @@ impl<T: Transport> DaemonClient<T> {
                 message: format!(
                     "expected SnapshotsCreate in reply to SnapshotsCreate, got {other:?}"
                 ),
+            }),
+        }
+    }
+
+    /// List sagas with optional filters via [`Request::SagasList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasList`].
+    pub fn sagas_list(&mut self, params: SagasListParams) -> Result<Vec<SagaSummary>, RpcError> {
+        match self.call(Request::SagasList { params })? {
+            Response::SagasList { sagas } => Ok(sagas),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasList in reply to SagasList, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Fetch a saga by ID. Returns `None` when the saga does not
+    /// exist on the daemon side.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasGet`].
+    pub fn sagas_get(&mut self, saga_id: String) -> Result<Option<SagaSummary>, RpcError> {
+        match self.call(Request::SagasGet { saga_id })? {
+            Response::SagasGet { saga } => Ok(saga),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasGet in reply to SagasGet, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Create a new saga.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasCreate`].
+    pub fn sagas_create(&mut self, params: SagasCreateParams) -> Result<SagaSummary, RpcError> {
+        match self.call(Request::SagasCreate { params })? {
+            Response::SagasCreate { saga } => Ok(saga),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasCreate in reply to SagasCreate, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Update a saga's title and/or description.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasUpdate`].
+    pub fn sagas_update(&mut self, params: SagasUpdateParams) -> Result<SagaSummary, RpcError> {
+        match self.call(Request::SagasUpdate { params })? {
+            Response::SagasUpdate { saga } => Ok(saga),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasUpdate in reply to SagasUpdate, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Add tasks to a saga. Returns `(saga_id_short, added_task_ids)`.
+    /// `added_task_ids.len()` matches the `added` count in the wire
+    /// response.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasAddTasks`].
+    pub fn sagas_add_tasks(
+        &mut self,
+        saga_id: String,
+        task_ids: Vec<String>,
+        cascade: bool,
+    ) -> Result<(String, Vec<String>), RpcError> {
+        match self.call(Request::SagasAddTasks {
+            saga_id,
+            task_ids,
+            cascade,
+        })? {
+            Response::SagasAddTasks {
+                saga_id,
+                added_task_ids,
+                ..
+            } => Ok((saga_id, added_task_ids)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasAddTasks in reply to SagasAddTasks, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Remove tasks from a saga. Returns `(saga_id_short, removed_task_ids)`.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasRemoveTasks`].
+    pub fn sagas_remove_tasks(
+        &mut self,
+        saga_id: String,
+        task_ids: Vec<String>,
+        cascade: bool,
+    ) -> Result<(String, Vec<String>), RpcError> {
+        match self.call(Request::SagasRemoveTasks {
+            saga_id,
+            task_ids,
+            cascade,
+        })? {
+            Response::SagasRemoveTasks {
+                saga_id,
+                removed_task_ids,
+                ..
+            } => Ok((saga_id, removed_task_ids)),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected SagasRemoveTasks in reply to SagasRemoveTasks, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Return the ready actionable member tasks for a saga.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasFrontier`].
+    pub fn sagas_frontier(
+        &mut self,
+        saga_id: String,
+    ) -> Result<(String, String, Vec<SagaFrontierTask>, Vec<SagaBrainSummary>), RpcError> {
+        match self.call(Request::SagasFrontier { saga_id })? {
+            Response::SagasFrontier {
+                saga_id,
+                saga_status,
+                tasks,
+                brains,
+            } => Ok((saga_id, saga_status, tasks, brains)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasFrontier in reply to SagasFrontier, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Transition a saga from `planning` to `open`.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasStart`].
+    pub fn sagas_start(&mut self, saga_id: String) -> Result<SagaSummary, RpcError> {
+        match self.call(Request::SagasStart { saga_id })? {
+            Response::SagasStart { saga } => Ok(saga),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasStart in reply to SagasStart, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Close a saga, optionally cascading member tasks to `done`.
+    /// Returns `(saga, cascade_results)` — `cascade_results` is empty
+    /// when `cascade` was `false`.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasClose`].
+    pub fn sagas_close(
+        &mut self,
+        saga_id: String,
+        cascade: bool,
+    ) -> Result<(SagaSummary, Vec<SagaCascadeResult>), RpcError> {
+        match self.call(Request::SagasClose { saga_id, cascade })? {
+            Response::SagasClose {
+                saga,
+                cascade_results,
+                ..
+            } => Ok((saga, cascade_results)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasClose in reply to SagasClose, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Cancel a saga, optionally cascading non-terminal member tasks
+    /// to `cancelled`. Returns `(saga, cascade_results)`.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasCancel`].
+    pub fn sagas_cancel(
+        &mut self,
+        saga_id: String,
+        cascade: bool,
+    ) -> Result<(SagaSummary, Vec<SagaCascadeResult>), RpcError> {
+        match self.call(Request::SagasCancel { saga_id, cascade })? {
+            Response::SagasCancel {
+                saga,
+                cascade_results,
+                ..
+            } => Ok((saga, cascade_results)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasCancel in reply to SagasCancel, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Reopen a closed or cancelled saga.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasReopen`].
+    pub fn sagas_reopen(&mut self, saga_id: String) -> Result<SagaSummary, RpcError> {
+        match self.call(Request::SagasReopen { saga_id })? {
+            Response::SagasReopen { saga } => Ok(saga),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasReopen in reply to SagasReopen, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Return aggregated statistics for a saga.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SagasStats`].
+    pub fn sagas_stats(
+        &mut self,
+        saga_id: String,
+    ) -> Result<
+        (
+            String,
+            SagaStatsReport,
+            Vec<SagaLabelCount>,
+            Vec<SagaBrainSummary>,
+        ),
+        RpcError,
+    > {
+        match self.call(Request::SagasStats { saga_id })? {
+            Response::SagasStats {
+                saga_id,
+                stats,
+                label_histogram,
+                brains,
+            } => Ok((saga_id, stats, label_histogram, brains)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SagasStats in reply to SagasStats, got {other:?}"),
             }),
         }
     }
@@ -1651,5 +1907,366 @@ mod tests {
             Err(RpcError::Protocol { message }) => assert!(message.contains("SnapshotsCreate")),
             other => panic!("expected Protocol, got {other:?}"),
         }
+    }
+
+    // ── sagas ──────────────────────────────────────────────────
+
+    fn sample_saga_summary() -> SagaSummary {
+        SagaSummary {
+            saga_id: "saga-abc".into(),
+            title: "t".into(),
+            description: None,
+            status: "planning".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            updated_at: "2026-05-17T00:00:00Z".into(),
+            closed_at: None,
+        }
+    }
+
+    #[test]
+    fn sagas_list_returns_unwrapped_payload() {
+        let want = vec![sample_saga_summary()];
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SagasList { .. } => Ok(Response::SagasList {
+                    sagas: want_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .sagas_list(SagasListParams::default())
+            .expect("sagas_list");
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn sagas_list_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.sagas_list(SagasListParams::default()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("SagasList")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sagas_get_returns_some_payload() {
+        let want = sample_saga_summary();
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SagasGet { .. } => Ok(Response::SagasGet {
+                    saga: Some(want_clone.clone()),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.sagas_get("saga-abc".into()).expect("sagas_get");
+        assert_eq!(got, Some(want));
+    }
+
+    #[test]
+    fn sagas_get_returns_none_when_not_found() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|_| {
+            Ok(Response::SagasGet { saga: None })
+        }));
+        assert!(client.sagas_get("missing".into()).unwrap().is_none());
+    }
+
+    #[test]
+    fn sagas_get_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.sagas_get("x".into()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("SagasGet")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sagas_create_returns_summary() {
+        let summary = sample_saga_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SagasCreate { params } => {
+                    assert_eq!(params.title, "Q4");
+                    Ok(Response::SagasCreate {
+                        saga: summary_clone.clone(),
+                    })
+                }
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .sagas_create(SagasCreateParams {
+                title: "Q4".into(),
+                description: None,
+            })
+            .expect("sagas_create");
+        assert_eq!(got, summary);
+    }
+
+    #[test]
+    fn sagas_create_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.sagas_create(SagasCreateParams {
+            title: "t".into(),
+            description: None,
+        }) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("SagasCreate")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sagas_update_returns_summary() {
+        let summary = sample_saga_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SagasUpdate { .. } => Ok(Response::SagasUpdate {
+                    saga: summary_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .sagas_update(SagasUpdateParams {
+                saga_id: "saga-abc".into(),
+                title: Some("new".into()),
+                description: None,
+            })
+            .expect("sagas_update");
+        assert_eq!(got, summary);
+    }
+
+    #[test]
+    fn sagas_update_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.sagas_update(SagasUpdateParams {
+            saga_id: "saga-abc".into(),
+            title: Some("t".into()),
+            description: None,
+        }) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("SagasUpdate")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sagas_add_tasks_forwards_inputs_and_returns_ids() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::SagasAddTasks {
+                saga_id,
+                task_ids,
+                cascade,
+            } => {
+                assert_eq!(saga_id, "saga-abc");
+                assert_eq!(task_ids, vec!["brn-2fe.27".to_string()]);
+                assert!(cascade);
+                Ok(Response::SagasAddTasks {
+                    saga_id: "saga-abc".into(),
+                    added: 1,
+                    added_task_ids: vec!["brn-2fe.27".into()],
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let (saga_id, added) = client
+            .sagas_add_tasks("saga-abc".into(), vec!["brn-2fe.27".into()], true)
+            .expect("sagas_add_tasks");
+        assert_eq!(saga_id, "saga-abc");
+        assert_eq!(added, vec!["brn-2fe.27".to_string()]);
+    }
+
+    #[test]
+    fn sagas_add_tasks_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.sagas_add_tasks("saga-abc".into(), vec![], false) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("SagasAddTasks")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sagas_remove_tasks_returns_ids() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::SagasRemoveTasks { .. } => Ok(Response::SagasRemoveTasks {
+                saga_id: "saga-abc".into(),
+                removed: 1,
+                removed_task_ids: vec!["brn-2fe.27".into()],
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let (saga_id, removed) = client
+            .sagas_remove_tasks("saga-abc".into(), vec!["brn-2fe.27".into()], false)
+            .expect("sagas_remove_tasks");
+        assert_eq!(saga_id, "saga-abc");
+        assert_eq!(removed, vec!["brn-2fe.27".to_string()]);
+    }
+
+    #[test]
+    fn sagas_remove_tasks_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.sagas_remove_tasks("saga-abc".into(), vec![], false) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("SagasRemoveTasks")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sagas_frontier_returns_tasks_and_brains() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::SagasFrontier { .. } => Ok(Response::SagasFrontier {
+                saga_id: "saga-abc".into(),
+                saga_status: "open".into(),
+                tasks: vec![SagaFrontierTask {
+                    task_id: "brn-2fe.27".into(),
+                    title: "t".into(),
+                    status: "open".into(),
+                    priority: 0,
+                    task_type: "task".into(),
+                }],
+                brains: vec![SagaBrainSummary {
+                    brain_id: "b".into(),
+                    name: "Brain".into(),
+                    prefix: None,
+                }],
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let (saga_id, status, tasks, brains) = client
+            .sagas_frontier("saga-abc".into())
+            .expect("sagas_frontier");
+        assert_eq!(saga_id, "saga-abc");
+        assert_eq!(status, "open");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(brains.len(), 1);
+    }
+
+    #[test]
+    fn sagas_frontier_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.sagas_frontier("saga-abc".into()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("SagasFrontier")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sagas_start_returns_summary() {
+        let summary = sample_saga_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SagasStart { .. } => Ok(Response::SagasStart {
+                    saga: summary_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.sagas_start("saga-abc".into()).expect("sagas_start");
+        assert_eq!(got, summary);
+    }
+
+    #[test]
+    fn sagas_close_returns_summary_and_cascade() {
+        let summary = sample_saga_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SagasClose { cascade, .. } => {
+                    assert!(cascade);
+                    Ok(Response::SagasClose {
+                        saga: summary_clone.clone(),
+                        cascade: true,
+                        cascade_results: vec![SagaCascadeResult {
+                            task_id: "brn-2fe.27".into(),
+                            outcome: crate::domain::SagaCascadeOutcome::Closed,
+                        }],
+                    })
+                }
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (saga, results) = client
+            .sagas_close("saga-abc".into(), true)
+            .expect("sagas_close");
+        assert_eq!(saga, summary);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn sagas_cancel_returns_summary_and_cascade() {
+        let summary = sample_saga_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SagasCancel { .. } => Ok(Response::SagasCancel {
+                    saga: summary_clone.clone(),
+                    cascade: false,
+                    cascade_results: vec![],
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (saga, results) = client
+            .sagas_cancel("saga-abc".into(), false)
+            .expect("sagas_cancel");
+        assert_eq!(saga, summary);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn sagas_reopen_returns_summary() {
+        let summary = sample_saga_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SagasReopen { .. } => Ok(Response::SagasReopen {
+                    saga: summary_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .sagas_reopen("saga-abc".into())
+            .expect("sagas_reopen");
+        assert_eq!(got, summary);
+    }
+
+    #[test]
+    fn sagas_stats_returns_report_and_aggregates() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::SagasStats { .. } => Ok(Response::SagasStats {
+                saga_id: "saga-abc".into(),
+                stats: SagaStatsReport {
+                    total: 3,
+                    open: 1,
+                    in_progress: 1,
+                    blocked: 0,
+                    done: 1,
+                    cancelled: 0,
+                    orphan: 0,
+                    completion_pct: Some(33.3),
+                },
+                label_histogram: vec![SagaLabelCount {
+                    label: "p0".into(),
+                    count: 1,
+                }],
+                brains: vec![SagaBrainSummary {
+                    brain_id: "b".into(),
+                    name: "Brain".into(),
+                    prefix: None,
+                }],
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let (saga_id, stats, labels, brains) =
+            client.sagas_stats("saga-abc".into()).expect("sagas_stats");
+        assert_eq!(saga_id, "saga-abc");
+        assert_eq!(stats.total, 3);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(brains.len(), 1);
     }
 }

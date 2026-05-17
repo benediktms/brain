@@ -90,8 +90,20 @@ impl Dispatcher for DefaultDispatcher {
             | Request::PlansCreate { .. }
             | Request::SnapshotsList { .. }
             | Request::SnapshotsShow { .. }
-            | Request::SnapshotsCreate { .. } => Err(RpcError::Unknown {
-                message: "tasks_* / records_* / <kind>_* requests not handled by \
+            | Request::SnapshotsCreate { .. }
+            | Request::SagasList { .. }
+            | Request::SagasGet { .. }
+            | Request::SagasCreate { .. }
+            | Request::SagasUpdate { .. }
+            | Request::SagasAddTasks { .. }
+            | Request::SagasRemoveTasks { .. }
+            | Request::SagasFrontier { .. }
+            | Request::SagasStart { .. }
+            | Request::SagasClose { .. }
+            | Request::SagasCancel { .. }
+            | Request::SagasReopen { .. }
+            | Request::SagasStats { .. } => Err(RpcError::Unknown {
+                message: "tasks_* / records_* / <kind>_* / sagas_* requests not handled by \
                           DefaultDispatcher — start brain-daemon with --sqlite-db and \
                           --lance-db to use the BrainStores-backed dispatcher"
                     .into(),

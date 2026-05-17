@@ -93,10 +93,22 @@ fn echo_once(listener: UnixListener) {
             | Request::PlansCreate { .. }
             | Request::SnapshotsList { .. }
             | Request::SnapshotsShow { .. }
-            | Request::SnapshotsCreate { .. } => {
+            | Request::SnapshotsCreate { .. }
+            | Request::SagasList { .. }
+            | Request::SagasGet { .. }
+            | Request::SagasCreate { .. }
+            | Request::SagasUpdate { .. }
+            | Request::SagasAddTasks { .. }
+            | Request::SagasRemoveTasks { .. }
+            | Request::SagasFrontier { .. }
+            | Request::SagasStart { .. }
+            | Request::SagasClose { .. }
+            | Request::SagasCancel { .. }
+            | Request::SagasReopen { .. }
+            | Request::SagasStats { .. } => {
                 unreachable!(
                     "echo_once test server is not configured to respond to tasks_* / records_* / \
-                     <kind>_* requests"
+                     sagas_* / <kind>_* requests"
                 )
             }
         };

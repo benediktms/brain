@@ -11,12 +11,20 @@ pub(crate) enum SagasAction {
         /// Optional description
         #[arg(long)]
         description: Option<String>,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Show a saga by its saga_id
     Show {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// List sagas (default: planning and open only)
@@ -37,6 +45,10 @@ pub(crate) enum SagasAction {
         /// live member task in this brain are returned.
         #[arg(long)]
         containing_brain: Option<String>,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Update a saga's title and/or description
@@ -55,6 +67,10 @@ pub(crate) enum SagasAction {
         /// Clear the description (set it to null)
         #[arg(long)]
         clear_description: bool,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Add one or more tasks to a saga (atomic batch)
@@ -69,12 +85,20 @@ pub(crate) enum SagasAction {
         /// Also add every transitive descendant of each input task (via parent_of)
         #[arg(long)]
         cascade: bool,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Start a saga (planning → open)
     Start {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Close a saga (must be in 'open' status)
@@ -85,6 +109,10 @@ pub(crate) enum SagasAction {
         /// Also close all member tasks
         #[arg(long)]
         cascade: bool,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Remove tasks from a saga (idempotent)
@@ -99,24 +127,40 @@ pub(crate) enum SagasAction {
         /// Also remove every transitive descendant of each input task (via parent_of) currently in the saga
         #[arg(long)]
         cascade: bool,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Reopen a closed or cancelled saga (status → open)
     Reopen {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Show ready-actionable tasks in a saga (same rules as tasks next)
     Frontier {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Aggregate statistics for a saga's member tasks
     Stats {
         /// Saga ID (bare 26-char ULID)
         saga_id: String,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Cancel a saga (optionally cascade-cancels member tasks)
@@ -127,5 +171,9 @@ pub(crate) enum SagasAction {
         /// Also cancel non-terminal member tasks
         #[arg(long)]
         cascade: bool,
+
+        /// Route operation through brain-daemon over local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 }

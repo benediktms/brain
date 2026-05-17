@@ -87,10 +87,22 @@ impl InMemoryTransport {
             | Request::PlansCreate { .. }
             | Request::SnapshotsList { .. }
             | Request::SnapshotsShow { .. }
-            | Request::SnapshotsCreate { .. } => Err(RpcError::Unknown {
+            | Request::SnapshotsCreate { .. }
+            | Request::SagasList { .. }
+            | Request::SagasGet { .. }
+            | Request::SagasCreate { .. }
+            | Request::SagasUpdate { .. }
+            | Request::SagasAddTasks { .. }
+            | Request::SagasRemoveTasks { .. }
+            | Request::SagasFrontier { .. }
+            | Request::SagasStart { .. }
+            | Request::SagasClose { .. }
+            | Request::SagasCancel { .. }
+            | Request::SagasReopen { .. }
+            | Request::SagasStats { .. } => Err(RpcError::Unknown {
                 message: "InMemoryTransport::echo does not handle tasks_* / records_* / \
-                          <kind>_* requests — use InMemoryTransport::new with a custom \
-                          handler"
+                          sagas_* / <kind>_* requests — use InMemoryTransport::new with a \
+                          custom handler"
                     .into(),
             }),
         })

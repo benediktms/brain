@@ -55,8 +55,10 @@ pub use client::DaemonClient;
 pub use domain::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
     PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
-    RpcError, SnapshotSummary, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams,
+    RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
+    SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
+    SagasListParams, SagasUpdateParams, SnapshotSummary, TaskSummary, TasksCreateParams,
+    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
 };
 pub use transport::Transport;
 

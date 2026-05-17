@@ -125,6 +125,51 @@ pub enum Request {
     /// Create (save) a new snapshot record. Server returns
     /// [`Response::SnapshotsCreate`]. Mirrors `brain snapshots save`.
     SnapshotsCreate { params: RecordsCreateParams },
+    /// List sagas with optional filters. Server returns
+    /// [`Response::SagasList`].
+    SagasList { params: SagasListParams },
+    /// Fetch a single saga by ID. Server returns
+    /// [`Response::SagasGet`] with `None` when not found.
+    SagasGet { saga_id: String },
+    /// Create a new saga in `planning` status. Server returns
+    /// [`Response::SagasCreate`].
+    SagasCreate { params: SagasCreateParams },
+    /// Update saga title and/or description. Server returns
+    /// [`Response::SagasUpdate`].
+    SagasUpdate { params: SagasUpdateParams },
+    /// Add one or more tasks to a saga. Server returns
+    /// [`Response::SagasAddTasks`].
+    SagasAddTasks {
+        saga_id: String,
+        task_ids: Vec<String>,
+        cascade: bool,
+    },
+    /// Remove one or more tasks from a saga. Server returns
+    /// [`Response::SagasRemoveTasks`].
+    SagasRemoveTasks {
+        saga_id: String,
+        task_ids: Vec<String>,
+        cascade: bool,
+    },
+    /// Return the ready-actionable member tasks for a saga plus the
+    /// brains those tasks belong to. Server returns
+    /// [`Response::SagasFrontier`].
+    SagasFrontier { saga_id: String },
+    /// Transition a saga from `planning` to `open`. Server returns
+    /// [`Response::SagasStart`].
+    SagasStart { saga_id: String },
+    /// Close an `open` saga, optionally cascading member tasks to
+    /// `done`. Server returns [`Response::SagasClose`].
+    SagasClose { saga_id: String, cascade: bool },
+    /// Cancel a saga, optionally cascading non-terminal member tasks
+    /// to `cancelled`. Server returns [`Response::SagasCancel`].
+    SagasCancel { saga_id: String, cascade: bool },
+    /// Reopen a closed or cancelled saga. Server returns
+    /// [`Response::SagasReopen`].
+    SagasReopen { saga_id: String },
+    /// Return aggregated statistics for a saga's member tasks. Server
+    /// returns [`Response::SagasStats`].
+    SagasStats { saga_id: String },
 }
 
 /// Optional filter and pagination params for [`Request::TasksList`].
@@ -264,6 +309,63 @@ pub struct RecordsCreateParams {
     pub brain: Option<String>,
 }
 
+/// Optional filter params for [`Request::SagasList`].
+///
+/// Mirrors the user-facing flags of `brain sagas list`. By default the
+/// daemon excludes `closed` and `cancelled` sagas; setting the
+/// corresponding flag (or both, equivalent to the CLI's `--all`)
+/// widens the result set.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct SagasListParams {
+    /// Include `closed` sagas in the result.
+    pub include_closed: bool,
+    /// Include `cancelled` sagas in the result.
+    pub include_cancelled: bool,
+    /// Only return sagas that have at least one member-task in this
+    /// brain (resolved by name or ID daemon-side).
+    pub containing_brain: Option<String>,
+}
+
+/// Wire-format params for [`Request::SagasCreate`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct SagasCreateParams {
+    pub title: String,
+    pub description: Option<String>,
+}
+
+/// Wire-format params for [`Request::SagasUpdate`].
+///
+/// `description` uses [`SagaDescriptionUpdate`] so callers can
+/// disambiguate "don't touch" from "set to NULL" — the underlying
+/// `SagaStore::update` API takes `Option<Option<&str>>` for the same
+/// reason.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct SagasUpdateParams {
+    pub saga_id: String,
+    pub title: Option<String>,
+    /// `None` = don't touch description.
+    /// `Some(SagaDescriptionUpdate::Clear)` = set description to NULL.
+    /// `Some(SagaDescriptionUpdate::Set(text))` = set description to
+    /// `text`.
+    pub description: Option<SagaDescriptionUpdate>,
+}
+
+/// Wire-format variant for updating a saga's description.
+///
+/// Tagged on the wire so the JSON shape distinguishes "set to a new
+/// string" from "set to NULL" — a single nested `Option<Option<String>>`
+/// would serialize ambiguously through serde's default representation.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum SagaDescriptionUpdate {
+    /// Set description to NULL.
+    Clear,
+    /// Set description to `value`.
+    Set { value: String },
+}
+
 /// A server-originated reply to a [`Request`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -341,6 +443,69 @@ pub enum Response {
         record: SnapshotSummary,
         content_hash: String,
         size: u64,
+    },
+    /// Reply to [`Request::SagasList`].
+    SagasList { sagas: Vec<SagaSummary> },
+    /// Reply to [`Request::SagasGet`]. `saga` is `None` when the
+    /// requested saga does not exist.
+    SagasGet { saga: Option<SagaSummary> },
+    /// Reply to [`Request::SagasCreate`].
+    SagasCreate { saga: SagaSummary },
+    /// Reply to [`Request::SagasUpdate`].
+    SagasUpdate { saga: SagaSummary },
+    /// Reply to [`Request::SagasAddTasks`]. `added_task_ids` carries
+    /// the canonical task IDs that were actually inserted (excludes
+    /// already-member tasks and within-batch duplicates). `added` is
+    /// `added_task_ids.len()` for caller convenience and to match the
+    /// shape of the CLI's `--json` output.
+    SagasAddTasks {
+        saga_id: String,
+        added: u32,
+        added_task_ids: Vec<String>,
+    },
+    /// Reply to [`Request::SagasRemoveTasks`]. `removed_task_ids`
+    /// carries the canonical task IDs that were actually removed
+    /// (intersection of the resolved input with current membership).
+    SagasRemoveTasks {
+        saga_id: String,
+        removed: u32,
+        removed_task_ids: Vec<String>,
+    },
+    /// Reply to [`Request::SagasFrontier`]. `saga_status` is the
+    /// saga's lifecycle state at the time of the call; `tasks` and
+    /// `brains` are empty by contract for any non-`open` saga.
+    SagasFrontier {
+        saga_id: String,
+        saga_status: String,
+        tasks: Vec<SagaFrontierTask>,
+        brains: Vec<SagaBrainSummary>,
+    },
+    /// Reply to [`Request::SagasStart`].
+    SagasStart { saga: SagaSummary },
+    /// Reply to [`Request::SagasClose`]. `cascade` echoes the request
+    /// flag so the caller can render output identical to the local
+    /// CLI's JSON path; `cascade_results` lists the per-task outcome
+    /// for every member touched.
+    SagasClose {
+        saga: SagaSummary,
+        cascade: bool,
+        cascade_results: Vec<SagaCascadeResult>,
+    },
+    /// Reply to [`Request::SagasCancel`]. Same shape as
+    /// [`Response::SagasClose`].
+    SagasCancel {
+        saga: SagaSummary,
+        cascade: bool,
+        cascade_results: Vec<SagaCascadeResult>,
+    },
+    /// Reply to [`Request::SagasReopen`].
+    SagasReopen { saga: SagaSummary },
+    /// Reply to [`Request::SagasStats`].
+    SagasStats {
+        saga_id: String,
+        stats: SagaStatsReport,
+        label_histogram: Vec<SagaLabelCount>,
+        brains: Vec<SagaBrainSummary>,
     },
 }
 
@@ -459,6 +624,116 @@ pub struct SnapshotSummary {
     pub title: String,
     pub created_at: String,
     pub brain_id: String,
+}
+
+/// Wire-format summary of a saga.
+///
+/// Mirrors but does not re-use `brain_sagas::Saga` — see module
+/// rustdoc for the anti-corruption-layer rationale. `saga_id` is the
+/// user-facing short form (`saga-<hex>`) the CLI displays; the
+/// canonical 26-char ULID stays inside the daemon.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaSummary {
+    /// Short user-facing form (`saga-<hex>`).
+    pub saga_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    /// Lifecycle status string ("planning", "open", "closed",
+    /// "cancelled"). Stringly-typed on the wire so adding a new status
+    /// server-side does not break older clients catastrophically.
+    pub status: String,
+    /// RFC 3339 / ISO 8601 timestamp.
+    pub created_at: String,
+    /// RFC 3339 / ISO 8601 timestamp.
+    pub updated_at: String,
+    /// RFC 3339 / ISO 8601 timestamp, or `None` when the saga has
+    /// never been closed/cancelled (or was subsequently reopened).
+    pub closed_at: Option<String>,
+}
+
+/// Wire-format summary of a brain referenced by a saga.
+///
+/// Mirrors `brain_sagas::BrainSummary` field-for-field.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaBrainSummary {
+    pub brain_id: String,
+    pub name: String,
+    pub prefix: Option<String>,
+}
+
+/// Wire-format member of [`Response::SagasFrontier`] — one ready
+/// actionable task in a saga.
+///
+/// Mirrors the CLI's `frontier --json` shape: short task ID, title,
+/// status string, integer priority, task-type string. The `task_type`
+/// is stringly-typed for the same forward-compatibility reason as
+/// [`TaskSummary::status`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaFrontierTask {
+    /// Short compact task ID (e.g. "brn-2fe.27" or the raw canonical
+    /// when no display alias exists).
+    pub task_id: String,
+    pub title: String,
+    pub status: String,
+    pub priority: i32,
+    pub task_type: String,
+}
+
+/// Wire-format per-task outcome of `close --cascade` / `cancel --cascade`.
+///
+/// Mirrors the CLI's `cascade_results` JSON shape: exactly one of the
+/// boolean flags is `true`, with the optional `reason` / `error`
+/// populated for `skipped` / `failed`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum SagaCascadeOutcome {
+    /// Task transitioned to `done` (close-cascade success).
+    Closed,
+    /// Task transitioned to `cancelled` (cancel-cascade success).
+    Cancelled,
+    /// Task was already terminal — left untouched.
+    Skipped { reason: String },
+    /// Task event append failed; saga's own state still committed.
+    Failed { error: String },
+}
+
+/// Wire-format wrapper pairing a member task ID with its cascade
+/// outcome.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaCascadeResult {
+    /// Compact task ID (e.g. "brn-2fe.27").
+    pub task_id: String,
+    pub outcome: SagaCascadeOutcome,
+}
+
+/// Wire-format aggregate counts for [`Response::SagasStats`].
+///
+/// Mirrors `brain_sagas::SagaStatsCounts`. `completion_pct` is a
+/// 0-100 percentage; `None` when the live-task count is zero.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SagaStatsReport {
+    pub total: i64,
+    pub open: i64,
+    pub in_progress: i64,
+    pub blocked: i64,
+    pub done: i64,
+    pub cancelled: i64,
+    pub orphan: i64,
+    pub completion_pct: Option<f64>,
+}
+
+// `f64` does not implement `Eq` in general (NaN != NaN), but wire-format
+// values deserialized from JSON are never NaN, so asserting `Eq` here is
+// safe. The manual impl lets `Response`, which derives `Eq`, include
+// `SagasStats` without a compilation error.
+impl Eq for SagaStatsReport {}
+
+/// Wire-format `(label, count)` pair for the saga label-histogram
+/// surface.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaLabelCount {
+    pub label: String,
+    pub count: i64,
 }
 
 /// Structured wire-format error.
@@ -1622,6 +1897,501 @@ mod tests {
             record: sample_snapshot_summary(),
             content_hash: "ab12".into(),
             size: 5,
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── sagas summary / params / report ────────────────────────
+
+    fn sample_saga_summary() -> SagaSummary {
+        SagaSummary {
+            saga_id: "saga-deadbeef".into(),
+            title: "Q4 migration".into(),
+            description: Some("desc".into()),
+            status: "open".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            updated_at: "2026-05-17T00:00:00Z".into(),
+            closed_at: None,
+        }
+    }
+
+    fn sample_saga_brain_summary() -> SagaBrainSummary {
+        SagaBrainSummary {
+            brain_id: "brain-x".into(),
+            name: "Brain X".into(),
+            prefix: Some("BRX".into()),
+        }
+    }
+
+    fn sample_saga_frontier_task() -> SagaFrontierTask {
+        SagaFrontierTask {
+            task_id: "brn-2fe.27".into(),
+            title: "vertical slice".into(),
+            status: "open".into(),
+            priority: 2,
+            task_type: "task".into(),
+        }
+    }
+
+    fn sample_saga_cascade_result() -> SagaCascadeResult {
+        SagaCascadeResult {
+            task_id: "brn-2fe.27".into(),
+            outcome: SagaCascadeOutcome::Closed,
+        }
+    }
+
+    fn sample_saga_stats_report() -> SagaStatsReport {
+        SagaStatsReport {
+            total: 5,
+            open: 1,
+            in_progress: 1,
+            blocked: 0,
+            done: 2,
+            cancelled: 1,
+            orphan: 0,
+            completion_pct: Some(50.0),
+        }
+    }
+
+    #[test]
+    fn saga_summary_roundtrips() {
+        let s = sample_saga_summary();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn saga_summary_wire_format_is_stable() {
+        let s = sample_saga_summary();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"saga_id":"saga-deadbeef","title":"Q4 migration","description":"desc","status":"open","created_at":"2026-05-17T00:00:00Z","updated_at":"2026-05-17T00:00:00Z","closed_at":null}"#
+        );
+    }
+
+    #[test]
+    fn saga_brain_summary_roundtrips() {
+        let s = sample_saga_brain_summary();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn saga_brain_summary_wire_format_is_stable() {
+        let s = sample_saga_brain_summary();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"brain_id":"brain-x","name":"Brain X","prefix":"BRX"}"#
+        );
+    }
+
+    #[test]
+    fn saga_frontier_task_roundtrips() {
+        let s = sample_saga_frontier_task();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn saga_frontier_task_wire_format_is_stable() {
+        let s = sample_saga_frontier_task();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"task_id":"brn-2fe.27","title":"vertical slice","status":"open","priority":2,"task_type":"task"}"#
+        );
+    }
+
+    #[test]
+    fn saga_cascade_outcome_closed_wire_format_is_stable() {
+        let o = SagaCascadeOutcome::Closed;
+        let json = serde_json::to_string(&o).unwrap();
+        assert_eq!(json, r#"{"outcome":"closed"}"#);
+    }
+
+    #[test]
+    fn saga_cascade_outcome_skipped_wire_format_is_stable() {
+        let o = SagaCascadeOutcome::Skipped {
+            reason: "terminal".into(),
+        };
+        let json = serde_json::to_string(&o).unwrap();
+        assert_eq!(json, r#"{"outcome":"skipped","reason":"terminal"}"#);
+    }
+
+    #[test]
+    fn saga_cascade_outcome_failed_wire_format_is_stable() {
+        let o = SagaCascadeOutcome::Failed {
+            error: "boom".into(),
+        };
+        let json = serde_json::to_string(&o).unwrap();
+        assert_eq!(json, r#"{"outcome":"failed","error":"boom"}"#);
+    }
+
+    #[test]
+    fn saga_cascade_outcome_all_variants_roundtrip() {
+        for o in [
+            SagaCascadeOutcome::Closed,
+            SagaCascadeOutcome::Cancelled,
+            SagaCascadeOutcome::Skipped { reason: "x".into() },
+            SagaCascadeOutcome::Failed { error: "e".into() },
+        ] {
+            assert_eq!(roundtrip(&o), o);
+        }
+    }
+
+    #[test]
+    fn saga_cascade_result_roundtrips() {
+        let r = sample_saga_cascade_result();
+        assert_eq!(roundtrip(&r), r);
+    }
+
+    #[test]
+    fn saga_stats_report_roundtrips() {
+        let r = sample_saga_stats_report();
+        let bytes = serde_json::to_vec(&r).unwrap();
+        let back: SagaStatsReport = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn saga_stats_report_wire_format_is_stable() {
+        let r = sample_saga_stats_report();
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(
+            json,
+            r#"{"total":5,"open":1,"in_progress":1,"blocked":0,"done":2,"cancelled":1,"orphan":0,"completion_pct":50.0}"#
+        );
+    }
+
+    #[test]
+    fn saga_label_count_roundtrips() {
+        let l = SagaLabelCount {
+            label: "p0".into(),
+            count: 3,
+        };
+        assert_eq!(roundtrip(&l), l);
+    }
+
+    // ── sagas params ───────────────────────────────────────────
+
+    #[test]
+    fn sagas_list_params_roundtrips() {
+        let p = SagasListParams {
+            include_closed: true,
+            include_cancelled: false,
+            containing_brain: Some("brain-x".into()),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn sagas_list_params_default_wire_format_is_stable() {
+        let p = SagasListParams::default();
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(
+            json,
+            r#"{"include_closed":false,"include_cancelled":false,"containing_brain":null}"#
+        );
+    }
+
+    #[test]
+    fn sagas_create_params_roundtrips() {
+        let p = SagasCreateParams {
+            title: "Q4 migration".into(),
+            description: Some("desc".into()),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn sagas_update_params_roundtrips_with_clear() {
+        let p = SagasUpdateParams {
+            saga_id: "saga-abc".into(),
+            title: Some("new".into()),
+            description: Some(SagaDescriptionUpdate::Clear),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn sagas_update_params_roundtrips_with_set() {
+        let p = SagasUpdateParams {
+            saga_id: "saga-abc".into(),
+            title: None,
+            description: Some(SagaDescriptionUpdate::Set {
+                value: "new desc".into(),
+            }),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn saga_description_update_clear_wire_format_is_stable() {
+        let u = SagaDescriptionUpdate::Clear;
+        let json = serde_json::to_string(&u).unwrap();
+        assert_eq!(json, r#"{"op":"clear"}"#);
+    }
+
+    #[test]
+    fn saga_description_update_set_wire_format_is_stable() {
+        let u = SagaDescriptionUpdate::Set {
+            value: "abc".into(),
+        };
+        let json = serde_json::to_string(&u).unwrap();
+        assert_eq!(json, r#"{"op":"set","value":"abc"}"#);
+    }
+
+    // ── sagas Request/Response ─────────────────────────────────
+
+    #[test]
+    fn request_sagas_list_roundtrips() {
+        let req = Request::SagasList {
+            params: SagasListParams::default(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_sagas_list_wire_format_is_stable() {
+        let req = Request::SagasList {
+            params: SagasListParams::default(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"sagas_list","params":{"include_closed":false,"include_cancelled":false,"containing_brain":null}}"#
+        );
+    }
+
+    #[test]
+    fn response_sagas_list_roundtrips() {
+        let res = Response::SagasList {
+            sagas: vec![sample_saga_summary()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_get_roundtrips() {
+        let req = Request::SagasGet {
+            saga_id: "saga-abc".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_get_some_roundtrips() {
+        let res = Response::SagasGet {
+            saga: Some(sample_saga_summary()),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_sagas_get_none_roundtrips() {
+        let res = Response::SagasGet { saga: None };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_create_roundtrips() {
+        let req = Request::SagasCreate {
+            params: SagasCreateParams {
+                title: "t".into(),
+                description: None,
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_create_roundtrips() {
+        let res = Response::SagasCreate {
+            saga: sample_saga_summary(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_update_roundtrips() {
+        let req = Request::SagasUpdate {
+            params: SagasUpdateParams {
+                saga_id: "saga-abc".into(),
+                title: Some("new".into()),
+                description: None,
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_update_roundtrips() {
+        let res = Response::SagasUpdate {
+            saga: sample_saga_summary(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_add_tasks_roundtrips() {
+        let req = Request::SagasAddTasks {
+            saga_id: "saga-abc".into(),
+            task_ids: vec!["brn-2fe.27".into(), "brn-2fe.28".into()],
+            cascade: true,
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_sagas_add_tasks_wire_format_is_stable() {
+        let req = Request::SagasAddTasks {
+            saga_id: "saga-abc".into(),
+            task_ids: vec!["brn-2fe.27".into()],
+            cascade: false,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"sagas_add_tasks","saga_id":"saga-abc","task_ids":["brn-2fe.27"],"cascade":false}"#
+        );
+    }
+
+    #[test]
+    fn response_sagas_add_tasks_roundtrips() {
+        let res = Response::SagasAddTasks {
+            saga_id: "saga-abc".into(),
+            added: 2,
+            added_task_ids: vec!["brn-2fe.27".into(), "brn-2fe.28".into()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_remove_tasks_roundtrips() {
+        let req = Request::SagasRemoveTasks {
+            saga_id: "saga-abc".into(),
+            task_ids: vec!["brn-2fe.27".into()],
+            cascade: true,
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_remove_tasks_roundtrips() {
+        let res = Response::SagasRemoveTasks {
+            saga_id: "saga-abc".into(),
+            removed: 1,
+            removed_task_ids: vec!["brn-2fe.27".into()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_frontier_roundtrips() {
+        let req = Request::SagasFrontier {
+            saga_id: "saga-abc".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_frontier_roundtrips() {
+        let res = Response::SagasFrontier {
+            saga_id: "saga-abc".into(),
+            saga_status: "open".into(),
+            tasks: vec![sample_saga_frontier_task()],
+            brains: vec![sample_saga_brain_summary()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_start_roundtrips() {
+        let req = Request::SagasStart {
+            saga_id: "saga-abc".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_start_roundtrips() {
+        let res = Response::SagasStart {
+            saga: sample_saga_summary(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_close_roundtrips() {
+        let req = Request::SagasClose {
+            saga_id: "saga-abc".into(),
+            cascade: true,
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_close_roundtrips() {
+        let res = Response::SagasClose {
+            saga: sample_saga_summary(),
+            cascade: true,
+            cascade_results: vec![sample_saga_cascade_result()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_cancel_roundtrips() {
+        let req = Request::SagasCancel {
+            saga_id: "saga-abc".into(),
+            cascade: false,
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_cancel_roundtrips() {
+        let res = Response::SagasCancel {
+            saga: sample_saga_summary(),
+            cascade: false,
+            cascade_results: vec![],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_reopen_roundtrips() {
+        let req = Request::SagasReopen {
+            saga_id: "saga-abc".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_reopen_roundtrips() {
+        let res = Response::SagasReopen {
+            saga: sample_saga_summary(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn request_sagas_stats_roundtrips() {
+        let req = Request::SagasStats {
+            saga_id: "saga-abc".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_sagas_stats_roundtrips() {
+        let res = Response::SagasStats {
+            saga_id: "saga-abc".into(),
+            stats: sample_saga_stats_report(),
+            label_histogram: vec![SagaLabelCount {
+                label: "p0".into(),
+                count: 3,
+            }],
+            brains: vec![sample_saga_brain_summary()],
         };
         assert_eq!(roundtrip(&res), res);
     }

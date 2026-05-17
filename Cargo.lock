@@ -714,6 +714,7 @@ dependencies = [
  "brain-persistence",
  "brain-records",
  "brain-rpc",
+ "brain-sagas",
  "brain-tasks",
  "chrono",
  "serde",

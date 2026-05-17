@@ -371,17 +371,22 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Sagas { json, action } => {
             let ctx = commands::sagas::SagaCtx::new(&cli.sqlite_db, json)?;
             match action {
-                SagasAction::Create { title, description } => {
-                    commands::sagas::create(&ctx, &title, description.as_deref())?;
+                SagasAction::Create {
+                    title,
+                    description,
+                    remote,
+                } => {
+                    commands::sagas::create(&ctx, &title, description.as_deref(), remote)?;
                 }
-                SagasAction::Show { saga_id } => {
-                    commands::sagas::show(&ctx, &saga_id)?;
+                SagasAction::Show { saga_id, remote } => {
+                    commands::sagas::show(&ctx, &saga_id, remote)?;
                 }
                 SagasAction::List {
                     include_closed,
                     include_cancelled,
                     all,
                     containing_brain,
+                    remote,
                 } => {
                     commands::sagas::list(
                         &ctx,
@@ -389,6 +394,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         include_cancelled,
                         all,
                         containing_brain,
+                        remote,
                     )?;
                 }
                 SagasAction::Update {
@@ -396,6 +402,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     title,
                     description,
                     clear_description,
+                    remote,
                 } => {
                     // Map CLI flags to the store's Option<Option<&str>> description convention:
                     //   --clear-description  => Some(None)   (set NULL)
@@ -406,39 +413,49 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     } else {
                         description.as_deref().map(Some)
                     };
-                    commands::sagas::update(&ctx, &saga_id, title.as_deref(), desc_arg)?;
+                    commands::sagas::update(&ctx, &saga_id, title.as_deref(), desc_arg, remote)?;
                 }
                 SagasAction::Add {
                     saga_id,
                     task_ids,
                     cascade,
+                    remote,
                 } => {
-                    commands::sagas::add_tasks(&ctx, &saga_id, &task_ids, cascade)?;
+                    commands::sagas::add_tasks(&ctx, &saga_id, &task_ids, cascade, remote)?;
                 }
-                SagasAction::Start { saga_id } => {
-                    commands::sagas::start(&ctx, &saga_id)?;
+                SagasAction::Start { saga_id, remote } => {
+                    commands::sagas::start(&ctx, &saga_id, remote)?;
                 }
                 SagasAction::Remove {
                     saga_id,
                     task_ids,
                     cascade,
+                    remote,
                 } => {
-                    commands::sagas::remove(&ctx, &saga_id, task_ids, cascade)?;
+                    commands::sagas::remove(&ctx, &saga_id, task_ids, cascade, remote)?;
                 }
-                SagasAction::Close { saga_id, cascade } => {
-                    commands::sagas::close(&ctx, &saga_id, cascade)?;
+                SagasAction::Close {
+                    saga_id,
+                    cascade,
+                    remote,
+                } => {
+                    commands::sagas::close(&ctx, &saga_id, cascade, remote)?;
                 }
-                SagasAction::Reopen { saga_id } => {
-                    commands::sagas::reopen(&ctx, &saga_id)?;
+                SagasAction::Reopen { saga_id, remote } => {
+                    commands::sagas::reopen(&ctx, &saga_id, remote)?;
                 }
-                SagasAction::Frontier { saga_id } => {
-                    commands::sagas::frontier(&ctx, &saga_id)?;
+                SagasAction::Frontier { saga_id, remote } => {
+                    commands::sagas::frontier(&ctx, &saga_id, remote)?;
                 }
-                SagasAction::Stats { saga_id } => {
-                    commands::sagas::stats(&ctx, &saga_id)?;
+                SagasAction::Stats { saga_id, remote } => {
+                    commands::sagas::stats(&ctx, &saga_id, remote)?;
                 }
-                SagasAction::Cancel { saga_id, cascade } => {
-                    commands::sagas::cancel(&ctx, &saga_id, cascade)?;
+                SagasAction::Cancel {
+                    saga_id,
+                    cascade,
+                    remote,
+                } => {
+                    commands::sagas::cancel(&ctx, &saga_id, cascade, remote)?;
                 }
             }
         }

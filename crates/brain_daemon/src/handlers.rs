@@ -14,14 +14,21 @@
 //! about whether to expose it on the wire.
 
 use brain_lib::stores::BrainStores;
+use brain_persistence::db::sagas::compact_saga_id;
 use brain_records::{
     CreateRecordParams, Record, RecordKind, RecordQuery, RecordStatus, RecordStore, integrity,
 };
 use brain_rpc::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
     PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
-    RpcError, SnapshotSummary, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams,
+    RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
+    SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
+    SagasListParams, SagasUpdateParams, SnapshotSummary, TaskSummary, TasksCreateParams,
+    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+};
+use brain_sagas::{
+    BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
+    SagaListFilter, SagaStats,
 };
 use brain_tasks::Task;
 use brain_tasks::events::{
@@ -891,6 +898,291 @@ impl BrainStoresDispatcher {
     fn snapshot_to_summary(&self, record: &Record) -> SnapshotSummary {
         snapshot_to_summary_with_brain(record, &self.stores.brain_id)
     }
+
+    // ── sagas handlers ───────────────────────────────────────────────────────
+
+    fn handle_sagas_list(&self, params: SagasListParams) -> Result<Response, RpcError> {
+        let filter = SagaListFilter {
+            include_closed: params.include_closed,
+            include_cancelled: params.include_cancelled,
+            containing_brain: params.containing_brain,
+        };
+        let sagas = self
+            .stores
+            .sagas
+            .list(filter)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list sagas: {e}"),
+            })?;
+        let sagas: Vec<SagaSummary> = sagas.iter().map(saga_to_summary).collect();
+        Ok(Response::SagasList { sagas })
+    }
+
+    fn handle_sagas_get(&self, saga_id: String) -> Result<Response, RpcError> {
+        let saga = self
+            .stores
+            .sagas
+            .get(&saga_id)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("get saga: {e}"),
+            })?;
+        Ok(Response::SagasGet {
+            saga: saga.as_ref().map(saga_to_summary),
+        })
+    }
+
+    fn handle_sagas_create(&self, params: SagasCreateParams) -> Result<Response, RpcError> {
+        let saga = self
+            .stores
+            .sagas
+            .create(&params.title, params.description.as_deref(), "daemon")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("create saga: {e}"),
+            })?;
+        Ok(Response::SagasCreate {
+            saga: saga_to_summary(&saga),
+        })
+    }
+
+    fn handle_sagas_update(&self, params: SagasUpdateParams) -> Result<Response, RpcError> {
+        // Map the wire description-update enum into the SagaStore's
+        // Option<Option<&str>> contract: None = don't touch,
+        // Some(None) = clear, Some(Some(value)) = set.
+        let description: Option<Option<&str>> = match params.description.as_ref() {
+            None => None,
+            Some(SagaDescriptionUpdate::Clear) => Some(None),
+            Some(SagaDescriptionUpdate::Set { value }) => Some(Some(value.as_str())),
+        };
+        let saga = self
+            .stores
+            .sagas
+            .update(
+                &params.saga_id,
+                params.title.as_deref(),
+                description,
+                "daemon",
+            )
+            .map_err(|e| RpcError::Unknown {
+                message: format!("update saga: {e}"),
+            })?;
+        Ok(Response::SagasUpdate {
+            saga: saga_to_summary(&saga),
+        })
+    }
+
+    fn handle_sagas_add_tasks(
+        &self,
+        saga_id: String,
+        task_ids: Vec<String>,
+        cascade: bool,
+    ) -> Result<Response, RpcError> {
+        let (canonical, saga_id_short) =
+            self.stores
+                .sagas
+                .resolve_short(&saga_id)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("resolve saga: {e}"),
+                })?;
+        let added = self
+            .stores
+            .sagas
+            .add_tasks(&canonical, &task_ids, cascade, "daemon")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("add tasks: {e}"),
+            })?;
+        let added_task_ids: Vec<String> = added
+            .iter()
+            .map(|id| self.stores.tasks.compact_id_or_raw(id))
+            .collect();
+        Ok(Response::SagasAddTasks {
+            saga_id: saga_id_short,
+            added: added_task_ids.len() as u32,
+            added_task_ids,
+        })
+    }
+
+    fn handle_sagas_remove_tasks(
+        &self,
+        saga_id: String,
+        task_ids: Vec<String>,
+        cascade: bool,
+    ) -> Result<Response, RpcError> {
+        let (canonical, saga_id_short) =
+            self.stores
+                .sagas
+                .resolve_short(&saga_id)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("resolve saga: {e}"),
+                })?;
+        let removed = self
+            .stores
+            .sagas
+            .remove_tasks(&canonical, task_ids, cascade, "daemon")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("remove tasks: {e}"),
+            })?;
+        let removed_task_ids: Vec<String> = removed
+            .iter()
+            .map(|id| self.stores.tasks.compact_id_or_raw(id))
+            .collect();
+        Ok(Response::SagasRemoveTasks {
+            saga_id: saga_id_short,
+            removed: removed_task_ids.len() as u32,
+            removed_task_ids,
+        })
+    }
+
+    fn handle_sagas_frontier(&self, saga_id: String) -> Result<Response, RpcError> {
+        let (canonical, saga_id_short) =
+            self.stores
+                .sagas
+                .resolve_short(&saga_id)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("resolve saga: {e}"),
+                })?;
+        let frontier = self
+            .stores
+            .sagas
+            .frontier(&canonical)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("saga frontier: {e}"),
+            })?;
+        let tasks: Vec<SagaFrontierTask> = frontier
+            .tasks
+            .iter()
+            .map(|t| self.frontier_task_to_summary(t))
+            .collect();
+        let brains: Vec<SagaBrainSummary> =
+            frontier.brains.iter().map(saga_brain_to_summary).collect();
+        Ok(Response::SagasFrontier {
+            saga_id: saga_id_short,
+            saga_status: frontier.status.to_string(),
+            tasks,
+            brains,
+        })
+    }
+
+    fn handle_sagas_start(&self, saga_id: String) -> Result<Response, RpcError> {
+        let saga = self
+            .stores
+            .sagas
+            .start(&saga_id, "daemon")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("start saga: {e}"),
+            })?;
+        Ok(Response::SagasStart {
+            saga: saga_to_summary(&saga),
+        })
+    }
+
+    fn handle_sagas_close(&self, saga_id: String, cascade: bool) -> Result<Response, RpcError> {
+        let (saga, cascade_results) = self
+            .stores
+            .sagas
+            .close(&saga_id, cascade, "daemon")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("close saga: {e}"),
+            })?;
+        let cascade_results: Vec<SagaCascadeResult> = cascade_results
+            .iter()
+            .map(|r| self.cascade_result_to_wire(r))
+            .collect();
+        Ok(Response::SagasClose {
+            saga: saga_to_summary(&saga),
+            cascade,
+            cascade_results,
+        })
+    }
+
+    fn handle_sagas_cancel(&self, saga_id: String, cascade: bool) -> Result<Response, RpcError> {
+        let (saga, cascade_results) = self
+            .stores
+            .sagas
+            .cancel(&saga_id, cascade, "daemon")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("cancel saga: {e}"),
+            })?;
+        let cascade_results: Vec<SagaCascadeResult> = cascade_results
+            .iter()
+            .map(|r| self.cascade_result_to_wire(r))
+            .collect();
+        Ok(Response::SagasCancel {
+            saga: saga_to_summary(&saga),
+            cascade,
+            cascade_results,
+        })
+    }
+
+    fn handle_sagas_reopen(&self, saga_id: String) -> Result<Response, RpcError> {
+        let saga = self
+            .stores
+            .sagas
+            .reopen(&saga_id, "daemon")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("reopen saga: {e}"),
+            })?;
+        Ok(Response::SagasReopen {
+            saga: saga_to_summary(&saga),
+        })
+    }
+
+    fn handle_sagas_stats(&self, saga_id: String) -> Result<Response, RpcError> {
+        let (canonical, saga_id_short) =
+            self.stores
+                .sagas
+                .resolve_short(&saga_id)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("resolve saga: {e}"),
+                })?;
+        let stats = self
+            .stores
+            .sagas
+            .stats(&canonical)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("saga stats: {e}"),
+            })?;
+        Ok(Response::SagasStats {
+            saga_id: saga_id_short,
+            stats: saga_stats_to_report(&stats),
+            label_histogram: stats
+                .label_histogram
+                .iter()
+                .map(label_count_to_wire)
+                .collect(),
+            brains: stats.brains.iter().map(saga_brain_to_summary).collect(),
+        })
+    }
+
+    /// Anti-corruption mapper for one frontier task — uses the
+    /// daemon's task store to render the compact display ID.
+    fn frontier_task_to_summary(&self, task: &Task) -> SagaFrontierTask {
+        SagaFrontierTask {
+            task_id: self.stores.tasks.compact_id_or_raw(task.id.as_str()),
+            title: task.title.clone(),
+            status: status_to_wire_string(&task.status),
+            priority: task.priority.as_i32(),
+            task_type: task.task_type.as_str().to_string(),
+        }
+    }
+
+    /// Anti-corruption mapper for one cascade result — renders the
+    /// member task ID via the daemon's task store so the wire string
+    /// matches the local CLI's compact form.
+    fn cascade_result_to_wire(&self, result: &CascadeResult) -> SagaCascadeResult {
+        SagaCascadeResult {
+            task_id: self.stores.tasks.compact_id_or_raw(result.task_id.as_str()),
+            outcome: match &result.outcome {
+                CascadeOutcome::Closed => SagaCascadeOutcome::Closed,
+                CascadeOutcome::Cancelled => SagaCascadeOutcome::Cancelled,
+                CascadeOutcome::Skipped { reason } => SagaCascadeOutcome::Skipped {
+                    reason: reason.clone(),
+                },
+                CascadeOutcome::Failed { error } => SagaCascadeOutcome::Failed {
+                    error: error.clone(),
+                },
+            },
+        }
+    }
 }
 
 impl Dispatcher for BrainStoresDispatcher {
@@ -936,6 +1228,26 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::SnapshotsList { params } => self.handle_snapshots_list(params),
             Request::SnapshotsShow { id } => self.handle_snapshots_show(id),
             Request::SnapshotsCreate { params } => self.handle_snapshots_create(params),
+            Request::SagasList { params } => self.handle_sagas_list(params),
+            Request::SagasGet { saga_id } => self.handle_sagas_get(saga_id),
+            Request::SagasCreate { params } => self.handle_sagas_create(params),
+            Request::SagasUpdate { params } => self.handle_sagas_update(params),
+            Request::SagasAddTasks {
+                saga_id,
+                task_ids,
+                cascade,
+            } => self.handle_sagas_add_tasks(saga_id, task_ids, cascade),
+            Request::SagasRemoveTasks {
+                saga_id,
+                task_ids,
+                cascade,
+            } => self.handle_sagas_remove_tasks(saga_id, task_ids, cascade),
+            Request::SagasFrontier { saga_id } => self.handle_sagas_frontier(saga_id),
+            Request::SagasStart { saga_id } => self.handle_sagas_start(saga_id),
+            Request::SagasClose { saga_id, cascade } => self.handle_sagas_close(saga_id, cascade),
+            Request::SagasCancel { saga_id, cascade } => self.handle_sagas_cancel(saga_id, cascade),
+            Request::SagasReopen { saga_id } => self.handle_sagas_reopen(saga_id),
+            Request::SagasStats { saga_id } => self.handle_sagas_stats(saga_id),
         }
     }
 }
@@ -1045,6 +1357,63 @@ fn snapshot_to_summary_with_brain(record: &Record, brain_id: &str) -> SnapshotSu
         title: record.title.clone(),
         created_at: epoch_seconds_to_iso(record.created_at),
         brain_id: brain_id.to_string(),
+    }
+}
+
+// ── saga anti-corruption mappers ─────────────────────────────────
+
+/// Map a [`Saga`] into the wire-format [`SagaSummary`]. Free function
+/// because the mapping needs no daemon state — the brain context lives
+/// on the saga itself via its membership table, not on the saga row.
+/// The `saga_id` returned is the short user-facing form (`saga-<hex>`)
+/// that mirrors the local CLI's JSON output.
+fn saga_to_summary(saga: &Saga) -> SagaSummary {
+    SagaSummary {
+        saga_id: compact_saga_id(&saga.display_id),
+        title: saga.title.clone(),
+        description: saga.description.clone(),
+        status: saga.status.to_string(),
+        created_at: saga
+            .created_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        updated_at: saga
+            .updated_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        closed_at: saga
+            .closed_at
+            .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+    }
+}
+
+/// Map a saga brain summary onto the wire format.
+fn saga_brain_to_summary(brain: &SagaBrainDomain) -> SagaBrainSummary {
+    SagaBrainSummary {
+        brain_id: brain.brain_id.clone(),
+        name: brain.name.clone(),
+        prefix: brain.prefix.clone(),
+    }
+}
+
+/// Map a saga stats aggregate onto the wire format.
+fn saga_stats_to_report(stats: &SagaStats) -> SagaStatsReport {
+    let c = &stats.counts;
+    SagaStatsReport {
+        total: c.total,
+        open: c.open,
+        in_progress: c.in_progress,
+        blocked: c.blocked,
+        done: c.done,
+        cancelled: c.cancelled,
+        orphan: c.orphan,
+        completion_pct: c.completion_pct,
+    }
+}
+
+/// Map a label-count pair onto the wire format.
+fn label_count_to_wire(label: &LabelCount) -> SagaLabelCount {
+    SagaLabelCount {
+        label: label.label.clone(),
+        count: label.count,
     }
 }
 
@@ -1302,5 +1671,305 @@ mod tests {
         assert_eq!(status_to_wire_string(&TaskStatus::Blocked), "blocked");
         assert_eq!(status_to_wire_string(&TaskStatus::Done), "done");
         assert_eq!(status_to_wire_string(&TaskStatus::Cancelled), "cancelled");
+    }
+
+    // ── sagas dispatcher tests ─────────────────────────────────
+
+    #[test]
+    fn dispatch_sagas_list_empty_store() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d
+            .dispatch(Request::SagasList {
+                params: SagasListParams::default(),
+            })
+            .unwrap();
+        match res {
+            Response::SagasList { sagas } => assert!(sagas.is_empty()),
+            other => panic!("expected SagasList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_get_returns_none_for_missing_saga() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let res = d
+            .dispatch(Request::SagasGet {
+                saga_id: "no-such-saga".into(),
+            })
+            .unwrap();
+        match res {
+            Response::SagasGet { saga } => assert!(saga.is_none()),
+            other => panic!("expected SagasGet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_create_then_get_roundtrips() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let created = d
+            .dispatch(Request::SagasCreate {
+                params: SagasCreateParams {
+                    title: "wire saga".into(),
+                    description: Some("desc".into()),
+                },
+            })
+            .unwrap();
+        let summary = match created {
+            Response::SagasCreate { saga } => saga,
+            other => panic!("expected SagasCreate, got {other:?}"),
+        };
+        assert_eq!(summary.title, "wire saga");
+        assert_eq!(summary.status, "planning");
+        assert!(summary.saga_id.starts_with("saga-"));
+
+        // Round-trip lookup.
+        let got = d
+            .dispatch(Request::SagasGet {
+                saga_id: summary.saga_id.clone(),
+            })
+            .unwrap();
+        match got {
+            Response::SagasGet { saga: Some(s) } => {
+                assert_eq!(s.saga_id, summary.saga_id);
+                assert_eq!(s.title, "wire saga");
+            }
+            other => panic!("expected SagasGet Some, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_update_clear_description() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let created = d
+            .dispatch(Request::SagasCreate {
+                params: SagasCreateParams {
+                    title: "t".into(),
+                    description: Some("desc".into()),
+                },
+            })
+            .unwrap();
+        let saga_id = match created {
+            Response::SagasCreate { saga } => saga.saga_id,
+            other => panic!("expected SagasCreate, got {other:?}"),
+        };
+        let updated = d
+            .dispatch(Request::SagasUpdate {
+                params: SagasUpdateParams {
+                    saga_id,
+                    title: None,
+                    description: Some(SagaDescriptionUpdate::Clear),
+                },
+            })
+            .unwrap();
+        match updated {
+            Response::SagasUpdate { saga } => assert!(saga.description.is_none()),
+            other => panic!("expected SagasUpdate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_start_transitions_to_open() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let created = d
+            .dispatch(Request::SagasCreate {
+                params: SagasCreateParams {
+                    title: "t".into(),
+                    description: None,
+                },
+            })
+            .unwrap();
+        let saga_id = match created {
+            Response::SagasCreate { saga } => saga.saga_id,
+            other => panic!("expected SagasCreate, got {other:?}"),
+        };
+        let started = d
+            .dispatch(Request::SagasStart {
+                saga_id: saga_id.clone(),
+            })
+            .unwrap();
+        match started {
+            Response::SagasStart { saga } => {
+                assert_eq!(saga.status, "open");
+                assert_eq!(saga.saga_id, saga_id);
+            }
+            other => panic!("expected SagasStart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_close_then_reopen() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let created = d
+            .dispatch(Request::SagasCreate {
+                params: SagasCreateParams {
+                    title: "t".into(),
+                    description: None,
+                },
+            })
+            .unwrap();
+        let saga_id = match created {
+            Response::SagasCreate { saga } => saga.saga_id,
+            other => panic!("expected SagasCreate, got {other:?}"),
+        };
+        d.dispatch(Request::SagasStart {
+            saga_id: saga_id.clone(),
+        })
+        .unwrap();
+        let closed = d
+            .dispatch(Request::SagasClose {
+                saga_id: saga_id.clone(),
+                cascade: false,
+            })
+            .unwrap();
+        match closed {
+            Response::SagasClose {
+                saga,
+                cascade,
+                cascade_results,
+            } => {
+                assert_eq!(saga.status, "closed");
+                assert!(!cascade);
+                assert!(cascade_results.is_empty());
+            }
+            other => panic!("expected SagasClose, got {other:?}"),
+        }
+        let reopened = d
+            .dispatch(Request::SagasReopen {
+                saga_id: saga_id.clone(),
+            })
+            .unwrap();
+        match reopened {
+            Response::SagasReopen { saga } => assert_eq!(saga.status, "open"),
+            other => panic!("expected SagasReopen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_cancel_returns_summary() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let created = d
+            .dispatch(Request::SagasCreate {
+                params: SagasCreateParams {
+                    title: "t".into(),
+                    description: None,
+                },
+            })
+            .unwrap();
+        let saga_id = match created {
+            Response::SagasCreate { saga } => saga.saga_id,
+            other => panic!("expected SagasCreate, got {other:?}"),
+        };
+        d.dispatch(Request::SagasStart {
+            saga_id: saga_id.clone(),
+        })
+        .unwrap();
+        let cancelled = d
+            .dispatch(Request::SagasCancel {
+                saga_id,
+                cascade: false,
+            })
+            .unwrap();
+        match cancelled {
+            Response::SagasCancel { saga, .. } => assert_eq!(saga.status, "cancelled"),
+            other => panic!("expected SagasCancel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_stats_empty_saga() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let created = d
+            .dispatch(Request::SagasCreate {
+                params: SagasCreateParams {
+                    title: "t".into(),
+                    description: None,
+                },
+            })
+            .unwrap();
+        let saga_id = match created {
+            Response::SagasCreate { saga } => saga.saga_id,
+            other => panic!("expected SagasCreate, got {other:?}"),
+        };
+        let stats = d.dispatch(Request::SagasStats { saga_id }).unwrap();
+        match stats {
+            Response::SagasStats {
+                stats,
+                label_histogram,
+                brains,
+                ..
+            } => {
+                assert_eq!(stats.total, 0);
+                assert!(label_histogram.is_empty());
+                assert!(brains.is_empty());
+            }
+            other => panic!("expected SagasStats, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_frontier_planning_returns_empty() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let created = d
+            .dispatch(Request::SagasCreate {
+                params: SagasCreateParams {
+                    title: "t".into(),
+                    description: None,
+                },
+            })
+            .unwrap();
+        let saga_id = match created {
+            Response::SagasCreate { saga } => saga.saga_id,
+            other => panic!("expected SagasCreate, got {other:?}"),
+        };
+        // Saga is in `planning` — frontier must be empty by contract.
+        let res = d.dispatch(Request::SagasFrontier { saga_id }).unwrap();
+        match res {
+            Response::SagasFrontier {
+                saga_status,
+                tasks,
+                brains,
+                ..
+            } => {
+                assert_eq!(saga_status, "planning");
+                assert!(tasks.is_empty());
+                assert!(brains.is_empty());
+            }
+            other => panic!("expected SagasFrontier, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_sagas_add_tasks_empty_batch_is_noop() {
+        let (_tmp, d) = dispatcher_with_empty_store();
+        let created = d
+            .dispatch(Request::SagasCreate {
+                params: SagasCreateParams {
+                    title: "t".into(),
+                    description: None,
+                },
+            })
+            .unwrap();
+        let saga_id = match created {
+            Response::SagasCreate { saga } => saga.saga_id,
+            other => panic!("expected SagasCreate, got {other:?}"),
+        };
+        let res = d
+            .dispatch(Request::SagasAddTasks {
+                saga_id,
+                task_ids: vec![],
+                cascade: false,
+            })
+            .unwrap();
+        match res {
+            Response::SagasAddTasks {
+                added,
+                added_task_ids,
+                ..
+            } => {
+                assert_eq!(added, 0);
+                assert!(added_task_ids.is_empty());
+            }
+            other => panic!("expected SagasAddTasks, got {other:?}"),
+        }
     }
 }
