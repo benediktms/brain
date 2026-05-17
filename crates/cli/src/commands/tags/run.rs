@@ -47,9 +47,14 @@ pub async fn recluster(ctx: &TagsCtx, model_dir: &Path, threshold: f32) -> Resul
         cosine_threshold: threshold,
     };
 
-    let report = run_recluster(&ctx.stores, &embedder, params)
-        .await
-        .context("recluster failed")?;
+    let report = run_recluster(
+        ctx.stores.inner_db(),
+        &ctx.stores.brain_id,
+        &embedder,
+        params,
+    )
+    .await
+    .context("recluster failed")?;
 
     if ctx.json {
         println!("{}", serde_json::to_string_pretty(&report)?);

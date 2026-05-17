@@ -88,9 +88,14 @@ async fn tag_clustering_end_to_end() {
     let params = ClusterParams {
         cosine_threshold: 0.85,
     };
-    let report = run_recluster(&ctx.stores, &embedder, params)
-        .await
-        .expect("first recluster ok");
+    let report = run_recluster(
+        ctx.stores.inner_db(),
+        &ctx.stores.brain_id,
+        &embedder,
+        params,
+    )
+    .await
+    .expect("first recluster ok");
 
     assert_eq!(report.source_count, 8, "8 distinct raw tags");
     assert_eq!(
@@ -222,9 +227,14 @@ async fn tag_clustering_end_to_end() {
 
     // 10. Idempotence: a re-run on identical data must produce zero
     //     upserts.
-    let report2 = run_recluster(&ctx.stores, &embedder, params)
-        .await
-        .expect("second recluster ok");
+    let report2 = run_recluster(
+        ctx.stores.inner_db(),
+        &ctx.stores.brain_id,
+        &embedder,
+        params,
+    )
+    .await
+    .expect("second recluster ok");
     assert_eq!(report2.new_aliases, 0, "rerun produced no new aliases");
     assert_eq!(
         report2.updated_aliases, 0,

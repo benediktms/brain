@@ -77,7 +77,14 @@ impl McpTool for TagsRecluster {
                 cluster_params.cosine_threshold = threshold;
             }
 
-            match run_recluster(&ctx.stores, embedder, cluster_params).await {
+            match run_recluster(
+                ctx.stores.inner_db(),
+                &ctx.stores.brain_id,
+                embedder,
+                cluster_params,
+            )
+            .await
+            {
                 Ok(report) => json_response(&report),
                 Err(e) => ToolCallResult::error(format!("recluster failed: {e}")),
             }
