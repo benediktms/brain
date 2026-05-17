@@ -63,10 +63,15 @@ pub struct ListParams {
 }
 
 fn list_remote(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
+    let status = params
+        .status
+        .parse::<RecordStatus>()
+        .unwrap_or(RecordStatus::Active)
+        .to_string();
     let wire_params = brain_rpc::ArtifactsListParams {
         kind: params.kind.clone(),
         tag: params.tag.clone(),
-        status: Some(params.status.clone()),
+        status: Some(status),
         limit: Some(params.limit as u32),
     };
 

@@ -18,7 +18,13 @@ pub fn next(ctx: &TaskCtx, params: NextParams) -> Result<()> {
     next_local(ctx, params.k)
 }
 
-fn next_remote(ctx: &TaskCtx, _params: &NextParams) -> Result<()> {
+fn next_remote(ctx: &TaskCtx, params: &NextParams) -> Result<()> {
+    if params.k > 1 {
+        anyhow::bail!(
+            "top-k semantics (k={}) are not yet supported on the --remote path",
+            params.k
+        );
+    }
     let mut client = crate::commands::rpc_client::connect_daemon()?;
 
     let task = client

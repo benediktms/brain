@@ -790,6 +790,16 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
 // remote helpers
 // ---------------------------------------------------------------------------
 
+/// Convert a user-supplied importance value into the wire-format
+/// millis-u32. Clamps to [0.0, 1.0] so out-of-range values can't
+/// silently saturate the `as u32` cast into a misleading "successful
+/// 5000-millis write" — the daemon caps importance at 1.0 anyway, so
+/// clamping client-side keeps the wire-format and storage semantics
+/// aligned.
+fn importance_to_millis(v: f64) -> u32 {
+    (v.clamp(0.0, 1.0) * 1000.0) as u32
+}
+
 pub fn write_episode_remote(params: WriteEpisodeParams, json: bool) -> anyhow::Result<()> {
     use brain_rpc::domain::{MemoryWriteEpisodeParams, Request, Response};
     let mut client = crate::commands::rpc_client::connect_daemon()?;
@@ -800,7 +810,7 @@ pub fn write_episode_remote(params: WriteEpisodeParams, json: bool) -> anyhow::R
                 actions: params.actions.clone(),
                 outcome: params.outcome.clone(),
                 tags: params.tags.clone(),
-                importance_millis: (params.importance * 1000.0) as u32,
+                importance_millis: importance_to_millis(params.importance),
             },
         })
         .map_err(|e| anyhow::anyhow!("MemoryWriteEpisode rpc failed: {e}"))?;
@@ -839,7 +849,7 @@ pub fn write_procedure_remote(params: WriteProcedureParams, json: bool) -> anyho
                 title: params.title.clone(),
                 steps: params.steps.clone(),
                 tags: params.tags.clone(),
-                importance_millis: (params.importance * 1000.0) as u32,
+                importance_millis: importance_to_millis(params.importance),
             },
         })
         .map_err(|e| anyhow::anyhow!("MemoryWriteProcedure rpc failed: {e}"))?;
@@ -1124,7 +1134,7 @@ pub fn reflect_remote(
                 content,
                 source_ids,
                 tags,
-                importance_millis: importance.map(|v| (v * 1000.0) as u32),
+                importance_millis: importance.map(importance_to_millis),
             },
         })
         .map_err(|e| anyhow::anyhow!("MemoryReflect rpc failed: {e}"))?;

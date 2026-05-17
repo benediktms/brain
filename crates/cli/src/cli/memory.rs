@@ -43,7 +43,8 @@ pub(crate) enum MemoryAction {
         #[arg(long, default_value = "1.0")]
         importance: f64,
 
-        /// Route the request through the brain-daemon RPC (requires daemon running)
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
         #[arg(long)]
         remote: bool,
     },
@@ -81,7 +82,8 @@ pub(crate) enum MemoryAction {
         #[arg(long, default_value = "0.9")]
         importance: f64,
 
-        /// Route the request through the brain-daemon RPC (requires daemon running)
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
         #[arg(long)]
         remote: bool,
     },
@@ -112,7 +114,8 @@ pub(crate) enum MemoryAction {
         #[arg(long)]
         auto_summarize: bool,
 
-        /// Route the request through the brain-daemon RPC (requires daemon running)
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
         #[arg(long)]
         remote: bool,
     },
@@ -151,7 +154,8 @@ pub(crate) enum MemoryAction {
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         async_llm: bool,
 
-        /// Route the request through the brain-daemon RPC (requires daemon running)
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
         #[arg(long)]
         remote: bool,
     },
@@ -239,7 +243,8 @@ pub(crate) enum MemoryAction {
         #[arg(long)]
         explain: bool,
 
-        /// Route the request through the brain-daemon RPC (requires daemon running)
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
         #[arg(long)]
         remote: bool,
     },
@@ -310,7 +315,8 @@ pub(crate) enum MemoryAction {
         #[arg(long)]
         importance: Option<f64>,
 
-        /// Route the request through the brain-daemon RPC (requires daemon running)
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
         #[arg(long)]
         remote: bool,
     },

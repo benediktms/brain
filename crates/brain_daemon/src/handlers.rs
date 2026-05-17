@@ -236,6 +236,12 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_create(&self, params: TasksCreateParams) -> Result<Response, RpcError> {
+        if params.priority > 4 {
+            return Err(RpcError::Protocol {
+                message: format!("invalid priority: {} (must be 0..=4)", params.priority),
+            });
+        }
+
         let task_type: TaskType =
             params
                 .task_type
@@ -311,6 +317,15 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_tasks_update(&self, params: TasksUpdateParams) -> Result<Response, RpcError> {
+        if params.priority.is_some_and(|p| p > 4) {
+            return Err(RpcError::Protocol {
+                message: format!(
+                    "invalid priority: {} (must be 0..=4)",
+                    params.priority.unwrap()
+                ),
+            });
+        }
+
         let resolved =
             self.stores
                 .tasks
@@ -1317,7 +1332,9 @@ impl BrainStoresDispatcher {
         let episodes = self
             .stores
             .list_episodes(params.limit, &self.stores.brain_id)
-            .unwrap_or_default();
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list_episodes: {e}"),
+            })?;
 
         let result = consolidate_episodes(episodes, params.gap_seconds);
         let jobs_enqueued = if params.auto_summarize {

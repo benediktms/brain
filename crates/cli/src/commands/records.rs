@@ -81,6 +81,9 @@ fn verify_remote(json: bool) -> Result<()> {
 
 pub fn verify(ctx: &RecordsCtx, verbose: bool, remote: bool) -> Result<()> {
     if remote {
+        if verbose {
+            anyhow::bail!("--verbose is not yet supported on the --remote path");
+        }
         return verify_remote(ctx.json);
     }
     let report = integrity::verify_integrity(&ctx.record_store, &ctx.object_store)

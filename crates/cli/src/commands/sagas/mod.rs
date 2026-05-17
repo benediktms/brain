@@ -457,6 +457,26 @@ fn close_remote(saga_id: &str, cascade: bool, json: bool) -> Result<()> {
             print_wire_cascade_summary(&cascade_results, "closed");
         }
     }
+
+    if cascade {
+        let failures = cascade_results
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.outcome,
+                    brain_rpc::domain::SagaCascadeOutcome::Failed { .. }
+                )
+            })
+            .count();
+        if failures > 0 {
+            anyhow::bail!(
+                "cascade had {} failed member(s) for saga {}",
+                failures,
+                saga_id,
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -517,6 +537,26 @@ fn cancel_remote(saga_id: &str, cascade: bool, json: bool) -> Result<()> {
             print_wire_cascade_summary(&cascade_results, "cancelled");
         }
     }
+
+    if cascade {
+        let failures = cascade_results
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.outcome,
+                    brain_rpc::domain::SagaCascadeOutcome::Failed { .. }
+                )
+            })
+            .count();
+        if failures > 0 {
+            anyhow::bail!(
+                "cascade had {} failed member(s) for saga {}",
+                failures,
+                saga_id,
+            );
+        }
+    }
+
     Ok(())
 }
 
