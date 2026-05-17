@@ -112,14 +112,18 @@ pub async fn run_recluster(
     );
 
     let outcome = run_inner(
-        db,
-        brain_id,
-        embedder,
-        &embedder_version,
+        RunResources {
+            db,
+            brain_id,
+            embedder,
+        },
+        RunMetadata {
+            run_id: run_id.clone(),
+            started_at_iso,
+            started_at,
+            embedder_version: embedder_version.clone(),
+        },
         params,
-        run_id.clone(),
-        started_at_iso,
-        started_at,
     )
     .await;
 
@@ -151,23 +155,49 @@ pub async fn run_recluster(
     outcome
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_inner(
-    db: &Db,
-    brain_id: &str,
-    embedder: &Arc<dyn Embed>,
-    embedder_version: &str,
-    params: ClusterParams,
+/// Borrowed references to the resources `run_inner` operates over.
+///
+/// Kept separate from [`RunMetadata`] so the function signature stays at a
+/// readable three parameters (resources, metadata, params) rather than the
+/// eight individual values it threads through. Borrows + owned together
+/// would also force a single lifetime parameter on the metadata.
+struct RunResources<'a> {
+    db: &'a Db,
+    brain_id: &'a str,
+    embedder: &'a Arc<dyn Embed>,
+}
+
+/// Owned metadata recorded on `tag_cluster_runs` and the final report.
+struct RunMetadata {
     run_id: String,
     started_at_iso: String,
     started_at: std::time::Instant,
+    embedder_version: String,
+}
+
+async fn run_inner(
+    resources: RunResources<'_>,
+    meta: RunMetadata,
+    params: ClusterParams,
 ) -> Result<ReclusterReport> {
+    let RunResources {
+        db,
+        brain_id,
+        embedder,
+    } = resources;
+    let RunMetadata {
+        run_id,
+        started_at_iso,
+        started_at,
+        embedder_version,
+    } = meta;
+
     // ---- Tx-1: insert the run row (FK precondition for Tx-2). -----------
     db.insert_run(InsertRun {
         run_id: run_id.clone(),
         brain_id: brain_id.to_string(),
         started_at_iso,
-        embedder_version: embedder_version.to_string(),
+        embedder_version: embedder_version.clone(),
         threshold: params.cosine_threshold,
         triggered_by: "manual".to_string(),
     })?;
@@ -176,7 +206,7 @@ async fn run_inner(
     let raw_tags: Vec<DedupedRawTag> = db.collect_raw_tags(brain_id)?;
     let snapshot: HashMap<String, ExistingAlias> = db.read_alias_snapshot(brain_id)?;
 
-    let candidates = build_candidates(&raw_tags, &snapshot, embedder, embedder_version).await?;
+    let candidates = build_candidates(&raw_tags, &snapshot, embedder, &embedder_version).await?;
 
     debug!(
         brain_id = %brain_id,
@@ -200,7 +230,7 @@ async fn run_inner(
         &candidates_by_tag,
         &snapshot,
         brain_id,
-        embedder_version,
+        &embedder_version,
     );
 
     // Stale rows: in this brain's snapshot but absent from the freshly
@@ -236,7 +266,7 @@ async fn run_inner(
         updated_aliases,
         stale_aliases,
         duration_ms: started_at.elapsed().as_millis() as u64,
-        embedder_version: embedder_version.to_string(),
+        embedder_version,
     };
 
     if report.stale_aliases > 0 {
