@@ -15,23 +15,24 @@ use tracing::{instrument, warn};
 use std::sync::atomic::Ordering;
 
 use crate::capsule::generate_stub_capsule;
-use crate::error::{BrainCoreError, Result};
-use crate::metrics::Metrics;
-use crate::ports::{
-    ChunkMetaReader, ChunkSearcher, EpisodeReader, FtsSearcher, GraphLinkReader, TagAliasReader,
-};
+use crate::domain::ReflectedEpisode;
+use crate::ports::VectorSearchStrategy;
 use crate::ranking::{
     CandidateSignals, FusionConfidence, RerankCandidate, Reranker, RerankerPolicy, Weights,
     compute_fusion_confidence, rank_candidates, resolve_intent,
 };
 use crate::retrieval::{MemoryKind, SearchResult, derive_kind, pack_minimal};
-use crate::tokens::estimate_tokens;
+use brain_core::error::{BrainCoreError, Result};
+use brain_core::metrics::Metrics;
 use brain_core::ports::Embed;
+use brain_core::tokens::estimate_tokens;
 use brain_persistence::db::Db;
 use brain_persistence::db::summaries::SummaryRow;
+use brain_persistence::ports::{
+    ChunkMetaReader, ChunkSearcher, EpisodeReader, FtsSearcher, GraphLinkReader, TagAliasReader,
+};
 #[allow(unused_imports)]
 use brain_persistence::sql::SqlResultExt;
-use brain_persistence::store::VectorSearchMode;
 use brain_persistence::store::{DEFAULT_NPROBES, StoreReader};
 
 const CANDIDATE_LIMIT: usize = 50;
@@ -100,7 +101,7 @@ fn expand_tags_via_aliases(
 pub struct ReflectResult {
     pub topic: String,
     pub budget_tokens: usize,
-    pub episodes: Vec<SummaryRow>,
+    pub episodes: Vec<ReflectedEpisode>,
     pub search_result: SearchResult,
 }
 
@@ -138,7 +139,7 @@ pub struct SearchParams<'a> {
     /// Controls the ANN (Approximate Nearest Neighbor) vs exact search
     /// tradeoff. Defaults to `AnnRefined`. See [`VectorSearchMode`] for
     /// details on each variant.
-    pub mode: VectorSearchMode,
+    pub mode: VectorSearchStrategy,
     /// When true, follow 1-hop outgoing links from top-K vector results and
     /// add the linked chunks to the candidate pool before ranking.
     /// Defaults to `false`.
@@ -179,7 +180,7 @@ impl<'a> SearchParams<'a> {
             budget_tokens,
             k,
             query_tags,
-            mode: VectorSearchMode::default(),
+            mode: VectorSearchStrategy::default(),
             graph_expand: false,
             brain_ids: None,
             brain_id: None,
@@ -192,7 +193,7 @@ impl<'a> SearchParams<'a> {
     }
 
     /// Override the vector search mode.
-    pub fn with_mode(mut self, mode: VectorSearchMode) -> Self {
+    pub fn with_mode(mut self, mode: VectorSearchStrategy) -> Self {
         self.mode = mode;
         self
     }
@@ -350,7 +351,7 @@ where
     }
 
     /// Core search logic: returns ranked results with fusion confidence and diagnostics.
-    pub(crate) async fn search_ranked_with_diagnostics(
+    pub async fn search_ranked_with_diagnostics(
         &self,
         params: &SearchParams<'_>,
     ) -> Result<(
@@ -389,8 +390,7 @@ where
         let tags_exclude_expanded = expand_tags_via_aliases(params.tags_exclude, &alias_lookup);
 
         // 1. Embed query
-        let vecs =
-            crate::embedder::embed_batch_async(self.embedder, vec![query.to_string()]).await?;
+        let vecs = crate::embed_batch_async(self.embedder, vec![query.to_string()]).await?;
         let query_vec = vecs
             .into_iter()
             .next()
@@ -403,7 +403,7 @@ where
                 &query_vec,
                 CANDIDATE_LIMIT,
                 DEFAULT_NPROBES,
-                mode,
+                mode.into(),
                 params.brain_id,
             )
             .await?;
@@ -496,7 +496,7 @@ where
         // 5. Enrich from SQLite (single batched JOIN — pagerank_score comes from files table)
         let chunk_ids: Vec<String> = candidates.keys().cloned().collect();
         let enrichment = self.db.get_chunks_by_ids(&chunk_ids);
-        let now = crate::utils::now_ts();
+        let now = brain_core::utils::now_ts();
 
         if let Ok(rows) = enrichment {
             for row in &rows {
@@ -707,7 +707,7 @@ where
     ///
     /// Thin wrapper around [`search_ranked_with_diagnostics`] that discards the
     /// diagnostic counters. Preserves the original call sites unchanged.
-    pub(crate) async fn search_ranked(
+    pub async fn search_ranked(
         &self,
         params: &SearchParams<'_>,
     ) -> Result<(Vec<crate::ranking::RankedResult>, FusionConfidence)> {
@@ -787,7 +787,7 @@ where
 
         match self.db.get_chunks_by_file_ids(&expansion_file_ids) {
             Ok(expansion_chunks) => {
-                let now = crate::utils::now_ts();
+                let now = brain_core::utils::now_ts();
                 for chunk in expansion_chunks {
                     let graph_sim =
                         parent_sim_map.get(&chunk.file_id).copied().unwrap_or(0.0) * 0.5;
@@ -875,7 +875,7 @@ where
         Ok(ReflectResult {
             topic,
             budget_tokens,
-            episodes,
+            episodes: episodes.into_iter().map(ReflectedEpisode::from).collect(),
             search_result,
         })
     }
@@ -934,7 +934,7 @@ where
     /// Shared embedder — query is embedded once, used across all brains.
     pub embedder: &'a Arc<dyn brain_core::ports::Embed>,
     /// Shared metrics handle.
-    pub metrics: &'a Arc<crate::metrics::Metrics>,
+    pub metrics: &'a Arc<Metrics>,
 }
 
 impl<'a, S, D> FederatedPipeline<'a, S, D>
@@ -1221,11 +1221,11 @@ mod tests {
 
     use brain_core::ports::Embed;
 
-    use crate::metrics::Metrics;
-    use crate::ports::mock::MockChunkSearcher;
-    use crate::ports::mock::MockEmbedder;
+    use brain_core::metrics::Metrics;
+    use brain_core::ports::mock::MockEmbedder;
     use brain_persistence::db::Db;
     use brain_persistence::db::tag_aliases::seed_tag_aliases;
+    use brain_persistence::ports::mock::MockChunkSearcher;
     use brain_persistence::store::QueryResult;
     use std::sync::Arc;
 
@@ -1765,7 +1765,7 @@ mod tests {
     // Without the fix, the spy would record `None` regardless of the param.
     // ───────────────────────────────────────────────────────────────────────
 
-    use crate::ports::ChunkSearcher;
+    use brain_persistence::ports::ChunkSearcher;
     use brain_persistence::store::VectorSearchMode;
     use std::sync::Mutex;
 
@@ -1801,7 +1801,7 @@ mod tests {
             _mode: VectorSearchMode,
             brain_id: Option<&'a str>,
         ) -> impl std::future::Future<
-            Output = crate::error::Result<Vec<brain_persistence::store::QueryResult>>,
+            Output = brain_core::error::Result<Vec<brain_persistence::store::QueryResult>>,
         > + Send
         + 'a {
             let captured = brain_id.map(str::to_owned);

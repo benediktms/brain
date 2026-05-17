@@ -542,7 +542,7 @@ pub trait Reranker: Send + Sync {
         &self,
         query: &str,
         candidates: &[RerankCandidate],
-    ) -> crate::error::Result<Vec<RerankResult>>;
+    ) -> brain_core::error::Result<Vec<RerankResult>>;
 }
 
 #[cfg(test)]

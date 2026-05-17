@@ -189,7 +189,7 @@ async fn test_1hop_graph_expansion_adds_linked_neighbour_to_results() {
         10,
         &[],
     );
-    params_expand.mode = VectorSearchMode::Exact;
+    params_expand.mode = VectorSearchMode::Exact.into();
     params_expand.graph_expand = true;
 
     let result_expand = qp.search(&params_expand).await.unwrap();
@@ -277,7 +277,7 @@ async fn test_1hop_expansion_does_not_follow_2hop_links() {
         10,
         &[],
     );
-    params.mode = VectorSearchMode::Exact;
+    params.mode = VectorSearchMode::Exact.into();
     params.graph_expand = true;
 
     let result = qp.search(&params).await.unwrap();

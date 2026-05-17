@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capsule::generate_stub_capsule;
 use crate::ranking::{ExpansionReason, FusionConfidence, RankedResult, SignalScores};
-use crate::tokens::estimate_tokens;
+use brain_core::tokens::estimate_tokens;
 
 /// Canonical memory result kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -252,7 +252,7 @@ fn make_stub(result: &RankedResult, ml_summary: Option<&str>) -> MemoryStub {
 }
 
 /// Derive the result kind from a chunk_id prefix and optional summary kind.
-pub(crate) fn derive_kind(chunk_id: &str, summary_kind: Option<&str>) -> MemoryKind {
+pub fn derive_kind(chunk_id: &str, summary_kind: Option<&str>) -> MemoryKind {
     if chunk_id.starts_with("sum:") {
         match summary_kind.unwrap_or("episode") {
             "reflection" => MemoryKind::Reflection,
