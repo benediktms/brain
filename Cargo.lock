@@ -708,6 +708,7 @@ dependencies = [
  "anyhow",
  "brain-daemon",
  "brain-lib",
+ "brain-memory",
  "brain-persistence",
  "brain-records",
  "brain-rpc",
