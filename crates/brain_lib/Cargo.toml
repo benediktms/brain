@@ -21,7 +21,7 @@ accelerate = ["embed", "brain-embedder?/accelerate"]
 # Exposes test-only accessors (e.g. BrainStores::db_for_tests) and the
 # matching brain-persistence seed helpers. Enable from integration tests
 # that need direct DB access; not for production use.
-test-utils = ["brain-persistence/test-utils", "brain-core/test-utils", "brain-records/test-utils", "brain-sagas/test-utils", "brain-tasks/test-utils"]
+test-utils = ["brain-persistence/test-utils", "brain-core/test-utils", "brain-records/test-utils", "brain-sagas/test-utils", "brain-tags/test-utils", "brain-tasks/test-utils"]
 
 [dependencies]
 brain-core = { path = "../brain_core" }
@@ -29,6 +29,7 @@ brain-embedder = { path = "../brain_embedder", optional = true }
 brain-persistence = { path = "../brain_persistence" }
 brain-records = { path = "../brain_records" }
 brain-sagas = { path = "../brain_sagas" }
+brain-tags = { path = "../brain_tags" }
 brain-tasks = { path = "../brain_tasks" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

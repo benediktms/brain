@@ -754,6 +754,7 @@ dependencies = [
  "brain-persistence",
  "brain-records",
  "brain-sagas",
+ "brain-tags",
  "brain-tasks",
  "chrono",
  "criterion",
@@ -857,6 +858,24 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "brain-tags"
+version = "0.4.1"
+dependencies = [
+ "blake3",
+ "brain-core",
+ "brain-embedder",
+ "brain-persistence",
+ "brain-tags",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

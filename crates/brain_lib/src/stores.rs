@@ -237,32 +237,37 @@ impl BrainStores {
         &self.db
     }
 
-    /// List `tag_aliases` rows for the calling brain. Delegates to
-    /// `TagAliasReader`. See `crate::ports::TagAliasReader::list_aliases_for_brain`.
+    /// List `tag_aliases` rows for the calling brain, projected into the
+    /// `brain_tags::TagAlias` domain type. Delegates to the `TagAliasReader`
+    /// port and converts each row at the persistence boundary.
     pub fn list_tag_aliases(
         &self,
         canonical: Option<&str>,
         cluster_id: Option<&str>,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<brain_persistence::db::tag_aliases::AliasRow>> {
+    ) -> Result<Vec<brain_tags::TagAlias>> {
+        use crate::ports::TagAliasReader;
+        let rows =
+            self.db
+                .list_aliases_for_brain(&self.brain_id, canonical, cluster_id, limit, offset)?;
+        Ok(rows.into_iter().map(brain_tags::TagAlias::from).collect())
+    }
+
+    /// Aggregate alias coverage for the calling brain.
+    pub fn count_tag_aliases(&self) -> Result<brain_tags::AliasCoverage> {
         use crate::ports::TagAliasReader;
         self.db
-            .list_aliases_for_brain(&self.brain_id, canonical, cluster_id, limit, offset)
+            .count_aliases_for_brain(&self.brain_id)
+            .map(brain_tags::AliasCoverage::from)
     }
 
-    /// Aggregate counts over `tag_aliases` for the calling brain.
-    pub fn count_tag_aliases(&self) -> Result<brain_persistence::db::tag_aliases::AliasCounts> {
+    /// Most recent `tag_cluster_runs` entry for the calling brain.
+    pub fn latest_tag_cluster_run(&self) -> Result<Option<brain_tags::ClusterRun>> {
         use crate::ports::TagAliasReader;
-        self.db.count_aliases_for_brain(&self.brain_id)
-    }
-
-    /// Most recent `tag_cluster_runs` row for the calling brain.
-    pub fn latest_tag_cluster_run(
-        &self,
-    ) -> Result<Option<brain_persistence::db::tag_aliases::TagClusterRunRow>> {
-        use crate::ports::TagAliasReader;
-        self.db.latest_run_for_brain(&self.brain_id)
+        self.db
+            .latest_run_for_brain(&self.brain_id)
+            .map(|opt| opt.map(brain_tags::ClusterRun::from))
     }
 
     /// Test-only accessor for the underlying `Db` handle.

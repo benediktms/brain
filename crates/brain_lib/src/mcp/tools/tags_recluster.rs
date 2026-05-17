@@ -1,8 +1,8 @@
 //! `tags.recluster` — synchronous trigger for `run_recluster`.
 //!
-//! Wraps the per-brain reclustering job (`brn-83a.7.2.3`) so a user can
-//! kick a run from the MCP toolset or `brain tags recluster` CLI. This is
-//! the only `tags.*` tool that **mutates** `tag_aliases`.
+//! Wraps the per-brain reclustering job so a user can kick a run from the
+//! MCP toolset or `brain tags recluster` CLI. This is the only `tags.*`
+//! tool that **mutates** `tag_aliases`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{McpTool, json_response};
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
-use crate::tags::{ClusterParams, run_recluster};
+use brain_tags::{ClusterParams, run_recluster};
 
 #[derive(Deserialize, Default)]
 struct Params {
