@@ -210,6 +210,17 @@ pub enum Request {
     /// List configured providers. Server returns
     /// [`Response::ProviderList`].
     ProviderList,
+
+    // ── watch ────────────────────────────────────────────────────────────
+    /// Register a filesystem path for watching. Server returns
+    /// [`Response::WatchAdded`].
+    WatchAdd { path: String },
+    /// Deregister a previously-added watch path. Server returns
+    /// [`Response::WatchRemoved`].
+    WatchRemove { path: String },
+    /// List all currently registered watch paths. Server returns
+    /// [`Response::WatchList`].
+    WatchList,
 }
 
 /// Optional filter and pagination params for [`Request::TasksList`].
@@ -582,6 +593,14 @@ pub enum Response {
     // ── provider ────────────────────────────────────────────────────────
     /// Reply to [`Request::ProviderList`].
     ProviderList { providers: Vec<ProviderSummary> },
+
+    // ── watch ────────────────────────────────────────────────────────────
+    /// Reply to [`Request::WatchAdd`].
+    WatchAdded { path: String, brain_name: String },
+    /// Reply to [`Request::WatchRemove`].
+    WatchRemoved { path: String },
+    /// Reply to [`Request::WatchList`].
+    WatchList { watches: Vec<WatchSummary> },
 }
 
 /// Wire-format summary of a single task.
@@ -997,6 +1016,22 @@ pub struct ProviderSummary {
     pub name: String,
     /// First 8 characters of the key hash (masked display).
     pub key_hash_prefix: String,
+}
+
+/// Wire-format summary of a single filesystem watch registration.
+///
+/// Mirrors but does not re-use any internal watcher state — see module
+/// rustdoc for the anti-corruption-layer rationale.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct WatchSummary {
+    /// Human-readable brain name.
+    pub brain_name: String,
+    /// Stable brain identifier.
+    pub brain_id: String,
+    /// Filesystem path being watched.
+    pub note_dir: String,
+    /// Whether the watch is currently active.
+    pub watching: bool,
 }
 
 /// Structured wire-format error.
@@ -2655,6 +2690,118 @@ mod tests {
                 count: 3,
             }],
             brains: vec![sample_saga_brain_summary()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── watch ─────────────────────────────────────────────────────────
+
+    fn sample_watch_summary() -> WatchSummary {
+        WatchSummary {
+            brain_name: "default".into(),
+            brain_id: "abc123".into(),
+            note_dir: "/notes".into(),
+            watching: true,
+        }
+    }
+
+    #[test]
+    fn watch_summary_roundtrips() {
+        let s = sample_watch_summary();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn watch_summary_wire_format_is_stable() {
+        let s = sample_watch_summary();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"brain_name":"default","brain_id":"abc123","note_dir":"/notes","watching":true}"#
+        );
+    }
+
+    #[test]
+    fn request_watch_add_roundtrips() {
+        let req = Request::WatchAdd {
+            path: "/notes".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_watch_add_wire_format_is_stable() {
+        let req = Request::WatchAdd {
+            path: "/notes".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"watch_add","path":"/notes"}"#);
+    }
+
+    #[test]
+    fn request_watch_remove_roundtrips() {
+        let req = Request::WatchRemove {
+            path: "/notes".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_watch_remove_wire_format_is_stable() {
+        let req = Request::WatchRemove {
+            path: "/notes".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"watch_remove","path":"/notes"}"#);
+    }
+
+    #[test]
+    fn request_watch_list_roundtrips() {
+        let req = Request::WatchList;
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_watch_list_wire_format_is_stable() {
+        let req = Request::WatchList;
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"watch_list"}"#);
+    }
+
+    #[test]
+    fn response_watch_added_roundtrips() {
+        let res = Response::WatchAdded {
+            path: "/notes".into(),
+            brain_name: "default".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_watch_added_wire_format_is_stable() {
+        let res = Response::WatchAdded {
+            path: "/notes".into(),
+            brain_name: "default".into(),
+        };
+        let json = serde_json::to_string(&res).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"watch_added","path":"/notes","brain_name":"default"}"#
+        );
+    }
+
+    #[test]
+    fn response_watch_removed_roundtrips() {
+        let res = Response::WatchRemoved {
+            path: "/notes".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_watch_list_roundtrips() {
+        let res = Response::WatchList {
+            watches: vec![sample_watch_summary()],
         };
         assert_eq!(roundtrip(&res), res);
     }

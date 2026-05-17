@@ -97,6 +97,9 @@ pub mod handlers;
 #[cfg(unix)]
 pub mod server;
 
+#[cfg(feature = "embed")]
+pub mod watcher;
+
 pub use config::DaemonConfig;
 pub use dispatcher::{DefaultDispatcher, Dispatcher};
 pub use entry::run_cli;

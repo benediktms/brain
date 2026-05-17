@@ -24,6 +24,7 @@ pub fn run_cli() -> std::process::ExitCode {
     let mut pid_file: Option<PathBuf> = None;
     let mut sqlite_db: Option<PathBuf> = None;
     let mut lance_db: Option<PathBuf> = None;
+    let mut no_watcher = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -54,6 +55,9 @@ pub fn run_cli() -> std::process::ExitCode {
                     eprintln!("brain-daemon: --lance-db requires a value");
                     return ExitCode::from(2);
                 }
+            }
+            "--no-watcher" => {
+                no_watcher = true;
             }
             "--help" | "-h" => {
                 print_usage();
@@ -94,11 +98,68 @@ pub fn run_cli() -> std::process::ExitCode {
         config = config.with_pid_file(p);
     }
 
+    // Spawn the watcher supervisor on a dedicated thread when:
+    //   * we resolved a real DB (otherwise we'd use DefaultDispatcher),
+    //   * --no-watcher was NOT passed (used by `brain mcp` to keep
+    //     per-session subprocesses lightweight),
+    //   * and the `embed` feature is compiled in.
+    //
+    // The supervisor owns its own tokio current-thread runtime in that
+    // thread, mirroring the per-request runtime pattern memory handlers
+    // use — same `Builder::new_current_thread` foundation, different
+    // lifecycle. Keeping it off the RPC server's accept-loop thread
+    // means a hung watcher can never wedge accept().
+    #[cfg(feature = "embed")]
+    let (watcher_handle, supervisor_thread) = if sqlite_db.is_some() && !no_watcher {
+        let (tx, rx) = tokio::sync::mpsc::channel::<crate::watcher::ControlMessage>(64);
+        let handle = std::sync::Arc::new(crate::watcher::WatcherHandle::new(tx));
+
+        let thread = match std::thread::Builder::new()
+            .name("brain-watcher".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        eprintln!("brain-daemon: failed to build watcher runtime: {e}");
+                        return;
+                    }
+                };
+                match rt.block_on(crate::watcher::Supervisor::bootstrap_and_run(rx)) {
+                    Ok(outcome) => {
+                        eprintln!(
+                            "brain-daemon: watcher exited cleanly (dropped_items={})",
+                            outcome.dropped_items
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("brain-daemon: watcher exited with error: {e}");
+                    }
+                }
+            }) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("brain-daemon: failed to spawn watcher thread: {e}");
+                return ExitCode::from(1);
+            }
+        };
+
+        (Some(handle), Some(thread))
+    } else {
+        (None, None)
+    };
+    #[cfg(not(feature = "embed"))]
+    let supervisor_thread: Option<std::thread::JoinHandle<()>> = None;
+    #[cfg(not(feature = "embed"))]
+    let _ = no_watcher;
+
     // Two monomorphizations of `run_server` chosen at runtime by which
     // args were present. Keeps UnixSocketServer's generic Dispatcher
     // bound (`D: Dispatcher + Send + Sync + 'static`) clean and avoids
     // a `Box<dyn Dispatcher>` indirection in the hot path.
-    if let Some(sqlite_path) = sqlite_db {
+    let exit_code = if let Some(sqlite_path) = sqlite_db {
         let stores =
             match brain_lib::stores::BrainStores::from_path(&sqlite_path, lance_db.as_deref()) {
                 Ok(s) => s,
@@ -107,12 +168,11 @@ pub fn run_cli() -> std::process::ExitCode {
                     return ExitCode::from(1);
                 }
             };
-        run_server(
-            &config,
-            BrainStoresDispatcher::new(stores),
-            &socket_path,
-            "BrainStoresDispatcher",
-        )
+        #[cfg(feature = "embed")]
+        let dispatcher = BrainStoresDispatcher::new(stores, watcher_handle.clone());
+        #[cfg(not(feature = "embed"))]
+        let dispatcher = BrainStoresDispatcher::new(stores);
+        run_server(&config, dispatcher, &socket_path, "BrainStoresDispatcher")
     } else {
         run_server(
             &config,
@@ -120,7 +180,25 @@ pub fn run_cli() -> std::process::ExitCode {
             &socket_path,
             "DefaultDispatcher (Ping + Handshake only — pass --sqlite-db to enable real handlers)",
         )
+    };
+
+    // Coordinated shutdown: drop the only remaining `WatcherHandle` so
+    // the supervisor's `control_rx.recv()` returns `None`, which its
+    // event loop treats as a shutdown trigger. If the supervisor
+    // already exited (its own SIGTERM/Ctrl+C handler fired first) this
+    // is a no-op. Either way we then join the thread; the supervisor's
+    // Phase 1-5 shutdown — WAL checkpoint, LanceDB optimize — can take
+    // tens of seconds on a large brain, so the join is unbounded.
+    #[cfg(feature = "embed")]
+    drop(watcher_handle);
+
+    if let Some(thread) = supervisor_thread
+        && let Err(e) = thread.join()
+    {
+        eprintln!("brain-daemon: watcher thread join failed: {e:?}");
     }
+
+    exit_code
 }
 
 #[cfg(unix)]
@@ -161,7 +239,8 @@ fn print_usage() {
     eprintln!(
         "Usage: brain-daemon --socket-path <PATH> \\\n\
          \x20            [--pid-file <PATH>] \\\n\
-         \x20            [--sqlite-db <PATH>] [--lance-db <PATH>]\n\
+         \x20            [--sqlite-db <PATH>] [--lance-db <PATH>] \\\n\
+         \x20            [--no-watcher]\n\
          \n\
          When --sqlite-db is omitted, brain-daemon resolves it from\n\
          $BRAIN_HOME/brain.db (or $HOME/.brain/brain.db). Similarly,\n\
@@ -170,9 +249,14 @@ fn print_usage() {
          set, the daemon falls back to a minimal dispatcher that only\n\
          answers Ping + Handshake.\n\
          \n\
-         Signal handling, file watcher, and job scheduler are deferred\n\
-         to follow-up tickets — see `brain_daemon::NOT_YET_IMPLEMENTED`\n\
-         in the crate docs."
+         When a real DB is resolved, brain-daemon spawns the file\n\
+         watcher and job scheduler on a dedicated thread alongside the\n\
+         RPC accept loop, and handles SIGTERM / SIGHUP / SIGUSR1 /\n\
+         Ctrl+C through the watcher supervisor's own signal handlers.\n\
+         \n\
+         --no-watcher disables the watcher and job scheduler, leaving\n\
+         only the RPC dispatcher running. Used by `brain mcp` so each\n\
+         per-session subprocess stays lightweight."
     );
 }
 

@@ -32,7 +32,7 @@ use crate::domain::{
     SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
     SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
     TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams,
+    TasksTransferParams, TasksUpdateParams, WatchSummary,
 };
 use crate::transport::Transport;
 
@@ -1080,6 +1080,53 @@ impl<T: Transport> DaemonClient<T> {
             Response::ProviderList { providers } => Ok(providers),
             other => Err(RpcError::Protocol {
                 message: format!("expected ProviderList in reply to ProviderList, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Register a filesystem path for watching via [`Request::WatchAdd`].
+    /// Returns `(path, brain_name)` from [`Response::WatchAdded`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::WatchAdded`].
+    pub fn watch_add(&mut self, path: String) -> Result<(String, String), RpcError> {
+        match self.call(Request::WatchAdd { path })? {
+            Response::WatchAdded { path, brain_name } => Ok((path, brain_name)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected WatchAdded in reply to WatchAdd, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Deregister a watch path via [`Request::WatchRemove`].
+    /// Returns the removed path from [`Response::WatchRemoved`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::WatchRemoved`].
+    pub fn watch_remove(&mut self, path: String) -> Result<String, RpcError> {
+        match self.call(Request::WatchRemove { path })? {
+            Response::WatchRemoved { path } => Ok(path),
+            other => Err(RpcError::Protocol {
+                message: format!("expected WatchRemoved in reply to WatchRemove, got {other:?}"),
+            }),
+        }
+    }
+
+    /// List all registered watch paths via [`Request::WatchList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::WatchList`].
+    pub fn watch_list(&mut self) -> Result<Vec<WatchSummary>, RpcError> {
+        match self.call(Request::WatchList)? {
+            Response::WatchList { watches } => Ok(watches),
+            other => Err(RpcError::Protocol {
+                message: format!("expected WatchList in reply to WatchList, got {other:?}"),
             }),
         }
     }
@@ -2706,6 +2753,103 @@ mod tests {
                 assert!(message.contains("MemoryReflect"));
             }
             other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── watch ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn watch_add_returns_path_and_brain_name() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::WatchAdd { path } => {
+                assert_eq!(path, "/notes");
+                Ok(Response::WatchAdded {
+                    path: "/notes".into(),
+                    brain_name: "default".into(),
+                })
+            }
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected request: {other:?}"),
+            }),
+        }));
+
+        let (path, brain_name) = client.watch_add("/notes".into()).expect("watch_add");
+        assert_eq!(path, "/notes");
+        assert_eq!(brain_name, "default");
+    }
+
+    #[test]
+    fn watch_add_returns_protocol_error_on_wrong_response_shape() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::WatchAdd { .. } => Ok(Response::Pong),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+
+        match client.watch_add("/notes".into()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("WatchAdded")),
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn watch_remove_returns_path() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::WatchRemove { path } => Ok(Response::WatchRemoved { path }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let path = client.watch_remove("/notes".into()).expect("watch_remove");
+        assert_eq!(path, "/notes");
+    }
+
+    #[test]
+    fn watch_remove_returns_protocol_error_on_wrong_response_shape() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::WatchRemove { .. } => Ok(Response::Pong),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        match client.watch_remove("/notes".into()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("WatchRemoved")),
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn watch_list_returns_watches() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::WatchList => Ok(Response::WatchList {
+                watches: vec![WatchSummary {
+                    brain_name: "default".into(),
+                    brain_id: "abc".into(),
+                    note_dir: "/notes".into(),
+                    watching: true,
+                }],
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let watches = client.watch_list().expect("watch_list");
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0].brain_name, "default");
+    }
+
+    #[test]
+    fn watch_list_returns_protocol_error_on_wrong_response_shape() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::WatchList => Ok(Response::Pong),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        match client.watch_list() {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("WatchList")),
+            other => panic!("expected Protocol error, got {other:?}"),
         }
     }
 }

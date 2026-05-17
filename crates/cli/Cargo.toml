@@ -28,7 +28,7 @@ default = ["embed"]
 # `embed` (via `--no-default-features`) drops those subcommands entirely —
 # `brain --help` won't list them and `brain watch` errors with
 # "unrecognized subcommand". Mirrors the gate in `brain-lib`.
-embed = ["brain-lib/embed"]
+embed = ["brain-lib/embed", "brain-daemon/embed"]
 # `accelerate` implies `embed` for the same reason it does in brain-lib:
 # Apple's BLAS only meaningfully accelerates the BGE-small candle path, and
 # without `embed` the cli would forward accelerate to brain-lib but never

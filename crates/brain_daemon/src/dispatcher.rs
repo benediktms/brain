@@ -120,6 +120,15 @@ impl Dispatcher for DefaultDispatcher {
                           and --lance-db to use the BrainStores-backed dispatcher"
                     .into(),
             }),
+            Request::WatchAdd { path } => Err(RpcError::Unknown {
+                message: format!("DefaultDispatcher does not handle WatchAdd: path={path}"),
+            }),
+            Request::WatchRemove { path } => Err(RpcError::Unknown {
+                message: format!("DefaultDispatcher does not handle WatchRemove: path={path}"),
+            }),
+            Request::WatchList => Err(RpcError::Unknown {
+                message: "DefaultDispatcher does not handle WatchList".into(),
+            }),
         }
     }
 }
