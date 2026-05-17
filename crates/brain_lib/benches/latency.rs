@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use brain_lib::embedder::{Embed, MockEmbedder};
+pub use brain_core::ports::mock::MockEmbedder;
+use brain_lib::embedder::Embed;
 use brain_lib::pipeline::IndexPipeline;
 use brain_persistence::db::Db;
 use brain_persistence::store::{IvfPqConfig, Store, VectorSearchMode};
@@ -122,6 +123,7 @@ fn bench_querying(c: &mut Criterion) {
 
                 let qv = pipeline
                     .embedder()
+                    .unwrap()
                     .embed_batch(&["benchmark search query"])
                     .unwrap()[0]
                     .clone();
@@ -192,7 +194,11 @@ fn bench_ivf_pq_recall(c: &mut Criterion) {
             .map(|i| format!("recall benchmark query number {i}"))
             .collect();
         let query_strs: Vec<&str> = queries.iter().map(|s| s.as_str()).collect();
-        let query_vecs = pipeline.embedder().embed_batch(&query_strs).unwrap();
+        let query_vecs = pipeline
+            .embedder()
+            .unwrap()
+            .embed_batch(&query_strs)
+            .unwrap();
 
         // Brute-force ground truth — Exact mode bypasses any ANN index.
         let mut ground_truth = Vec::new();
