@@ -30,8 +30,8 @@ use brain_rpc::{
     Response, RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult,
     SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
     SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
-    TagAliasesStatusReport, TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams,
-    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
+    TasksCreateParams, TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
 };
 use brain_sagas::{
     BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
@@ -1997,6 +1997,67 @@ impl BrainStoresDispatcher {
         Ok(Response::BrainsList { brains, count })
     }
 
+    fn handle_tags_recluster(&self, params: TagsReclusterParams) -> Result<Response, RpcError> {
+        // Mirrors `brain_lib::mcp::tools::tags_recluster::Params` — accepts
+        // an opaque JSON body to avoid mirroring the MCP tool's input
+        // schema in the wire protocol.
+        #[derive(serde::Deserialize, Default)]
+        struct Inner {
+            threshold: Option<f32>,
+        }
+
+        let parsed: Inner =
+            serde_json::from_value(params.params_json).map_err(|e| RpcError::Protocol {
+                message: format!("Invalid parameters: {e}"),
+            })?;
+
+        let mut cluster_params = brain_lib::ClusterParams::default();
+        if let Some(threshold) = parsed.threshold {
+            if !(0.0..=1.0).contains(&threshold) {
+                return Err(RpcError::Unknown {
+                    message: format!(
+                        "threshold must be between 0.0 and 1.0 (got {threshold}); \
+                         values outside this range produce all-singleton clusters \
+                         and write a misleading 'successful' run row"
+                    ),
+                });
+            }
+            cluster_params.cosine_threshold = threshold;
+        }
+
+        let mcp_ctx = self.mcp_ctx()?;
+        // Verbatim of `brain_lib::mcp::tools::MEMORY_UNAVAILABLE`; kept in
+        // sync until brain_lib::mcp leaves and the daemon owns the wire
+        // message outright.
+        let embedder = mcp_ctx.embedder().ok_or_else(|| RpcError::Unknown {
+            message: "Memory tools are unavailable: embedding model not found.\n\
+                To download the model, either run the setup script:\n  \
+                curl -sSL https://raw.githubusercontent.com/benediktms/brain/master/scripts/setup-model.sh | bash\n\
+                Or install the HuggingFace CLI manually:\n  \
+                pip install huggingface_hub\n  \
+                hf download BAAI/bge-small-en-v1.5 config.json tokenizer.json model.safetensors --local-dir ~/.brain/models/bge-small-en-v1.5"
+                .to_string(),
+        })?;
+
+        let runtime = self.runtime()?;
+        let report = runtime
+            .block_on(brain_lib::run_recluster(
+                mcp_ctx.stores.inner_db(),
+                &mcp_ctx.stores.brain_id,
+                embedder,
+                cluster_params,
+            ))
+            .map_err(|e| RpcError::Unknown {
+                message: format!("recluster failed: {e}"),
+            })?;
+
+        let result_json = serde_json::to_string(&report).map_err(|e| RpcError::Protocol {
+            message: format!("serialize ReclusterReport: {e}"),
+        })?;
+
+        Ok(Response::TagsRecluster { result_json })
+    }
+
     /// Resolve federated brain keys to a `(name, id, Option<StoreReader>)`
     /// list suitable for `brain_memory::retrieve::run_query_as_json`.
     ///
@@ -2493,9 +2554,7 @@ impl Dispatcher for BrainStoresDispatcher {
             }),
             Request::TasksLabelsSummary => self.handle_tasks_labels_summary(),
             Request::MemoryWalkThread { params } => self.handle_memory_walk_thread(params),
-            Request::TagsRecluster { .. } => Err(RpcError::Unknown {
-                message: "TagsRecluster: handler pending wire-up".into(),
-            }),
+            Request::TagsRecluster { params } => self.handle_tags_recluster(params),
             Request::BrainsList { params } => self.handle_brains_list(params),
         }
     }
