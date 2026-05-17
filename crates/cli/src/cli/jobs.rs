@@ -7,6 +7,9 @@ pub(crate) enum JobsAction {
         /// Output as JSON instead of human-readable text
         #[arg(long)]
         json: bool,
+        /// Route through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
     /// Retry a failed or stuck job by resetting it to pending
     Retry {

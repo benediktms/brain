@@ -498,6 +498,9 @@ pub(crate) enum Command {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Route through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Observe and manage the async job queue (status, retry, gc)
@@ -577,7 +580,11 @@ pub(crate) enum ProviderAction {
     },
 
     /// List configured providers (no keys shown)
-    List,
+    List {
+        /// Route through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
+    },
 
     /// Remove a provider by ID or name
     Remove {

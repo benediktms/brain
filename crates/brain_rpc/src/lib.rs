@@ -52,7 +52,18 @@ pub mod unix;
 pub mod testing;
 
 pub use client::DaemonClient;
-pub use domain::{PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksListParams};
+pub use domain::{
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
+    JobSummary, JobsStatusReport, MemoryConsolidateParams, MemoryReflectParams,
+    MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWriteEpisodeParams,
+    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
+    RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response, RpcError,
+    SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
+    SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
+    SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
+    TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams,
+};
 pub use transport::Transport;
 
 #[cfg(unix)]

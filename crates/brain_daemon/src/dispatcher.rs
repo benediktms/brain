@@ -62,13 +62,62 @@ impl Dispatcher for DefaultDispatcher {
             }),
             // DefaultDispatcher deliberately doesn't reach into BrainStores
             // (no brain_lib dep) — that's `BrainStoresDispatcher`'s job in
-            // crate::handlers. Surface a clear error so a misconfigured
-            // daemon (started without DB args) fails loudly rather than
-            // silently dropping requests.
-            Request::TasksList { .. } => Err(RpcError::Unknown {
-                message: "TasksList not handled by DefaultDispatcher \
-                          — start brain-daemon with --sqlite-db and \
-                          --lance-db to use the BrainStores-backed dispatcher"
+            // crate::handlers. Surface a clear error for every tasks_* op
+            // so a misconfigured daemon (started without DB args) fails
+            // loudly rather than silently dropping requests.
+            Request::TasksList { .. }
+            | Request::TasksShow { .. }
+            | Request::TasksNext
+            | Request::TasksCreate { .. }
+            | Request::TasksUpdate { .. }
+            | Request::TasksMutate { .. }
+            | Request::TasksAddDep { .. }
+            | Request::TasksRemoveDep { .. }
+            | Request::TasksAddLabel { .. }
+            | Request::TasksRemoveLabel { .. }
+            | Request::TasksTransfer { .. }
+            | Request::RecordsVerify
+            | Request::AnalysesList { .. }
+            | Request::AnalysesShow { .. }
+            | Request::AnalysesCreate { .. }
+            | Request::ArtifactsList { .. }
+            | Request::ArtifactsShow { .. }
+            | Request::DocumentsList { .. }
+            | Request::DocumentsShow { .. }
+            | Request::DocumentsCreate { .. }
+            | Request::PlansList { .. }
+            | Request::PlansShow { .. }
+            | Request::PlansCreate { .. }
+            | Request::SnapshotsList { .. }
+            | Request::SnapshotsShow { .. }
+            | Request::SnapshotsCreate { .. }
+            | Request::SagasList { .. }
+            | Request::SagasGet { .. }
+            | Request::SagasCreate { .. }
+            | Request::SagasUpdate { .. }
+            | Request::SagasAddTasks { .. }
+            | Request::SagasRemoveTasks { .. }
+            | Request::SagasFrontier { .. }
+            | Request::SagasStart { .. }
+            | Request::SagasClose { .. }
+            | Request::SagasCancel { .. }
+            | Request::SagasReopen { .. }
+            | Request::SagasStats { .. }
+            | Request::MemoryWriteEpisode { .. }
+            | Request::MemoryWriteProcedure { .. }
+            | Request::MemoryRetrieve { .. }
+            | Request::MemoryConsolidate { .. }
+            | Request::MemorySummarizeScope { .. }
+            | Request::MemoryReflect { .. }
+            | Request::TagsAliasesList { .. }
+            | Request::TagsAliasesStatus
+            | Request::JobsStatus
+            | Request::BrainStatus
+            | Request::ProviderList => Err(RpcError::Unknown {
+                message: "tasks_* / records_* / <kind>_* / sagas_* / memory_* / tags_* / \
+                          jobs_* / status / provider_* requests not handled by \
+                          DefaultDispatcher — start brain-daemon with --sqlite-db \
+                          and --lance-db to use the BrainStores-backed dispatcher"
                     .into(),
             }),
         }

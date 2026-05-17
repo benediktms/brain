@@ -712,12 +712,16 @@ dependencies = [
  "brain-daemon",
  "brain-lib",
  "brain-persistence",
+ "brain-records",
  "brain-rpc",
+ "brain-sagas",
  "brain-tasks",
+ "chrono",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "toml",
 ]
 

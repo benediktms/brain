@@ -8,6 +8,7 @@ use serde_json::json;
 use brain_lib::stores::BrainStores;
 use brain_records::{CreateRecordParams, RecordKind, RecordQuery, RecordStatus};
 
+use crate::commands::rpc_client;
 use crate::markdown_table::MarkdownTable;
 
 // -- shared context --
@@ -59,9 +60,51 @@ pub struct SaveParams {
     pub tags: Vec<String>,
     pub media_type: Option<String>,
     pub brain: Option<String>,
+    pub remote: bool,
+}
+
+fn save_remote(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
+    let data: Vec<u8> = if let Some(ref path) = params.file {
+        std::fs::read(path).with_context(|| format!("Failed to read file: {}", path.display()))?
+    } else if params.stdin {
+        let mut buf = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut buf)
+            .context("Failed to read from stdin")?;
+        buf
+    } else {
+        bail!("Must provide either --file <path> or --stdin to supply payload");
+    };
+
+    let wire_params = brain_rpc::RecordsCreateParams {
+        title: params.title,
+        description: params.description,
+        body: data,
+        media_type: params.media_type,
+        task_id: params.task,
+        tags: params.tags,
+        brain: params.brain,
+    };
+
+    let mut client = rpc_client::connect_daemon()?;
+    let (summary, _content_hash, _size) = client
+        .snapshots_create(wire_params)
+        .map_err(|e| anyhow::anyhow!("SnapshotsCreate rpc failed: {e}"))?;
+
+    if ctx.json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("Saved snapshot {}", summary.record_id);
+        println!("  Title: {}", summary.title);
+    }
+
+    Ok(())
 }
 
 pub fn save(ctx: &SnapshotCtx, params: SaveParams) -> Result<()> {
+    if params.remote {
+        return save_remote(ctx, params);
+    }
     let data: Vec<u8> = if let Some(ref path) = params.file {
         std::fs::read(path).with_context(|| format!("Failed to read file: {}", path.display()))?
     } else if params.stdin {
@@ -147,9 +190,50 @@ pub struct ListParams {
     pub tag: Option<String>,
     pub status: String,
     pub limit: usize,
+    pub remote: bool,
+}
+
+fn list_remote(ctx: &SnapshotCtx, params: &ListParams) -> Result<()> {
+    let wire_params = brain_rpc::RecordsListParams {
+        tag: params.tag.clone(),
+        task_id: None,
+        status: Some(params.status.clone()),
+        limit: Some(params.limit as u32),
+    };
+
+    let mut client = rpc_client::connect_daemon()?;
+    let snapshots = client
+        .snapshots_list(wire_params)
+        .map_err(|e| anyhow::anyhow!("SnapshotsList rpc failed: {e}"))?;
+
+    if ctx.json {
+        let out = json!({ "snapshots": snapshots, "count": snapshots.len() });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        if snapshots.is_empty() {
+            println!("No snapshots found.");
+            return Ok(());
+        }
+        let mut table = MarkdownTable::new(vec!["ID", "TITLE", "CREATED"]);
+        for s in &snapshots {
+            table.add_row(vec![
+                s.record_id.clone(),
+                s.title.clone(),
+                s.created_at.clone(),
+            ]);
+        }
+        print!("{table}");
+        println!();
+        println!("{} snapshot(s) shown", snapshots.len());
+    }
+
+    Ok(())
 }
 
 pub fn list(ctx: &SnapshotCtx, params: &ListParams) -> Result<()> {
+    if params.remote {
+        return list_remote(ctx, params);
+    }
     let query = RecordQuery {
         kind: Some(RecordKind::Snapshot),
         status: Some(params.status.parse::<RecordStatus>().unwrap()),

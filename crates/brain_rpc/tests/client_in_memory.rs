@@ -83,6 +83,12 @@ fn typed_ping_and_tasks_list_round_trip_through_public_api() {
             };
             Ok(Response::TasksList { tasks: vec![echo] })
         }
+        // This integration test exercises only ping + tasks_list. Other
+        // tasks_* requests aren't hit here; cover them so the match stays
+        // exhaustive after new variants land.
+        other => Err(RpcError::Unknown {
+            message: format!("test server does not handle {other:?}"),
+        }),
     }))
     .expect("connect");
 

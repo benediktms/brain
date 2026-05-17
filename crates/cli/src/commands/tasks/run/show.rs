@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::json;
 
 use brain_tasks::enrichment::{
@@ -6,11 +6,65 @@ use brain_tasks::enrichment::{
     note_links_to_json, task_row_to_compact_json,
 };
 
-use super::{TaskCtx, format_ts, format_ts_short, priority_label};
+use super::{ShowParams, TaskCtx, format_ts, format_ts_short, priority_label};
 
 // ── show ────────────────────────────────────────────────────
 
-pub fn show(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
+pub fn show(ctx: &TaskCtx, params: ShowParams) -> Result<()> {
+    if params.remote {
+        return show_remote(ctx, &params);
+    }
+    show_local(ctx, &params.id, params.brain.as_deref())
+}
+
+fn show_remote(ctx: &TaskCtx, params: &ShowParams) -> Result<()> {
+    if params.brain.is_some() {
+        bail!("--brain selector is not yet supported on the --remote path");
+    }
+
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+
+    let task = client
+        .tasks_show(params.id.clone())
+        .map_err(|e| anyhow::anyhow!("TasksShow rpc failed: {e}"))?;
+
+    match task {
+        None => {
+            if ctx.output.is_json_mode() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "task": null }))?
+                );
+            } else {
+                bail!("task not found: {}", params.id);
+            }
+        }
+        Some(t) => {
+            if ctx.output.is_json_mode() {
+                let out = json!({
+                    "task": {
+                        "task_id": t.task_id,
+                        "title": t.title,
+                        "status": t.status,
+                        "priority": t.priority,
+                        "brain_id": t.brain_id,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!("Task: {}", t.task_id);
+                println!("Title: {}", t.title);
+                println!("Status: {}", t.status);
+                println!("Priority: {}", priority_label(t.priority as i32));
+                println!("Brain: {}", t.brain_id);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn show_local(ctx: &TaskCtx, id: &str, _brain: Option<&str>) -> Result<()> {
     let id = ctx.store.resolve_task_id(id)?;
     let task = ctx
         .store

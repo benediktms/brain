@@ -53,6 +53,17 @@ impl TaskCtx {
 
 // ── param structs ──────────────────────────────────────────
 
+pub struct ShowParams {
+    pub id: String,
+    pub brain: Option<String>,
+    pub remote: bool,
+}
+
+pub struct NextParams {
+    pub k: usize,
+    pub remote: bool,
+}
+
 pub struct CreateParams {
     pub title: String,
     pub description: Option<String>,
@@ -61,6 +72,7 @@ pub struct CreateParams {
     pub assignee: Option<String>,
     pub parent: Option<String>,
     pub brain: Option<String>,
+    pub remote: bool,
 }
 
 pub struct ListParams {
@@ -89,6 +101,7 @@ pub struct UpdateParams {
     pub task_type: Option<TaskType>,
     pub assignee: Option<String>,
     pub blocked_reason: Option<String>,
+    pub remote: bool,
 }
 
 pub(super) fn format_ts(ts: i64) -> String {
@@ -116,7 +129,57 @@ pub(super) fn priority_label(p: i32) -> &'static str {
 
 // ── create ──────────────────────────────────────────────────
 
+fn create_remote(ctx: &TaskCtx, params: &CreateParams) -> Result<()> {
+    if params.brain.is_some() {
+        bail!("--brain selector is not yet supported on the --remote path");
+    }
+
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+
+    let wire_params = brain_rpc::TasksCreateParams {
+        title: params.title.clone(),
+        description: params.description.clone(),
+        priority: params.priority.clamp(0, u8::MAX as i32) as u8,
+        task_type: params.task_type.as_str().to_string(),
+        assignee: params.assignee.clone(),
+        parent: params.parent.clone(),
+    };
+
+    let (task, event_id) = client
+        .tasks_create(wire_params)
+        .map_err(|e| anyhow::anyhow!("TasksCreate rpc failed: {e}"))?;
+
+    if ctx.output.is_json_mode() {
+        let out = json!({
+            "event_id": event_id,
+            "task": {
+                "task_id": task.task_id,
+                "title": task.title,
+                "status": task.status,
+                "priority": task.priority,
+                "brain_id": task.brain_id,
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Created task {}", task.task_id);
+        println!("  Title: {}", task.title);
+        println!("  Priority: {}", priority_label(task.priority as i32));
+        if let Some(ref a) = params.assignee {
+            println!("  Assignee: {a}");
+        }
+        if let Some(ref p) = params.parent {
+            println!("  Parent: {p}");
+        }
+    }
+
+    Ok(())
+}
+
 pub fn create(ctx: &TaskCtx, params: CreateParams) -> Result<()> {
+    if params.remote {
+        return create_remote(ctx, &params);
+    }
     if let Some(ref brain) = params.brain {
         // Cross-brain task creation: resolve target brain and write into its scope.
         let (bid, bname) = ctx.store.resolve_brain(brain)?;

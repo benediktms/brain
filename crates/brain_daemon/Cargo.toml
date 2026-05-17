@@ -31,18 +31,30 @@ path = "src/main.rs"
 # impl files (handlers.rs) — port-layer files (config.rs, dispatcher.rs)
 # remain framework-free.
 #
-# default-features = false on brain-lib drops the candle embedder from
-# the daemon's compile path — the MVP daemon answers TasksList only,
-# which doesn't need embeddings.
+# brain-lib pulls in the candle embedder via its default `embed` feature.
+# The daemon is the long-lived process where embedder weights live (the
+# CLI is short-lived), so it makes architectural sense to load candle
+# here rather than in every CLI invocation. This is required for the
+# memory_retrieve / memory_reflect handlers — they go through
+# `McpContext` + `ToolRegistry`, which needs a real `Embed` trait impl.
+#
+# `tokio` (current-thread runtime only) is needed by the memory handlers
+# to drive the async `ToolRegistry::dispatch` call to completion from
+# this otherwise-sync dispatcher. Kept minimal — no macros, no
+# multi-thread runtime — to avoid bloating the daemon's dep tree.
 [dependencies]
 brain-rpc = { path = "../brain_rpc" }
-brain-lib = { path = "../brain_lib", default-features = false }
+brain-lib = { path = "../brain_lib" }
 brain-persistence = { path = "../brain_persistence" }
 brain-tasks = { path = "../brain_tasks" }
+brain-records = { path = "../brain_records" }
+brain-sagas = { path = "../brain_sagas" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 tempfile = "3"

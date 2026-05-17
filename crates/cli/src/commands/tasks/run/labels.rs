@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::json;
 use tracing::debug;
 
@@ -136,7 +136,50 @@ pub fn labels(ctx: &TaskCtx) -> Result<()> {
 
 // ── label add / label remove ────────────────────────────────
 
-pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
+fn label_remote(ctx: &TaskCtx, task_id: &str, label: &str, add: bool) -> Result<()> {
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+
+    let event_id = if add {
+        client
+            .tasks_add_label(task_id.to_string(), label.to_string())
+            .map_err(|e| anyhow::anyhow!("TasksAddLabel rpc failed: {e}"))?
+    } else {
+        client
+            .tasks_remove_label(task_id.to_string(), label.to_string())
+            .map_err(|e| anyhow::anyhow!("TasksRemoveLabel rpc failed: {e}"))?
+    };
+
+    let action = if add { "added" } else { "removed" };
+    if ctx.output.is_json_mode() {
+        let out = json!({
+            "event_id": event_id,
+            "task_id": task_id,
+            "label": label,
+            "action": action,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else if add {
+        println!("Added label \"{label}\" to task {task_id}");
+    } else {
+        println!("Removed label \"{label}\" from task {task_id}");
+    }
+
+    Ok(())
+}
+
+pub fn label_add(
+    ctx: &TaskCtx,
+    task_id: &str,
+    label: &str,
+    brain: Option<&str>,
+    remote: bool,
+) -> Result<()> {
+    if remote {
+        if brain.is_some() {
+            bail!("--brain selector is not yet supported on the --remote path");
+        }
+        return label_remote(ctx, task_id, label, true);
+    }
     if let Some(target_brain) = brain {
         if try_ipc_label_event(ctx, target_brain, task_id, label, "label_added", "Added")? {
             return Ok(());
@@ -148,7 +191,7 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
             store: tasks,
             output: ctx.output,
         };
-        return label_add(&remote_ctx, task_id, label, None);
+        return label_add(&remote_ctx, task_id, label, None, false);
     }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let display_id = ctx.store.compact_id_or_raw(task_id);
@@ -177,7 +220,19 @@ pub fn label_add(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>)
     Ok(())
 }
 
-pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&str>) -> Result<()> {
+pub fn label_remove(
+    ctx: &TaskCtx,
+    task_id: &str,
+    label: &str,
+    brain: Option<&str>,
+    remote: bool,
+) -> Result<()> {
+    if remote {
+        if brain.is_some() {
+            bail!("--brain selector is not yet supported on the --remote path");
+        }
+        return label_remote(ctx, task_id, label, false);
+    }
     if let Some(target_brain) = brain {
         if try_ipc_label_event(
             ctx,
@@ -195,7 +250,7 @@ pub fn label_remove(ctx: &TaskCtx, task_id: &str, label: &str, brain: Option<&st
             store: tasks,
             output: ctx.output,
         };
-        return label_remove(&remote_ctx, task_id, label, None);
+        return label_remove(&remote_ctx, task_id, label, None, false);
     }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let display_id = ctx.store.compact_id_or_raw(task_id);

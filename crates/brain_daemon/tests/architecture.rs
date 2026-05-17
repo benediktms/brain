@@ -25,16 +25,23 @@ const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 ///
 /// As of the BrainStoresDispatcher landing, brain_lib / brain_persistence
 /// / brain_tasks are ALLOWED — they're used inside handlers.rs to map
-/// requests onto real domain calls. Direct rusqlite / lancedb / candle
-/// imports remain forbidden (those belong inside brain_persistence and
-/// brain_embedder), as do the not-yet-extracted domain crates whose
-/// types haven't earned a place on the daemon's request surface yet.
+/// requests onto real domain calls. brain_records joined the allowed
+/// set when the records / analyses / artifacts / documents / plans /
+/// snapshots wire surface landed (the dispatcher needs the integrity
+/// API + typed Record domain types for anti-corruption mapping).
+/// brain_sagas joined the allowed set when the sagas_* wire surface
+/// landed — handlers.rs needs the typed `Saga` / `SagaFrontier` /
+/// `SagaStats` / `SagaListFilter` / `CascadeResult` domain types for
+/// the anti-corruption mapping into wire-format `SagaSummary` /
+/// `SagaFrontierTask` / `SagaStatsReport` / `SagaCascadeResult`.
+/// Direct rusqlite / lancedb / candle imports remain forbidden (those
+/// belong inside brain_persistence and brain_embedder), as do the
+/// not-yet-extracted domain crates whose types haven't earned a place
+/// on the daemon's request surface yet.
 const FORBIDDEN_CRATES: &[&str] = &[
     "rusqlite",
     "lancedb",
     "candle",
-    "brain_sagas",
-    "brain_records",
     "brain_tags",
     "brain_retrieval",
     "brain_embedder",

@@ -7,6 +7,10 @@ pub(crate) enum RecordsAction {
         /// Show detailed findings
         #[arg(long)]
         verbose: bool,
+
+        /// Run against the daemon via RPC instead of opening the DB directly
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Remove orphan blobs from the object store

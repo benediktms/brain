@@ -66,10 +66,61 @@ fn echo_once(listener: UnixListener) {
             },
             Request::Ping => Response::Pong,
             // This test echo server only exercises the wire framing for
-            // Handshake + Ping. If we ever wire a TasksList test through
-            // here, this arm should be expanded.
-            Request::TasksList { .. } => {
-                unreachable!("echo_once test server is not configured to respond to TasksList")
+            // Handshake + Ping. If we ever wire a tasks_* test through
+            // here, the relevant arm should be expanded.
+            Request::TasksList { .. }
+            | Request::TasksShow { .. }
+            | Request::TasksNext
+            | Request::TasksCreate { .. }
+            | Request::TasksUpdate { .. }
+            | Request::TasksMutate { .. }
+            | Request::TasksAddDep { .. }
+            | Request::TasksRemoveDep { .. }
+            | Request::TasksAddLabel { .. }
+            | Request::TasksRemoveLabel { .. }
+            | Request::TasksTransfer { .. }
+            | Request::RecordsVerify
+            | Request::AnalysesList { .. }
+            | Request::AnalysesShow { .. }
+            | Request::AnalysesCreate { .. }
+            | Request::ArtifactsList { .. }
+            | Request::ArtifactsShow { .. }
+            | Request::DocumentsList { .. }
+            | Request::DocumentsShow { .. }
+            | Request::DocumentsCreate { .. }
+            | Request::PlansList { .. }
+            | Request::PlansShow { .. }
+            | Request::PlansCreate { .. }
+            | Request::SnapshotsList { .. }
+            | Request::SnapshotsShow { .. }
+            | Request::SnapshotsCreate { .. }
+            | Request::SagasList { .. }
+            | Request::SagasGet { .. }
+            | Request::SagasCreate { .. }
+            | Request::SagasUpdate { .. }
+            | Request::SagasAddTasks { .. }
+            | Request::SagasRemoveTasks { .. }
+            | Request::SagasFrontier { .. }
+            | Request::SagasStart { .. }
+            | Request::SagasClose { .. }
+            | Request::SagasCancel { .. }
+            | Request::SagasReopen { .. }
+            | Request::SagasStats { .. }
+            | Request::MemoryWriteEpisode { .. }
+            | Request::MemoryWriteProcedure { .. }
+            | Request::MemoryRetrieve { .. }
+            | Request::MemoryConsolidate { .. }
+            | Request::MemorySummarizeScope { .. }
+            | Request::MemoryReflect { .. }
+            | Request::TagsAliasesList { .. }
+            | Request::TagsAliasesStatus
+            | Request::JobsStatus
+            | Request::BrainStatus
+            | Request::ProviderList => {
+                unreachable!(
+                    "echo_once test server is not configured to respond to tasks_* / records_* / \
+                     sagas_* / memory_* / tags_* / jobs_* / status / provider_* requests"
+                )
             }
         };
         let mut payload = serde_json::to_vec(&resp).expect("serialize response");

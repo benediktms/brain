@@ -355,8 +355,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             api_key.as_deref(),
                         )?;
                     }
-                    ProviderAction::List => {
-                        commands::provider::run_list(&cli.sqlite_db, Some(&cli.lance_db))?;
+                    ProviderAction::List { remote } => {
+                        commands::provider::run_list(&cli.sqlite_db, Some(&cli.lance_db), remote)?;
                     }
                     ProviderAction::Remove { target } => {
                         commands::provider::run_remove(
@@ -371,17 +371,22 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         Command::Sagas { json, action } => {
             let ctx = commands::sagas::SagaCtx::new(&cli.sqlite_db, json)?;
             match action {
-                SagasAction::Create { title, description } => {
-                    commands::sagas::create(&ctx, &title, description.as_deref())?;
+                SagasAction::Create {
+                    title,
+                    description,
+                    remote,
+                } => {
+                    commands::sagas::create(&ctx, &title, description.as_deref(), remote)?;
                 }
-                SagasAction::Show { saga_id } => {
-                    commands::sagas::show(&ctx, &saga_id)?;
+                SagasAction::Show { saga_id, remote } => {
+                    commands::sagas::show(&ctx, &saga_id, remote)?;
                 }
                 SagasAction::List {
                     include_closed,
                     include_cancelled,
                     all,
                     containing_brain,
+                    remote,
                 } => {
                     commands::sagas::list(
                         &ctx,
@@ -389,6 +394,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         include_cancelled,
                         all,
                         containing_brain,
+                        remote,
                     )?;
                 }
                 SagasAction::Update {
@@ -396,6 +402,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     title,
                     description,
                     clear_description,
+                    remote,
                 } => {
                     // Map CLI flags to the store's Option<Option<&str>> description convention:
                     //   --clear-description  => Some(None)   (set NULL)
@@ -406,39 +413,49 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     } else {
                         description.as_deref().map(Some)
                     };
-                    commands::sagas::update(&ctx, &saga_id, title.as_deref(), desc_arg)?;
+                    commands::sagas::update(&ctx, &saga_id, title.as_deref(), desc_arg, remote)?;
                 }
                 SagasAction::Add {
                     saga_id,
                     task_ids,
                     cascade,
+                    remote,
                 } => {
-                    commands::sagas::add_tasks(&ctx, &saga_id, &task_ids, cascade)?;
+                    commands::sagas::add_tasks(&ctx, &saga_id, &task_ids, cascade, remote)?;
                 }
-                SagasAction::Start { saga_id } => {
-                    commands::sagas::start(&ctx, &saga_id)?;
+                SagasAction::Start { saga_id, remote } => {
+                    commands::sagas::start(&ctx, &saga_id, remote)?;
                 }
                 SagasAction::Remove {
                     saga_id,
                     task_ids,
                     cascade,
+                    remote,
                 } => {
-                    commands::sagas::remove(&ctx, &saga_id, task_ids, cascade)?;
+                    commands::sagas::remove(&ctx, &saga_id, task_ids, cascade, remote)?;
                 }
-                SagasAction::Close { saga_id, cascade } => {
-                    commands::sagas::close(&ctx, &saga_id, cascade)?;
+                SagasAction::Close {
+                    saga_id,
+                    cascade,
+                    remote,
+                } => {
+                    commands::sagas::close(&ctx, &saga_id, cascade, remote)?;
                 }
-                SagasAction::Reopen { saga_id } => {
-                    commands::sagas::reopen(&ctx, &saga_id)?;
+                SagasAction::Reopen { saga_id, remote } => {
+                    commands::sagas::reopen(&ctx, &saga_id, remote)?;
                 }
-                SagasAction::Frontier { saga_id } => {
-                    commands::sagas::frontier(&ctx, &saga_id)?;
+                SagasAction::Frontier { saga_id, remote } => {
+                    commands::sagas::frontier(&ctx, &saga_id, remote)?;
                 }
-                SagasAction::Stats { saga_id } => {
-                    commands::sagas::stats(&ctx, &saga_id)?;
+                SagasAction::Stats { saga_id, remote } => {
+                    commands::sagas::stats(&ctx, &saga_id, remote)?;
                 }
-                SagasAction::Cancel { saga_id, cascade } => {
-                    commands::sagas::cancel(&ctx, &saga_id, cascade)?;
+                SagasAction::Cancel {
+                    saga_id,
+                    cascade,
+                    remote,
+                } => {
+                    commands::sagas::cancel(&ctx, &saga_id, cascade, remote)?;
                 }
             }
         }
@@ -448,7 +465,9 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             markdown: _,
             action,
         } => {
-            use commands::tasks::run::{CreateParams, ListParams, TaskCtx, UpdateParams};
+            use commands::tasks::run::{
+                CreateParams, ListParams, NextParams, ShowParams, TaskCtx, UpdateParams,
+            };
             let output = match output_arg {
                 Some(OutputFormatArg::HookEnvelope) => OutputFormat::HookEnvelope,
                 Some(OutputFormatArg::Json) => OutputFormat::Json,
@@ -467,6 +486,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     assignee,
                     parent,
                     brain,
+                    remote,
                 } => {
                     commands::tasks::run::create(
                         &ctx,
@@ -478,6 +498,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             assignee,
                             parent,
                             brain,
+                            remote,
                         },
                     )?;
                 }
@@ -511,8 +532,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     };
                     commands::tasks::run::list(&ctx, &params)?;
                 }
-                TasksAction::Show { id, brain } => {
-                    commands::tasks::run::show(&ctx, &id, brain.as_deref())?;
+                TasksAction::Show { id, brain, remote } => {
+                    commands::tasks::run::show(&ctx, ShowParams { id, brain, remote })?;
                 }
                 TasksAction::Update {
                     id,
@@ -523,6 +544,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     task_type,
                     assignee,
                     blocked_reason,
+                    remote,
                 } => {
                     commands::tasks::run::update(
                         &ctx,
@@ -535,6 +557,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             task_type: task_type.map(Into::into),
                             assignee,
                             blocked_reason,
+                            remote,
                         },
                     )?;
                 }
@@ -542,14 +565,16 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     DepAction::Add {
                         task_id,
                         depends_on,
+                        remote,
                     } => {
-                        commands::tasks::run::dep_add(&ctx, &task_id, &depends_on)?;
+                        commands::tasks::run::dep_add(&ctx, &task_id, &depends_on, remote)?;
                     }
                     DepAction::Remove {
                         task_id,
                         depends_on,
+                        remote,
                     } => {
-                        commands::tasks::run::dep_remove(&ctx, &task_id, &depends_on)?;
+                        commands::tasks::run::dep_remove(&ctx, &task_id, &depends_on, remote)?;
                     }
                     DepAction::AddChain { task_ids } => {
                         commands::tasks::run::dep_add_chain(&ctx, &task_ids)?;
@@ -601,19 +626,28 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         task_id,
                         label,
                         brain,
+                        remote,
                     } => {
-                        commands::tasks::run::label_add(&ctx, &task_id, &label, brain.as_deref())?;
+                        commands::tasks::run::label_add(
+                            &ctx,
+                            &task_id,
+                            &label,
+                            brain.as_deref(),
+                            remote,
+                        )?;
                     }
                     LabelAction::Remove {
                         task_id,
                         label,
                         brain,
+                        remote,
                     } => {
                         commands::tasks::run::label_remove(
                             &ctx,
                             &task_id,
                             &label,
                             brain.as_deref(),
+                            remote,
                         )?;
                     }
                     LabelAction::BatchAdd {
@@ -709,20 +743,21 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 TasksAction::Labels => {
                     commands::tasks::run::labels(&ctx)?;
                 }
-                TasksAction::Next { k } => {
-                    commands::tasks::run::next(&ctx, k)?;
+                TasksAction::Next { k, remote } => {
+                    commands::tasks::run::next(&ctx, NextParams { k, remote })?;
                 }
                 TasksAction::Transfer {
                     task_id,
                     to,
                     dry_run,
+                    remote,
                 } => {
                     use commands::tasks::run::TransferParams;
                     // Open a writable LanceDB handle so vector rows are
                     // re-stamped to the target brain. If the open fails (e.g.
                     // path missing in tests), proceed without — `transfer_task`
                     // tolerates `None` and logs a warning if vectors drift.
-                    let vector_store = if dry_run {
+                    let vector_store = if dry_run || remote {
                         None
                     } else {
                         brain_persistence::store::Store::open_or_create(&cli.lance_db)
@@ -735,6 +770,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             task_id,
                             to,
                             dry_run,
+                            remote,
                         },
                         vector_store.as_ref(),
                     )
@@ -756,6 +792,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     media_type,
                     brain,
+                    remote,
                 } => {
                     commands::snapshots::run::save(
                         &ctx,
@@ -768,11 +805,25 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags: tag,
                             media_type,
                             brain,
+                            remote,
                         },
                     )?;
                 }
-                SnapshotsAction::List { tag, status, limit } => {
-                    commands::snapshots::run::list(&ctx, &ListParams { tag, status, limit })?;
+                SnapshotsAction::List {
+                    tag,
+                    status,
+                    limit,
+                    remote,
+                } => {
+                    commands::snapshots::run::list(
+                        &ctx,
+                        &ListParams {
+                            tag,
+                            status,
+                            limit,
+                            remote,
+                        },
+                    )?;
                 }
                 SnapshotsAction::Get { id } => {
                     commands::snapshots::run::get(&ctx, &id)?;
@@ -811,6 +862,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     status,
                     limit,
+                    remote,
                 } => {
                     commands::artifacts::run::list(
                         &ctx,
@@ -819,6 +871,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tag,
                             status,
                             limit,
+                            remote,
                         },
                     )?;
                 }
@@ -866,6 +919,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     media_type,
                     brain,
+                    remote,
                 } => {
                     commands::documents::run::create(
                         &ctx,
@@ -879,6 +933,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags: tag,
                             media_type,
                             brain,
+                            remote,
                         },
                     )?;
                 }
@@ -901,6 +956,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     media_type,
                     brain,
+                    remote,
                 } => {
                     commands::analyses::run::create(
                         &ctx,
@@ -914,6 +970,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags: tag,
                             media_type,
                             brain,
+                            remote,
                         },
                     )?;
                 }
@@ -933,6 +990,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     media_type,
                     brain,
+                    remote,
                 } => {
                     commands::plans::run::create(
                         &ctx,
@@ -946,6 +1004,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags: tag,
                             media_type,
                             brain,
+                            remote,
                         },
                     )?;
                 }
@@ -965,6 +1024,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                         cluster_id,
                         limit,
                         offset,
+                        remote,
                     } => {
                         commands::tags::run::aliases_list(
                             &ctx,
@@ -973,12 +1033,13 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                                 cluster_id,
                                 limit,
                                 offset,
+                                remote,
                             },
                         )?;
                     }
                 },
-                TagsAction::Status => {
-                    commands::tags::run::status(&ctx, Some(&cli.model_dir))?;
+                TagsAction::Status { remote } => {
+                    commands::tags::run::status(&ctx, Some(&cli.model_dir), remote)?;
                 }
             }
         }
@@ -1024,8 +1085,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 action => {
                     let ctx = RecordsCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
                     match action {
-                        RecordsAction::Verify { verbose } => {
-                            commands::records::verify(&ctx, verbose)?;
+                        RecordsAction::Verify { verbose, remote } => {
+                            commands::records::verify(&ctx, verbose, remote)?;
                         }
                         RecordsAction::Gc { dry_run } => {
                             commands::records::gc(&ctx, dry_run)?;
@@ -1051,16 +1112,33 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 MemoryCtx, ReflectCommitParams, ReflectPrepareParams, RetrieveParams,
                 WriteEpisodeParams, WriteProcedureParams,
             };
-            let ctx = MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
 
             match action {
                 MemoryAction::Consolidate {
                     limit,
                     gap_seconds,
                     auto_summarize,
+                    remote,
                 } => {
-                    commands::memory::run::consolidate(&ctx, limit, gap_seconds, auto_summarize)
+                    if remote {
+                        commands::memory::run::consolidate_remote(
+                            limit,
+                            gap_seconds,
+                            auto_summarize,
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::consolidate(
+                            &ctx,
+                            limit,
+                            gap_seconds,
+                            auto_summarize,
+                        )
                         .await?;
+                    }
                 }
                 MemoryAction::Retrieve {
                     query,
@@ -1077,27 +1155,53 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tags_exclude,
                     kinds,
                     explain,
+                    remote,
                 } => {
-                    commands::memory::run::retrieve(
-                        &ctx,
-                        RetrieveParams {
-                            query,
-                            uri,
-                            lod,
-                            count,
-                            strategy,
-                            brains,
-                            time_scope,
-                            time_after,
-                            time_before,
-                            tags,
-                            tags_require,
-                            tags_exclude,
-                            kinds,
-                            explain,
-                        },
-                    )
-                    .await?;
+                    if remote {
+                        commands::memory::run::retrieve_remote(
+                            RetrieveParams {
+                                query,
+                                uri,
+                                lod,
+                                count,
+                                strategy,
+                                brains,
+                                time_scope,
+                                time_after,
+                                time_before,
+                                tags,
+                                tags_require,
+                                tags_exclude,
+                                kinds,
+                                explain,
+                            },
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::retrieve(
+                            &ctx,
+                            RetrieveParams {
+                                query,
+                                uri,
+                                lod,
+                                count,
+                                strategy,
+                                brains,
+                                time_scope,
+                                time_after,
+                                time_before,
+                                tags,
+                                tags_require,
+                                tags_exclude,
+                                kinds,
+                                explain,
+                            },
+                        )
+                        .await?;
+                    }
                 }
                 MemoryAction::WriteEpisode {
                     goal,
@@ -1105,52 +1209,101 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     outcome,
                     tags,
                     importance,
+                    remote,
                 } => {
-                    commands::memory::run::write_episode(
-                        &ctx,
-                        WriteEpisodeParams {
-                            goal,
-                            actions,
-                            outcome,
-                            tags,
-                            importance,
-                            lance_db: Some(cli.lance_db.clone()),
-                        },
-                    )
-                    .await?;
+                    if remote {
+                        commands::memory::run::write_episode_remote(
+                            WriteEpisodeParams {
+                                goal,
+                                actions,
+                                outcome,
+                                tags,
+                                importance,
+                                lance_db: None,
+                            },
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::write_episode(
+                            &ctx,
+                            WriteEpisodeParams {
+                                goal,
+                                actions,
+                                outcome,
+                                tags,
+                                importance,
+                                lance_db: Some(cli.lance_db.clone()),
+                            },
+                        )
+                        .await?;
+                    }
                 }
                 MemoryAction::WriteProcedure {
                     title,
                     steps,
                     tags,
                     importance,
+                    remote,
                 } => {
-                    commands::memory::run::write_procedure(
-                        &ctx,
-                        WriteProcedureParams {
-                            title,
-                            steps,
-                            tags,
-                            importance,
-                            lance_db: Some(cli.lance_db.clone()),
-                        },
-                    )
-                    .await?;
+                    if remote {
+                        commands::memory::run::write_procedure_remote(
+                            WriteProcedureParams {
+                                title,
+                                steps,
+                                tags,
+                                importance,
+                                lance_db: None,
+                            },
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::write_procedure(
+                            &ctx,
+                            WriteProcedureParams {
+                                title,
+                                steps,
+                                tags,
+                                importance,
+                                lance_db: Some(cli.lance_db.clone()),
+                            },
+                        )
+                        .await?;
+                    }
                 }
                 MemoryAction::SummarizeScope {
                     scope_type,
                     scope_value,
                     regenerate,
                     async_llm,
+                    remote,
                 } => {
-                    commands::memory::run::summarize_scope(
-                        &ctx,
-                        &scope_type,
-                        &scope_value,
-                        regenerate,
-                        async_llm,
-                    )
-                    .await?;
+                    if remote {
+                        commands::memory::run::summarize_scope_remote(
+                            &scope_type,
+                            &scope_value,
+                            regenerate,
+                            async_llm,
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::summarize_scope(
+                            &ctx,
+                            &scope_type,
+                            &scope_value,
+                            regenerate,
+                            async_llm,
+                        )
+                        .await?;
+                    }
                 }
                 MemoryAction::Reflect {
                     commit,
@@ -1162,43 +1315,56 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     source_ids,
                     tags,
                     importance,
+                    remote,
                 } => {
-                    if commit {
-                        commands::memory::run::reflect_commit(
-                            &ctx,
-                            ReflectCommitParams {
-                                title: title.unwrap_or_default(),
-                                content: content.unwrap_or_default(),
-                                source_ids,
-                                tags,
-                                importance: importance.unwrap_or(1.0),
-                                lance_db: Some(cli.lance_db.clone()),
-                            },
-                        )
-                        .await?;
+                    if remote {
+                        commands::memory::run::reflect_remote(
+                            commit, topic, budget, brains, title, content, source_ids, tags,
+                            importance, json,
+                        )?;
                     } else {
-                        let topic = topic.ok_or_else(|| {
-                            anyhow::anyhow!("--topic is required in prepare mode (omit --commit)")
-                        })?;
-                        commands::memory::run::reflect_prepare(
-                            &ctx,
-                            ReflectPrepareParams {
-                                topic,
-                                budget,
-                                brains,
-                            },
-                        )
-                        .await?;
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        if commit {
+                            commands::memory::run::reflect_commit(
+                                &ctx,
+                                ReflectCommitParams {
+                                    title: title.unwrap_or_default(),
+                                    content: content.unwrap_or_default(),
+                                    source_ids,
+                                    tags,
+                                    importance: importance.unwrap_or(1.0),
+                                    lance_db: Some(cli.lance_db.clone()),
+                                },
+                            )
+                            .await?;
+                        } else {
+                            let topic = topic.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "--topic is required in prepare mode (omit --commit)"
+                                )
+                            })?;
+                            commands::memory::run::reflect_prepare(
+                                &ctx,
+                                ReflectPrepareParams {
+                                    topic,
+                                    budget,
+                                    brains,
+                                },
+                            )
+                            .await?;
+                        }
                     }
                 }
             }
         }
-        Command::Status { json } => {
-            commands::status::run(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+        Command::Status { json, remote } => {
+            commands::status::run(&cli.sqlite_db, Some(&cli.lance_db), json, remote)?;
         }
         Command::Jobs { action } => match action {
-            JobsAction::Status { json } => {
-                commands::jobs::run_status(&cli.sqlite_db, Some(&cli.lance_db), json)?;
+            JobsAction::Status { json, remote } => {
+                commands::jobs::run_status(&cli.sqlite_db, Some(&cli.lance_db), json, remote)?;
             }
             JobsAction::Retry { job_id } => {
                 commands::jobs::run_retry(&cli.sqlite_db, Some(&cli.lance_db), &job_id)?;

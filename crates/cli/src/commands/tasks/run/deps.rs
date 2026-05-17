@@ -7,7 +7,25 @@ use super::TaskCtx;
 
 // ── dep add / dep remove ────────────────────────────────────
 
-pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
+pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> Result<()> {
+    if remote {
+        let mut client = crate::commands::rpc_client::connect_daemon()?;
+        let event_id = client
+            .tasks_add_dep(task_id.to_string(), depends_on.to_string())
+            .map_err(|e| anyhow::anyhow!("TasksAddDep rpc failed: {e}"))?;
+        if ctx.output.is_json_mode() {
+            let out = json!({
+                "event_id": event_id,
+                "task_id": task_id,
+                "depends_on": depends_on,
+                "action": "added",
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("Added dependency: {task_id} depends on {depends_on}");
+        }
+        return Ok(());
+    }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let depends_on = &ctx.store.resolve_task_id(depends_on)?;
     let display_task_id = ctx.store.compact_id_or_raw(task_id);
@@ -37,7 +55,25 @@ pub fn dep_add(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str) -> Result<()> {
+pub fn dep_remove(ctx: &TaskCtx, task_id: &str, depends_on: &str, remote: bool) -> Result<()> {
+    if remote {
+        let mut client = crate::commands::rpc_client::connect_daemon()?;
+        let event_id = client
+            .tasks_remove_dep(task_id.to_string(), depends_on.to_string())
+            .map_err(|e| anyhow::anyhow!("TasksRemoveDep rpc failed: {e}"))?;
+        if ctx.output.is_json_mode() {
+            let out = json!({
+                "event_id": event_id,
+                "task_id": task_id,
+                "depends_on": depends_on,
+                "action": "removed",
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("Removed dependency: {task_id} no longer depends on {depends_on}");
+        }
+        return Ok(());
+    }
     let task_id = &ctx.store.resolve_task_id(task_id)?;
     let depends_on = &ctx.store.resolve_task_id(depends_on)?;
     let display_task_id = ctx.store.compact_id_or_raw(task_id);

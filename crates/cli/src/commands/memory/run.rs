@@ -786,6 +786,425 @@ pub async fn reflect_commit(ctx: &MemoryCtx, params: ReflectCommitParams) -> Res
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// remote helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a user-supplied importance value into the wire-format
+/// millis-u32. Clamps to [0.0, 1.0] so out-of-range values can't
+/// silently saturate the `as u32` cast into a misleading "successful
+/// 5000-millis write" — the daemon caps importance at 1.0 anyway, so
+/// clamping client-side keeps the wire-format and storage semantics
+/// aligned.
+fn importance_to_millis(v: f64) -> u32 {
+    (v.clamp(0.0, 1.0) * 1000.0) as u32
+}
+
+pub fn write_episode_remote(params: WriteEpisodeParams, json: bool) -> anyhow::Result<()> {
+    use brain_rpc::domain::{MemoryWriteEpisodeParams, Request, Response};
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+    let resp = client
+        .call(Request::MemoryWriteEpisode {
+            params: MemoryWriteEpisodeParams {
+                goal: params.goal.clone(),
+                actions: params.actions.clone(),
+                outcome: params.outcome.clone(),
+                tags: params.tags.clone(),
+                importance_millis: importance_to_millis(params.importance),
+            },
+        })
+        .map_err(|e| anyhow::anyhow!("MemoryWriteEpisode rpc failed: {e}"))?;
+    let (summary_id, uri) = match resp {
+        Response::MemoryWriteEpisode { summary_id, uri } => (summary_id, uri),
+        other => anyhow::bail!("unexpected response to MemoryWriteEpisode: {other:?}"),
+    };
+    if json {
+        let out = serde_json::json!({
+            "status": "stored",
+            "summary_id": summary_id,
+            "uri": uri,
+            "goal": params.goal,
+            "tags": params.tags,
+            "importance": params.importance,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Episode stored: {summary_id}");
+        println!("  URI:        {uri}");
+        println!("  Goal:       {}", params.goal);
+        println!("  Importance: {}", params.importance);
+        if !params.tags.is_empty() {
+            println!("  Tags:       {}", params.tags.join(", "));
+        }
+    }
+    Ok(())
+}
+
+pub fn write_procedure_remote(params: WriteProcedureParams, json: bool) -> anyhow::Result<()> {
+    use brain_rpc::domain::{MemoryWriteProcedureParams, Request, Response};
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+    let resp = client
+        .call(Request::MemoryWriteProcedure {
+            params: MemoryWriteProcedureParams {
+                title: params.title.clone(),
+                steps: params.steps.clone(),
+                tags: params.tags.clone(),
+                importance_millis: importance_to_millis(params.importance),
+            },
+        })
+        .map_err(|e| anyhow::anyhow!("MemoryWriteProcedure rpc failed: {e}"))?;
+    let (summary_id, uri) = match resp {
+        Response::MemoryWriteProcedure { summary_id, uri } => (summary_id, uri),
+        other => anyhow::bail!("unexpected response to MemoryWriteProcedure: {other:?}"),
+    };
+    if json {
+        let out = serde_json::json!({
+            "status": "stored",
+            "summary_id": summary_id,
+            "uri": uri,
+            "title": params.title,
+            "tags": params.tags,
+            "importance": params.importance,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("Procedure stored: {summary_id}");
+        println!("  URI:        {uri}");
+        println!("  Title:      {}", params.title);
+        println!("  Importance: {}", params.importance);
+        if !params.tags.is_empty() {
+            println!("  Tags:       {}", params.tags.join(", "));
+        }
+    }
+    Ok(())
+}
+
+pub fn retrieve_remote(params: RetrieveParams, json: bool) -> anyhow::Result<()> {
+    use brain_rpc::domain::{MemoryRetrieveParams, Request, Response};
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+    let strategy = params.strategy.clone();
+    let lod = params.lod.clone();
+    let explain = params.explain;
+    let resp = client
+        .call(Request::MemoryRetrieve {
+            params: MemoryRetrieveParams {
+                query: params.query,
+                uri: params.uri,
+                lod,
+                count: params.count,
+                strategy,
+                brains: params.brains,
+                time_scope: params.time_scope,
+                time_after: params.time_after,
+                time_before: params.time_before,
+                tags: params.tags,
+                tags_require: params.tags_require,
+                tags_exclude: params.tags_exclude,
+                kinds: params.kinds,
+                explain,
+            },
+        })
+        .map_err(|e| anyhow::anyhow!("MemoryRetrieve rpc failed: {e}"))?;
+    let result_json = match resp {
+        Response::MemoryRetrieve { result_json } => result_json,
+        other => anyhow::bail!("unexpected response to MemoryRetrieve: {other:?}"),
+    };
+    let response: serde_json::Value = serde_json::from_str(&result_json)
+        .unwrap_or_else(|_| serde_json::json!({"raw": result_json}));
+    if json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    let results = response["results"].as_array();
+    let Some(results) = results else {
+        println!("No results.");
+        return Ok(());
+    };
+    if results.is_empty() {
+        println!("No results found.");
+        return Ok(());
+    }
+    let headers = if explain {
+        vec![
+            "URI",
+            "KIND",
+            "SCORE",
+            "LOD",
+            "EXPANSION_REASON",
+            "SLOT",
+            "SIGNALS",
+        ]
+    } else {
+        vec!["URI", "KIND", "SCORE", "LOD", "EXPANSION_REASON", "SLOT"]
+    };
+    let mut table = crate::markdown_table::MarkdownTable::new(headers);
+    for entry in results {
+        let uri = entry["uri"].as_str().unwrap_or("-");
+        let kind = entry["kind"].as_str().unwrap_or("-");
+        let score = entry["score"]
+            .as_f64()
+            .map(|s| format!("{s:.4}"))
+            .unwrap_or_else(|| "-".to_string());
+        let lod_val = entry["lod"].as_str().unwrap_or("-");
+        let expansion_reason = entry["expansion_reason"].as_str().unwrap_or("-");
+        let slot = entry["lod_plan_slot"]
+            .as_u64()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        if explain {
+            let signals = if let Some(sig) = entry["signals"].as_object() {
+                sig.iter()
+                    .filter_map(|(k, v)| v.as_f64().map(|f| format!("{k}:{f:.3}")))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                "-".to_string()
+            };
+            table.add_row(vec![
+                uri.to_string(),
+                kind.to_string(),
+                score,
+                lod_val.to_string(),
+                expansion_reason.to_string(),
+                slot,
+                signals,
+            ]);
+        } else {
+            table.add_row(vec![
+                uri.to_string(),
+                kind.to_string(),
+                score,
+                lod_val.to_string(),
+                expansion_reason.to_string(),
+                slot,
+            ]);
+        }
+    }
+    print!("{table}");
+    println!();
+    let result_count = response["result_count"]
+        .as_u64()
+        .unwrap_or(results.len() as u64);
+    let lod_requested = response["lod_requested"]
+        .as_str()
+        .unwrap_or(response["lod"].as_str().unwrap_or("-"));
+    let strategy_val = response["strategy"].as_str().unwrap_or("-");
+    println!("{result_count} result(s) | lod: {lod_requested} | strategy: {strategy_val}");
+    Ok(())
+}
+
+pub fn consolidate_remote(
+    limit: usize,
+    gap_seconds: i64,
+    auto_summarize: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    use brain_rpc::domain::{MemoryConsolidateParams, Request, Response};
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+    let resp = client
+        .call(Request::MemoryConsolidate {
+            params: MemoryConsolidateParams {
+                limit,
+                gap_seconds,
+                auto_summarize,
+            },
+        })
+        .map_err(|e| anyhow::anyhow!("MemoryConsolidate rpc failed: {e}"))?;
+    let result_json = match resp {
+        Response::MemoryConsolidate { result_json } => result_json,
+        other => anyhow::bail!("unexpected response to MemoryConsolidate: {other:?}"),
+    };
+    let response: serde_json::Value = serde_json::from_str(&result_json)
+        .unwrap_or_else(|_| serde_json::json!({"raw": result_json}));
+    if json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    let clusters = response["clusters"].as_array();
+    match clusters.map(|v| v.as_slice()) {
+        None | Some([]) => {
+            println!("No clusters found. No episodes to consolidate.");
+        }
+        Some(clusters) => {
+            println!("{} cluster(s) found:", clusters.len());
+            println!();
+            for (i, cluster) in clusters.iter().enumerate() {
+                let episode_count = cluster["episode_count"].as_u64().unwrap_or(0);
+                let title = cluster["suggested_title"].as_str().unwrap_or("<untitled>");
+                let summary = cluster["summary"].as_str().unwrap_or("");
+                let ids = cluster["episode_ids"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                println!("Cluster {} — {} episode(s)", i + 1, episode_count);
+                println!("  Title:    {title}");
+                println!("  Summary:  {summary}");
+                println!("  IDs:      {ids}");
+                println!();
+            }
+            if auto_summarize {
+                let jobs = response["jobs_enqueued"].as_u64().unwrap_or(0);
+                println!("Enqueued {jobs} async consolidation job(s).");
+                println!();
+            }
+            println!(
+                "Use `brain memory reflect --commit` to synthesize a cluster into a reflection."
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn summarize_scope_remote(
+    scope_type: &str,
+    scope_value: &str,
+    regenerate: bool,
+    async_llm: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    use brain_rpc::domain::{MemorySummarizeScopeParams, Request, Response};
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+    let resp = client
+        .call(Request::MemorySummarizeScope {
+            params: MemorySummarizeScopeParams {
+                scope_type: scope_type.to_string(),
+                scope_value: scope_value.to_string(),
+                regenerate,
+                async_llm,
+            },
+        })
+        .map_err(|e| anyhow::anyhow!("MemorySummarizeScope rpc failed: {e}"))?;
+    let result_json = match resp {
+        Response::MemorySummarizeScope { result_json } => result_json,
+        other => anyhow::bail!("unexpected response to MemorySummarizeScope: {other:?}"),
+    };
+    let response: serde_json::Value = serde_json::from_str(&result_json)
+        .unwrap_or_else(|_| serde_json::json!({"raw": result_json}));
+    if json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    let st = response["scope_type"].as_str().unwrap_or(scope_type);
+    let sv = response["scope_value"].as_str().unwrap_or(scope_value);
+    println!("Scope summary | {st}:{sv}");
+    if response["stale"].as_bool().unwrap_or(false) {
+        println!("  [stale — use --regenerate to refresh]");
+    }
+    if response["llm_pending"].as_bool().unwrap_or(false) {
+        println!("  [async LLM refresh queued]");
+    }
+    if let Some(ts) = response["generated_at"].as_str() {
+        println!("  Generated: {ts}");
+    }
+    println!();
+    if let Some(content) = response["content"].as_str() {
+        println!("{content}");
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn reflect_remote(
+    commit: bool,
+    topic: Option<String>,
+    budget: usize,
+    brains: Vec<String>,
+    title: Option<String>,
+    content: Option<String>,
+    source_ids: Vec<String>,
+    tags: Vec<String>,
+    importance: Option<f64>,
+    json: bool,
+) -> anyhow::Result<()> {
+    use brain_rpc::domain::{MemoryReflectParams, Request, Response};
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+    let resp = client
+        .call(Request::MemoryReflect {
+            params: MemoryReflectParams {
+                commit,
+                topic,
+                budget,
+                brains,
+                title,
+                content,
+                source_ids,
+                tags,
+                importance_millis: importance.map(importance_to_millis),
+            },
+        })
+        .map_err(|e| anyhow::anyhow!("MemoryReflect rpc failed: {e}"))?;
+    let result_json = match resp {
+        Response::MemoryReflect { result_json } => result_json,
+        other => anyhow::bail!("unexpected response to MemoryReflect: {other:?}"),
+    };
+    let response: serde_json::Value = serde_json::from_str(&result_json)
+        .unwrap_or_else(|_| serde_json::json!({"raw": result_json}));
+    if json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    // Render human-readable output from the JSON response.
+    if commit {
+        let summary_id = response["summary_id"].as_str().unwrap_or("-");
+        let uri = response["uri"].as_str().unwrap_or("-");
+        let title_val = response["title"].as_str().unwrap_or("-");
+        let sources = response["source_count"].as_u64().unwrap_or(0);
+        let imp = response["importance"].as_f64().unwrap_or(0.0);
+        println!("Reflection stored: {summary_id}");
+        println!("  URI:        {uri}");
+        println!("  Title:        {title_val}");
+        println!("  Sources:      {sources}");
+        println!("  Importance:   {imp}");
+    } else {
+        let topic_val = response["topic"].as_str().unwrap_or("-");
+        println!("Reflect prepare | topic: {topic_val}");
+        println!();
+        let episodes = response["episodes"].as_array();
+        match episodes.map(|v| v.as_slice()) {
+            None | Some([]) => println!("No recent episodes found."),
+            Some(eps) => {
+                println!("## Recent Episodes ({})", eps.len());
+                for ep in eps {
+                    let id = ep["summary_id"].as_str().unwrap_or("-");
+                    let title_ep = ep["title"].as_str().unwrap_or("<untitled>");
+                    let imp = ep["importance"].as_f64().unwrap_or(0.0);
+                    println!("  [{id}] {title_ep} (importance: {imp})");
+                }
+            }
+        }
+        println!();
+        let chunks = response["related_chunks"]["results"].as_array();
+        match chunks.map(|v| v.as_slice()) {
+            None | Some([]) => println!("No related chunks found."),
+            Some(cks) => {
+                println!("## Related Chunks ({})", cks.len());
+                let mut table =
+                    crate::markdown_table::MarkdownTable::new(vec!["ID", "TITLE", "SCORE"]);
+                for stub in cks {
+                    let mid = stub["memory_id"].as_str().unwrap_or("-");
+                    let t = stub["title"].as_str().unwrap_or("-");
+                    let score = stub["score"]
+                        .as_f64()
+                        .map(|s| format!("{s:.4}"))
+                        .unwrap_or_else(|| "-".to_string());
+                    table.add_row(vec![mid.to_string(), t.to_string(), score]);
+                }
+                print!("{table}");
+            }
+        }
+        println!();
+        println!(
+            "Use `brain memory reflect --commit --title ... --content ... --source-ids <ids>` to store a reflection."
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod retrieve_tests {
     use brain_persistence::sql::SqlResultExt;

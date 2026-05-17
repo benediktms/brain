@@ -9,9 +9,68 @@ use brain_tasks::events::TaskType;
 
 use crate::markdown_table::MarkdownTable;
 
-use super::{TaskCtx, priority_label};
+use super::{NextParams, TaskCtx, priority_label};
 
-pub fn next(ctx: &TaskCtx, k: usize) -> Result<()> {
+pub fn next(ctx: &TaskCtx, params: NextParams) -> Result<()> {
+    if params.remote {
+        return next_remote(ctx, &params);
+    }
+    next_local(ctx, params.k)
+}
+
+fn next_remote(ctx: &TaskCtx, params: &NextParams) -> Result<()> {
+    if params.k > 1 {
+        anyhow::bail!(
+            "top-k semantics (k={}) are not yet supported on the --remote path",
+            params.k
+        );
+    }
+    let mut client = crate::commands::rpc_client::connect_daemon()?;
+
+    let task = client
+        .tasks_next()
+        .map_err(|e| anyhow::anyhow!("TasksNext rpc failed: {e}"))?;
+
+    match task {
+        None => {
+            if ctx.output.is_json_mode() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "task": null }))?
+                );
+            } else {
+                println!("No actionable tasks found.");
+            }
+        }
+        Some(t) => {
+            if ctx.output.is_json_mode() {
+                let out = json!({
+                    "task": {
+                        "task_id": t.task_id,
+                        "title": t.title,
+                        "status": t.status,
+                        "priority": t.priority,
+                        "brain_id": t.brain_id,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                let mut table = MarkdownTable::new(vec!["ID", "TITLE", "PRIORITY", "STATUS"]);
+                table.add_row(vec![
+                    t.task_id.clone(),
+                    t.title.clone(),
+                    priority_label(t.priority as i32).to_string(),
+                    t.status.clone(),
+                ]);
+                print!("{table}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn next_local(ctx: &TaskCtx, k: usize) -> Result<()> {
     let k = k.min(100);
     // Fetch ready actionable tasks (epics excluded by the store query)
     let mut tasks = ctx.store.list_ready_actionable()?;

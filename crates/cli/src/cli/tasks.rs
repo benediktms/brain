@@ -37,6 +37,10 @@ pub(crate) enum TasksAction {
         /// Target brain name or ID
         #[arg(long)]
         brain: Option<String>,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// List tasks with optional filters
@@ -86,11 +90,11 @@ pub(crate) enum TasksAction {
         brain: Option<String>,
 
         /// Route the request through brain-daemon over the local Unix
-        /// socket instead of opening the database in-process. Requires
-        /// the daemon to be running (`brain-daemon --socket-path …
-        /// --sqlite-db …`). Experimental; only a subset of filters
-        /// (status, priority, search) are honored on the remote path
-        /// — full parity with the local path lands in follow-up work.
+        /// socket instead of opening the database in-process. The daemon
+        /// is auto-started if it isn't already running. Experimental;
+        /// only a subset of filters (status, priority, search) are
+        /// honored on the remote path — full parity with the local path
+        /// lands in follow-up work.
         #[arg(long)]
         remote: bool,
     },
@@ -103,6 +107,10 @@ pub(crate) enum TasksAction {
         /// Target brain name or ID (fetches from that brain instead of locally)
         #[arg(long)]
         brain: Option<String>,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Update a task's fields or status
@@ -137,6 +145,10 @@ pub(crate) enum TasksAction {
         /// Set blocked reason
         #[arg(long)]
         blocked_reason: Option<String>,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Manage task dependencies
@@ -227,6 +239,10 @@ pub(crate) enum TasksAction {
         /// Maximum number of tasks to show
         #[arg(short, long, default_value = "5")]
         k: usize,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Show blocked tasks
@@ -250,6 +266,10 @@ pub(crate) enum TasksAction {
         /// Print what would happen without making any changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 }
 
@@ -264,6 +284,10 @@ pub(crate) enum DepAction {
 
         /// Task it depends on
         depends_on: String,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Remove a dependency
@@ -273,6 +297,10 @@ pub(crate) enum DepAction {
 
         /// Task it depended on
         depends_on: String,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Create a sequential dependency chain (each task depends on the previous)
@@ -314,6 +342,10 @@ pub(crate) enum LabelAction {
         /// Target brain name or ID (adds label in that brain instead of locally)
         #[arg(long)]
         brain: Option<String>,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Remove a label from a task
@@ -327,6 +359,10 @@ pub(crate) enum LabelAction {
         /// Target brain name or ID (removes label in that brain instead of locally)
         #[arg(long)]
         brain: Option<String>,
+
+        /// Route the request through brain-daemon over the local Unix socket
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Add a label to multiple tasks at once

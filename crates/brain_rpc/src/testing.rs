@@ -59,12 +59,61 @@ impl InMemoryTransport {
                 server_version: PROTOCOL_VERSION,
             }),
             // echo is a minimal mock for liveness + handshake tests.
-            // Tests that need TasksList behavior should build their
+            // Tests that need tasks_* behavior should build their
             // own InMemoryTransport with a custom closure rather
             // than rely on this convenience constructor.
-            Request::TasksList { .. } => Err(RpcError::Unknown {
-                message: "InMemoryTransport::echo does not handle TasksList \
-                          — use InMemoryTransport::new with a custom handler"
+            Request::TasksList { .. }
+            | Request::TasksShow { .. }
+            | Request::TasksNext
+            | Request::TasksCreate { .. }
+            | Request::TasksUpdate { .. }
+            | Request::TasksMutate { .. }
+            | Request::TasksAddDep { .. }
+            | Request::TasksRemoveDep { .. }
+            | Request::TasksAddLabel { .. }
+            | Request::TasksRemoveLabel { .. }
+            | Request::TasksTransfer { .. }
+            | Request::RecordsVerify
+            | Request::AnalysesList { .. }
+            | Request::AnalysesShow { .. }
+            | Request::AnalysesCreate { .. }
+            | Request::ArtifactsList { .. }
+            | Request::ArtifactsShow { .. }
+            | Request::DocumentsList { .. }
+            | Request::DocumentsShow { .. }
+            | Request::DocumentsCreate { .. }
+            | Request::PlansList { .. }
+            | Request::PlansShow { .. }
+            | Request::PlansCreate { .. }
+            | Request::SnapshotsList { .. }
+            | Request::SnapshotsShow { .. }
+            | Request::SnapshotsCreate { .. }
+            | Request::SagasList { .. }
+            | Request::SagasGet { .. }
+            | Request::SagasCreate { .. }
+            | Request::SagasUpdate { .. }
+            | Request::SagasAddTasks { .. }
+            | Request::SagasRemoveTasks { .. }
+            | Request::SagasFrontier { .. }
+            | Request::SagasStart { .. }
+            | Request::SagasClose { .. }
+            | Request::SagasCancel { .. }
+            | Request::SagasReopen { .. }
+            | Request::SagasStats { .. }
+            | Request::MemoryWriteEpisode { .. }
+            | Request::MemoryWriteProcedure { .. }
+            | Request::MemoryRetrieve { .. }
+            | Request::MemoryConsolidate { .. }
+            | Request::MemorySummarizeScope { .. }
+            | Request::MemoryReflect { .. }
+            | Request::TagsAliasesList { .. }
+            | Request::TagsAliasesStatus
+            | Request::JobsStatus
+            | Request::BrainStatus
+            | Request::ProviderList => Err(RpcError::Unknown {
+                message: "InMemoryTransport::echo does not handle tasks_* / records_* / \
+                          sagas_* / memory_* / <kind>_* requests — use \
+                          InMemoryTransport::new with a custom handler"
                     .into(),
             }),
         })

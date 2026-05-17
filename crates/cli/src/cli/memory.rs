@@ -42,6 +42,11 @@ pub(crate) enum MemoryAction {
         /// Importance score (0.0 to 1.0)
         #[arg(long, default_value = "1.0")]
         importance: f64,
+
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Store a step-by-step procedure to the knowledge base
@@ -76,6 +81,11 @@ pub(crate) enum MemoryAction {
         /// Importance score (0.0 to 1.0)
         #[arg(long, default_value = "0.9")]
         importance: f64,
+
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Group recent episodes by temporal proximity into consolidation clusters
@@ -103,6 +113,11 @@ pub(crate) enum MemoryAction {
         /// Enqueue async LLM synthesis jobs for returned clusters
         #[arg(long)]
         auto_summarize: bool,
+
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Generate or retrieve a scope summary for a directory or tag
@@ -138,6 +153,11 @@ pub(crate) enum MemoryAction {
         /// Disable async LLM refresh and keep the extractive placeholder only
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         async_llm: bool,
+
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Retrieve memory chunks at a requested level of detail (LOD)
@@ -222,6 +242,11 @@ pub(crate) enum MemoryAction {
         /// Include per-result signal score breakdowns
         #[arg(long)]
         explain: bool,
+
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Retrieve source material for reflection (prepare) or store a reflection (commit)
@@ -289,5 +314,10 @@ pub(crate) enum MemoryAction {
         /// (commit) Importance score (0.0 to 1.0)
         #[arg(long)]
         importance: Option<f64>,
+
+        /// Route the request through brain-daemon. The daemon is auto-started
+        /// if it isn't already running.
+        #[arg(long)]
+        remote: bool,
     },
 }

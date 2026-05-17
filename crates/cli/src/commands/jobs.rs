@@ -5,7 +5,100 @@ use brain_lib::ports::JobQueue;
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::job::JobStatus;
 
-pub fn run_status(sqlite_db: &Path, lance_db: Option<&Path>, json: bool) -> Result<()> {
+use crate::commands::rpc_client;
+
+fn run_status_remote(json: bool) -> Result<()> {
+    let mut client = rpc_client::connect_daemon()?;
+    let report = client
+        .jobs_status()
+        .map_err(|e| anyhow::anyhow!("JobsStatus rpc failed: {e}"))?;
+
+    if json {
+        let recent_failures_json: Vec<serde_json::Value> = report
+            .recent_failures
+            .iter()
+            .map(|j| {
+                serde_json::json!({
+                    "job_id": j.job_id,
+                    "kind": j.kind,
+                    "ref_id": j.ref_id,
+                    "attempts": j.attempts,
+                    "last_error": j.last_error,
+                    "updated_at": j.updated_at,
+                })
+            })
+            .collect();
+        let stuck_jobs_json: Vec<serde_json::Value> = report
+            .stuck_jobs
+            .iter()
+            .map(|j| {
+                serde_json::json!({
+                    "job_id": j.job_id,
+                    "kind": j.kind,
+                    "ref_id": j.ref_id,
+                })
+            })
+            .collect();
+        let output = serde_json::json!({
+            "counts": {
+                "pending": report.pending,
+                "running": report.running,
+                "completed": report.done,
+                "failed": report.failed,
+                "ready": report.ready,
+            },
+            "recent_failures": recent_failures_json,
+            "stuck_jobs": stuck_jobs_json,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("Job Queue");
+        println!("  pending:   {}", report.pending);
+        println!("  running:   {}", report.running);
+        println!("  ready:     {}", report.ready);
+        println!("  completed: {}", report.done);
+        println!("  failed:    {}", report.failed);
+        println!();
+
+        if !report.recent_failures.is_empty() {
+            println!("Recent Failures");
+            for job in &report.recent_failures {
+                println!(
+                    "  [{:>3} attempts] {} — {}: {}",
+                    job.attempts, job.job_id, job.kind, job.ref_id
+                );
+                if let Some(ref err) = job.last_error {
+                    println!("    Error: {}", err);
+                }
+            }
+            println!();
+        }
+
+        if !report.stuck_jobs.is_empty() {
+            println!("Stuck Jobs");
+            for job in &report.stuck_jobs {
+                println!("  {} — {}", job.job_id, job.kind);
+            }
+            println!();
+        }
+
+        if report.recent_failures.is_empty() && report.stuck_jobs.is_empty() {
+            println!("No recent failures or stuck jobs.");
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_status(
+    sqlite_db: &Path,
+    lance_db: Option<&Path>,
+    json: bool,
+    remote: bool,
+) -> Result<()> {
+    if remote {
+        return run_status_remote(json);
+    }
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
 
     let pending = stores.count_jobs_by_status(&JobStatus::Pending)?;

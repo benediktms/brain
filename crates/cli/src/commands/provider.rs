@@ -8,6 +8,8 @@ use brain_lib::stores::BrainStores;
 use brain_persistence::db::crypto;
 use brain_persistence::db::providers::InsertProvider;
 
+use crate::commands::rpc_client;
+
 const VALID_PROVIDERS: &[&str] = &["anthropic", "openai"];
 
 /// `brain config provider set <name> [api_key]`
@@ -69,8 +71,31 @@ pub fn run_set(
     Ok(())
 }
 
+fn run_list_remote() -> Result<()> {
+    let mut client = rpc_client::connect_daemon()?;
+    let providers = client
+        .provider_list()
+        .map_err(|e| anyhow::anyhow!("ProviderList rpc failed: {e}"))?;
+
+    if providers.is_empty() {
+        println!("No providers configured.");
+        println!("Run `brain config provider set <anthropic|openai> <api-key>` to add one.");
+        return Ok(());
+    }
+
+    println!("Configured Providers");
+    for p in &providers {
+        println!("  {} — {} (key: {}…)", p.id, p.name, p.key_hash_prefix);
+    }
+
+    Ok(())
+}
+
 /// `brain config provider list`
-pub fn run_list(sqlite_db: &Path, lance_db: Option<&Path>) -> Result<()> {
+pub fn run_list(sqlite_db: &Path, lance_db: Option<&Path>, remote: bool) -> Result<()> {
+    if remote {
+        return run_list_remote();
+    }
     let stores = BrainStores::from_path(sqlite_db, lance_db)?;
     let providers = stores.list_providers()?;
 
