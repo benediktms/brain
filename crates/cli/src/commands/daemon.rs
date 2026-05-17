@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -8,19 +8,6 @@ pub struct Daemon {
     pid_path: PathBuf,
     log_dir: PathBuf,
     lock_path: PathBuf,
-}
-
-/// CLI-level overrides for the log sink. Fields shadow config-file values when
-/// `Some`. Applied before `init_tracing_for_daemon` in the forked child.
-#[derive(Debug, Default)]
-pub(crate) struct LogOverrides {
-    pub(crate) log_filter: Option<String>,
-    pub(crate) log_max_files: Option<u32>,
-    pub(crate) log_max_size_mb: Option<u64>,
-    /// True when `--log-max-size-mb` was explicitly supplied on the CLI.
-    /// Used to emit a warning that size-based rotation is not yet implemented.
-    pub(crate) user_set_max_size_mb: bool,
-    pub(crate) log_format: Option<String>,
 }
 
 impl Daemon {
@@ -39,8 +26,29 @@ impl Daemon {
         })
     }
 
-    /// Fork, setsid, redirect fds, write PID. Parent exits; child returns.
-    pub fn start(&self, overrides: LogOverrides) -> Result<()> {
+    /// Fork, setsid, redirect fds, write PID, then exec brain-daemon. Parent exits.
+    ///
+    /// `sqlite_db` and `lance_db` are forwarded to `brain-daemon` as CLI flags.
+    /// `socket_path` is the Unix socket `brain-daemon` should listen on.
+    ///
+    /// If `notes_path` is `Some`, the call bails immediately — single-brain
+    /// daemon mode is no longer supported. Register the project with
+    /// `brain link` and use `brain watch PATH` instead.
+    pub fn start(
+        &self,
+        notes_path: Option<&Path>,
+        sqlite_db: &Path,
+        lance_db: &Path,
+        socket_path: &Path,
+    ) -> Result<()> {
+        // Single-brain mode removed: --notes-path on `daemon start` is no longer supported.
+        if notes_path.is_some() {
+            bail!(
+                "single-brain `brain daemon start <PATH>` is no longer supported. \
+                 Register your project with `brain link` and use `brain watch PATH` instead."
+            );
+        }
+
         // One-time cleanup of legacy log paths superseded by ~/.brain/logs/.
         let brain_home = self
             .log_dir
@@ -67,12 +75,13 @@ impl Daemon {
         }
         // lock_file stays alive through start() — protects the startup
         // sequence from concurrent `brain daemon start` invocations.  The
-        // lock is released when start() returns in the child, which is fine:
-        // by then the PID file is written and the daemon is running.
+        // lock is released when the child execs into brain-daemon, which
+        // closes all inherited file descriptors that are not O_CLOEXEC.
+        // (flock locks are released on last-close of the fd in the process.)
 
         if let Some((pid, stored_mtime)) = self.read_pid_file()? {
             if self.is_alive(pid) {
-                let cur_mtime = current_exe_mtime().ok();
+                let cur_mtime = brain_daemon_mtime().ok();
                 let is_stale = match (stored_mtime, cur_mtime) {
                     (Some(stored), Some(cur)) => stored != cur,
                     _ => false,
@@ -98,21 +107,20 @@ impl Daemon {
         fs::create_dir_all(&self.log_dir)
             .with_context(|| format!("failed to create log dir {}", self.log_dir.display()))?;
 
-        // Surface the deprecation warning to the user immediately, before
-        // forking.  The in-child tracing::warn! still fires for the daemon log.
-        if overrides.user_set_max_size_mb {
-            eprintln!(
-                "warning: --log-max-size-mb is reserved for future use; current rotation is daily"
-            );
-        }
+        // Snapshot the paths as owned values so the child can use them after
+        // the fork without holding borrows across the unsafe boundary.
+        let socket_path = socket_path.to_path_buf();
+        let sqlite_db = sqlite_db.to_path_buf();
+        let lance_db = lance_db.to_path_buf();
+        let pid_path = self.pid_path.clone();
 
         let pid = unsafe { libc::fork() };
         match pid {
             -1 => bail!("fork failed: {}", std::io::Error::last_os_error()),
             0 => {
                 // Child: new session. Redirect stdin to /dev/null; stdout/stderr
-                // are left untouched — tracing-appender writes directly to the
-                // log file, bypassing fd 1/2 entirely.
+                // are left untouched — brain-daemon writes directly to the log
+                // file, bypassing fd 1/2 entirely.
                 if unsafe { libc::setsid() } == -1 {
                     bail!("setsid failed: {}", std::io::Error::last_os_error());
                 }
@@ -121,36 +129,38 @@ impl Daemon {
                 unsafe { libc::dup2(devnull.as_raw_fd() as libc::c_int, 0) };
                 drop(devnull);
 
-                // Initialize the log sink now that we are the daemon child.
-                // This MUST happen after fork — non_blocking spawns a thread.
-                // CLI flags override config-file values; RUST_LOG still wins.
-                let user_set_max_size_mb = overrides.user_set_max_size_mb;
-                let mut config = brain_lib::config::load_global_config().unwrap_or_default();
-                if let Some(v) = overrides.log_filter {
-                    config.log_filter = Some(v);
-                }
-                if let Some(v) = overrides.log_max_files {
-                    config.log_max_files = Some(v);
-                }
-                if let Some(v) = overrides.log_max_size_mb {
-                    config.log_max_size_mb = Some(v);
-                }
-                if let Some(v) = overrides.log_format {
-                    config.log_format = Some(v);
-                }
-                crate::dispatch::init_tracing_for_daemon(
-                    &config,
-                    self.log_dir.clone(),
-                    user_set_max_size_mb,
-                );
-
-                // Write PID from child (getpid is accurate post-setsid)
+                // Write PID from child (getpid is accurate post-setsid).
+                // brain-daemon will own the process from here; the mtime we
+                // store is for the brain-daemon binary so staleness detection
+                // in future `brain daemon start` invocations compares against
+                // the right binary.
                 let child_pid = unsafe { libc::getpid() };
-                let mtime_line = current_exe_mtime()
+                let mtime_line = brain_daemon_mtime()
                     .map(|m| format!("\n{m}"))
                     .unwrap_or_default();
-                fs::write(&self.pid_path, format!("{child_pid}{mtime_line}"))?;
-                Ok(())
+                fs::write(&pid_path, format!("{child_pid}{mtime_line}"))?;
+
+                // Replace this child process with brain-daemon. exec() only
+                // returns on error.
+                use std::os::unix::process::CommandExt;
+                let daemon_bin = brain_daemon_path();
+                let err = std::process::Command::new(&daemon_bin)
+                    .args([
+                        "--socket-path",
+                        &socket_path.to_string_lossy(),
+                        "--pid-file",
+                        &pid_path.to_string_lossy(),
+                        "--sqlite-db",
+                        &sqlite_db.to_string_lossy(),
+                        "--lance-db",
+                        &lance_db.to_string_lossy(),
+                    ])
+                    .exec();
+                eprintln!(
+                    "brain daemon: failed to exec {}: {err}",
+                    daemon_bin.display()
+                );
+                std::process::exit(1);
             }
             _parent => {
                 // Parent: print info and exit
@@ -192,7 +202,7 @@ impl Daemon {
     pub fn status(&self) -> Result<()> {
         match self.read_pid_file()? {
             Some((pid, stored_mtime)) if self.is_alive(pid) => {
-                let cur_mtime = current_exe_mtime().ok();
+                let cur_mtime = brain_daemon_mtime().ok();
                 let is_stale = match (stored_mtime, cur_mtime) {
                     (Some(stored), Some(cur)) => stored != cur,
                     _ => false,
@@ -298,14 +308,37 @@ pub(crate) fn kill_and_wait(pid: u32) -> bool {
     false
 }
 
-fn current_exe_mtime() -> Result<u64> {
-    let exe = std::env::current_exe().context("cannot determine executable path")?;
-    let meta = fs::metadata(&exe).context("cannot stat executable")?;
-    let mtime = meta.modified().context("cannot read executable mtime")?;
+/// Return the mtime (seconds since UNIX epoch) of the `brain-daemon` sibling
+/// binary. Used for staleness detection: if the stored mtime in the PID file
+/// differs from the on-disk binary, the running daemon is stale and should be
+/// replaced.
+fn brain_daemon_mtime() -> Result<u64> {
+    let path = brain_daemon_path();
+    let meta = fs::metadata(&path)
+        .with_context(|| format!("cannot stat brain-daemon at {}", path.display()))?;
+    let mtime = meta.modified().context("cannot read brain-daemon mtime")?;
     Ok(mtime
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs())
+}
+
+/// Resolve the path of the `brain-daemon` binary.
+///
+/// Strategy: try the directory that contains the running executable first
+/// (works for `cargo install`, cargo-dist, and Homebrew which install both
+/// binaries side-by-side). Fall back to the bare name `"brain-daemon"` so
+/// the OS PATH lookup is the last resort.
+fn brain_daemon_path() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        let candidate = parent.join("brain-daemon");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    PathBuf::from("brain-daemon")
 }
 
 #[cfg(test)]
@@ -475,17 +508,23 @@ mod tests {
     }
 
     #[test]
-    fn test_current_exe_mtime_returns_reasonable_value() {
-        let mtime = current_exe_mtime().expect("should get exe mtime");
-        // The mtime should be after 2020-01-01 (Unix timestamp 1577836800)
-        assert!(
-            mtime > 1_577_836_800,
-            "mtime {mtime} looks unreasonably old"
-        );
-        // And before some far future date (year 2100 = Unix timestamp ~4102444800)
-        assert!(
-            mtime < 4_102_444_800,
-            "mtime {mtime} looks unreasonably far in the future"
-        );
+    fn test_brain_daemon_mtime_or_fallback() {
+        // brain_daemon_path() may return a PATH-lookup fallback when the
+        // sibling binary does not exist in CI. Only assert the mtime when
+        // the resolved path actually exists on disk.
+        let path = brain_daemon_path();
+        if path.exists() {
+            let mtime = brain_daemon_mtime().expect("should get brain-daemon mtime");
+            // The mtime should be after 2020-01-01 (Unix timestamp 1577836800)
+            assert!(
+                mtime > 1_577_836_800,
+                "mtime {mtime} looks unreasonably old"
+            );
+            // And before some far future date (year 2100 = Unix timestamp ~4102444800)
+            assert!(
+                mtime < 4_102_444_800,
+                "mtime {mtime} looks unreasonably far in the future"
+            );
+        }
     }
 }

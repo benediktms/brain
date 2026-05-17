@@ -40,5 +40,4 @@ pub mod tags;
 pub mod tasks;
 #[cfg(feature = "embed")]
 pub mod vacuum;
-#[cfg(feature = "embed")]
 pub mod watch;

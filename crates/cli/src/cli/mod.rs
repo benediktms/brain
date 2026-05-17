@@ -167,14 +167,13 @@ pub(crate) enum Command {
     #[command(
         visible_alias = "w",
         long_about = "Watch a directory for changes and re-index incrementally.\n\n\
-            Performs an initial full index scan, then enters a filesystem event \
-            loop that re-indexes only the files that changed. Press Ctrl+C to stop."
+            Connects to brain-daemon (spawning it if needed) and registers the path \
+            for watching. With no path, lists all currently watched directories."
     )]
-    #[cfg(feature = "embed")]
     Watch {
-        /// Path to the notes directory
-        #[arg(default_value = ".", value_hint = ValueHint::DirPath)]
-        notes_path: PathBuf,
+        /// Path to the notes directory; omit to list current watches
+        #[arg(value_hint = ValueHint::DirPath)]
+        notes_path: Option<PathBuf>,
     },
 
     /// Manage the brain daemon (background watcher)
@@ -725,17 +724,23 @@ pub(crate) enum DaemonAction {
         #[arg(value_hint = ValueHint::DirPath)]
         notes_path: Option<PathBuf>,
         /// Override the EnvFilter directive string (e.g. "warn,brain_lib=info").
-        /// Takes precedence over config file; RUST_LOG still wins over this flag.
+        /// Currently a no-op; will be forwarded to brain-daemon when log flags
+        /// land on the daemon side.
         #[arg(long)]
         log_filter: Option<String>,
         /// Maximum number of rotating log files to keep (default: 3).
+        /// Currently a no-op; will be forwarded to brain-daemon when log flags
+        /// land on the daemon side.
         #[arg(long)]
         log_max_files: Option<u32>,
-        /// Reserved for future use; current rotation is daily. Supplying this flag emits a
-        /// startup warning. Default: 100.
+        /// Reserved for future use; current rotation is daily.
+        /// Currently a no-op; will be forwarded to brain-daemon when log flags
+        /// land on the daemon side.
         #[arg(long)]
         log_max_size_mb: Option<u64>,
         /// Log output format: "plain" (default) or "json".
+        /// Currently a no-op; will be forwarded to brain-daemon when log flags
+        /// land on the daemon side.
         #[arg(long, value_parser = ["plain", "json"])]
         log_format: Option<String>,
     },

@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::*;
-use crate::commands::daemon::{Daemon, LogOverrides};
+use crate::commands::daemon::Daemon;
 
 mod cli;
 mod commands;
@@ -58,25 +58,21 @@ fn main() -> Result<()> {
     resolve_defaults(&mut cli);
 
     if let Command::Daemon {
-        action:
-            DaemonAction::Start {
-                log_filter,
-                log_max_files,
-                log_max_size_mb,
-                log_format,
-                ..
-            },
+        action: DaemonAction::Start { notes_path, .. },
     } = &cli.command
     {
+        let socket_path = crate::commands::rpc_client::default_socket_path()?;
         let daemon = Daemon::new()?;
-        daemon.start(LogOverrides {
-            log_filter: log_filter.clone(),
-            log_max_files: *log_max_files,
-            log_max_size_mb: *log_max_size_mb,
-            user_set_max_size_mb: log_max_size_mb.is_some(),
-            log_format: log_format.clone(),
-        })?;
-        // Only the child process reaches here — parent called exit(0).
+        daemon.start(
+            notes_path.as_deref(),
+            &cli.sqlite_db,
+            &cli.lance_db,
+            &socket_path,
+        )?;
+        // The child process never reaches here — exec() replaces it with
+        // brain-daemon. The parent exits via std::process::exit(0) inside
+        // start(). This line is only reachable if start() returns an Err
+        // (e.g. notes_path bail, lock contention), which propagates up.
     }
 
     // Fork must happen before the tokio runtime is created (forking a
@@ -105,13 +101,18 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "embed")]
     #[test]
     fn parse_watch() {
         let cli = Cli::try_parse_from(["brain", "watch", "./notes"]).unwrap();
         assert!(
-            matches!(cli.command, Command::Watch { notes_path } if notes_path == Path::new("./notes"))
+            matches!(cli.command, Command::Watch { notes_path } if notes_path == Some(PathBuf::from("./notes")))
         );
+    }
+
+    #[test]
+    fn parse_watch_no_path() {
+        let cli = Cli::try_parse_from(["brain", "watch"]).unwrap();
+        assert!(matches!(cli.command, Command::Watch { notes_path: None }));
     }
 
     #[test]

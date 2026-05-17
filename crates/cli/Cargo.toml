@@ -43,19 +43,16 @@ brain-records = { path = "../brain_records" }
 brain-rpc = { path = "../brain_rpc" }
 brain-tasks = { path = "../brain_tasks" }
 tokio = { workspace = true, features = ["signal", "net"] }
-tokio-util = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { workspace = true }
-tracing-appender = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 toml = "0.8"
 libc = "0.2"
 dirs = "6"
-notify-debouncer-full = "0.7"
 blake3 = { workspace = true }
 
 [dev-dependencies]
