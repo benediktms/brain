@@ -789,6 +789,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "brain-memory"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "brain-core",
+ "brain-embedder",
+ "brain-memory",
+ "brain-persistence",
+ "brain-records",
+ "brain-retrieval",
+ "brain-tags",
+ "brain-tasks",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "brain-persistence"
 version = "0.4.1"
 dependencies = [
