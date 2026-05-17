@@ -24,15 +24,19 @@
 //!   test that constructs a client.
 
 use crate::domain::{
-    AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
-    JobsStatusReport, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
-    MemorySummarizeScopeParams, MemoryWriteEpisodeParams, MemoryWriteProcedureParams,
-    PROTOCOL_VERSION, PlanSummary, ProviderSummary, RecordsCreateParams, RecordsListParams,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, BrainsListParams,
+    DocumentSummary, JobsStatusReport, LinksAddParams, LinksForEntityParams, LinksRemoveParams,
+    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
+    MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
+    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
+    RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams, RecordsListParams,
     RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary, SagaCascadeResult,
     SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
     SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
-    TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams, WatchSummary,
+    TagsAliasesListParams, TagsReclusterParams, TaskSummary, TasksApplyEventParams,
+    TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams,
+    TasksMutateParams, TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary,
+    WireLinkSummary, WireTaskLabelSummary,
 };
 use crate::transport::Transport;
 
@@ -1127,6 +1131,321 @@ impl<T: Transport> DaemonClient<T> {
             Response::WatchList { watches } => Ok(watches),
             other => Err(RpcError::Protocol {
                 message: format!("expected WatchList in reply to WatchList, got {other:?}"),
+            }),
+        }
+    }
+
+    // ── links / records / tasks / memory / tags / brains typed methods ──
+
+    /// Add a polymorphic link edge via [`Request::LinksAdd`]. Returns
+    /// `true` if a new edge was created, `false` if the edge already
+    /// existed (idempotent insert).
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::LinksAdd`].
+    pub fn links_add(&mut self, params: LinksAddParams) -> Result<bool, RpcError> {
+        match self.call(Request::LinksAdd { params })? {
+            Response::LinksAdd { created } => Ok(created),
+            other => Err(RpcError::Protocol {
+                message: format!("expected LinksAdd in reply to LinksAdd, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Remove a polymorphic link edge via [`Request::LinksRemove`].
+    /// Returns `true` if an edge was removed, `false` if no matching
+    /// edge existed.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::LinksRemove`].
+    pub fn links_remove(&mut self, params: LinksRemoveParams) -> Result<bool, RpcError> {
+        match self.call(Request::LinksRemove { params })? {
+            Response::LinksRemove { removed } => Ok(removed),
+            other => Err(RpcError::Protocol {
+                message: format!("expected LinksRemove in reply to LinksRemove, got {other:?}"),
+            }),
+        }
+    }
+
+    /// List link edges incident on an entity via
+    /// [`Request::LinksForEntity`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::LinksForEntity`].
+    pub fn links_for_entity(
+        &mut self,
+        params: LinksForEntityParams,
+    ) -> Result<Vec<WireLinkSummary>, RpcError> {
+        match self.call(Request::LinksForEntity { params })? {
+            Response::LinksForEntity { links } => Ok(links),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected LinksForEntity in reply to LinksForEntity, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Archive a record via [`Request::RecordsArchive`]. Returns the
+    /// canonical record id, its synapse URI, and the post-archive
+    /// status string from [`Response::RecordsArchive`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::RecordsArchive`].
+    pub fn records_archive(
+        &mut self,
+        params: RecordsArchiveParams,
+    ) -> Result<(String, String, String), RpcError> {
+        match self.call(Request::RecordsArchive { params })? {
+            Response::RecordsArchive {
+                record_id,
+                uri,
+                status,
+            } => Ok((record_id, uri, status)),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected RecordsArchive in reply to RecordsArchive, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Add a link from a record to another entity via
+    /// [`Request::RecordsLinkAdd`]. Returns `true` if a new edge was
+    /// created.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::RecordsLinkAdd`].
+    pub fn records_link_add(&mut self, params: RecordsLinkParams) -> Result<bool, RpcError> {
+        match self.call(Request::RecordsLinkAdd { params })? {
+            Response::RecordsLinkAdd { created } => Ok(created),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected RecordsLinkAdd in reply to RecordsLinkAdd, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Remove a link from a record via [`Request::RecordsLinkRemove`].
+    /// Returns `true` if an edge was removed.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::RecordsLinkRemove`].
+    pub fn records_link_remove(&mut self, params: RecordsLinkParams) -> Result<bool, RpcError> {
+        match self.call(Request::RecordsLinkRemove { params })? {
+            Response::RecordsLinkRemove { removed } => Ok(removed),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected RecordsLinkRemove in reply to RecordsLinkRemove, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Add a tag to a record via [`Request::RecordsTagAdd`]. Returns
+    /// the canonical tag string (after server-side normalisation /
+    /// alias resolution).
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::RecordsTagAdd`].
+    pub fn records_tag_add(
+        &mut self,
+        record_id: String,
+        tag: String,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::RecordsTagAdd { record_id, tag })? {
+            Response::RecordsTagAdd { tag } => Ok(tag),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected RecordsTagAdd in reply to RecordsTagAdd, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Remove a tag from a record via [`Request::RecordsTagRemove`].
+    /// Returns `true` if the tag was present and removed.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::RecordsTagRemove`].
+    pub fn records_tag_remove(
+        &mut self,
+        record_id: String,
+        tag: String,
+    ) -> Result<bool, RpcError> {
+        match self.call(Request::RecordsTagRemove { record_id, tag })? {
+            Response::RecordsTagRemove { removed } => Ok(removed),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected RecordsTagRemove in reply to RecordsTagRemove, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Apply a raw task event via [`Request::TasksApplyEvent`]. Returns
+    /// the JSON result blob; callers parse it according to the event
+    /// type (the MCP surface intentionally keeps a single tool for all
+    /// task event types).
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksApplyEvent`].
+    pub fn tasks_apply_event(
+        &mut self,
+        params: TasksApplyEventParams,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::TasksApplyEvent { params })? {
+            Response::TasksApplyEvent { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TasksApplyEvent in reply to TasksApplyEvent, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Batch dependency operations via [`Request::TasksDepsBatch`].
+    /// Returns the opaque JSON result blob (shape varies per action).
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksDepsBatch`].
+    pub fn tasks_deps_batch(
+        &mut self,
+        params: TasksDepsBatchParams,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::TasksDepsBatch { params })? {
+            Response::TasksDepsBatch { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TasksDepsBatch in reply to TasksDepsBatch, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Batch label operations via [`Request::TasksLabelsBatch`].
+    /// Returns the opaque JSON result blob.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksLabelsBatch`].
+    pub fn tasks_labels_batch(
+        &mut self,
+        params: TasksLabelsBatchParams,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::TasksLabelsBatch { params })? {
+            Response::TasksLabelsBatch { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TasksLabelsBatch in reply to TasksLabelsBatch, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Return all unique labels with counts and associated task IDs via
+    /// [`Request::TasksLabelsSummary`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TasksLabelsSummary`].
+    pub fn tasks_labels_summary(
+        &mut self,
+    ) -> Result<Vec<WireTaskLabelSummary>, RpcError> {
+        match self.call(Request::TasksLabelsSummary)? {
+            Response::TasksLabelsSummary { labels } => Ok(labels),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TasksLabelsSummary in reply to TasksLabelsSummary, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Walk a `continues` thread starting from an episode or procedure
+    /// via [`Request::MemoryWalkThread`]. Returns the opaque JSON result
+    /// blob (the MCP surface keeps the shape).
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::MemoryWalkThread`].
+    pub fn memory_walk_thread(
+        &mut self,
+        params: MemoryWalkThreadParams,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::MemoryWalkThread { params })? {
+            Response::MemoryWalkThread { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected MemoryWalkThread in reply to MemoryWalkThread, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Recluster tag synonyms via [`Request::TagsRecluster`]. Returns
+    /// the opaque JSON result blob (move counts, cluster summaries,
+    /// or a dry-run preview depending on the params).
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::TagsRecluster`].
+    pub fn tags_recluster(
+        &mut self,
+        params: TagsReclusterParams,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::TagsRecluster { params })? {
+            Response::TagsRecluster { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected TagsRecluster in reply to TagsRecluster, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// List all registered brain projects via [`Request::BrainsList`].
+    /// Returns `(brains, count)` from [`Response::BrainsList`] —
+    /// `count` matches `brains.len()` and is mirrored on the wire for
+    /// CLI / MCP output parity.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::BrainsList`].
+    pub fn brains_list(
+        &mut self,
+        params: BrainsListParams,
+    ) -> Result<(Vec<WireBrainSummary>, u32), RpcError> {
+        match self.call(Request::BrainsList { params })? {
+            Response::BrainsList { brains, count } => Ok((brains, count)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected BrainsList in reply to BrainsList, got {other:?}"),
             }),
         }
     }
@@ -2851,5 +3170,330 @@ mod tests {
             Err(RpcError::Protocol { message }) => assert!(message.contains("WatchList")),
             other => panic!("expected Protocol error, got {other:?}"),
         }
+    }
+
+    // ── links / records / tasks / memory / tags / brains: round-trip tests ──
+    //
+    // Each new typed method gets one happy-path test that confirms the
+    // method (a) sends the right Request variant, (b) unwraps the matching
+    // Response variant, and (c) returns the expected payload. The Protocol-
+    // error path is identical across all of them; one representative test
+    // (`links_add_returns_protocol_error_on_wrong_response_shape`) locks
+    // that contract.
+
+    fn wire_entity(kind: &str, id: &str) -> crate::domain::WireEntityRef {
+        crate::domain::WireEntityRef {
+            kind: kind.into(),
+            id: id.into(),
+        }
+    }
+
+    #[test]
+    fn links_add_unwraps_created_flag() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::LinksAdd { .. } => Ok(Response::LinksAdd { created: true }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let created = client
+            .links_add(LinksAddParams {
+                from: wire_entity("task", "t1"),
+                to: wire_entity("record", "r1"),
+                edge_kind: "covers".into(),
+            })
+            .expect("links_add");
+        assert!(created);
+    }
+
+    #[test]
+    fn links_add_returns_protocol_error_on_wrong_response_shape() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::LinksAdd { .. } => Ok(Response::Pong),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        match client.links_add(LinksAddParams {
+            from: wire_entity("task", "t1"),
+            to: wire_entity("record", "r1"),
+            edge_kind: "covers".into(),
+        }) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("LinksAdd")),
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn links_remove_unwraps_removed_flag() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::LinksRemove { .. } => Ok(Response::LinksRemove { removed: false }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let removed = client
+            .links_remove(LinksRemoveParams {
+                from: wire_entity("task", "t1"),
+                to: wire_entity("record", "r1"),
+                edge_kind: "covers".into(),
+            })
+            .expect("links_remove");
+        assert!(!removed);
+    }
+
+    #[test]
+    fn links_for_entity_unwraps_links_vec() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::LinksForEntity { .. } => Ok(Response::LinksForEntity {
+                links: vec![WireLinkSummary {
+                    from: wire_entity("task", "t1"),
+                    to: wire_entity("record", "r1"),
+                    edge_kind: "covers".into(),
+                    created_at: "2026-05-17T12:00:00Z".into(),
+                }],
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let links = client
+            .links_for_entity(LinksForEntityParams {
+                entity: wire_entity("task", "t1"),
+                direction: "outgoing".into(),
+                limit: Some(10),
+            })
+            .expect("links_for_entity");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].edge_kind, "covers");
+    }
+
+    #[test]
+    fn records_archive_unwraps_triple() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsArchive { .. } => Ok(Response::RecordsArchive {
+                record_id: "rec_abc".into(),
+                uri: "synapse://brain/record/rec_abc".into(),
+                status: "archived".into(),
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let (id, uri, status) = client
+            .records_archive(RecordsArchiveParams {
+                record_id: "rec_abc".into(),
+                reason: Some("superseded".into()),
+            })
+            .expect("records_archive");
+        assert_eq!(id, "rec_abc");
+        assert_eq!(uri, "synapse://brain/record/rec_abc");
+        assert_eq!(status, "archived");
+    }
+
+    #[test]
+    fn records_link_add_unwraps_created_flag() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsLinkAdd { .. } => Ok(Response::RecordsLinkAdd { created: true }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let created = client
+            .records_link_add(RecordsLinkParams {
+                record_id: "rec_abc".into(),
+                target: wire_entity("task", "t1"),
+                link_kind: "covers".into(),
+            })
+            .expect("records_link_add");
+        assert!(created);
+    }
+
+    #[test]
+    fn records_link_remove_unwraps_removed_flag() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsLinkRemove { .. } => {
+                Ok(Response::RecordsLinkRemove { removed: true })
+            }
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let removed = client
+            .records_link_remove(RecordsLinkParams {
+                record_id: "rec_abc".into(),
+                target: wire_entity("task", "t1"),
+                link_kind: "covers".into(),
+            })
+            .expect("records_link_remove");
+        assert!(removed);
+    }
+
+    #[test]
+    fn records_tag_add_unwraps_canonical_tag() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsTagAdd { .. } => Ok(Response::RecordsTagAdd {
+                tag: "rust".into(),
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let canonical = client
+            .records_tag_add("rec_abc".into(), "Rust".into())
+            .expect("records_tag_add");
+        assert_eq!(canonical, "rust");
+    }
+
+    #[test]
+    fn records_tag_remove_unwraps_removed_flag() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsTagRemove { .. } => {
+                Ok(Response::RecordsTagRemove { removed: true })
+            }
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let removed = client
+            .records_tag_remove("rec_abc".into(), "rust".into())
+            .expect("records_tag_remove");
+        assert!(removed);
+    }
+
+    #[test]
+    fn tasks_apply_event_unwraps_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksApplyEvent { .. } => Ok(Response::TasksApplyEvent {
+                result_json: "{\"task_id\":\"t1\"}".into(),
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let result = client
+            .tasks_apply_event(TasksApplyEventParams {
+                event_json: serde_json::json!({"event_type": "task_created"}),
+            })
+            .expect("tasks_apply_event");
+        assert!(result.contains("task_id"));
+    }
+
+    #[test]
+    fn tasks_deps_batch_unwraps_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksDepsBatch { .. } => Ok(Response::TasksDepsBatch {
+                result_json: "{\"succeeded\":[]}".into(),
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let result = client
+            .tasks_deps_batch(TasksDepsBatchParams {
+                params_json: serde_json::json!({"action": "add", "pairs": []}),
+            })
+            .expect("tasks_deps_batch");
+        assert!(result.contains("succeeded"));
+    }
+
+    #[test]
+    fn tasks_labels_batch_unwraps_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksLabelsBatch { .. } => Ok(Response::TasksLabelsBatch {
+                result_json: "{\"updated\":0}".into(),
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let result = client
+            .tasks_labels_batch(TasksLabelsBatchParams {
+                params_json: serde_json::json!({"action": "add"}),
+            })
+            .expect("tasks_labels_batch");
+        assert!(result.contains("updated"));
+    }
+
+    #[test]
+    fn tasks_labels_summary_unwraps_labels_vec() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TasksLabelsSummary => Ok(Response::TasksLabelsSummary {
+                labels: vec![WireTaskLabelSummary {
+                    label: "urgent".into(),
+                    count: 3,
+                    task_ids: vec!["t1".into(), "t2".into(), "t3".into()],
+                }],
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let labels = client.tasks_labels_summary().expect("tasks_labels_summary");
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].count, 3);
+    }
+
+    #[test]
+    fn memory_walk_thread_unwraps_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::MemoryWalkThread { .. } => Ok(Response::MemoryWalkThread {
+                result_json: "{\"episodes\":[]}".into(),
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let result = client
+            .memory_walk_thread(MemoryWalkThreadParams {
+                params_json: serde_json::json!({"source_id": "abc"}),
+            })
+            .expect("memory_walk_thread");
+        assert!(result.contains("episodes"));
+    }
+
+    #[test]
+    fn tags_recluster_unwraps_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::TagsRecluster { .. } => Ok(Response::TagsRecluster {
+                result_json: "{\"moved\":0}".into(),
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let result = client
+            .tags_recluster(TagsReclusterParams {
+                params_json: serde_json::json!({"dry_run": true}),
+            })
+            .expect("tags_recluster");
+        assert!(result.contains("moved"));
+    }
+
+    #[test]
+    fn brains_list_unwraps_brains_and_count() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::BrainsList { .. } => Ok(Response::BrainsList {
+                brains: vec![WireBrainSummary {
+                    name: "default".into(),
+                    id: Some("abc".into()),
+                    root: "/home/user/brain".into(),
+                    aliases: vec![],
+                    extra_roots: vec![],
+                    prefix: Some("BRN".into()),
+                    archived: false,
+                }],
+                count: 1,
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let (brains, count) = client
+            .brains_list(BrainsListParams::default())
+            .expect("brains_list");
+        assert_eq!(brains.len(), 1);
+        assert_eq!(count, 1);
+        assert_eq!(brains[0].name, "default");
     }
 }
