@@ -221,6 +221,63 @@ pub enum Request {
     /// List all currently registered watch paths. Server returns
     /// [`Response::WatchList`].
     WatchList,
+
+    // ── links ────────────────────────────────────────────────────────────
+    /// Add a polymorphic link edge between two entities. Server returns
+    /// [`Response::LinksAdd`].
+    LinksAdd { params: LinksAddParams },
+    /// Remove a polymorphic link edge. Server returns
+    /// [`Response::LinksRemove`].
+    LinksRemove { params: LinksRemoveParams },
+    /// List incident link edges for an entity. Server returns
+    /// [`Response::LinksForEntity`].
+    LinksForEntity { params: LinksForEntityParams },
+
+    // ── records (mutations) ─────────────────────────────────────────────
+    /// Archive an existing record. Server returns
+    /// [`Response::RecordsArchive`].
+    RecordsArchive { params: RecordsArchiveParams },
+    /// Add a link from a record to another entity. Server returns
+    /// [`Response::RecordsLinkAdd`].
+    RecordsLinkAdd { params: RecordsLinkParams },
+    /// Remove a link from a record to another entity. Server returns
+    /// [`Response::RecordsLinkRemove`].
+    RecordsLinkRemove { params: RecordsLinkParams },
+    /// Add a tag to a record. Server returns
+    /// [`Response::RecordsTagAdd`].
+    RecordsTagAdd { record_id: String, tag: String },
+    /// Remove a tag from a record. Server returns
+    /// [`Response::RecordsTagRemove`].
+    RecordsTagRemove { record_id: String, tag: String },
+
+    // ── tasks (batch + opaque event) ────────────────────────────────────
+    /// Apply a raw task event (the MCP `tasks.apply_event` surface).
+    /// Server returns [`Response::TasksApplyEvent`].
+    TasksApplyEvent { params: TasksApplyEventParams },
+    /// Batch dependency operations (add/remove/chain/fan/clear). Server
+    /// returns [`Response::TasksDepsBatch`].
+    TasksDepsBatch { params: TasksDepsBatchParams },
+    /// Batch label operations across tasks. Server returns
+    /// [`Response::TasksLabelsBatch`].
+    TasksLabelsBatch { params: TasksLabelsBatchParams },
+    /// Return all unique labels with counts and associated task IDs.
+    /// Server returns [`Response::TasksLabelsSummary`].
+    TasksLabelsSummary,
+
+    // ── memory (DAG walk) ───────────────────────────────────────────────
+    /// Walk the `continues` thread starting from an episode or
+    /// procedure. Server returns [`Response::MemoryWalkThread`].
+    MemoryWalkThread { params: MemoryWalkThreadParams },
+
+    // ── tags (recluster) ────────────────────────────────────────────────
+    /// Recluster tag synonyms via the embedder. Server returns
+    /// [`Response::TagsRecluster`].
+    TagsRecluster { params: TagsReclusterParams },
+
+    // ── brains (enumeration) ────────────────────────────────────────────
+    /// List all registered brain projects. Server returns
+    /// [`Response::BrainsList`].
+    BrainsList { params: BrainsListParams },
 }
 
 /// Optional filter and pagination params for [`Request::TasksList`].
@@ -601,6 +658,58 @@ pub enum Response {
     WatchRemoved { path: String },
     /// Reply to [`Request::WatchList`].
     WatchList { watches: Vec<WatchSummary> },
+
+    // ── links ────────────────────────────────────────────────────────────
+    /// Reply to [`Request::LinksAdd`].
+    LinksAdd { created: bool },
+    /// Reply to [`Request::LinksRemove`].
+    LinksRemove { removed: bool },
+    /// Reply to [`Request::LinksForEntity`].
+    LinksForEntity { links: Vec<WireLinkSummary> },
+
+    // ── records (mutations) ─────────────────────────────────────────────
+    /// Reply to [`Request::RecordsArchive`].
+    RecordsArchive {
+        record_id: String,
+        uri: String,
+        status: String,
+    },
+    /// Reply to [`Request::RecordsLinkAdd`].
+    RecordsLinkAdd { created: bool },
+    /// Reply to [`Request::RecordsLinkRemove`].
+    RecordsLinkRemove { removed: bool },
+    /// Reply to [`Request::RecordsTagAdd`].
+    RecordsTagAdd { tag: String },
+    /// Reply to [`Request::RecordsTagRemove`].
+    RecordsTagRemove { removed: bool },
+
+    // ── tasks (batch + opaque event) ────────────────────────────────────
+    /// Reply to [`Request::TasksApplyEvent`]. The `result_json` mirrors
+    /// the MCP tool's JSON output.
+    TasksApplyEvent { result_json: String },
+    /// Reply to [`Request::TasksDepsBatch`]. Opaque JSON output (variable
+    /// per action).
+    TasksDepsBatch { result_json: String },
+    /// Reply to [`Request::TasksLabelsBatch`]. Opaque JSON output.
+    TasksLabelsBatch { result_json: String },
+    /// Reply to [`Request::TasksLabelsSummary`].
+    TasksLabelsSummary { labels: Vec<WireTaskLabelSummary> },
+
+    // ── memory (DAG walk) ───────────────────────────────────────────────
+    /// Reply to [`Request::MemoryWalkThread`]. Opaque JSON mirrors the
+    /// MCP tool surface.
+    MemoryWalkThread { result_json: String },
+
+    // ── tags (recluster) ────────────────────────────────────────────────
+    /// Reply to [`Request::TagsRecluster`]. Opaque JSON output.
+    TagsRecluster { result_json: String },
+
+    // ── brains (enumeration) ────────────────────────────────────────────
+    /// Reply to [`Request::BrainsList`].
+    BrainsList {
+        brains: Vec<WireBrainSummary>,
+        count: u32,
+    },
 }
 
 /// Wire-format summary of a single task.
@@ -1074,6 +1183,141 @@ pub enum RpcError {
     /// Server-side failure not covered by the more specific variants.
     #[error("{message}")]
     Unknown { message: String },
+}
+
+// ── Wire types and params for link / record-mutation / task-batch /
+// walk / recluster / brains variants ───────────────────────────────────
+
+/// Polymorphic entity reference shared by `Links*` and `Records*` link
+/// variants. `kind` is the snake-case discriminant string (`"task"`,
+/// `"record"`, `"episode"`, `"procedure"`, `"chunk"`, `"note"`)
+/// matching the brain-side `EntityKind` enum.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct WireEntityRef {
+    pub kind: String,
+    pub id: String,
+}
+
+/// Wire-format link summary returned from [`Response::LinksForEntity`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct WireLinkSummary {
+    pub from: WireEntityRef,
+    pub to: WireEntityRef,
+    pub edge_kind: String,
+    /// RFC 3339 UTC timestamp.
+    pub created_at: String,
+}
+
+/// Wire-format brain summary returned from [`Response::BrainsList`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct WireBrainSummary {
+    pub name: String,
+    pub id: Option<String>,
+    pub root: String,
+    pub aliases: Vec<String>,
+    pub extra_roots: Vec<String>,
+    pub prefix: Option<String>,
+    pub archived: bool,
+}
+
+/// Wire-format per-label histogram entry returned from
+/// [`Response::TasksLabelsSummary`]. `task_ids` carries the short
+/// prefixes used by the MCP surface; the daemon resolves canonical
+/// IDs at the boundary.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct WireTaskLabelSummary {
+    pub label: String,
+    pub count: u32,
+    pub task_ids: Vec<String>,
+}
+
+/// Wire-format params for [`Request::LinksAdd`]. `edge_kind` is one of
+/// `parent_of`, `blocks`, `covers`, `relates_to`, `see_also`,
+/// `supersedes`, `contradicts`, `continues` — DAG-validated kinds
+/// reject cycles dispatcher-side.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LinksAddParams {
+    pub from: WireEntityRef,
+    pub to: WireEntityRef,
+    pub edge_kind: String,
+}
+
+/// Wire-format params for [`Request::LinksRemove`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LinksRemoveParams {
+    pub from: WireEntityRef,
+    pub to: WireEntityRef,
+    pub edge_kind: String,
+}
+
+/// Wire-format params for [`Request::LinksForEntity`]. `direction` is
+/// one of `incoming`, `outgoing`, or `both`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LinksForEntityParams {
+    pub entity: WireEntityRef,
+    pub direction: String,
+    pub limit: Option<u32>,
+}
+
+/// Wire-format params for [`Request::RecordsArchive`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RecordsArchiveParams {
+    pub record_id: String,
+    pub reason: Option<String>,
+}
+
+/// Wire-format params shared by [`Request::RecordsLinkAdd`] and
+/// [`Request::RecordsLinkRemove`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RecordsLinkParams {
+    pub record_id: String,
+    pub target: WireEntityRef,
+    pub link_kind: String,
+}
+
+/// Wire-format params for [`Request::TasksApplyEvent`]. The body is
+/// kept opaque (`serde_json::Value`) so the multi-variant event-type
+/// union on the MCP surface does not need to be mirrored in the wire
+/// layer. The dispatcher parses and dispatches; brain_rpc just
+/// transports the raw event JSON.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TasksApplyEventParams {
+    pub event_json: serde_json::Value,
+}
+
+/// Wire-format params for [`Request::TasksDepsBatch`]. Opaque JSON to
+/// avoid mirroring the MCP tool's 5-action union (add / remove /
+/// chain / fan / clear) in the protocol layer.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TasksDepsBatchParams {
+    pub params_json: serde_json::Value,
+}
+
+/// Wire-format params for [`Request::TasksLabelsBatch`]. Opaque JSON
+/// — same rationale as [`TasksDepsBatchParams`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TasksLabelsBatchParams {
+    pub params_json: serde_json::Value,
+}
+
+/// Wire-format params for [`Request::MemoryWalkThread`]. Opaque JSON
+/// mirrors the existing `MemoryRetrieve` pattern: the daemon owns the
+/// shape, brain_rpc carries it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MemoryWalkThreadParams {
+    pub params_json: serde_json::Value,
+}
+
+/// Wire-format params for [`Request::TagsRecluster`]. Opaque JSON.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TagsReclusterParams {
+    pub params_json: serde_json::Value,
+}
+
+/// Wire-format params for [`Request::BrainsList`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct BrainsListParams {
+    pub include_archived: bool,
 }
 
 #[cfg(test)]

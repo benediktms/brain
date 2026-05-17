@@ -1951,6 +1951,57 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::WatchAdd { path } => self.handle_watch_add(path),
             Request::WatchRemove { path } => self.handle_watch_remove(path),
             Request::WatchList => self.handle_watch_list(),
+
+            // ── Stub dispatchers for the new wire variants ───────────────
+            // Real implementations land in a follow-up commit once
+            // brain_memory's per-operation modules are populated. Until
+            // then these return a structured error so the workspace
+            // compiles and existing wire variants stay untouched.
+            Request::LinksAdd { .. } => Err(RpcError::Unknown {
+                message: "LinksAdd: handler pending wire-up".into(),
+            }),
+            Request::LinksRemove { .. } => Err(RpcError::Unknown {
+                message: "LinksRemove: handler pending wire-up".into(),
+            }),
+            Request::LinksForEntity { .. } => Err(RpcError::Unknown {
+                message: "LinksForEntity: handler pending wire-up".into(),
+            }),
+            Request::RecordsArchive { .. } => Err(RpcError::Unknown {
+                message: "RecordsArchive: handler pending wire-up".into(),
+            }),
+            Request::RecordsLinkAdd { .. } => Err(RpcError::Unknown {
+                message: "RecordsLinkAdd: handler pending wire-up".into(),
+            }),
+            Request::RecordsLinkRemove { .. } => Err(RpcError::Unknown {
+                message: "RecordsLinkRemove: handler pending wire-up".into(),
+            }),
+            Request::RecordsTagAdd { .. } => Err(RpcError::Unknown {
+                message: "RecordsTagAdd: handler pending wire-up".into(),
+            }),
+            Request::RecordsTagRemove { .. } => Err(RpcError::Unknown {
+                message: "RecordsTagRemove: handler pending wire-up".into(),
+            }),
+            Request::TasksApplyEvent { .. } => Err(RpcError::Unknown {
+                message: "TasksApplyEvent: handler pending wire-up".into(),
+            }),
+            Request::TasksDepsBatch { .. } => Err(RpcError::Unknown {
+                message: "TasksDepsBatch: handler pending wire-up".into(),
+            }),
+            Request::TasksLabelsBatch { .. } => Err(RpcError::Unknown {
+                message: "TasksLabelsBatch: handler pending wire-up".into(),
+            }),
+            Request::TasksLabelsSummary => Err(RpcError::Unknown {
+                message: "TasksLabelsSummary: handler pending wire-up".into(),
+            }),
+            Request::MemoryWalkThread { .. } => Err(RpcError::Unknown {
+                message: "MemoryWalkThread: handler pending wire-up".into(),
+            }),
+            Request::TagsRecluster { .. } => Err(RpcError::Unknown {
+                message: "TagsRecluster: handler pending wire-up".into(),
+            }),
+            Request::BrainsList { .. } => Err(RpcError::Unknown {
+                message: "BrainsList: handler pending wire-up".into(),
+            }),
         }
     }
 }

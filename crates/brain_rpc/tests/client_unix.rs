@@ -119,10 +119,26 @@ fn echo_once(listener: UnixListener) {
             | Request::ProviderList
             | Request::WatchAdd { .. }
             | Request::WatchRemove { .. }
-            | Request::WatchList => {
+            | Request::WatchList
+            | Request::LinksAdd { .. }
+            | Request::LinksRemove { .. }
+            | Request::LinksForEntity { .. }
+            | Request::RecordsArchive { .. }
+            | Request::RecordsLinkAdd { .. }
+            | Request::RecordsLinkRemove { .. }
+            | Request::RecordsTagAdd { .. }
+            | Request::RecordsTagRemove { .. }
+            | Request::TasksApplyEvent { .. }
+            | Request::TasksDepsBatch { .. }
+            | Request::TasksLabelsBatch { .. }
+            | Request::TasksLabelsSummary
+            | Request::MemoryWalkThread { .. }
+            | Request::TagsRecluster { .. }
+            | Request::BrainsList { .. } => {
                 unreachable!(
                     "echo_once test server is not configured to respond to tasks_* / records_* / \
-                     sagas_* / memory_* / tags_* / jobs_* / status / provider_* / watch_* requests"
+                     sagas_* / memory_* / tags_* / jobs_* / status / provider_* / watch_* / \
+                     links_* / brains_* requests"
                 )
             }
         };
