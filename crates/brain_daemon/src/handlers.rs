@@ -31,17 +31,18 @@ use brain_rpc::{
     SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
     SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
     TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
-    TasksCreateParams, TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    TasksCreateParams, TasksLabelsBatchParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams,
 };
 use brain_sagas::{
     BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
     SagaListFilter, SagaStats,
 };
-use brain_tasks::Task;
 use brain_tasks::events::{
     DependencyPayload, EventType, LabelPayload, StatusChangedPayload, TaskCreatedPayload,
     TaskEvent, TaskStatus, TaskType, TaskUpdatedPayload,
 };
+use brain_tasks::{Task, TaskStore};
 use chrono::{DateTime, Utc};
 
 use crate::dispatcher::Dispatcher;
@@ -1997,6 +1998,97 @@ impl BrainStoresDispatcher {
         Ok(Response::BrainsList { brains, count })
     }
 
+    fn handle_tasks_labels_batch(
+        &self,
+        params: TasksLabelsBatchParams,
+    ) -> Result<Response, RpcError> {
+        // Mirrors `brain_lib::mcp::tools::task_labels_batch::Params`.
+        // Action union: add / remove / rename / purge.
+        #[derive(serde::Deserialize)]
+        struct Inner {
+            action: String,
+            #[serde(default)]
+            label: Option<String>,
+            #[serde(default)]
+            task_ids: Option<Vec<String>>,
+            #[serde(default)]
+            old_label: Option<String>,
+            #[serde(default)]
+            new_label: Option<String>,
+            #[serde(default)]
+            brain: Option<String>,
+        }
+
+        let parsed: Inner =
+            serde_json::from_value(params.params_json).map_err(|e| RpcError::Protocol {
+                message: format!("Invalid parameters: {e}"),
+            })?;
+
+        // Resolve target TaskStore. With `brain` set we open a remote
+        // rescoped store; otherwise we use the daemon's local one. The
+        // remote store is owned through this scope; the local store is
+        // borrowed from `self`. `target_tasks` ends up as `&TaskStore`
+        // regardless, so the helper signatures stay uniform.
+        let (remote_store, target_brain_name) = if let Some(b) = &parsed.brain {
+            let (bid, bname) = self
+                .stores
+                .resolve_brain(b)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("Failed to resolve brain: {e}"),
+                })?;
+            let tasks = self
+                .stores
+                .tasks
+                .with_remote_brain_id(&bid, &bname)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("Failed to open brain stores: {e}"),
+                })?;
+            (Some(tasks), bname)
+        } else {
+            (None, self.stores.brain_name.clone())
+        };
+        let target_tasks: &TaskStore = remote_store.as_ref().unwrap_or(&self.stores.tasks);
+
+        let value = match parsed.action.as_str() {
+            "add" => label_add_remove_response(
+                target_tasks,
+                parsed.label.as_deref(),
+                parsed.task_ids.as_deref(),
+                EventType::LabelAdded,
+                &target_brain_name,
+            )?,
+            "remove" => label_add_remove_response(
+                target_tasks,
+                parsed.label.as_deref(),
+                parsed.task_ids.as_deref(),
+                EventType::LabelRemoved,
+                &target_brain_name,
+            )?,
+            "rename" => label_rename_response(
+                target_tasks,
+                parsed.old_label.as_deref(),
+                parsed.new_label.as_deref(),
+                &target_brain_name,
+            )?,
+            "purge" => {
+                label_purge_response(target_tasks, parsed.label.as_deref(), &target_brain_name)?
+            }
+            other => {
+                return Err(RpcError::Protocol {
+                    message: format!(
+                        "Invalid action: '{other}'. Must be one of: add, remove, rename, purge"
+                    ),
+                });
+            }
+        };
+
+        let result_json = serde_json::to_string(&value).map_err(|e| RpcError::Protocol {
+            message: format!("serialize labels_batch response: {e}"),
+        })?;
+
+        Ok(Response::TasksLabelsBatch { result_json })
+    }
+
     fn handle_tags_recluster(&self, params: TagsReclusterParams) -> Result<Response, RpcError> {
         // Mirrors `brain_lib::mcp::tools::tags_recluster::Params` — accepts
         // an opaque JSON body to avoid mirroring the MCP tool's input
@@ -2549,9 +2641,7 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::TasksDepsBatch { .. } => Err(RpcError::Unknown {
                 message: "TasksDepsBatch: handler pending wire-up".into(),
             }),
-            Request::TasksLabelsBatch { .. } => Err(RpcError::Unknown {
-                message: "TasksLabelsBatch: handler pending wire-up".into(),
-            }),
+            Request::TasksLabelsBatch { params } => self.handle_tasks_labels_batch(params),
             Request::TasksLabelsSummary => self.handle_tasks_labels_summary(),
             Request::MemoryWalkThread { params } => self.handle_memory_walk_thread(params),
             Request::TagsRecluster { params } => self.handle_tags_recluster(params),
@@ -2733,6 +2823,222 @@ fn label_count_to_wire(label: &LabelCount) -> SagaLabelCount {
         label: label.label.clone(),
         count: label.count,
     }
+}
+
+// ───────── tasks.labels_batch helpers ───────────────────────────────
+// Pure data transforms used by `handle_tasks_labels_batch`. Free
+// functions (not methods) so the dispatcher impl block stays focused
+// on request routing.
+
+fn label_add_remove_response(
+    store: &TaskStore,
+    label: Option<&str>,
+    task_ids: Option<&[String]>,
+    event_type: EventType,
+    brain_name: &str,
+) -> Result<serde_json::Value, RpcError> {
+    let label = label.filter(|s| !s.is_empty()).ok_or(RpcError::Protocol {
+        message: "Missing required parameter: label".into(),
+    })?;
+    let task_ids = task_ids.ok_or(RpcError::Protocol {
+        message: "Missing required parameter: task_ids".into(),
+    })?;
+
+    if task_ids.is_empty() {
+        return Ok(batch_response_value(Vec::new(), Vec::new()));
+    }
+
+    let mut events = Vec::with_capacity(task_ids.len());
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for raw_id in task_ids {
+        let resolved_input = brain_lib::uri::resolve_id(raw_id);
+        match store.resolve_task_id(&resolved_input) {
+            Ok(resolved) => events.push(TaskEvent::new(
+                &resolved,
+                "mcp",
+                event_type.clone(),
+                &LabelPayload {
+                    label: label.to_string(),
+                },
+            )),
+            Err(e) => failed.push(serde_json::json!({
+                "task_id": raw_id,
+                "error": format!("{e}"),
+            })),
+        }
+    }
+
+    let results = store.append_batch(&events);
+    let mut succeeded: Vec<serde_json::Value> = Vec::new();
+    for (i, result) in results.into_iter().enumerate() {
+        let tid = &events[i].task_id;
+        let short_id = store.compact_id_or_raw(tid);
+        match result {
+            Ok(()) => {
+                let uri = brain_lib::uri::SynapseUri::for_task(brain_name, &short_id).to_string();
+                succeeded.push(serde_json::json!({ "task_id": short_id, "uri": uri }));
+            }
+            Err(e) => failed.push(serde_json::json!({
+                "task_id": short_id,
+                "error": format!("{e}"),
+            })),
+        }
+    }
+
+    Ok(batch_response_value(succeeded, failed))
+}
+
+fn label_rename_response(
+    store: &TaskStore,
+    old_label: Option<&str>,
+    new_label: Option<&str>,
+    brain_name: &str,
+) -> Result<serde_json::Value, RpcError> {
+    let old_label = old_label
+        .filter(|s| !s.is_empty())
+        .ok_or(RpcError::Protocol {
+            message: "Missing required parameter: old_label".into(),
+        })?;
+    let new_label = new_label
+        .filter(|s| !s.is_empty())
+        .ok_or(RpcError::Protocol {
+            message: "Missing required parameter: new_label".into(),
+        })?;
+
+    let task_ids = store
+        .get_task_ids_with_label(old_label)
+        .map_err(|e| RpcError::Unknown {
+            message: format!("Failed to query tasks: {e}"),
+        })?;
+
+    if task_ids.is_empty() {
+        return Ok(batch_response_value(Vec::new(), Vec::new()));
+    }
+
+    let mut events = Vec::with_capacity(task_ids.len() * 2);
+    for tid in &task_ids {
+        events.push(TaskEvent::new(
+            tid,
+            "mcp",
+            EventType::LabelRemoved,
+            &LabelPayload {
+                label: old_label.to_string(),
+            },
+        ));
+        events.push(TaskEvent::new(
+            tid,
+            "mcp",
+            EventType::LabelAdded,
+            &LabelPayload {
+                label: new_label.to_string(),
+            },
+        ));
+    }
+
+    let results = store.append_batch(&events);
+    let mut succeeded: Vec<serde_json::Value> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    // Results come in (remove, add) pairs per task — mirror the
+    // original tool's pair-failure-reporting semantics.
+    for (i, tid) in task_ids.iter().enumerate() {
+        let remove_idx = i * 2;
+        let add_idx = i * 2 + 1;
+        let short_id = store.compact_id_or_raw(tid);
+        let remove_ok = results[remove_idx].is_ok();
+        let add_ok = results[add_idx].is_ok();
+
+        if remove_ok && add_ok {
+            let uri = brain_lib::uri::SynapseUri::for_task(brain_name, &short_id).to_string();
+            succeeded.push(serde_json::json!({ "task_id": short_id, "uri": uri }));
+        } else {
+            let mut errors = Vec::new();
+            if let Err(e) = &results[remove_idx] {
+                errors.push(format!("remove: {e}"));
+            }
+            if let Err(e) = &results[add_idx] {
+                errors.push(format!("add: {e}"));
+            }
+            failed.push(serde_json::json!({
+                "task_id": short_id,
+                "error": errors.join("; "),
+            }));
+        }
+    }
+
+    Ok(batch_response_value(succeeded, failed))
+}
+
+fn label_purge_response(
+    store: &TaskStore,
+    label: Option<&str>,
+    brain_name: &str,
+) -> Result<serde_json::Value, RpcError> {
+    let label = label.filter(|s| !s.is_empty()).ok_or(RpcError::Protocol {
+        message: "Missing required parameter: label".into(),
+    })?;
+
+    let task_ids = store
+        .get_task_ids_with_label(label)
+        .map_err(|e| RpcError::Unknown {
+            message: format!("Failed to query tasks: {e}"),
+        })?;
+
+    if task_ids.is_empty() {
+        return Ok(batch_response_value(Vec::new(), Vec::new()));
+    }
+
+    let events: Vec<TaskEvent> = task_ids
+        .iter()
+        .map(|tid| {
+            TaskEvent::new(
+                tid,
+                "mcp",
+                EventType::LabelRemoved,
+                &LabelPayload {
+                    label: label.to_string(),
+                },
+            )
+        })
+        .collect();
+
+    let results = store.append_batch(&events);
+    let mut succeeded: Vec<serde_json::Value> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for (i, result) in results.into_iter().enumerate() {
+        let tid = &task_ids[i];
+        let short_id = store.compact_id_or_raw(tid);
+        match result {
+            Ok(()) => {
+                let uri = brain_lib::uri::SynapseUri::for_task(brain_name, &short_id).to_string();
+                succeeded.push(serde_json::json!({ "task_id": short_id, "uri": uri }));
+            }
+            Err(e) => failed.push(serde_json::json!({
+                "task_id": short_id,
+                "error": format!("{e}"),
+            })),
+        }
+    }
+
+    Ok(batch_response_value(succeeded, failed))
+}
+
+fn batch_response_value(
+    succeeded: Vec<serde_json::Value>,
+    failed: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let succeeded_count = succeeded.len();
+    let failed_count = failed.len();
+    serde_json::json!({
+        "succeeded": succeeded,
+        "failed": failed,
+        "summary": {
+            "succeeded": succeeded_count,
+            "failed": failed_count,
+        },
+    })
 }
 
 /// Drive a future to completion under the assumption that it never
