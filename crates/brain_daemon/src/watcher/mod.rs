@@ -2,9 +2,7 @@
 //! handles registry housekeeping.
 //!
 //! The supervisor is reachable from the RPC dispatcher via
-//! [`WatcherHandle`] (an `mpsc::Sender<ControlMessage>` wrapper). The
-//! actual `run` event loop lands in a follow-up story; this module is
-//! the skeleton + the pure helpers relocated from the cli `watch` command.
+//! [`WatcherHandle`] (an `mpsc::Sender<ControlMessage>` wrapper).
 
 pub mod control;
 pub mod handle;
