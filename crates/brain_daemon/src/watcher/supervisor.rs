@@ -52,9 +52,14 @@ impl Supervisor {
     /// Bootstrap shared resources (db, store, embedder), initialise per-brain
     /// pipelines, start the file watcher, and run the event loop until shutdown.
     ///
-    /// Replaces the legacy multi-brain entry from the cli's watch command.
+    /// `rpc_shutdown` is the handle to the RPC server's accept loop. When this
+    /// supervisor exits (signal, channel close, or error), Phase 1 of the
+    /// shutdown sequence flips that handle so the main thread's accept loop
+    /// stops on its next poll. Callers without a co-located RPC server (e.g.
+    /// the legacy `brain watch` shim) pass [`crate::ShutdownHandle::noop`].
     pub async fn bootstrap_and_run(
         control_rx: mpsc::Receiver<ControlMessage>,
+        rpc_shutdown: crate::ShutdownHandle,
     ) -> Result<ShutdownOutcome> {
         // ── 1. Load global config ────────────────────────────────────────
         let global_cfg = load_global_config()?;
@@ -305,6 +310,12 @@ impl Supervisor {
         if ipc_inode != 0 {
             brain_lib::ipc::server::remove_socket_if_owned(&sock_path, ipc_inode);
         }
+        // Flip the RPC server's accept-loop shutdown flag so the main
+        // thread exits within ACCEPT_POLL_INTERVAL. Without this the
+        // main thread keeps spinning on listener.accept() forever when
+        // SIGTERM only reaches this supervisor's tokio runtime, and the
+        // post-supervisor cleanup in `entry.rs` is never reached.
+        rpc_shutdown.request();
 
         // Phase 2: Stop watcher
         info!("shutdown phase 2/5: stopping file watcher");
@@ -410,10 +421,9 @@ impl Supervisor {
         let mut root_validation_tick = tokio::time::interval(Duration::from_secs(60));
 
         let reason = loop {
-            // Top-of-iteration metrics polling — same shape as the legacy
-            // run_multi loop. The optimizer state is shared across all
-            // brains (owned by shared_store), so one read fans out to
-            // every per-brain Metrics object.
+            // Top-of-iteration metrics polling. The optimizer state is
+            // shared across all brains (owned by shared_store), so one
+            // read fans out to every per-brain Metrics object.
             {
                 let pending = self.shared_store.optimizer().pending_count();
                 let failures = self.shared_store.optimizer().optimize_failure_count();

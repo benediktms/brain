@@ -189,9 +189,9 @@ impl Daemon {
         if kill_and_wait(pid) {
             let _ = fs::remove_file(&self.pid_path);
             // NOTE: We do NOT delete the socket file here.  The daemon's own
-            // shutdown sequence removes it (phase 1 in watch.rs).  For
-            // SIGKILL, the stale-socket detection in IpcServer::bind() handles
-            // cleanup on next start.
+            // shutdown sequence removes it (phase 1 in brain-daemon's
+            // supervisor).  For SIGKILL, the stale-socket detection in
+            // IpcServer::bind() handles cleanup on next start.
             println!("Daemon stopped");
         } else {
             eprintln!("Daemon did not exit. Kill manually: kill -9 {pid}");

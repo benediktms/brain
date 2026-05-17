@@ -49,7 +49,8 @@ pub async fn init_brain_instance(
         .collect();
 
     // Create the pipeline with the shared embedder and shared store.
-    // Schema version check is already done in run_multi() before cloning.
+    // Schema version is ensured by `bootstrap_and_run` before constructing
+    // per-brain instances; the clone here inherits an already-migrated DB.
     let mut pipeline = IndexPipeline::with_embedder(db, store, embedder).await?;
     pipeline.set_brain_id(brain_id.to_string());
 

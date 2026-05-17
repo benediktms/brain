@@ -72,9 +72,15 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     // Child process after fork — run the multi-brain supervisor.
                     // Log init already done in daemon.rs::start() post-fork.
                     let (control_tx, control_rx) = tokio::sync::mpsc::channel(64);
-                    let outcome = brain_daemon::watcher::Supervisor::bootstrap_and_run(control_rx)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("supervisor: {e}"))?;
+                    // No co-located RPC server on this path — pass a detached
+                    // shutdown handle so the supervisor's Phase 1 still
+                    // type-checks but has nothing to flip.
+                    let outcome = brain_daemon::watcher::Supervisor::bootstrap_and_run(
+                        control_rx,
+                        brain_daemon::ShutdownHandle::noop(),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("supervisor: {e}"))?;
                     drop(control_tx);
                     if !outcome.clean {
                         std::process::exit(1);

@@ -98,68 +98,29 @@ pub fn run_cli() -> std::process::ExitCode {
         config = config.with_pid_file(p);
     }
 
-    // Spawn the watcher supervisor on a dedicated thread when:
-    //   * we resolved a real DB (otherwise we'd use DefaultDispatcher),
-    //   * --no-watcher was NOT passed (used by `brain mcp` to keep
-    //     per-session subprocesses lightweight),
-    //   * and the `embed` feature is compiled in.
-    //
-    // The supervisor owns its own tokio current-thread runtime in that
-    // thread, mirroring the per-request runtime pattern memory handlers
-    // use — same `Builder::new_current_thread` foundation, different
-    // lifecycle. Keeping it off the RPC server's accept-loop thread
-    // means a hung watcher can never wedge accept().
+    // Pre-create the watcher control channel so we can wire its sender
+    // into the dispatcher before constructing the server. The supervisor
+    // thread itself is spawned inside `run_with_server` once the server
+    // is bound, because the supervisor needs the server's ShutdownHandle
+    // — its Phase 1 shutdown flips the accept loop's atomic, which is
+    // the only path that bridges SIGTERM (caught only by the supervisor's
+    // tokio runtime) into clean termination of the synchronous accept loop.
     #[cfg(feature = "embed")]
-    let (watcher_handle, supervisor_thread) = if sqlite_db.is_some() && !no_watcher {
+    let (watcher_handle, supervisor_rx) = if sqlite_db.is_some() && !no_watcher {
         let (tx, rx) = tokio::sync::mpsc::channel::<crate::watcher::ControlMessage>(64);
         let handle = std::sync::Arc::new(crate::watcher::WatcherHandle::new(tx));
-
-        let thread = match std::thread::Builder::new()
-            .name("brain-watcher".into())
-            .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        eprintln!("brain-daemon: failed to build watcher runtime: {e}");
-                        return;
-                    }
-                };
-                match rt.block_on(crate::watcher::Supervisor::bootstrap_and_run(rx)) {
-                    Ok(outcome) => {
-                        eprintln!(
-                            "brain-daemon: watcher exited cleanly (dropped_items={})",
-                            outcome.dropped_items
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("brain-daemon: watcher exited with error: {e}");
-                    }
-                }
-            }) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("brain-daemon: failed to spawn watcher thread: {e}");
-                return ExitCode::from(1);
-            }
-        };
-
-        (Some(handle), Some(thread))
+        (Some(handle), Some(rx))
     } else {
         (None, None)
     };
     #[cfg(not(feature = "embed"))]
-    let supervisor_thread: Option<std::thread::JoinHandle<()>> = None;
-    #[cfg(not(feature = "embed"))]
     let _ = no_watcher;
 
-    // Two monomorphizations of `run_server` chosen at runtime by which
+    // Two monomorphizations of `run_with_server` chosen at runtime by which
     // args were present. Keeps UnixSocketServer's generic Dispatcher
     // bound (`D: Dispatcher + Send + Sync + 'static`) clean and avoids
     // a `Box<dyn Dispatcher>` indirection in the hot path.
-    let exit_code = if let Some(sqlite_path) = sqlite_db {
+    let (exit_code, supervisor_thread) = if let Some(sqlite_path) = sqlite_db {
         let stores =
             match brain_lib::stores::BrainStores::from_path(&sqlite_path, lance_db.as_deref()) {
                 Ok(s) => s,
@@ -172,13 +133,22 @@ pub fn run_cli() -> std::process::ExitCode {
         let dispatcher = BrainStoresDispatcher::new(stores, watcher_handle.clone());
         #[cfg(not(feature = "embed"))]
         let dispatcher = BrainStoresDispatcher::new(stores);
-        run_server(&config, dispatcher, &socket_path, "BrainStoresDispatcher")
+        run_with_server(
+            &config,
+            dispatcher,
+            &socket_path,
+            "BrainStoresDispatcher",
+            #[cfg(feature = "embed")]
+            supervisor_rx,
+        )
     } else {
-        run_server(
+        run_with_server(
             &config,
             DefaultDispatcher,
             &socket_path,
             "DefaultDispatcher (Ping + Handshake only — pass --sqlite-db to enable real handlers)",
+            #[cfg(feature = "embed")]
+            None,
         )
     };
 
@@ -201,13 +171,30 @@ pub fn run_cli() -> std::process::ExitCode {
     exit_code
 }
 
+/// Bind the socket, optionally spawn the watcher supervisor (handing it the
+/// server's shutdown handle), then run the accept loop on the calling thread.
+///
+/// Returns the resulting exit code together with the supervisor's `JoinHandle`
+/// (when spawned) so the caller can drop the watcher handle and join the
+/// thread after the accept loop exits.
+///
+/// The supervisor owns its own tokio current-thread runtime in that thread,
+/// mirroring the per-request runtime pattern memory handlers use. Keeping it
+/// off the RPC server's accept-loop thread means a hung watcher can never
+/// wedge accept(). The supervisor receives the server's [`ShutdownHandle`] so
+/// its Phase 1 shutdown can flip the accept-loop's atomic — the only path
+/// that bridges SIGTERM (caught by the supervisor's tokio runtime) into
+/// termination of the synchronous accept loop.
 #[cfg(unix)]
-fn run_server<D>(
+fn run_with_server<D>(
     config: &crate::DaemonConfig,
     dispatcher: D,
     socket_path: &std::path::Path,
     dispatcher_label: &str,
-) -> std::process::ExitCode
+    #[cfg(feature = "embed")] supervisor_rx: Option<
+        tokio::sync::mpsc::Receiver<crate::watcher::ControlMessage>,
+    >,
+) -> (std::process::ExitCode, Option<std::thread::JoinHandle<()>>)
 where
     D: crate::Dispatcher + Send + Sync + 'static,
 {
@@ -217,9 +204,50 @@ where
         Ok(s) => s,
         Err(e) => {
             eprintln!("brain-daemon: failed to bind socket: {e}");
-            return ExitCode::from(1);
+            return (ExitCode::from(1), None);
         }
     };
+
+    #[cfg(feature = "embed")]
+    let supervisor_thread = supervisor_rx.and_then(|rx| {
+        let rpc_shutdown = server.shutdown_handle();
+        match std::thread::Builder::new()
+            .name("brain-watcher".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        eprintln!("brain-daemon: failed to build watcher runtime: {e}");
+                        return;
+                    }
+                };
+                match rt.block_on(crate::watcher::Supervisor::bootstrap_and_run(
+                    rx,
+                    rpc_shutdown,
+                )) {
+                    Ok(outcome) => {
+                        eprintln!(
+                            "brain-daemon: watcher exited cleanly (dropped_items={})",
+                            outcome.dropped_items
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("brain-daemon: watcher exited with error: {e}");
+                    }
+                }
+            }) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("brain-daemon: failed to spawn watcher thread: {e}");
+                None
+            }
+        }
+    });
+    #[cfg(not(feature = "embed"))]
+    let supervisor_thread: Option<std::thread::JoinHandle<()>> = None;
 
     println!(
         "brain-daemon listening on {} (dispatcher: {dispatcher_label})",
@@ -228,10 +256,10 @@ where
 
     if let Err(e) = server.run() {
         eprintln!("brain-daemon: server error: {e}");
-        return ExitCode::from(1);
+        return (ExitCode::from(1), supervisor_thread);
     }
 
-    ExitCode::SUCCESS
+    (ExitCode::SUCCESS, supervisor_thread)
 }
 
 #[cfg(unix)]
