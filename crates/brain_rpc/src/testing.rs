@@ -110,9 +110,12 @@ impl InMemoryTransport {
             | Request::TagsAliasesStatus
             | Request::JobsStatus
             | Request::BrainStatus
-            | Request::ProviderList => Err(RpcError::Unknown {
+            | Request::ProviderList
+            | Request::WatchAdd { .. }
+            | Request::WatchRemove { .. }
+            | Request::WatchList => Err(RpcError::Unknown {
                 message: "InMemoryTransport::echo does not handle tasks_* / records_* / \
-                          sagas_* / memory_* / <kind>_* requests — use \
+                          sagas_* / memory_* / <kind>_* / watch_* requests — use \
                           InMemoryTransport::new with a custom handler"
                     .into(),
             }),

@@ -4,10 +4,10 @@
 //! # Role
 //!
 //! `brain_daemon` runs the long-lived RPC server that owns the writer
-//! connection to SQLite (and, eventually, the file watcher, job
-//! scheduler, and other persistent services). Thin clients (the `brain`
-//! CLI, the `brain-mcp` MCP server) talk to it over a Unix socket using
-//! the wire protocol defined by [`brain_rpc`].
+//! connection to SQLite, the file watcher, and (eventually) the job
+//! scheduler. Thin clients (the `brain` CLI, the `brain-mcp` MCP
+//! server) talk to it over a Unix socket using the wire protocol
+//! defined by [`brain_rpc`].
 //!
 //! # Coexistence with the legacy `brain_lib::ipc::IpcServer`
 //!
@@ -26,16 +26,6 @@
 //! it the obvious replacement. Until then, both daemons can run
 //! side-by-side on their own sockets.
 //!
-//! # MVP scope (this ticket)
-//!
-//! The MVP is intentionally small: a `brain-daemon` binary that listens
-//! on a Unix socket and answers [`brain_rpc::Request::Ping`] +
-//! [`brain_rpc::Request::Handshake`]. No DB access. No file watcher.
-//! No signal handling. No real handlers backed by [`brain_lib`].
-//!
-//! See [`NOT_YET_IMPLEMENTED`] for the explicit list of deferred work
-//! and which ticket each item lives in.
-//!
 //! # Hexagonal shape
 //!
 //! Mirroring [`brain_rpc`]'s structure:
@@ -51,10 +41,11 @@
 //!
 //! # Architectural ratchet
 //!
-//! This crate's `[dependencies]` is locked to
-//! `{brain-rpc, serde, serde_json, anyhow, thiserror}` until the
-//! migration tickets land. NO `rusqlite`, `lancedb`, `candle`, or
-//! `brain_*` domain crate.
+//! `brain-rpc` stays the wire contract and must never take on storage
+//! or domain-crate deps. `brain_daemon`'s handler layer (`handlers.rs`)
+//! is allowed to depend on `brain-lib`, `brain-persistence`, and domain
+//! crates — but `rusqlite`, `lancedb`, and `candle` must NOT appear as
+//! direct deps (they enter only transitively through `brain-lib`).
 //!
 //! The port-layer files (`config.rs`, `dispatcher.rs`) must remain free
 //! of concrete I/O imports (`std::io`, `std::os`, `std::process`,
@@ -73,8 +64,6 @@
 //!   `daemon` command module.
 //! - Migrating launchd / systemd integration from the cli crate's
 //!   `daemon_service` command module.
-//! - Migrating the file watcher from the cli crate's `watch` command
-//!   module — to land inside a future `services/watch` module here.
 //! - Signal handling (`SIGTERM` graceful shutdown, `SIGHUP` config
 //!   reload — see the open daemon-bookkeeping-write issue this will
 //!   fix).
@@ -96,6 +85,9 @@ pub mod handlers;
 
 #[cfg(unix)]
 pub mod server;
+
+#[cfg(feature = "embed")]
+pub mod watcher;
 
 pub use config::DaemonConfig;
 pub use dispatcher::{DefaultDispatcher, Dispatcher};

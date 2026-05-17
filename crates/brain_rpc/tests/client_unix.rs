@@ -116,10 +116,13 @@ fn echo_once(listener: UnixListener) {
             | Request::TagsAliasesStatus
             | Request::JobsStatus
             | Request::BrainStatus
-            | Request::ProviderList => {
+            | Request::ProviderList
+            | Request::WatchAdd { .. }
+            | Request::WatchRemove { .. }
+            | Request::WatchList => {
                 unreachable!(
                     "echo_once test server is not configured to respond to tasks_* / records_* / \
-                     sagas_* / memory_* / tags_* / jobs_* / status / provider_* requests"
+                     sagas_* / memory_* / tags_* / jobs_* / status / provider_* / watch_* requests"
                 )
             }
         };

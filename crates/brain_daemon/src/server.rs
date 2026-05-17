@@ -59,6 +59,17 @@ impl ShutdownHandle {
     pub fn request(&self) {
         self.flag.store(true, Ordering::SeqCst);
     }
+
+    /// Construct a detached handle that is not wired to any server.
+    /// Useful for callers (e.g. the legacy `brain watch` shim) that
+    /// drive the supervisor without a co-located RPC server: they
+    /// still need to satisfy `bootstrap_and_run`'s signature, but
+    /// flipping the flag is a harmless no-op for them.
+    pub fn noop() -> Self {
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 /// Generic server adapter: takes a [`Dispatcher`], binds a Unix socket,

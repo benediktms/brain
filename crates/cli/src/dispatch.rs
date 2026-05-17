@@ -1,9 +1,6 @@
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::*;
@@ -18,10 +15,6 @@ fn resolve_brain_root() -> Result<Option<PathBuf>> {
     let cwd = std::env::current_dir()?;
     Ok(brain_lib::config::find_brain_root(&cwd))
 }
-
-/// Holds the `WorkerGuard` for the daemon log sink for the process lifetime.
-/// Must be set exactly once, after fork, in the child process.
-static DAEMON_LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 /// Initialize tracing for CLI (interactive) usage.
 ///
@@ -45,89 +38,6 @@ pub(crate) fn init_tracing_for_cli() -> anyhow::Result<()> {
             .init();
     }
     Ok(())
-}
-
-/// Initialize tracing for daemon usage, writing to a rotating file appender.
-///
-/// MUST be called strictly after `fork()` in the child process — the
-/// `non_blocking` writer spawns a background thread, and threads do not
-/// survive across `fork()` on Unix.
-///
-/// The returned `WorkerGuard` is stored in a process-lifetime `OnceLock`.
-/// Callers must not drop it early.
-///
-/// Under sustained log saturation, the bounded channel (default 128k lines)
-/// drops oldest entries silently — adjust `RUST_LOG` / `log_filter` if this
-/// becomes a concern.
-pub(crate) fn init_tracing_for_daemon(
-    config: &brain_lib::config::GlobalConfig,
-    log_dir: PathBuf,
-    user_set_max_size_mb: bool,
-) {
-    let filter_str = config
-        .log_filter
-        .as_deref()
-        .unwrap_or(brain_lib::config::DEFAULT_LOG_FILTER);
-
-    // RUST_LOG wins over config file.
-    let env_filter = match std::env::var("RUST_LOG") {
-        Ok(_) => EnvFilter::from_env("RUST_LOG"),
-        Err(_) => EnvFilter::new(filter_str),
-    };
-
-    let max_files = config.log_max_files.unwrap_or(3) as usize;
-    let use_json = config
-        .log_format
-        .as_deref()
-        .map(|f| f.eq_ignore_ascii_case("json"))
-        .unwrap_or(false);
-
-    let file_appender = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix("brain")
-        .filename_suffix("log")
-        .max_log_files(max_files)
-        .build(&log_dir)
-        .expect("failed to initialize rolling file appender");
-
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-
-    if use_json {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .json()
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .init();
-    }
-
-    // Store the guard for the process lifetime. If already set (should not
-    // happen in daemon flow), drop the new guard and log a warning.
-    if DAEMON_LOG_GUARD.set(guard).is_err() {
-        tracing::warn!("init_tracing_for_daemon called more than once; extra guard dropped");
-    }
-
-    // In production deployment, set BRAIN_COMPARATOR=1 to enable the dual-read
-    // comparator for the entity_links cutover soak window (brn-de1.15).
-    if std::env::var("BRAIN_COMPARATOR").is_ok_and(|v| v == "1") {
-        tracing::info!("comparator enabled — soak observability active");
-    }
-
-    // Warn when the user explicitly supplied --log-max-size-mb: size-based
-    // rotation is reserved for a future tracing-appender version; the current
-    // rotation strategy is daily and ignores size thresholds entirely.
-    if user_set_max_size_mb {
-        tracing::warn!(
-            requested_mb = ?config.log_max_size_mb,
-            "log_max_size_mb is reserved for future use; current rotation is daily and ignores size",
-        );
-    }
 }
 
 // ── async dispatch ──────────────────────────────────────────
@@ -154,28 +64,25 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
             commands::index::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db).await?
         }
         #[cfg(feature = "embed")]
-        Command::Watch { notes_path } => {
-            let outcome =
-                commands::watch::run(notes_path, cli.model_dir, cli.lance_db, cli.sqlite_db)
-                    .await?;
-            if !outcome.clean {
-                std::process::exit(1);
-            }
-        }
+        Command::Watch { notes_path } => commands::watch::run(notes_path)?,
         Command::Daemon { action } => {
             let daemon = commands::daemon::Daemon::new()?;
             match action {
                 #[cfg(feature = "embed")]
-                DaemonAction::Start { notes_path, .. } => {
-                    // Child process after fork — run watch directly.
+                DaemonAction::Start { .. } => {
+                    // Child process after fork — run the multi-brain supervisor.
                     // Log init already done in daemon.rs::start() post-fork.
-                    let outcome = match notes_path {
-                        Some(path) => {
-                            commands::watch::run(path, cli.model_dir, cli.lance_db, cli.sqlite_db)
-                                .await?
-                        }
-                        None => commands::watch::run_multi().await?,
-                    };
+                    let (control_tx, control_rx) = tokio::sync::mpsc::channel(64);
+                    // No co-located RPC server on this path — pass a detached
+                    // shutdown handle so the supervisor's Phase 1 still
+                    // type-checks but has nothing to flip.
+                    let outcome = brain_daemon::watcher::Supervisor::bootstrap_and_run(
+                        control_rx,
+                        brain_daemon::ShutdownHandle::noop(),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("supervisor: {e}"))?;
+                    drop(control_tx);
                     if !outcome.clean {
                         std::process::exit(1);
                     }

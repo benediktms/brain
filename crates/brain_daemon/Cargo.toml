@@ -17,6 +17,15 @@ default = []
 # downstream consumers. Mirrors the test-utils pattern from brain-rpc /
 # brain-tasks / brain-sagas.
 test-utils = []
+# Activates the file-watcher supervisor module + its transitive deps.
+# Off by default to keep the daemon's dep graph lean when only RPC dispatch is needed
+# (e.g. for hosts that don't need file watching).
+embed = [
+    "brain-lib/embed",
+    "dep:notify-debouncer-full",
+    "dep:tokio-util",
+    "dep:tracing",
+]
 
 [[bin]]
 name = "brain-daemon"
@@ -55,6 +64,12 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
+# Optional deps activated by the `embed` feature. Both are only used by
+# the `watcher` supervisor module (file-watching + debounce, cancellation
+# token plumbing for shutdown).
+notify-debouncer-full = { version = "0.7", optional = true }
+tokio-util = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

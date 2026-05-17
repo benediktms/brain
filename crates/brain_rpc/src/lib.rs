@@ -62,7 +62,7 @@ pub use domain::{
     SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
     SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
     TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams,
+    TasksTransferParams, TasksUpdateParams, WatchSummary,
 };
 pub use transport::Transport;
 

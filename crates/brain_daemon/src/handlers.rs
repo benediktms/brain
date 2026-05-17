@@ -65,14 +65,25 @@ pub struct BrainStoresDispatcher {
     /// call from `self.stores.brain_home` so a daemon launched without
     /// the embedder model on disk still answers everything else.
     mcp_ctx: OnceLock<Arc<brain_lib::mcp::McpContext>>,
+    /// Handle to the file-watcher supervisor. `None` when the daemon was
+    /// started without a supervisor (e.g. no `--watch-dir` flag). Used
+    /// by the `WatchAdd` / `WatchRemove` / `WatchList` request handlers
+    /// to send `ControlMessage`s over the mpsc channel.
+    #[cfg(feature = "embed")]
+    watcher: Option<Arc<crate::watcher::WatcherHandle>>,
 }
 
 impl BrainStoresDispatcher {
-    pub fn new(stores: BrainStores) -> Self {
+    pub fn new(
+        stores: BrainStores,
+        #[cfg(feature = "embed")] watcher: Option<Arc<crate::watcher::WatcherHandle>>,
+    ) -> Self {
         Self {
             stores,
             runtime: OnceLock::new(),
             mcp_ctx: OnceLock::new(),
+            #[cfg(feature = "embed")]
+            watcher,
         }
     }
 
@@ -1758,6 +1769,102 @@ impl BrainStoresDispatcher {
 
         Ok(Response::ProviderList { providers: wire })
     }
+
+    // ── file-watcher handlers ────────────────────────────────────────────────
+
+    #[cfg(feature = "embed")]
+    fn handle_watch_add(&self, path: String) -> Result<Response, RpcError> {
+        let handle = self
+            .watcher
+            .as_ref()
+            .ok_or_else(|| RpcError::Unknown {
+                message: "watcher not running in this daemon".into(),
+            })?
+            .clone();
+        let runtime = self.runtime()?;
+        let outcome =
+            runtime
+                .block_on(handle.add(path.clone()))
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("watch add: {e}"),
+                })?;
+        Ok(Response::WatchAdded {
+            path,
+            brain_name: outcome.brain_name,
+        })
+    }
+
+    #[cfg(not(feature = "embed"))]
+    fn handle_watch_add(&self, _path: String) -> Result<Response, RpcError> {
+        Err(RpcError::Unknown {
+            message: "this daemon was built without the embed feature".into(),
+        })
+    }
+
+    #[cfg(feature = "embed")]
+    fn handle_watch_remove(&self, path: String) -> Result<Response, RpcError> {
+        let handle = self
+            .watcher
+            .as_ref()
+            .ok_or_else(|| RpcError::Unknown {
+                message: "watcher not running in this daemon".into(),
+            })?
+            .clone();
+        let runtime = self.runtime()?;
+        runtime
+            .block_on(handle.remove(path.clone()))
+            .map_err(|e| RpcError::Unknown {
+                message: format!("watch remove: {e}"),
+            })?;
+        Ok(Response::WatchRemoved { path })
+    }
+
+    #[cfg(not(feature = "embed"))]
+    fn handle_watch_remove(&self, _path: String) -> Result<Response, RpcError> {
+        Err(RpcError::Unknown {
+            message: "this daemon was built without the embed feature".into(),
+        })
+    }
+
+    #[cfg(feature = "embed")]
+    fn handle_watch_list(&self) -> Result<Response, RpcError> {
+        let handle = self
+            .watcher
+            .as_ref()
+            .ok_or_else(|| RpcError::Unknown {
+                message: "watcher not running in this daemon".into(),
+            })?
+            .clone();
+        let runtime = self.runtime()?;
+        let entries = runtime
+            .block_on(handle.list())
+            .map_err(|e| RpcError::Unknown {
+                message: format!("watch list: {e}"),
+            })?;
+        let watches = entries.into_iter().map(Self::watch_to_summary).collect();
+        Ok(Response::WatchList { watches })
+    }
+
+    #[cfg(not(feature = "embed"))]
+    fn handle_watch_list(&self) -> Result<Response, RpcError> {
+        Err(RpcError::Unknown {
+            message: "this daemon was built without the embed feature".into(),
+        })
+    }
+
+    /// Map a supervisor-internal [`crate::watcher::control::WatchEntry`]
+    /// onto the wire-format [`brain_rpc::WatchSummary`]. Mirrors the
+    /// `task_to_summary` pattern — if the internal type gains fields,
+    /// this is the explicit decision point for what reaches the wire.
+    #[cfg(feature = "embed")]
+    fn watch_to_summary(entry: crate::watcher::control::WatchEntry) -> brain_rpc::WatchSummary {
+        brain_rpc::WatchSummary {
+            brain_name: entry.brain_name,
+            brain_id: entry.brain_id,
+            note_dir: entry.note_dir,
+            watching: entry.watching,
+        }
+    }
 }
 
 /// Convert the wire-format `importance_millis` (0..=1000) into the
@@ -1841,6 +1948,9 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::JobsStatus => self.handle_jobs_status(),
             Request::BrainStatus => self.handle_brain_status(),
             Request::ProviderList => self.handle_provider_list(),
+            Request::WatchAdd { path } => self.handle_watch_add(path),
+            Request::WatchRemove { path } => self.handle_watch_remove(path),
+            Request::WatchList => self.handle_watch_list(),
         }
     }
 }
@@ -2055,7 +2165,11 @@ mod tests {
 
     fn dispatcher_with_empty_store() -> (tempfile::TempDir, BrainStoresDispatcher) {
         let (tmp, stores) = BrainStores::in_memory().expect("in_memory stores");
-        (tmp, BrainStoresDispatcher::new(stores))
+        #[cfg(feature = "embed")]
+        let dispatcher = BrainStoresDispatcher::new(stores, None);
+        #[cfg(not(feature = "embed"))]
+        let dispatcher = BrainStoresDispatcher::new(stores);
+        (tmp, dispatcher)
     }
 
     #[test]
