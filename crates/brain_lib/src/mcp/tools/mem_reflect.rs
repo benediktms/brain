@@ -84,11 +84,11 @@ impl McpTool for MemReflect {
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            let params: brain_memory::reflect::ReflectParams =
-                match serde_json::from_value(params) {
-                    Ok(p) => p,
-                    Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
-                };
+            let params: brain_memory::reflect::ReflectParams = match serde_json::from_value(params)
+            {
+                Ok(p) => p,
+                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            };
 
             let sem_ctx = brain_memory::context::SemanticContext {
                 db: ctx.stores.inner_db(),
@@ -107,7 +107,9 @@ impl McpTool for MemReflect {
                 Err(BrainCoreError::Parse(msg)) => ToolCallResult::error(msg),
                 // Embedding errors surface as the tasks-only-mode
                 // "memory unavailable" message.
-                Err(BrainCoreError::Embedding(_)) => ToolCallResult::error(super::MEMORY_UNAVAILABLE),
+                Err(BrainCoreError::Embedding(_)) => {
+                    ToolCallResult::error(super::MEMORY_UNAVAILABLE)
+                }
                 Err(e) => ToolCallResult::error(format!("Reflect failed: {e}")),
             }
         })

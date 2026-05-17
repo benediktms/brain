@@ -55,10 +55,7 @@ pub struct ReflectParams {
 
 /// Dispatch on `params.mode`. Returns a `Parse`-typed error for an
 /// unknown mode string so the MCP wrapper can surface it verbatim.
-pub async fn run_as_json(
-    ctx: &SemanticContext<'_>,
-    params: ReflectParams,
-) -> Result<Value> {
+pub async fn run_as_json(ctx: &SemanticContext<'_>, params: ReflectParams) -> Result<Value> {
     match params.mode.as_str() {
         "prepare" => prepare_as_json(ctx, params).await,
         "commit" => commit_as_json(ctx, params),
@@ -71,10 +68,7 @@ pub async fn run_as_json(
 /// Prepare mode: load episodes for the requested brain scope, run
 /// the retrieval pipeline for additional source chunks, and shape the
 /// MCP wire envelope.
-pub async fn prepare_as_json(
-    ctx: &SemanticContext<'_>,
-    params: ReflectParams,
-) -> Result<Value> {
+pub async fn prepare_as_json(ctx: &SemanticContext<'_>, params: ReflectParams) -> Result<Value> {
     let store = ctx
         .store
         .ok_or_else(|| BrainCoreError::Embedding(MEMORY_UNAVAILABLE.into()))?;
@@ -102,14 +96,16 @@ pub async fn prepare_as_json(
     } else {
         let brain_ids: Vec<String> = params.brains.clone();
         ctx.db
-            .with_read_conn(move |conn| {
-                summaries::list_episodes_multi_brain(conn, 10, &brain_ids)
-            })
+            .with_read_conn(move |conn| summaries::list_episodes_multi_brain(conn, 10, &brain_ids))
             .into_brain_core()?
     };
 
     let reflect_result = pipeline
-        .reflect_with_episodes(params.topic.clone(), params.budget_tokens as usize, episodes)
+        .reflect_with_episodes(
+            params.topic.clone(),
+            params.budget_tokens as usize,
+            episodes,
+        )
         .await?;
 
     let episode_sources: Vec<Value> = reflect_result
