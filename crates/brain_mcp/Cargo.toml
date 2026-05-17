@@ -1,0 +1,29 @@
+[package]
+name = "brain-mcp"
+version.workspace = true
+edition.workspace = true
+
+# Architectural ratchet: brain_mcp is the MCP-protocol-facing crate that
+# emerged from saga-5df's final extraction step. The acceptance gate is
+# that brain_mcp owns ZERO direct rusqlite / lance / candle / brain_<domain>
+# dependencies — it is a thin client of brain_rpc::DaemonClient.
+#
+# Tool bodies in this crate parse params, issue a `DaemonClient.<typed>(...)`
+# call, and shape the JSON envelope. All storage and search work happens
+# behind the wire in `brain_daemon`. Adding rusqlite or any brain_<domain>
+# dep here is the anti-pattern the architecture test gates against.
+
+[features]
+default = []
+
+[dependencies]
+brain-rpc = { path = "../brain_rpc" }
+brain-core = { path = "../brain_core" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "io-std", "io-util", "macros", "sync"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

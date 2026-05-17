@@ -791,6 +791,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "brain-mcp"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "brain-core",
+ "brain-rpc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "brain-memory"
 version = "0.4.1"
 dependencies = [
