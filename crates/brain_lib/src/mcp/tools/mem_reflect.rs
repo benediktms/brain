@@ -1,219 +1,15 @@
-use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 
-use serde::Deserialize;
+use brain_core::error::BrainCoreError;
 use serde_json::{Value, json};
 
 use crate::mcp::McpContext;
 use crate::mcp::protocol::{ToolCallResult, ToolDefinition};
 
-use crate::uri::SynapseUri;
-
 use super::{McpTool, json_response};
 
-#[derive(Deserialize)]
-struct Params {
-    #[serde(default = "default_mode")]
-    mode: String,
-    // --- prepare fields ---
-    #[serde(default)]
-    topic: String,
-    #[serde(default = "default_budget")]
-    budget_tokens: u64,
-    /// Brain names/IDs to include. Empty = current brain only.
-    /// "all" = all brains.
-    #[serde(default)]
-    brains: Vec<String>,
-    // --- commit fields ---
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    content: String,
-    #[serde(default)]
-    source_ids: Vec<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-    importance: Option<f64>,
-}
-
-fn default_mode() -> String {
-    "prepare".to_string()
-}
-
-fn default_budget() -> u64 {
-    2000
-}
-
 pub(super) struct MemReflect;
-
-impl MemReflect {
-    /// Prepare mode: retrieve source material for reflection.
-    async fn prepare(params: Params, ctx: &McpContext) -> ToolCallResult {
-        let Some(store) = ctx.store() else {
-            return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
-        };
-        let Some(embedder) = ctx.embedder() else {
-            return ToolCallResult::error(super::MEMORY_UNAVAILABLE);
-        };
-
-        if params.topic.is_empty() {
-            return ToolCallResult::error("'topic' is required for prepare mode");
-        }
-
-        let pipeline = ctx.stores.query_pipeline(store, embedder, &ctx.metrics);
-
-        // Determine episode scope from `brains` parameter.
-        // Note: the summaries table does not yet carry a brain_id column.
-        // Until a schema migration adds it, episode listing is global.
-        // The brains parameter is accepted but scoping is a no-op until
-        // brain_persistence adds brain_id support to the summaries table.
-        let episodes = if params.brains.is_empty() {
-            match ctx.stores.list_episodes(10, ctx.brain_id()) {
-                Ok(rows) => rows,
-                Err(e) => {
-                    return ToolCallResult::error(format!("Failed to list episodes: {e}"));
-                }
-            }
-        } else if params.brains.iter().any(|b| b == "all") {
-            match ctx.stores.list_episodes(10, "") {
-                Ok(rows) => rows,
-                Err(e) => {
-                    return ToolCallResult::error(format!("Failed to list episodes: {e}"));
-                }
-            }
-        } else {
-            let brain_ids: Vec<String> = params.brains.clone();
-            match ctx.stores.list_episodes_multi_brain(10, &brain_ids) {
-                Ok(rows) => rows,
-                Err(e) => {
-                    return ToolCallResult::error(format!(
-                        "Failed to list episodes for requested brains: {e}"
-                    ));
-                }
-            }
-        };
-
-        let reflect_result = match pipeline
-            .reflect_with_episodes(
-                params.topic.clone(),
-                params.budget_tokens as usize,
-                episodes,
-            )
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => return ToolCallResult::error(format!("Reflect failed: {e}")),
-        };
-
-        let episode_sources: Vec<Value> = reflect_result
-            .episodes
-            .iter()
-            .map(|ep| {
-                json!({
-                    "type": "episode",
-                    "summary_id": ep.summary_id,
-                    "title": ep.title,
-                    "content": ep.content,
-                    "tags": ep.tags,
-                    "importance": ep.importance,
-                })
-            })
-            .collect();
-
-        let related_chunks_json: Vec<Value> = reflect_result
-            .search_result
-            .results
-            .iter()
-            .map(|stub| {
-                json!({
-                    "memory_id": stub.memory_id,
-                    "title": stub.title,
-                    "summary": stub.summary_2sent,
-                    "score": stub.hybrid_score,
-                    "file_path": stub.file_path,
-                    "heading_path": stub.heading_path,
-                })
-            })
-            .collect();
-
-        let response = json!({
-            "mode": "prepare",
-            "topic": reflect_result.topic,
-            "budget_tokens": reflect_result.budget_tokens,
-            "source_count": episode_sources.len(),
-            "episodes": episode_sources,
-            "related_chunks": {
-                "budget_tokens": reflect_result.search_result.budget_tokens,
-                "used_tokens_est": reflect_result.search_result.used_tokens_est,
-                "result_count": reflect_result.search_result.num_results,
-                "total_available": reflect_result.search_result.total_available,
-                "results": related_chunks_json,
-            },
-        });
-
-        json_response(&response)
-    }
-
-    /// Commit mode: store a synthesized reflection linked to its source IDs.
-    async fn commit(params: Params, ctx: &McpContext) -> ToolCallResult {
-        if params.title.is_empty() {
-            return ToolCallResult::error("'title' is required for commit mode");
-        }
-        if params.content.is_empty() {
-            return ToolCallResult::error("'content' is required for commit mode");
-        }
-        if params.source_ids.is_empty() {
-            return ToolCallResult::error("'source_ids' is required for commit mode");
-        }
-
-        // Finding 6: clamp importance to [0.0, 1.0].
-        let importance = params.importance.unwrap_or(1.0).clamp(0.0, 1.0);
-
-        // Finding 5: batch source_id validation — single round-trip.
-        let source_ids = params.source_ids.clone();
-        let found = match ctx.stores.get_summaries_by_ids(&source_ids) {
-            Ok(rows) => rows,
-            Err(e) => {
-                return ToolCallResult::error(format!("Failed to validate source_ids: {e}"));
-            }
-        };
-        let found_ids: HashSet<&str> = found.iter().map(|r| r.summary_id.as_str()).collect();
-        for id in &source_ids {
-            if !found_ids.contains(id.as_str()) {
-                return ToolCallResult::error(format!("source_id not found: {id}"));
-            }
-        }
-
-        // Store the reflection in SQLite.
-        let summary_id = match ctx.stores.store_reflection(
-            &params.title,
-            &params.content,
-            &source_ids,
-            &params.tags,
-            importance,
-            ctx.brain_id(),
-        ) {
-            Ok(id) => id,
-            Err(e) => {
-                return ToolCallResult::error(format!("Failed to store reflection: {e}"));
-            }
-        };
-
-        let uri = SynapseUri::for_reflection(ctx.brain_name(), &summary_id).to_string();
-        let response = json!({
-            "mode": "commit",
-            "status": "stored",
-            "summary_id": summary_id,
-            "uri": uri,
-            "title": params.title,
-            "source_count": source_ids.len(),
-            "importance": importance,
-        });
-
-        json_response(&response)
-    }
-}
 
 impl McpTool for MemReflect {
     fn name(&self) -> &'static str {
@@ -288,19 +84,31 @@ impl McpTool for MemReflect {
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            let params: Params = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            let params: brain_memory::reflect::ReflectParams =
+                match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+                };
+
+            let sem_ctx = brain_memory::context::SemanticContext {
+                db: ctx.stores.inner_db(),
+                brain_id: ctx.brain_id(),
+                brain_name: ctx.brain_name(),
+                store: ctx.store(),
+                embedder: ctx.embedder(),
+                metrics: &ctx.metrics,
             };
 
-            // Finding 4: explicit mode dispatch with error on unknown values.
-            match params.mode.as_str() {
-                "prepare" => Self::prepare(params, ctx).await,
-                "commit" => Self::commit(params, ctx).await,
-                _ => ToolCallResult::error(format!(
-                    "Invalid mode: '{}'. Must be 'prepare' or 'commit'",
-                    params.mode
-                )),
+            match brain_memory::reflect::run_as_json(&sem_ctx, params).await {
+                Ok(v) => json_response(&v),
+                // Parse-typed errors carry the validation message
+                // verbatim — the MCP wire contract preserves the
+                // original strings byte-identical.
+                Err(BrainCoreError::Parse(msg)) => ToolCallResult::error(msg),
+                // Embedding errors surface as the tasks-only-mode
+                // "memory unavailable" message.
+                Err(BrainCoreError::Embedding(_)) => ToolCallResult::error(super::MEMORY_UNAVAILABLE),
+                Err(e) => ToolCallResult::error(format!("Reflect failed: {e}")),
             }
         })
     }
