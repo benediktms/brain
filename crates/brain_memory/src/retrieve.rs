@@ -93,6 +93,9 @@ pub type FederatedBrain = (String, String, Option<StoreReader>);
 /// Parse a `time_scope` string like `"7d"` or `"24h"` into a Unix
 /// timestamp (now minus the duration). Returns `None` for malformed
 /// input — callers may then fall back to an explicit `time_after`.
+///
+/// Only non-negative magnitudes are accepted; `"-7d"` returns `None`
+/// rather than a future timestamp.
 fn parse_time_scope(scope: &str) -> Option<i64> {
     let scope = scope.trim();
     if scope.is_empty() {
@@ -105,10 +108,10 @@ fn parse_time_scope(scope: &str) -> Option<i64> {
     } else {
         return None;
     };
-    let n: i64 = num_str.trim().parse().ok()?;
-    let seconds = match unit {
-        "d" => n * 86_400,
-        "h" => n * 3_600,
+    let n: u64 = num_str.trim().parse().ok()?;
+    let seconds: i64 = match unit {
+        "d" => n.checked_mul(86_400)?.try_into().ok()?,
+        "h" => n.checked_mul(3_600)?.try_into().ok()?,
         _ => return None,
     };
     Some(now_ts() - seconds)
