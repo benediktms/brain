@@ -36,7 +36,10 @@ fn first_sentence_from_text(text: &str) -> Option<String> {
     let sentence = if let Some(pos) = content.find(". ") {
         &content[..=pos]
     } else if content.ends_with('.') {
-        content
+        // Cap single-sentence-with-period chunks at 200 chars to match the
+        // newline branch — keeps the capsule bounded for long single sentences.
+        let end = content.len().min(200);
+        &content[..end]
     } else {
         let end = content.find('\n').unwrap_or_else(|| content.len().min(200));
         &content[..end]
