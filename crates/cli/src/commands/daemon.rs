@@ -345,8 +345,12 @@ fn brain_daemon_mtime() -> Result<u64> {
 ///
 /// Strategy: try the directory that contains the running executable first
 /// (works for `cargo install`, cargo-dist, and Homebrew which install both
-/// binaries side-by-side). Fall back to the bare name `"brain-daemon"` so
-/// the OS PATH lookup is the last resort.
+/// binaries side-by-side). Fall back to scanning `$PATH` for a concrete
+/// candidate so callers stat'ing the result (staleness checks, mtime
+/// comparisons) see a real file rather than a bare name. The bare name
+/// `"brain-daemon"` is only returned when no candidate exists anywhere —
+/// `exec()` will still PATH-resolve it at spawn time, but `fs::metadata`
+/// won't, so anyone stat'ing the result must expect that case.
 fn brain_daemon_path() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
@@ -356,6 +360,16 @@ fn brain_daemon_path() -> PathBuf {
             return candidate;
         }
     }
+
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join("brain-daemon");
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+
     PathBuf::from("brain-daemon")
 }
 
