@@ -73,12 +73,20 @@ pub fn run_cli() -> std::process::ExitCode {
         return ExitCode::from(2);
     };
 
-    // If --sqlite-db / --lance-db were not supplied, derive them from
-    // $BRAIN_HOME (or $HOME/.brain/ if BRAIN_HOME is unset). This lets
-    // `connect_or_spawn` auto-start the daemon without needing to
-    // forward explicit DB paths through the spawner.
+    // If --sqlite-db was not supplied, derive a default from $BRAIN_HOME
+    // (or $HOME/.brain/ if BRAIN_HOME is unset) — but only when the
+    // resolved file actually exists. This lets `connect_or_spawn` auto-
+    // start the daemon against a real install without forwarding DB
+    // paths through the spawner, while leaving test sandboxes and
+    // fresh-install setups in DefaultDispatcher mode (which never
+    // touches the DB).
     let brain_home = resolve_brain_home();
-    let sqlite_db = sqlite_db.or_else(|| brain_home.as_ref().map(|h| h.join("brain.db")));
+    let sqlite_db = sqlite_db.or_else(|| {
+        brain_home
+            .as_ref()
+            .map(|h| h.join("brain.db"))
+            .filter(|p| p.exists())
+    });
     let lance_db = lance_db.or_else(|| brain_home.as_ref().map(|h| h.join("lancedb")));
 
     let mut config = DaemonConfig::new(&socket_path);
