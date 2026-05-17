@@ -24,8 +24,10 @@
 //!   test that constructs a client.
 
 use crate::domain::{
-    PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksCreateParams, TasksListParams,
-    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
+    PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
+    RpcError, SnapshotSummary, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams,
 };
 use crate::transport::Transport;
 
@@ -335,6 +337,281 @@ impl<T: Transport> DaemonClient<T> {
             Response::TasksTransfer { task, event_id } => Ok((task, event_id)),
             other => Err(RpcError::Protocol {
                 message: format!("expected TasksTransfer in reply to TasksTransfer, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Run an integrity verification pass over the records object
+    /// store. Returns the wire-format [`RecordsVerifyReport`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::RecordsVerify`].
+    pub fn records_verify(&mut self) -> Result<RecordsVerifyReport, RpcError> {
+        match self.call(Request::RecordsVerify)? {
+            Response::RecordsVerify { report } => Ok(report),
+            other => Err(RpcError::Protocol {
+                message: format!("expected RecordsVerify in reply to RecordsVerify, got {other:?}"),
+            }),
+        }
+    }
+
+    /// List analysis records via [`Request::AnalysesList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::AnalysesList`].
+    pub fn analyses_list(
+        &mut self,
+        params: RecordsListParams,
+    ) -> Result<Vec<AnalysisSummary>, RpcError> {
+        match self.call(Request::AnalysesList { params })? {
+            Response::AnalysesList { records } => Ok(records),
+            other => Err(RpcError::Protocol {
+                message: format!("expected AnalysesList in reply to AnalysesList, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Fetch a single analysis record by ID. Returns `None` when not found.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::AnalysesShow`].
+    pub fn analyses_show(&mut self, id: String) -> Result<Option<AnalysisSummary>, RpcError> {
+        match self.call(Request::AnalysesShow { id })? {
+            Response::AnalysesShow { record } => Ok(record),
+            other => Err(RpcError::Protocol {
+                message: format!("expected AnalysesShow in reply to AnalysesShow, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Create a new analysis record. Returns the summary plus the
+    /// stored blob's content hash and size.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::AnalysesCreate`].
+    pub fn analyses_create(
+        &mut self,
+        params: RecordsCreateParams,
+    ) -> Result<(AnalysisSummary, String, u64), RpcError> {
+        match self.call(Request::AnalysesCreate { params })? {
+            Response::AnalysesCreate {
+                record,
+                content_hash,
+                size,
+            } => Ok((record, content_hash, size)),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected AnalysesCreate in reply to AnalysesCreate, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// List artifact records (cross-kind read view) via
+    /// [`Request::ArtifactsList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::ArtifactsList`].
+    pub fn artifacts_list(
+        &mut self,
+        params: ArtifactsListParams,
+    ) -> Result<Vec<ArtifactSummary>, RpcError> {
+        match self.call(Request::ArtifactsList { params })? {
+            Response::ArtifactsList { records } => Ok(records),
+            other => Err(RpcError::Protocol {
+                message: format!("expected ArtifactsList in reply to ArtifactsList, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Fetch a single artifact record by ID. Returns `None` when not found.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::ArtifactsShow`].
+    pub fn artifacts_show(&mut self, id: String) -> Result<Option<ArtifactSummary>, RpcError> {
+        match self.call(Request::ArtifactsShow { id })? {
+            Response::ArtifactsShow { record } => Ok(record),
+            other => Err(RpcError::Protocol {
+                message: format!("expected ArtifactsShow in reply to ArtifactsShow, got {other:?}"),
+            }),
+        }
+    }
+
+    /// List document records via [`Request::DocumentsList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::DocumentsList`].
+    pub fn documents_list(
+        &mut self,
+        params: RecordsListParams,
+    ) -> Result<Vec<DocumentSummary>, RpcError> {
+        match self.call(Request::DocumentsList { params })? {
+            Response::DocumentsList { records } => Ok(records),
+            other => Err(RpcError::Protocol {
+                message: format!("expected DocumentsList in reply to DocumentsList, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Fetch a single document record by ID. Returns `None` when not found.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::DocumentsShow`].
+    pub fn documents_show(&mut self, id: String) -> Result<Option<DocumentSummary>, RpcError> {
+        match self.call(Request::DocumentsShow { id })? {
+            Response::DocumentsShow { record } => Ok(record),
+            other => Err(RpcError::Protocol {
+                message: format!("expected DocumentsShow in reply to DocumentsShow, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Create a new document record.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::DocumentsCreate`].
+    pub fn documents_create(
+        &mut self,
+        params: RecordsCreateParams,
+    ) -> Result<(DocumentSummary, String, u64), RpcError> {
+        match self.call(Request::DocumentsCreate { params })? {
+            Response::DocumentsCreate {
+                record,
+                content_hash,
+                size,
+            } => Ok((record, content_hash, size)),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected DocumentsCreate in reply to DocumentsCreate, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// List plan records via [`Request::PlansList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::PlansList`].
+    pub fn plans_list(&mut self, params: RecordsListParams) -> Result<Vec<PlanSummary>, RpcError> {
+        match self.call(Request::PlansList { params })? {
+            Response::PlansList { records } => Ok(records),
+            other => Err(RpcError::Protocol {
+                message: format!("expected PlansList in reply to PlansList, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Fetch a single plan record by ID. Returns `None` when not found.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::PlansShow`].
+    pub fn plans_show(&mut self, id: String) -> Result<Option<PlanSummary>, RpcError> {
+        match self.call(Request::PlansShow { id })? {
+            Response::PlansShow { record } => Ok(record),
+            other => Err(RpcError::Protocol {
+                message: format!("expected PlansShow in reply to PlansShow, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Create a new plan record.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::PlansCreate`].
+    pub fn plans_create(
+        &mut self,
+        params: RecordsCreateParams,
+    ) -> Result<(PlanSummary, String, u64), RpcError> {
+        match self.call(Request::PlansCreate { params })? {
+            Response::PlansCreate {
+                record,
+                content_hash,
+                size,
+            } => Ok((record, content_hash, size)),
+            other => Err(RpcError::Protocol {
+                message: format!("expected PlansCreate in reply to PlansCreate, got {other:?}"),
+            }),
+        }
+    }
+
+    /// List snapshot records via [`Request::SnapshotsList`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SnapshotsList`].
+    pub fn snapshots_list(
+        &mut self,
+        params: RecordsListParams,
+    ) -> Result<Vec<SnapshotSummary>, RpcError> {
+        match self.call(Request::SnapshotsList { params })? {
+            Response::SnapshotsList { records } => Ok(records),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SnapshotsList in reply to SnapshotsList, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Fetch a single snapshot record by ID. Returns `None` when not found.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SnapshotsShow`].
+    pub fn snapshots_show(&mut self, id: String) -> Result<Option<SnapshotSummary>, RpcError> {
+        match self.call(Request::SnapshotsShow { id })? {
+            Response::SnapshotsShow { record } => Ok(record),
+            other => Err(RpcError::Protocol {
+                message: format!("expected SnapshotsShow in reply to SnapshotsShow, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Create (save) a new snapshot record. Mirrors
+    /// `brain snapshots save`.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::SnapshotsCreate`].
+    pub fn snapshots_create(
+        &mut self,
+        params: RecordsCreateParams,
+    ) -> Result<(SnapshotSummary, String, u64), RpcError> {
+        match self.call(Request::SnapshotsCreate { params })? {
+            Response::SnapshotsCreate {
+                record,
+                content_hash,
+                size,
+            } => Ok((record, content_hash, size)),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected SnapshotsCreate in reply to SnapshotsCreate, got {other:?}"
+                ),
             }),
         }
     }
@@ -954,6 +1231,424 @@ mod tests {
             Err(RpcError::Protocol { message }) => {
                 assert!(message.contains("TasksTransfer"));
             }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── records_verify ─────────────────────────────────────────
+
+    #[test]
+    fn records_verify_returns_report() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsVerify => Ok(Response::RecordsVerify {
+                report: RecordsVerifyReport {
+                    clean: true,
+                    records_checked: 1,
+                    blobs_checked: 1,
+                    missing: 0,
+                    corrupt: 0,
+                    orphans: 0,
+                    stale_flags: 0,
+                },
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let report = client.records_verify().expect("records_verify");
+        assert!(report.clean);
+        assert_eq!(report.records_checked, 1);
+    }
+
+    #[test]
+    fn records_verify_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.records_verify() {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("RecordsVerify"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── analyses ───────────────────────────────────────────────
+
+    fn sample_analysis_summary() -> AnalysisSummary {
+        AnalysisSummary {
+            record_id: "BRN-01J".into(),
+            title: "title".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    fn sample_records_create_params() -> RecordsCreateParams {
+        RecordsCreateParams {
+            title: "t".into(),
+            description: None,
+            body: b"x".to_vec(),
+            media_type: Some("text/plain".into()),
+            task_id: None,
+            tags: vec![],
+            brain: None,
+        }
+    }
+
+    #[test]
+    fn analyses_list_returns_records() {
+        let want = vec![sample_analysis_summary()];
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::AnalysesList { .. } => Ok(Response::AnalysesList {
+                    records: want_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .analyses_list(RecordsListParams::default())
+            .expect("analyses_list");
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn analyses_list_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.analyses_list(RecordsListParams::default()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("AnalysesList")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn analyses_show_returns_some_payload() {
+        let want = sample_analysis_summary();
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::AnalysesShow { .. } => Ok(Response::AnalysesShow {
+                    record: Some(want_clone.clone()),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.analyses_show("BRN-01J".into()).expect("show");
+        assert_eq!(got, Some(want));
+    }
+
+    #[test]
+    fn analyses_show_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.analyses_show("x".into()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("AnalysesShow")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn analyses_create_returns_summary_and_hash() {
+        let summary = sample_analysis_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::AnalysesCreate { .. } => Ok(Response::AnalysesCreate {
+                    record: summary_clone.clone(),
+                    content_hash: "h".into(),
+                    size: 1,
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (got, hash, size) = client
+            .analyses_create(sample_records_create_params())
+            .expect("create");
+        assert_eq!(got, summary);
+        assert_eq!(hash, "h");
+        assert_eq!(size, 1);
+    }
+
+    #[test]
+    fn analyses_create_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.analyses_create(sample_records_create_params()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("AnalysesCreate")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── artifacts ──────────────────────────────────────────────
+
+    fn sample_artifact_summary() -> ArtifactSummary {
+        ArtifactSummary {
+            record_id: "BRN-01J".into(),
+            title: "t".into(),
+            kind: "document".into(),
+            status: "active".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    #[test]
+    fn artifacts_list_returns_records() {
+        let want = vec![sample_artifact_summary()];
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::ArtifactsList { .. } => Ok(Response::ArtifactsList {
+                    records: want_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .artifacts_list(ArtifactsListParams::default())
+            .expect("artifacts_list");
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn artifacts_list_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.artifacts_list(ArtifactsListParams::default()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("ArtifactsList")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn artifacts_show_returns_some_payload() {
+        let want = sample_artifact_summary();
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::ArtifactsShow { .. } => Ok(Response::ArtifactsShow {
+                    record: Some(want_clone.clone()),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.artifacts_show("BRN-01J".into()).expect("show");
+        assert_eq!(got, Some(want));
+    }
+
+    #[test]
+    fn artifacts_show_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.artifacts_show("x".into()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("ArtifactsShow")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── documents ──────────────────────────────────────────────
+
+    fn sample_document_summary() -> DocumentSummary {
+        DocumentSummary {
+            record_id: "BRN-01J".into(),
+            title: "doc".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    #[test]
+    fn documents_list_returns_records() {
+        let want = vec![sample_document_summary()];
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::DocumentsList { .. } => Ok(Response::DocumentsList {
+                    records: want_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .documents_list(RecordsListParams::default())
+            .expect("documents_list");
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn documents_show_returns_some_payload() {
+        let want = sample_document_summary();
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::DocumentsShow { .. } => Ok(Response::DocumentsShow {
+                    record: Some(want_clone.clone()),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.documents_show("BRN-01J".into()).expect("show");
+        assert_eq!(got, Some(want));
+    }
+
+    #[test]
+    fn documents_create_returns_summary_and_hash() {
+        let summary = sample_document_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::DocumentsCreate { .. } => Ok(Response::DocumentsCreate {
+                    record: summary_clone.clone(),
+                    content_hash: "h".into(),
+                    size: 1,
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (got, hash, size) = client
+            .documents_create(sample_records_create_params())
+            .expect("create");
+        assert_eq!(got, summary);
+        assert_eq!(hash, "h");
+        assert_eq!(size, 1);
+    }
+
+    #[test]
+    fn documents_create_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.documents_create(sample_records_create_params()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("DocumentsCreate")),
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    // ── plans ──────────────────────────────────────────────────
+
+    fn sample_plan_summary() -> PlanSummary {
+        PlanSummary {
+            record_id: "BRN-01J".into(),
+            title: "plan".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    #[test]
+    fn plans_list_returns_records() {
+        let want = vec![sample_plan_summary()];
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::PlansList { .. } => Ok(Response::PlansList {
+                    records: want_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .plans_list(RecordsListParams::default())
+            .expect("plans_list");
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn plans_show_returns_some_payload() {
+        let want = sample_plan_summary();
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::PlansShow { .. } => Ok(Response::PlansShow {
+                    record: Some(want_clone.clone()),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.plans_show("BRN-01J".into()).expect("show");
+        assert_eq!(got, Some(want));
+    }
+
+    #[test]
+    fn plans_create_returns_summary_and_hash() {
+        let summary = sample_plan_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::PlansCreate { .. } => Ok(Response::PlansCreate {
+                    record: summary_clone.clone(),
+                    content_hash: "h".into(),
+                    size: 1,
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (got, hash, size) = client
+            .plans_create(sample_records_create_params())
+            .expect("create");
+        assert_eq!(got, summary);
+        assert_eq!(hash, "h");
+        assert_eq!(size, 1);
+    }
+
+    // ── snapshots ──────────────────────────────────────────────
+
+    fn sample_snapshot_summary() -> SnapshotSummary {
+        SnapshotSummary {
+            record_id: "BRN-01J".into(),
+            title: "snap".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    #[test]
+    fn snapshots_list_returns_records() {
+        let want = vec![sample_snapshot_summary()];
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SnapshotsList { .. } => Ok(Response::SnapshotsList {
+                    records: want_clone.clone(),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client
+            .snapshots_list(RecordsListParams::default())
+            .expect("snapshots_list");
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn snapshots_show_returns_some_payload() {
+        let want = sample_snapshot_summary();
+        let want_clone = want.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SnapshotsShow { .. } => Ok(Response::SnapshotsShow {
+                    record: Some(want_clone.clone()),
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let got = client.snapshots_show("BRN-01J".into()).expect("show");
+        assert_eq!(got, Some(want));
+    }
+
+    #[test]
+    fn snapshots_create_returns_summary_and_hash() {
+        let summary = sample_snapshot_summary();
+        let summary_clone = summary.clone();
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(move |req| match req {
+                Request::SnapshotsCreate { .. } => Ok(Response::SnapshotsCreate {
+                    record: summary_clone.clone(),
+                    content_hash: "h".into(),
+                    size: 1,
+                }),
+                _ => panic!("unexpected request: {req:?}"),
+            }));
+        let (got, hash, size) = client
+            .snapshots_create(sample_records_create_params())
+            .expect("create");
+        assert_eq!(got, summary);
+        assert_eq!(hash, "h");
+        assert_eq!(size, 1);
+    }
+
+    #[test]
+    fn snapshots_create_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.snapshots_create(sample_records_create_params()) {
+            Err(RpcError::Protocol { message }) => assert!(message.contains("SnapshotsCreate")),
             other => panic!("expected Protocol, got {other:?}"),
         }
     }

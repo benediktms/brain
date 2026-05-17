@@ -39,10 +39,12 @@ brain-rpc = { path = "../brain_rpc" }
 brain-lib = { path = "../brain_lib", default-features = false }
 brain-persistence = { path = "../brain_persistence" }
 brain-tasks = { path = "../brain_tasks" }
+brain-records = { path = "../brain_records" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -39,5 +39,9 @@ pub(crate) enum AnalysesAction {
         /// Target brain name or ID (writes to current brain if omitted)
         #[arg(long)]
         brain: Option<String>,
+
+        /// Run against the daemon via RPC instead of opening the DB directly
+        #[arg(long)]
+        remote: bool,
     },
 }

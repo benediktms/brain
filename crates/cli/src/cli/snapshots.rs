@@ -37,6 +37,10 @@ pub(crate) enum SnapshotsAction {
         /// Target brain name or ID (writes to current brain if omitted)
         #[arg(long)]
         brain: Option<String>,
+
+        /// Run against the daemon via RPC instead of opening the DB directly
+        #[arg(long)]
+        remote: bool,
     },
 
     /// List snapshots
@@ -52,6 +56,10 @@ pub(crate) enum SnapshotsAction {
         /// Maximum results
         #[arg(long, default_value = "50")]
         limit: usize,
+
+        /// Run against the daemon via RPC instead of opening the DB directly
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Show details for a specific snapshot

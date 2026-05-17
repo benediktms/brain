@@ -53,8 +53,10 @@ pub mod testing;
 
 pub use client::DaemonClient;
 pub use domain::{
-    PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksCreateParams, TasksListParams,
-    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
+    PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
+    RpcError, SnapshotSummary, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams,
 };
 pub use transport::Transport;
 

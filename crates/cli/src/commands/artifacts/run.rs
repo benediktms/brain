@@ -9,6 +9,7 @@ use serde_json::json;
 use brain_lib::stores::BrainStores;
 use brain_records::{RecordKind, RecordQuery, RecordStatus};
 
+use crate::commands::rpc_client;
 use crate::markdown_table::MarkdownTable;
 
 // -- shared context --
@@ -58,9 +59,52 @@ pub struct ListParams {
     pub tag: Option<String>,
     pub status: String,
     pub limit: usize,
+    pub remote: bool,
+}
+
+fn list_remote(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
+    let wire_params = brain_rpc::ArtifactsListParams {
+        kind: params.kind.clone(),
+        tag: params.tag.clone(),
+        status: Some(params.status.clone()),
+        limit: Some(params.limit as u32),
+    };
+
+    let mut client = rpc_client::connect_daemon()?;
+    let artifacts = client
+        .artifacts_list(wire_params)
+        .map_err(|e| anyhow::anyhow!("ArtifactsList rpc failed: {e}"))?;
+
+    if ctx.json {
+        let out = json!({ "artifacts": artifacts, "count": artifacts.len() });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        if artifacts.is_empty() {
+            println!("No artifacts found.");
+            return Ok(());
+        }
+        let mut table = MarkdownTable::new(vec!["ID", "TITLE", "KIND", "STATUS", "CREATED"]);
+        for a in &artifacts {
+            table.add_row(vec![
+                a.record_id.clone(),
+                a.title.clone(),
+                a.kind.clone(),
+                a.status.clone(),
+                a.created_at.clone(),
+            ]);
+        }
+        print!("{table}");
+        println!();
+        println!("{} artifact(s) shown", artifacts.len());
+    }
+
+    Ok(())
 }
 
 pub fn list(ctx: &ArtifactCtx, params: &ListParams) -> Result<()> {
+    if params.remote {
+        return list_remote(ctx, params);
+    }
     let query = RecordQuery {
         kind: params.kind.as_deref().map(RecordKind::from),
         status: Some(

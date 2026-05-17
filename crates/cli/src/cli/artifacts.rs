@@ -21,6 +21,10 @@ pub(crate) enum ArtifactsAction {
         /// Maximum results
         #[arg(long, default_value = "50")]
         limit: usize,
+
+        /// Run against the daemon via RPC instead of opening the DB directly
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Show details for a specific artifact

@@ -78,8 +78,26 @@ fn echo_once(listener: UnixListener) {
             | Request::TasksRemoveDep { .. }
             | Request::TasksAddLabel { .. }
             | Request::TasksRemoveLabel { .. }
-            | Request::TasksTransfer { .. } => {
-                unreachable!("echo_once test server is not configured to respond to tasks_*")
+            | Request::TasksTransfer { .. }
+            | Request::RecordsVerify
+            | Request::AnalysesList { .. }
+            | Request::AnalysesShow { .. }
+            | Request::AnalysesCreate { .. }
+            | Request::ArtifactsList { .. }
+            | Request::ArtifactsShow { .. }
+            | Request::DocumentsList { .. }
+            | Request::DocumentsShow { .. }
+            | Request::DocumentsCreate { .. }
+            | Request::PlansList { .. }
+            | Request::PlansShow { .. }
+            | Request::PlansCreate { .. }
+            | Request::SnapshotsList { .. }
+            | Request::SnapshotsShow { .. }
+            | Request::SnapshotsCreate { .. } => {
+                unreachable!(
+                    "echo_once test server is not configured to respond to tasks_* / records_* / \
+                     <kind>_* requests"
+                )
             }
         };
         let mut payload = serde_json::to_vec(&resp).expect("serialize response");

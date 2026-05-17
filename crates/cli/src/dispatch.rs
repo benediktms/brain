@@ -775,6 +775,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     media_type,
                     brain,
+                    remote,
                 } => {
                     commands::snapshots::run::save(
                         &ctx,
@@ -787,11 +788,25 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags: tag,
                             media_type,
                             brain,
+                            remote,
                         },
                     )?;
                 }
-                SnapshotsAction::List { tag, status, limit } => {
-                    commands::snapshots::run::list(&ctx, &ListParams { tag, status, limit })?;
+                SnapshotsAction::List {
+                    tag,
+                    status,
+                    limit,
+                    remote,
+                } => {
+                    commands::snapshots::run::list(
+                        &ctx,
+                        &ListParams {
+                            tag,
+                            status,
+                            limit,
+                            remote,
+                        },
+                    )?;
                 }
                 SnapshotsAction::Get { id } => {
                     commands::snapshots::run::get(&ctx, &id)?;
@@ -830,6 +845,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     status,
                     limit,
+                    remote,
                 } => {
                     commands::artifacts::run::list(
                         &ctx,
@@ -838,6 +854,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tag,
                             status,
                             limit,
+                            remote,
                         },
                     )?;
                 }
@@ -885,6 +902,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     media_type,
                     brain,
+                    remote,
                 } => {
                     commands::documents::run::create(
                         &ctx,
@@ -898,6 +916,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags: tag,
                             media_type,
                             brain,
+                            remote,
                         },
                     )?;
                 }
@@ -920,6 +939,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     media_type,
                     brain,
+                    remote,
                 } => {
                     commands::analyses::run::create(
                         &ctx,
@@ -933,6 +953,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags: tag,
                             media_type,
                             brain,
+                            remote,
                         },
                     )?;
                 }
@@ -952,6 +973,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tag,
                     media_type,
                     brain,
+                    remote,
                 } => {
                     commands::plans::run::create(
                         &ctx,
@@ -965,6 +987,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                             tags: tag,
                             media_type,
                             brain,
+                            remote,
                         },
                     )?;
                 }
@@ -1043,8 +1066,8 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 action => {
                     let ctx = RecordsCtx::new(&cli.sqlite_db, Some(&cli.lance_db), json)?;
                     match action {
-                        RecordsAction::Verify { verbose } => {
-                            commands::records::verify(&ctx, verbose)?;
+                        RecordsAction::Verify { verbose, remote } => {
+                            commands::records::verify(&ctx, verbose, remote)?;
                         }
                         RecordsAction::Gc { dry_run } => {
                             commands::records::gc(&ctx, dry_run)?;

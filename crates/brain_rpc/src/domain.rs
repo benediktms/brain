@@ -79,6 +79,52 @@ pub enum Request {
     /// Transfer a task to a different brain (preserve-ID move). Server
     /// returns [`Response::TasksTransfer`] with the updated summary.
     TasksTransfer { params: TasksTransferParams },
+    /// Run an integrity verification pass over the records object
+    /// store. Server returns [`Response::RecordsVerify`] with a
+    /// [`RecordsVerifyReport`] mirroring the JSON output that
+    /// `brain records verify --json` produces locally.
+    RecordsVerify,
+    /// List analysis records. Server returns
+    /// [`Response::AnalysesList`].
+    AnalysesList { params: RecordsListParams },
+    /// Fetch a single analysis record by ID. Server returns
+    /// [`Response::AnalysesShow`] with `None` when not found.
+    AnalysesShow { id: String },
+    /// Create a new analysis record. Server returns
+    /// [`Response::AnalysesCreate`].
+    AnalysesCreate { params: RecordsCreateParams },
+    /// List artifact records (cross-kind read view). Server returns
+    /// [`Response::ArtifactsList`].
+    ArtifactsList { params: ArtifactsListParams },
+    /// Fetch a single artifact record by ID. Server returns
+    /// [`Response::ArtifactsShow`] with `None` when not found.
+    ArtifactsShow { id: String },
+    /// List document records. Server returns
+    /// [`Response::DocumentsList`].
+    DocumentsList { params: RecordsListParams },
+    /// Fetch a single document record by ID. Server returns
+    /// [`Response::DocumentsShow`] with `None` when not found.
+    DocumentsShow { id: String },
+    /// Create a new document record. Server returns
+    /// [`Response::DocumentsCreate`].
+    DocumentsCreate { params: RecordsCreateParams },
+    /// List plan records. Server returns [`Response::PlansList`].
+    PlansList { params: RecordsListParams },
+    /// Fetch a single plan record by ID. Server returns
+    /// [`Response::PlansShow`] with `None` when not found.
+    PlansShow { id: String },
+    /// Create a new plan record. Server returns
+    /// [`Response::PlansCreate`].
+    PlansCreate { params: RecordsCreateParams },
+    /// List snapshot records. Server returns
+    /// [`Response::SnapshotsList`].
+    SnapshotsList { params: RecordsListParams },
+    /// Fetch a single snapshot record by ID. Server returns
+    /// [`Response::SnapshotsShow`] with `None` when not found.
+    SnapshotsShow { id: String },
+    /// Create (save) a new snapshot record. Server returns
+    /// [`Response::SnapshotsCreate`]. Mirrors `brain snapshots save`.
+    SnapshotsCreate { params: RecordsCreateParams },
 }
 
 /// Optional filter and pagination params for [`Request::TasksList`].
@@ -153,6 +199,71 @@ pub struct TasksTransferParams {
     pub target_brain: String,
 }
 
+/// Optional filter and pagination params shared across
+/// [`Request::AnalysesList`], [`Request::DocumentsList`],
+/// [`Request::PlansList`], and [`Request::SnapshotsList`].
+///
+/// Mirrors the user-facing flags of the equivalent `brain <kind> list`
+/// commands. Fields not relevant to a given kind (`task_id` on snapshots
+/// for instance) are accepted on the wire but the dispatcher will
+/// surface a Protocol error when they cannot be honoured.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct RecordsListParams {
+    /// Filter by single tag (exact match).
+    pub tag: Option<String>,
+    /// Filter by linked task ID.
+    pub task_id: Option<String>,
+    /// Filter by status string ("active", "archived"). `None` accepts
+    /// the default ("active") chosen by the dispatcher.
+    pub status: Option<String>,
+    /// Maximum result count. `None` = server default.
+    pub limit: Option<u32>,
+}
+
+/// Optional filter and pagination params for [`Request::ArtifactsList`].
+///
+/// Artifacts are a cross-kind read view, so this struct adds a `kind`
+/// filter over [`RecordsListParams`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct ArtifactsListParams {
+    /// Filter by record kind (e.g. `"document"`, `"plan"`,
+    /// `"snapshot"`, `"analysis"`, or any custom kind string).
+    pub kind: Option<String>,
+    /// Filter by single tag (exact match).
+    pub tag: Option<String>,
+    /// Filter by status string ("active", "archived").
+    pub status: Option<String>,
+    /// Maximum result count.
+    pub limit: Option<u32>,
+}
+
+/// Wire-format params for record-creation operations
+/// ([`Request::AnalysesCreate`], [`Request::DocumentsCreate`],
+/// [`Request::PlansCreate`], [`Request::SnapshotsCreate`]).
+///
+/// `body` carries the raw payload bytes — the daemon writes them to the
+/// object store (compressing past threshold) at the boundary. The wire
+/// shape keeps payload-source negotiation (`--file` vs `--stdin` vs
+/// `--text`) on the CLI side; what crosses the wire is always a
+/// resolved byte buffer.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct RecordsCreateParams {
+    pub title: String,
+    pub description: Option<String>,
+    /// Raw payload bytes. Serializes as a JSON array of integers; in
+    /// practice the wire is local Unix sockets so the encoding cost
+    /// is acceptable. A future ticket may add a base64 encoding for
+    /// remote transports.
+    pub body: Vec<u8>,
+    pub media_type: Option<String>,
+    pub task_id: Option<String>,
+    pub tags: Vec<String>,
+    /// Optional target brain name or ID. `None` writes to the
+    /// daemon's local scope.
+    pub brain: Option<String>,
+}
+
 /// A server-originated reply to a [`Request`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -185,6 +296,52 @@ pub enum Response {
     TasksLabelRemoved { event_id: String },
     /// Reply to [`Request::TasksTransfer`].
     TasksTransfer { task: TaskSummary, event_id: String },
+    /// Reply to [`Request::RecordsVerify`].
+    RecordsVerify { report: RecordsVerifyReport },
+    /// Reply to [`Request::AnalysesList`].
+    AnalysesList { records: Vec<AnalysisSummary> },
+    /// Reply to [`Request::AnalysesShow`]. `record` is `None` when not found.
+    AnalysesShow { record: Option<AnalysisSummary> },
+    /// Reply to [`Request::AnalysesCreate`].
+    AnalysesCreate {
+        record: AnalysisSummary,
+        content_hash: String,
+        size: u64,
+    },
+    /// Reply to [`Request::ArtifactsList`].
+    ArtifactsList { records: Vec<ArtifactSummary> },
+    /// Reply to [`Request::ArtifactsShow`]. `record` is `None` when not found.
+    ArtifactsShow { record: Option<ArtifactSummary> },
+    /// Reply to [`Request::DocumentsList`].
+    DocumentsList { records: Vec<DocumentSummary> },
+    /// Reply to [`Request::DocumentsShow`]. `record` is `None` when not found.
+    DocumentsShow { record: Option<DocumentSummary> },
+    /// Reply to [`Request::DocumentsCreate`].
+    DocumentsCreate {
+        record: DocumentSummary,
+        content_hash: String,
+        size: u64,
+    },
+    /// Reply to [`Request::PlansList`].
+    PlansList { records: Vec<PlanSummary> },
+    /// Reply to [`Request::PlansShow`]. `record` is `None` when not found.
+    PlansShow { record: Option<PlanSummary> },
+    /// Reply to [`Request::PlansCreate`].
+    PlansCreate {
+        record: PlanSummary,
+        content_hash: String,
+        size: u64,
+    },
+    /// Reply to [`Request::SnapshotsList`].
+    SnapshotsList { records: Vec<SnapshotSummary> },
+    /// Reply to [`Request::SnapshotsShow`]. `record` is `None` when not found.
+    SnapshotsShow { record: Option<SnapshotSummary> },
+    /// Reply to [`Request::SnapshotsCreate`].
+    SnapshotsCreate {
+        record: SnapshotSummary,
+        content_hash: String,
+        size: u64,
+    },
 }
 
 /// Wire-format summary of a single task.
@@ -210,6 +367,97 @@ pub struct TaskSummary {
     /// Priority: 0=critical, 1=high, 2=medium, 3=low, 4=backlog.
     pub priority: u8,
     /// Brain identifier the task belongs to ("" for unscoped).
+    pub brain_id: String,
+}
+
+/// Wire-format integrity report returned by [`Response::RecordsVerify`].
+///
+/// Mirrors the JSON output produced by the local `brain records verify
+/// --json` code path: counts of each finding category plus the totals.
+/// Detailed per-record findings are not surfaced on the wire today —
+/// the verbose CLI rendering is a local-only feature.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RecordsVerifyReport {
+    /// `true` iff every count below is zero.
+    pub clean: bool,
+    /// Total records inspected during the verification pass.
+    pub records_checked: u64,
+    /// Total blobs inspected during the verification pass.
+    pub blobs_checked: u64,
+    /// Number of records whose referenced blob is missing from the
+    /// object store.
+    pub missing: u64,
+    /// Number of blobs whose stored bytes do not match the expected
+    /// BLAKE3 hash.
+    pub corrupt: u64,
+    /// Number of blobs in the object store not referenced by any
+    /// record.
+    pub orphans: u64,
+    /// Number of records flagged `payload_available=false` whose blob
+    /// nonetheless still exists on disk.
+    pub stale_flags: u64,
+}
+
+/// Wire-format summary of an analysis record.
+///
+/// Mirrors but does not re-use `brain_records::Record` — see module
+/// rustdoc for the anti-corruption-layer rationale.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AnalysisSummary {
+    /// Stable record ID (e.g. "BRN-01J…"). User-visible identifier.
+    pub record_id: String,
+    /// Record title.
+    pub title: String,
+    /// ISO 8601 / RFC 3339 timestamp when the record was created.
+    pub created_at: String,
+    /// Brain identifier the record belongs to ("" for unscoped).
+    pub brain_id: String,
+}
+
+/// Wire-format summary of an artifact record.
+///
+/// Artifacts are the cross-kind read view over all record kinds, so
+/// the summary surfaces `kind` and `status` alongside the common
+/// identity fields.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactSummary {
+    pub record_id: String,
+    pub title: String,
+    /// Record kind string ("document", "analysis", "plan", "snapshot",
+    /// or any custom kind). Stringly-typed on the wire so adding a new
+    /// kind server-side does not break older clients.
+    pub kind: String,
+    /// Lifecycle status string ("active", "archived", or any forward-
+    /// compatible value).
+    pub status: String,
+    pub created_at: String,
+    pub brain_id: String,
+}
+
+/// Wire-format summary of a document record.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DocumentSummary {
+    pub record_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub brain_id: String,
+}
+
+/// Wire-format summary of a plan record.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PlanSummary {
+    pub record_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub brain_id: String,
+}
+
+/// Wire-format summary of a snapshot record.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotSummary {
+    pub record_id: String,
+    pub title: String,
+    pub created_at: String,
     pub brain_id: String,
 }
 
@@ -879,6 +1127,501 @@ mod tests {
         let res = Response::TasksTransfer {
             task: sample_summary(),
             event_id: "evt".into(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── records_verify ─────────────────────────────────────────
+
+    fn sample_verify_report() -> RecordsVerifyReport {
+        RecordsVerifyReport {
+            clean: true,
+            records_checked: 42,
+            blobs_checked: 50,
+            missing: 0,
+            corrupt: 0,
+            orphans: 0,
+            stale_flags: 0,
+        }
+    }
+
+    #[test]
+    fn request_records_verify_roundtrips() {
+        let req = Request::RecordsVerify;
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_records_verify_wire_format_is_stable() {
+        let req = Request::RecordsVerify;
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"type":"records_verify"}"#);
+    }
+
+    #[test]
+    fn response_records_verify_roundtrips() {
+        let res = Response::RecordsVerify {
+            report: sample_verify_report(),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn records_verify_report_roundtrips() {
+        let rep = sample_verify_report();
+        assert_eq!(roundtrip(&rep), rep);
+    }
+
+    #[test]
+    fn records_verify_report_wire_format_is_stable() {
+        let rep = sample_verify_report();
+        let json = serde_json::to_string(&rep).unwrap();
+        assert_eq!(
+            json,
+            r#"{"clean":true,"records_checked":42,"blobs_checked":50,"missing":0,"corrupt":0,"orphans":0,"stale_flags":0}"#
+        );
+    }
+
+    // ── shared params (RecordsListParams / RecordsCreateParams) ──
+
+    fn sample_records_list_params() -> RecordsListParams {
+        RecordsListParams {
+            tag: Some("ops".into()),
+            task_id: Some("brn-2fe.27".into()),
+            status: Some("active".into()),
+            limit: Some(25),
+        }
+    }
+
+    fn sample_records_create_params() -> RecordsCreateParams {
+        RecordsCreateParams {
+            title: "title".into(),
+            description: Some("desc".into()),
+            body: b"hello".to_vec(),
+            media_type: Some("text/plain".into()),
+            task_id: Some("brn-2fe.27".into()),
+            tags: vec!["ops".into()],
+            brain: None,
+        }
+    }
+
+    #[test]
+    fn records_list_params_roundtrips() {
+        let p = sample_records_list_params();
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn records_list_params_wire_format_is_stable() {
+        let p = RecordsListParams {
+            tag: Some("ops".into()),
+            task_id: None,
+            status: Some("active".into()),
+            limit: Some(25),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(
+            json,
+            r#"{"tag":"ops","task_id":null,"status":"active","limit":25}"#
+        );
+    }
+
+    #[test]
+    fn records_create_params_roundtrips() {
+        let p = sample_records_create_params();
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn records_create_params_wire_format_is_stable() {
+        let p = RecordsCreateParams {
+            title: "t".into(),
+            description: None,
+            body: vec![0x68, 0x69],
+            media_type: Some("text/plain".into()),
+            task_id: None,
+            tags: vec![],
+            brain: None,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(
+            json,
+            r#"{"title":"t","description":null,"body":[104,105],"media_type":"text/plain","task_id":null,"tags":[],"brain":null}"#
+        );
+    }
+
+    #[test]
+    fn artifacts_list_params_roundtrips() {
+        let p = ArtifactsListParams {
+            kind: Some("document".into()),
+            tag: None,
+            status: Some("active".into()),
+            limit: Some(50),
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn artifacts_list_params_wire_format_is_stable() {
+        let p = ArtifactsListParams {
+            kind: Some("document".into()),
+            tag: None,
+            status: Some("active".into()),
+            limit: Some(50),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"document","tag":null,"status":"active","limit":50}"#
+        );
+    }
+
+    // ── per-family summaries ───────────────────────────────────
+
+    fn sample_analysis_summary() -> AnalysisSummary {
+        AnalysisSummary {
+            record_id: "BRN-01J".into(),
+            title: "perf review".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    fn sample_artifact_summary() -> ArtifactSummary {
+        ArtifactSummary {
+            record_id: "BRN-01J".into(),
+            title: "perf review".into(),
+            kind: "document".into(),
+            status: "active".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    fn sample_document_summary() -> DocumentSummary {
+        DocumentSummary {
+            record_id: "BRN-01J".into(),
+            title: "doc".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    fn sample_plan_summary() -> PlanSummary {
+        PlanSummary {
+            record_id: "BRN-01J".into(),
+            title: "plan".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    fn sample_snapshot_summary() -> SnapshotSummary {
+        SnapshotSummary {
+            record_id: "BRN-01J".into(),
+            title: "snap".into(),
+            created_at: "2026-05-17T00:00:00Z".into(),
+            brain_id: "eAx_dEFA".into(),
+        }
+    }
+
+    #[test]
+    fn analysis_summary_roundtrips() {
+        let s = sample_analysis_summary();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn analysis_summary_wire_format_is_stable() {
+        let s = sample_analysis_summary();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"record_id":"BRN-01J","title":"perf review","created_at":"2026-05-17T00:00:00Z","brain_id":"eAx_dEFA"}"#
+        );
+    }
+
+    #[test]
+    fn artifact_summary_roundtrips() {
+        let s = sample_artifact_summary();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn artifact_summary_wire_format_is_stable() {
+        let s = sample_artifact_summary();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"record_id":"BRN-01J","title":"perf review","kind":"document","status":"active","created_at":"2026-05-17T00:00:00Z","brain_id":"eAx_dEFA"}"#
+        );
+    }
+
+    #[test]
+    fn document_summary_roundtrips() {
+        let s = sample_document_summary();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn document_summary_wire_format_is_stable() {
+        let s = sample_document_summary();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"record_id":"BRN-01J","title":"doc","created_at":"2026-05-17T00:00:00Z","brain_id":"eAx_dEFA"}"#
+        );
+    }
+
+    #[test]
+    fn plan_summary_roundtrips() {
+        let s = sample_plan_summary();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn plan_summary_wire_format_is_stable() {
+        let s = sample_plan_summary();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"record_id":"BRN-01J","title":"plan","created_at":"2026-05-17T00:00:00Z","brain_id":"eAx_dEFA"}"#
+        );
+    }
+
+    #[test]
+    fn snapshot_summary_roundtrips() {
+        let s = sample_snapshot_summary();
+        assert_eq!(roundtrip(&s), s);
+    }
+
+    #[test]
+    fn snapshot_summary_wire_format_is_stable() {
+        let s = sample_snapshot_summary();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            json,
+            r#"{"record_id":"BRN-01J","title":"snap","created_at":"2026-05-17T00:00:00Z","brain_id":"eAx_dEFA"}"#
+        );
+    }
+
+    // ── analyses Request/Response ───────────────────────────────
+
+    #[test]
+    fn request_analyses_list_roundtrips() {
+        let req = Request::AnalysesList {
+            params: sample_records_list_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_analyses_show_roundtrips() {
+        let req = Request::AnalysesShow {
+            id: "BRN-01J".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_analyses_create_roundtrips() {
+        let req = Request::AnalysesCreate {
+            params: sample_records_create_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_analyses_list_roundtrips() {
+        let res = Response::AnalysesList {
+            records: vec![sample_analysis_summary()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_analyses_show_some_roundtrips() {
+        let res = Response::AnalysesShow {
+            record: Some(sample_analysis_summary()),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_analyses_show_none_roundtrips() {
+        let res = Response::AnalysesShow { record: None };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_analyses_create_roundtrips() {
+        let res = Response::AnalysesCreate {
+            record: sample_analysis_summary(),
+            content_hash: "ab12".into(),
+            size: 5,
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── artifacts Request/Response ──────────────────────────────
+
+    #[test]
+    fn request_artifacts_list_roundtrips() {
+        let req = Request::ArtifactsList {
+            params: ArtifactsListParams {
+                kind: Some("document".into()),
+                tag: None,
+                status: Some("active".into()),
+                limit: Some(50),
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_artifacts_show_roundtrips() {
+        let req = Request::ArtifactsShow {
+            id: "BRN-01J".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_artifacts_list_roundtrips() {
+        let res = Response::ArtifactsList {
+            records: vec![sample_artifact_summary()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_artifacts_show_some_roundtrips() {
+        let res = Response::ArtifactsShow {
+            record: Some(sample_artifact_summary()),
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── documents Request/Response ──────────────────────────────
+
+    #[test]
+    fn request_documents_list_roundtrips() {
+        let req = Request::DocumentsList {
+            params: sample_records_list_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_documents_show_roundtrips() {
+        let req = Request::DocumentsShow {
+            id: "BRN-01J".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_documents_create_roundtrips() {
+        let req = Request::DocumentsCreate {
+            params: sample_records_create_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_documents_list_roundtrips() {
+        let res = Response::DocumentsList {
+            records: vec![sample_document_summary()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_documents_create_roundtrips() {
+        let res = Response::DocumentsCreate {
+            record: sample_document_summary(),
+            content_hash: "ab12".into(),
+            size: 5,
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── plans Request/Response ──────────────────────────────────
+
+    #[test]
+    fn request_plans_list_roundtrips() {
+        let req = Request::PlansList {
+            params: sample_records_list_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_plans_show_roundtrips() {
+        let req = Request::PlansShow {
+            id: "BRN-01J".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_plans_create_roundtrips() {
+        let req = Request::PlansCreate {
+            params: sample_records_create_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_plans_create_roundtrips() {
+        let res = Response::PlansCreate {
+            record: sample_plan_summary(),
+            content_hash: "ab12".into(),
+            size: 5,
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── snapshots Request/Response ──────────────────────────────
+
+    #[test]
+    fn request_snapshots_list_roundtrips() {
+        let req = Request::SnapshotsList {
+            params: sample_records_list_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_snapshots_show_roundtrips() {
+        let req = Request::SnapshotsShow {
+            id: "BRN-01J".into(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_snapshots_create_roundtrips() {
+        let req = Request::SnapshotsCreate {
+            params: sample_records_create_params(),
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn response_snapshots_list_roundtrips() {
+        let res = Response::SnapshotsList {
+            records: vec![sample_snapshot_summary()],
+        };
+        assert_eq!(roundtrip(&res), res);
+    }
+
+    #[test]
+    fn response_snapshots_create_roundtrips() {
+        let res = Response::SnapshotsCreate {
+            record: sample_snapshot_summary(),
+            content_hash: "ab12".into(),
+            size: 5,
         };
         assert_eq!(roundtrip(&res), res);
     }

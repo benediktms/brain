@@ -75,9 +75,24 @@ impl Dispatcher for DefaultDispatcher {
             | Request::TasksRemoveDep { .. }
             | Request::TasksAddLabel { .. }
             | Request::TasksRemoveLabel { .. }
-            | Request::TasksTransfer { .. } => Err(RpcError::Unknown {
-                message: "tasks_* requests not handled by DefaultDispatcher \
-                          — start brain-daemon with --sqlite-db and \
+            | Request::TasksTransfer { .. }
+            | Request::RecordsVerify
+            | Request::AnalysesList { .. }
+            | Request::AnalysesShow { .. }
+            | Request::AnalysesCreate { .. }
+            | Request::ArtifactsList { .. }
+            | Request::ArtifactsShow { .. }
+            | Request::DocumentsList { .. }
+            | Request::DocumentsShow { .. }
+            | Request::DocumentsCreate { .. }
+            | Request::PlansList { .. }
+            | Request::PlansShow { .. }
+            | Request::PlansCreate { .. }
+            | Request::SnapshotsList { .. }
+            | Request::SnapshotsShow { .. }
+            | Request::SnapshotsCreate { .. } => Err(RpcError::Unknown {
+                message: "tasks_* / records_* / <kind>_* requests not handled by \
+                          DefaultDispatcher — start brain-daemon with --sqlite-db and \
                           --lance-db to use the BrainStores-backed dispatcher"
                     .into(),
             }),

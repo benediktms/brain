@@ -32,6 +32,7 @@ pub mod records;
 pub mod registry;
 #[cfg(feature = "embed")]
 pub mod reindex;
+pub mod rpc_client;
 pub mod sagas;
 pub mod snapshots;
 pub mod status;

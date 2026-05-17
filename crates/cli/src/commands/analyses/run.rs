@@ -10,6 +10,8 @@ use brain_lib::stores::BrainStores;
 use brain_lib::uri::SynapseUri;
 use brain_records::CreateRecordParams;
 
+use crate::commands::rpc_client;
+
 pub struct AnalysisCtx {
     pub(crate) stores: BrainStores,
     pub(crate) json: bool,
@@ -34,9 +36,60 @@ pub struct CreateParams {
     pub tags: Vec<String>,
     pub media_type: Option<String>,
     pub brain: Option<String>,
+    pub remote: bool,
+}
+
+fn create_remote(ctx: &AnalysisCtx, params: CreateParams) -> Result<()> {
+    let provided_sources = usize::from(params.file.is_some())
+        + usize::from(params.stdin)
+        + usize::from(params.text.is_some());
+    if provided_sources != 1 {
+        bail!("Provide exactly one payload source: --file <path>, --stdin, or --text <body>");
+    }
+
+    let body: Vec<u8> = match (&params.file, params.stdin, &params.text) {
+        (Some(path), false, None) => std::fs::read(path)
+            .with_context(|| format!("Failed to read file: {}", path.display()))?,
+        (None, true, None) => {
+            let mut buf = Vec::new();
+            std::io::stdin()
+                .read_to_end(&mut buf)
+                .context("Failed to read from stdin")?;
+            buf
+        }
+        (None, false, Some(text)) => text.as_bytes().to_vec(),
+        _ => unreachable!("validated exactly one payload source"),
+    };
+
+    let wire_params = brain_rpc::RecordsCreateParams {
+        title: params.title,
+        description: params.description,
+        body,
+        media_type: params.media_type,
+        task_id: params.task,
+        tags: params.tags,
+        brain: params.brain,
+    };
+
+    let mut client = rpc_client::connect_daemon()?;
+    let (summary, _content_hash, _size) = client
+        .analyses_create(wire_params)
+        .map_err(|e| anyhow::anyhow!("AnalysesCreate rpc failed: {e}"))?;
+
+    if ctx.json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("Created analysis {}", summary.record_id);
+        println!("  Title: {}", summary.title);
+    }
+
+    Ok(())
 }
 
 pub fn create(ctx: &AnalysisCtx, params: CreateParams) -> Result<()> {
+    if params.remote {
+        return create_remote(ctx, params);
+    }
     let provided_sources = usize::from(params.file.is_some())
         + usize::from(params.stdin)
         + usize::from(params.text.is_some());

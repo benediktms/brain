@@ -14,15 +14,21 @@
 //! about whether to expose it on the wire.
 
 use brain_lib::stores::BrainStores;
+use brain_records::{
+    CreateRecordParams, Record, RecordKind, RecordQuery, RecordStatus, RecordStore, integrity,
+};
 use brain_rpc::{
-    PROTOCOL_VERSION, Request, Response, RpcError, TaskSummary, TasksCreateParams, TasksListParams,
-    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
+    PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
+    RpcError, SnapshotSummary, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams,
 };
 use brain_tasks::Task;
 use brain_tasks::events::{
     DependencyPayload, EventType, LabelPayload, StatusChangedPayload, TaskCreatedPayload,
     TaskEvent, TaskStatus, TaskType, TaskUpdatedPayload,
 };
+use chrono::{DateTime, Utc};
 
 use crate::dispatcher::Dispatcher;
 
@@ -555,6 +561,336 @@ impl BrainStoresDispatcher {
             brain_id: self.stores.brain_id.clone(),
         }
     }
+
+    // ── records / sub-record handlers ──────────────────────────
+
+    fn handle_records_verify(&self) -> Result<Response, RpcError> {
+        let report = integrity::verify_integrity(&self.stores.records, &self.stores.objects)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("verify integrity: {e}"),
+            })?;
+        Ok(Response::RecordsVerify {
+            report: record_to_verify_report(&report),
+        })
+    }
+
+    fn list_records_with_kind(
+        &self,
+        kind: &str,
+        params: &RecordsListParams,
+    ) -> Result<Vec<Record>, RpcError> {
+        let status = parse_status_filter(params.status.as_deref())?;
+        let query = RecordQuery {
+            kind: Some(RecordKind::from(kind)),
+            status: Some(status),
+            tag: params.tag.clone(),
+            task_id: params.task_id.clone(),
+            limit: params.limit.map(|n| n as usize),
+        };
+        self.stores
+            .records
+            .list_records(&query)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("list {kind} records: {e}"),
+            })
+    }
+
+    fn handle_analyses_list(&self, params: RecordsListParams) -> Result<Response, RpcError> {
+        let records = self.list_records_with_kind("analysis", &params)?;
+        let records = records
+            .iter()
+            .map(|r| self.analysis_to_summary(r))
+            .collect();
+        Ok(Response::AnalysesList { records })
+    }
+
+    fn handle_analyses_show(&self, id: String) -> Result<Response, RpcError> {
+        let record = self.lookup_record_of_kind(&id, Some("analysis"))?;
+        Ok(Response::AnalysesShow {
+            record: record.as_ref().map(|r| self.analysis_to_summary(r)),
+        })
+    }
+
+    fn handle_analyses_create(&self, params: RecordsCreateParams) -> Result<Response, RpcError> {
+        let brain = params.brain.clone();
+        let resolved_store = self.scoped_record_store(brain.as_deref())?;
+        let target_records: &RecordStore = resolved_store
+            .as_ref()
+            .map(|(rs, _)| rs)
+            .unwrap_or(&self.stores.records);
+        let brain_id: String = resolved_store
+            .as_ref()
+            .map(|(_, bid)| bid.clone())
+            .unwrap_or_else(|| self.stores.brain_id.clone());
+        let create_params = records_create_params_to_internal(params);
+        let record = target_records
+            .create_analysis(create_params, &self.stores.objects)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("create analysis: {e}"),
+            })?;
+        let summary = analysis_to_summary_with_brain(&record, &brain_id);
+        let content_hash = record.content_ref.hash.clone();
+        let size = record.content_ref.size;
+        Ok(Response::AnalysesCreate {
+            record: summary,
+            content_hash,
+            size,
+        })
+    }
+
+    fn handle_artifacts_list(&self, params: ArtifactsListParams) -> Result<Response, RpcError> {
+        let status = parse_status_filter(params.status.as_deref())?;
+        let query = RecordQuery {
+            kind: params.kind.as_deref().map(RecordKind::from),
+            status: Some(status),
+            tag: params.tag.clone(),
+            task_id: None,
+            limit: params.limit.map(|n| n as usize),
+        };
+        let records: Vec<Record> =
+            self.stores
+                .records
+                .list_records(&query)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("list artifact records: {e}"),
+                })?;
+        let records = records
+            .iter()
+            .map(|r| self.artifact_to_summary(r))
+            .collect();
+        Ok(Response::ArtifactsList { records })
+    }
+
+    fn handle_artifacts_show(&self, id: String) -> Result<Response, RpcError> {
+        // Artifacts is a cross-kind read view — no kind filter on
+        // lookup, just resolve and map.
+        let record = self.lookup_record_of_kind(&id, None)?;
+        Ok(Response::ArtifactsShow {
+            record: record.as_ref().map(|r| self.artifact_to_summary(r)),
+        })
+    }
+
+    fn handle_documents_list(&self, params: RecordsListParams) -> Result<Response, RpcError> {
+        let records = self.list_records_with_kind("document", &params)?;
+        let records = records
+            .iter()
+            .map(|r| self.document_to_summary(r))
+            .collect();
+        Ok(Response::DocumentsList { records })
+    }
+
+    fn handle_documents_show(&self, id: String) -> Result<Response, RpcError> {
+        let record = self.lookup_record_of_kind(&id, Some("document"))?;
+        Ok(Response::DocumentsShow {
+            record: record.as_ref().map(|r| self.document_to_summary(r)),
+        })
+    }
+
+    fn handle_documents_create(&self, params: RecordsCreateParams) -> Result<Response, RpcError> {
+        let brain = params.brain.clone();
+        let resolved_store = self.scoped_record_store(brain.as_deref())?;
+        let target_records: &RecordStore = resolved_store
+            .as_ref()
+            .map(|(rs, _)| rs)
+            .unwrap_or(&self.stores.records);
+        let brain_id: String = resolved_store
+            .as_ref()
+            .map(|(_, bid)| bid.clone())
+            .unwrap_or_else(|| self.stores.brain_id.clone());
+        let create_params = records_create_params_to_internal(params);
+        let record = target_records
+            .create_document(create_params, &self.stores.objects)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("create document: {e}"),
+            })?;
+        let summary = document_to_summary_with_brain(&record, &brain_id);
+        let content_hash = record.content_ref.hash.clone();
+        let size = record.content_ref.size;
+        Ok(Response::DocumentsCreate {
+            record: summary,
+            content_hash,
+            size,
+        })
+    }
+
+    fn handle_plans_list(&self, params: RecordsListParams) -> Result<Response, RpcError> {
+        let records = self.list_records_with_kind("plan", &params)?;
+        let records = records.iter().map(|r| self.plan_to_summary(r)).collect();
+        Ok(Response::PlansList { records })
+    }
+
+    fn handle_plans_show(&self, id: String) -> Result<Response, RpcError> {
+        let record = self.lookup_record_of_kind(&id, Some("plan"))?;
+        Ok(Response::PlansShow {
+            record: record.as_ref().map(|r| self.plan_to_summary(r)),
+        })
+    }
+
+    fn handle_plans_create(&self, params: RecordsCreateParams) -> Result<Response, RpcError> {
+        let brain = params.brain.clone();
+        let resolved_store = self.scoped_record_store(brain.as_deref())?;
+        let target_records: &RecordStore = resolved_store
+            .as_ref()
+            .map(|(rs, _)| rs)
+            .unwrap_or(&self.stores.records);
+        let brain_id: String = resolved_store
+            .as_ref()
+            .map(|(_, bid)| bid.clone())
+            .unwrap_or_else(|| self.stores.brain_id.clone());
+        let create_params = records_create_params_to_internal(params);
+        let record = target_records
+            .create_plan(create_params, &self.stores.objects)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("create plan: {e}"),
+            })?;
+        let summary = plan_to_summary_with_brain(&record, &brain_id);
+        let content_hash = record.content_ref.hash.clone();
+        let size = record.content_ref.size;
+        Ok(Response::PlansCreate {
+            record: summary,
+            content_hash,
+            size,
+        })
+    }
+
+    fn handle_snapshots_list(&self, params: RecordsListParams) -> Result<Response, RpcError> {
+        let records = self.list_records_with_kind("snapshot", &params)?;
+        let records = records
+            .iter()
+            .map(|r| self.snapshot_to_summary(r))
+            .collect();
+        Ok(Response::SnapshotsList { records })
+    }
+
+    fn handle_snapshots_show(&self, id: String) -> Result<Response, RpcError> {
+        let record = self.lookup_record_of_kind(&id, Some("snapshot"))?;
+        Ok(Response::SnapshotsShow {
+            record: record.as_ref().map(|r| self.snapshot_to_summary(r)),
+        })
+    }
+
+    fn handle_snapshots_create(&self, params: RecordsCreateParams) -> Result<Response, RpcError> {
+        let brain = params.brain.clone();
+        let resolved_store = self.scoped_record_store(brain.as_deref())?;
+        let target_records: &RecordStore = resolved_store
+            .as_ref()
+            .map(|(rs, _)| rs)
+            .unwrap_or(&self.stores.records);
+        let brain_id: String = resolved_store
+            .as_ref()
+            .map(|(_, bid)| bid.clone())
+            .unwrap_or_else(|| self.stores.brain_id.clone());
+        let create_params = records_create_params_to_internal(params);
+        let record = target_records
+            .create_snapshot(create_params, &self.stores.objects)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("create snapshot: {e}"),
+            })?;
+        let summary = snapshot_to_summary_with_brain(&record, &brain_id);
+        let content_hash = record.content_ref.hash.clone();
+        let size = record.content_ref.size;
+        Ok(Response::SnapshotsCreate {
+            record: summary,
+            content_hash,
+            size,
+        })
+    }
+
+    /// Resolve an optional remote-brain (record store, brain_id) pair
+    /// for record-creation requests. `None` means "use the daemon's
+    /// local stores"; `Some(name_or_id)` resolves to a `RecordStore`
+    /// scoped to the requested brain on the same underlying DB,
+    /// rejecting archived targets. The object store is always the
+    /// daemon-local one because object storage is keyed by hash and
+    /// shared across brains.
+    fn scoped_record_store(
+        &self,
+        brain: Option<&str>,
+    ) -> Result<Option<(RecordStore, String)>, RpcError> {
+        let Some(name_or_id) = brain else {
+            return Ok(None);
+        };
+        let (bid, bname) =
+            self.stores
+                .records
+                .resolve_brain(name_or_id)
+                .map_err(|e| RpcError::Protocol {
+                    message: format!("resolve brain: {e}"),
+                })?;
+        if self
+            .stores
+            .records
+            .is_brain_archived(&bid)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("check brain archived: {e}"),
+            })?
+        {
+            return Err(RpcError::Protocol {
+                message: format!("target brain '{bname}' is archived"),
+            });
+        }
+        let records = self
+            .stores
+            .records
+            .with_remote_brain_id(&bid, &bname)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("open target brain record store: {e}"),
+            })?;
+        Ok(Some((records, bid)))
+    }
+
+    /// Resolve a record by ID, optionally filtering on `expected_kind`.
+    /// A mismatched kind is treated as "not found" so callers honour
+    /// per-family Show semantics (returning `None`) rather than leaking
+    /// records of the wrong kind.
+    fn lookup_record_of_kind(
+        &self,
+        id: &str,
+        expected_kind: Option<&str>,
+    ) -> Result<Option<Record>, RpcError> {
+        let resolved = match self.stores.records.resolve_record_id(id) {
+            Ok(r) => r,
+            Err(_) => return Ok(None),
+        };
+        let record = self
+            .stores
+            .records
+            .get_record(&resolved)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("get record: {e}"),
+            })?;
+        Ok(record.filter(|r| match expected_kind {
+            Some(kind) => r.kind.as_str() == kind,
+            None => true,
+        }))
+    }
+
+    fn analysis_to_summary(&self, record: &Record) -> AnalysisSummary {
+        analysis_to_summary_with_brain(record, &self.stores.brain_id)
+    }
+
+    fn artifact_to_summary(&self, record: &Record) -> ArtifactSummary {
+        ArtifactSummary {
+            record_id: record.record_id.clone(),
+            title: record.title.clone(),
+            kind: record.kind.as_str().to_string(),
+            status: record.status.as_str().to_string(),
+            created_at: epoch_seconds_to_iso(record.created_at),
+            brain_id: self.stores.brain_id.clone(),
+        }
+    }
+
+    fn document_to_summary(&self, record: &Record) -> DocumentSummary {
+        document_to_summary_with_brain(record, &self.stores.brain_id)
+    }
+
+    fn plan_to_summary(&self, record: &Record) -> PlanSummary {
+        plan_to_summary_with_brain(record, &self.stores.brain_id)
+    }
+
+    fn snapshot_to_summary(&self, record: &Record) -> SnapshotSummary {
+        snapshot_to_summary_with_brain(record, &self.stores.brain_id)
+    }
 }
 
 impl Dispatcher for BrainStoresDispatcher {
@@ -585,6 +921,21 @@ impl Dispatcher for BrainStoresDispatcher {
                 self.handle_tasks_remove_label(task_id, label)
             }
             Request::TasksTransfer { params } => self.handle_tasks_transfer(params),
+            Request::RecordsVerify => self.handle_records_verify(),
+            Request::AnalysesList { params } => self.handle_analyses_list(params),
+            Request::AnalysesShow { id } => self.handle_analyses_show(id),
+            Request::AnalysesCreate { params } => self.handle_analyses_create(params),
+            Request::ArtifactsList { params } => self.handle_artifacts_list(params),
+            Request::ArtifactsShow { id } => self.handle_artifacts_show(id),
+            Request::DocumentsList { params } => self.handle_documents_list(params),
+            Request::DocumentsShow { id } => self.handle_documents_show(id),
+            Request::DocumentsCreate { params } => self.handle_documents_create(params),
+            Request::PlansList { params } => self.handle_plans_list(params),
+            Request::PlansShow { id } => self.handle_plans_show(id),
+            Request::PlansCreate { params } => self.handle_plans_create(params),
+            Request::SnapshotsList { params } => self.handle_snapshots_list(params),
+            Request::SnapshotsShow { id } => self.handle_snapshots_show(id),
+            Request::SnapshotsCreate { params } => self.handle_snapshots_create(params),
         }
     }
 }
@@ -601,6 +952,100 @@ fn status_to_wire_string(s: &TaskStatus) -> String {
         TaskStatus::Cancelled => "cancelled",
     }
     .to_string()
+}
+
+/// Map [`integrity::IntegrityReport`] onto the wire-format
+/// [`RecordsVerifyReport`]. Per-finding detail lists are flattened to
+/// counts — the wire surface mirrors the JSON the CLI's
+/// `--json` path produces, where verbose findings are local-only.
+fn record_to_verify_report(report: &integrity::IntegrityReport) -> RecordsVerifyReport {
+    RecordsVerifyReport {
+        clean: report.is_clean(),
+        records_checked: report.records_checked as u64,
+        blobs_checked: report.blobs_checked as u64,
+        missing: report.missing.len() as u64,
+        corrupt: report.corrupt.len() as u64,
+        orphans: report.orphans.len() as u64,
+        stale_flags: report.stale_flags.len() as u64,
+    }
+}
+
+/// Convert a wire [`RecordsCreateParams`] into the internal
+/// [`CreateRecordParams`]. Field-for-field translation point that
+/// keeps the persistence type behind the daemon boundary.
+fn records_create_params_to_internal(p: RecordsCreateParams) -> CreateRecordParams {
+    CreateRecordParams {
+        title: p.title,
+        description: p.description,
+        body: p.body,
+        media_type: p.media_type,
+        task_id: p.task_id,
+        tags: p.tags,
+        scope_type: None,
+        scope_id: None,
+        retention_class: None,
+        producer: None,
+        actor: "daemon".to_string(),
+    }
+}
+
+/// Parse a wire status filter ("active" / "archived" / arbitrary
+/// string) into [`RecordStatus`]. `None` resolves to `Active` —
+/// matches the CLI default. `RecordStatus::from_str` is infallible
+/// (unrecognised strings become `Unknown(s)`), so this function
+/// cannot fail; the `Result` envelope is kept for symmetry with the
+/// other dispatcher helpers and forward-compatibility.
+fn parse_status_filter(status: Option<&str>) -> Result<RecordStatus, RpcError> {
+    Ok(status
+        .map(|s| s.parse::<RecordStatus>().unwrap_or(RecordStatus::Active))
+        .unwrap_or(RecordStatus::Active))
+}
+
+/// Format an epoch-seconds timestamp as an RFC 3339 / ISO 8601 string.
+/// The wire format uses strings (not raw i64) for timestamps per
+/// project convention — see iso_timestamps feedback.
+fn epoch_seconds_to_iso(ts: i64) -> String {
+    DateTime::<Utc>::from_timestamp(ts, 0)
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_else(|| ts.to_string())
+}
+
+// ── per-family anti-corruption mappers ─────────────────────────
+
+fn analysis_to_summary_with_brain(record: &Record, brain_id: &str) -> AnalysisSummary {
+    AnalysisSummary {
+        record_id: record.record_id.clone(),
+        title: record.title.clone(),
+        created_at: epoch_seconds_to_iso(record.created_at),
+        brain_id: brain_id.to_string(),
+    }
+}
+
+fn document_to_summary_with_brain(record: &Record, brain_id: &str) -> DocumentSummary {
+    DocumentSummary {
+        record_id: record.record_id.clone(),
+        title: record.title.clone(),
+        created_at: epoch_seconds_to_iso(record.created_at),
+        brain_id: brain_id.to_string(),
+    }
+}
+
+fn plan_to_summary_with_brain(record: &Record, brain_id: &str) -> PlanSummary {
+    PlanSummary {
+        record_id: record.record_id.clone(),
+        title: record.title.clone(),
+        created_at: epoch_seconds_to_iso(record.created_at),
+        brain_id: brain_id.to_string(),
+    }
+}
+
+fn snapshot_to_summary_with_brain(record: &Record, brain_id: &str) -> SnapshotSummary {
+    SnapshotSummary {
+        record_id: record.record_id.clone(),
+        title: record.title.clone(),
+        created_at: epoch_seconds_to_iso(record.created_at),
+        brain_id: brain_id.to_string(),
+    }
 }
 
 /// Drive a future to completion under the assumption that it never

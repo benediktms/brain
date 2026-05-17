@@ -10,6 +10,8 @@ use brain_lib::stores::BrainStores;
 use brain_lib::uri::SynapseUri;
 use brain_records::integrity;
 
+use crate::commands::rpc_client;
+
 #[cfg(feature = "embed")]
 use crate::commands::memory::run::MemoryCtx;
 #[cfg(feature = "embed")]
@@ -32,7 +34,55 @@ impl RecordsCtx {
     }
 }
 
-pub fn verify(ctx: &RecordsCtx, verbose: bool) -> Result<()> {
+fn verify_remote(json: bool) -> Result<()> {
+    let mut client = rpc_client::connect_daemon()?;
+    let report = client
+        .records_verify()
+        .map_err(|e| anyhow::anyhow!("RecordsVerify rpc failed: {e}"))?;
+
+    if json {
+        let out = serde_json::json!({
+            "clean": report.clean,
+            "records_checked": report.records_checked,
+            "blobs_checked": report.blobs_checked,
+            "missing": report.missing,
+            "corrupt": report.corrupt,
+            "orphans": report.orphans,
+            "stale_flags": report.stale_flags,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "Records: {}",
+            if report.clean { "OK" } else { "ISSUES FOUND" }
+        );
+        println!("  records_checked: {}", report.records_checked);
+        println!("  blobs_checked:   {}", report.blobs_checked);
+        if report.missing > 0 {
+            println!("  missing:         {}", report.missing);
+        }
+        if report.corrupt > 0 {
+            println!("  corrupt:         {}", report.corrupt);
+        }
+        if report.orphans > 0 {
+            println!("  orphans:         {}", report.orphans);
+        }
+        if report.stale_flags > 0 {
+            println!("  stale_flags:     {}", report.stale_flags);
+        }
+    }
+
+    if !report.clean {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+pub fn verify(ctx: &RecordsCtx, verbose: bool, remote: bool) -> Result<()> {
+    if remote {
+        return verify_remote(ctx.json);
+    }
     let report = integrity::verify_integrity(&ctx.record_store, &ctx.object_store)
         .context("Failed to verify integrity")?;
 

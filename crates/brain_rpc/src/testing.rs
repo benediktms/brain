@@ -72,9 +72,25 @@ impl InMemoryTransport {
             | Request::TasksRemoveDep { .. }
             | Request::TasksAddLabel { .. }
             | Request::TasksRemoveLabel { .. }
-            | Request::TasksTransfer { .. } => Err(RpcError::Unknown {
-                message: "InMemoryTransport::echo does not handle tasks_* requests \
-                          — use InMemoryTransport::new with a custom handler"
+            | Request::TasksTransfer { .. }
+            | Request::RecordsVerify
+            | Request::AnalysesList { .. }
+            | Request::AnalysesShow { .. }
+            | Request::AnalysesCreate { .. }
+            | Request::ArtifactsList { .. }
+            | Request::ArtifactsShow { .. }
+            | Request::DocumentsList { .. }
+            | Request::DocumentsShow { .. }
+            | Request::DocumentsCreate { .. }
+            | Request::PlansList { .. }
+            | Request::PlansShow { .. }
+            | Request::PlansCreate { .. }
+            | Request::SnapshotsList { .. }
+            | Request::SnapshotsShow { .. }
+            | Request::SnapshotsCreate { .. } => Err(RpcError::Unknown {
+                message: "InMemoryTransport::echo does not handle tasks_* / records_* / \
+                          <kind>_* requests — use InMemoryTransport::new with a custom \
+                          handler"
                     .into(),
             }),
         })
