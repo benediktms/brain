@@ -6,7 +6,7 @@
 //! persistence boundary — the only place where row types are mentioned by
 //! name.
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use serde::Serialize;
 
 use brain_persistence::db::summaries::SummaryRow;
@@ -56,8 +56,18 @@ impl From<SummaryRow> for ReflectedEpisode {
 }
 
 fn epoch_to_rfc3339(secs: i64) -> String {
-    Utc.timestamp_opt(secs, 0)
-        .single()
-        .map(|dt: DateTime<Utc>| dt.to_rfc3339())
-        .unwrap_or_default()
+    // `timestamp_opt` returns `None` only for i64 values well outside any
+    // realistic Unix timestamp (e.g., u64::MAX cast to i64). On the rare
+    // chance such a value reaches us, log it so corrupted SummaryRow data
+    // surfaces in observability instead of becoming a silently empty field.
+    match Utc.timestamp_opt(secs, 0).single() {
+        Some(dt) => dt.to_rfc3339(),
+        None => {
+            tracing::warn!(
+                secs,
+                "epoch_to_rfc3339: timestamp out of range — emitting empty string"
+            );
+            String::new()
+        }
+    }
 }
