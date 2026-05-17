@@ -31,8 +31,8 @@ use brain_rpc::{
     SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
     SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
     TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
-    TasksCreateParams, TasksLabelsBatchParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams,
+    TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams,
+    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
 };
 use brain_sagas::{
     BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
@@ -1998,6 +1998,82 @@ impl BrainStoresDispatcher {
         Ok(Response::BrainsList { brains, count })
     }
 
+    fn handle_tasks_deps_batch(&self, params: TasksDepsBatchParams) -> Result<Response, RpcError> {
+        // Mirrors `brain_lib::mcp::tools::task_deps_batch::{Params, DepPair}`.
+        // Action union: add / remove / chain / fan / clear.
+        #[derive(serde::Deserialize)]
+        struct DepPair {
+            task_id: String,
+            depends_on_task_id: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Inner {
+            action: String,
+            #[serde(default)]
+            pairs: Option<Vec<DepPair>>,
+            #[serde(default)]
+            task_ids: Option<Vec<String>>,
+            #[serde(default)]
+            source_task_id: Option<String>,
+            #[serde(default)]
+            dependent_task_ids: Option<Vec<String>>,
+            #[serde(default)]
+            task_id: Option<String>,
+        }
+
+        let parsed: Inner =
+            serde_json::from_value(params.params_json).map_err(|e| RpcError::Protocol {
+                message: format!("Invalid parameters: {e}"),
+            })?;
+
+        let store = &self.stores.tasks;
+        let brain_name = self.stores.brain_name.as_str();
+
+        let value = match parsed.action.as_str() {
+            "add" => deps_pairs_response(
+                store,
+                parsed.pairs.as_deref().map(|p| {
+                    p.iter()
+                        .map(|d| (d.task_id.as_str(), d.depends_on_task_id.as_str()))
+                        .collect::<Vec<_>>()
+                }),
+                EventType::DependencyAdded,
+                brain_name,
+            )?,
+            "remove" => deps_pairs_response(
+                store,
+                parsed.pairs.as_deref().map(|p| {
+                    p.iter()
+                        .map(|d| (d.task_id.as_str(), d.depends_on_task_id.as_str()))
+                        .collect::<Vec<_>>()
+                }),
+                EventType::DependencyRemoved,
+                brain_name,
+            )?,
+            "chain" => deps_chain_response(store, parsed.task_ids.as_deref(), brain_name)?,
+            "fan" => deps_fan_response(
+                store,
+                parsed.source_task_id.as_deref(),
+                parsed.dependent_task_ids.as_deref(),
+                brain_name,
+            )?,
+            "clear" => deps_clear_response(store, parsed.task_id.as_deref(), brain_name)?,
+            other => {
+                return Err(RpcError::Protocol {
+                    message: format!(
+                        "Invalid action: '{other}'. Must be one of: add, remove, chain, fan, clear"
+                    ),
+                });
+            }
+        };
+
+        let result_json = serde_json::to_string(&value).map_err(|e| RpcError::Protocol {
+            message: format!("serialize deps_batch response: {e}"),
+        })?;
+
+        Ok(Response::TasksDepsBatch { result_json })
+    }
+
     fn handle_tasks_labels_batch(
         &self,
         params: TasksLabelsBatchParams,
@@ -2638,9 +2714,7 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::TasksApplyEvent { .. } => Err(RpcError::Unknown {
                 message: "TasksApplyEvent: handler pending wire-up".into(),
             }),
-            Request::TasksDepsBatch { .. } => Err(RpcError::Unknown {
-                message: "TasksDepsBatch: handler pending wire-up".into(),
-            }),
+            Request::TasksDepsBatch { params } => self.handle_tasks_deps_batch(params),
             Request::TasksLabelsBatch { params } => self.handle_tasks_labels_batch(params),
             Request::TasksLabelsSummary => self.handle_tasks_labels_summary(),
             Request::MemoryWalkThread { params } => self.handle_memory_walk_thread(params),
@@ -3029,6 +3103,323 @@ fn batch_response_value(
     succeeded: Vec<serde_json::Value>,
     failed: Vec<serde_json::Value>,
 ) -> serde_json::Value {
+    let succeeded_count = succeeded.len();
+    let failed_count = failed.len();
+    serde_json::json!({
+        "succeeded": succeeded,
+        "failed": failed,
+        "summary": {
+            "succeeded": succeeded_count,
+            "failed": failed_count,
+        },
+    })
+}
+
+// ───────── tasks.deps_batch helpers ─────────────────────────────────
+// Action sub-handlers for `handle_tasks_deps_batch`. Mirrors the
+// original tool body's add/remove/chain/fan/clear split. Sequential
+// `append` per event is intentional — cycle detection in
+// `TaskStore::append` reads accumulated state.
+
+fn deps_pairs_response(
+    store: &TaskStore,
+    pairs: Option<Vec<(&str, &str)>>,
+    event_type: EventType,
+    brain_name: &str,
+) -> Result<serde_json::Value, RpcError> {
+    let pairs = pairs.ok_or(RpcError::Protocol {
+        message: "Missing required parameter: pairs".into(),
+    })?;
+
+    if pairs.is_empty() {
+        return Ok(deps_batch_response_value(
+            Vec::new(),
+            Vec::new(),
+            brain_name,
+        ));
+    }
+
+    let mut succeeded: Vec<serde_json::Value> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for (raw_task, raw_depends_on) in pairs {
+        let task_input = brain_lib::uri::resolve_id(raw_task);
+        let task_id = match store.resolve_task_id(&task_input) {
+            Ok(id) => id,
+            Err(e) => {
+                failed.push(serde_json::json!({
+                    "task_id": raw_task,
+                    "depends_on_task_id": raw_depends_on,
+                    "error": format!("{e}"),
+                }));
+                continue;
+            }
+        };
+        let depends_input = brain_lib::uri::resolve_id(raw_depends_on);
+        let depends_on = match store.resolve_task_id(&depends_input) {
+            Ok(id) => id,
+            Err(e) => {
+                failed.push(serde_json::json!({
+                    "task_id": raw_task,
+                    "depends_on_task_id": raw_depends_on,
+                    "error": format!("{e}"),
+                }));
+                continue;
+            }
+        };
+
+        let event = TaskEvent::new(
+            &task_id,
+            "mcp",
+            event_type.clone(),
+            &DependencyPayload {
+                depends_on_task_id: depends_on.clone(),
+            },
+        );
+
+        let short_task = store.compact_id_or_raw(&task_id);
+        let short_depends = store.compact_id_or_raw(&depends_on);
+        match store.append(&event) {
+            Ok(()) => succeeded.push(serde_json::json!({
+                "task_id": short_task,
+                "depends_on_task_id": short_depends,
+            })),
+            Err(e) => failed.push(serde_json::json!({
+                "task_id": short_task,
+                "depends_on_task_id": short_depends,
+                "error": format!("{e}"),
+            })),
+        }
+    }
+
+    Ok(deps_batch_response_value(succeeded, failed, brain_name))
+}
+
+fn deps_chain_response(
+    store: &TaskStore,
+    task_ids: Option<&[String]>,
+    brain_name: &str,
+) -> Result<serde_json::Value, RpcError> {
+    let task_ids = task_ids.ok_or(RpcError::Protocol {
+        message: "Missing required parameter: task_ids".into(),
+    })?;
+
+    if task_ids.len() < 2 {
+        return Err(RpcError::Protocol {
+            message: "chain requires at least 2 task IDs".into(),
+        });
+    }
+
+    let mut resolved: Vec<String> = Vec::with_capacity(task_ids.len());
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+    for raw_id in task_ids {
+        let input = brain_lib::uri::resolve_id(raw_id);
+        match store.resolve_task_id(&input) {
+            Ok(id) => resolved.push(id),
+            Err(e) => failed.push(serde_json::json!({
+                "task_id": raw_id,
+                "error": format!("{e}"),
+            })),
+        }
+    }
+
+    // Can't build a chain with missing tasks — report all as failed.
+    if !failed.is_empty() {
+        return Ok(deps_batch_response_value(Vec::new(), failed, brain_name));
+    }
+
+    let mut succeeded: Vec<serde_json::Value> = Vec::new();
+    for i in 1..resolved.len() {
+        let task_id = &resolved[i];
+        let depends_on = &resolved[i - 1];
+
+        let event = TaskEvent::new(
+            task_id,
+            "mcp",
+            EventType::DependencyAdded,
+            &DependencyPayload {
+                depends_on_task_id: depends_on.clone(),
+            },
+        );
+
+        let short_task = store.compact_id_or_raw(task_id);
+        let short_depends = store.compact_id_or_raw(depends_on);
+        match store.append(&event) {
+            Ok(()) => succeeded.push(serde_json::json!({
+                "task_id": short_task,
+                "depends_on_task_id": short_depends,
+            })),
+            Err(e) => failed.push(serde_json::json!({
+                "task_id": short_task,
+                "depends_on_task_id": short_depends,
+                "error": format!("{e}"),
+            })),
+        }
+    }
+
+    Ok(deps_batch_response_value(succeeded, failed, brain_name))
+}
+
+fn deps_fan_response(
+    store: &TaskStore,
+    source: Option<&str>,
+    dependents: Option<&[String]>,
+    brain_name: &str,
+) -> Result<serde_json::Value, RpcError> {
+    let source = source.filter(|s| !s.is_empty()).ok_or(RpcError::Protocol {
+        message: "Missing required parameter: source_task_id".into(),
+    })?;
+    let dependents = dependents.ok_or(RpcError::Protocol {
+        message: "Missing required parameter: dependent_task_ids".into(),
+    })?;
+
+    if dependents.is_empty() {
+        return Ok(deps_batch_response_value(
+            Vec::new(),
+            Vec::new(),
+            brain_name,
+        ));
+    }
+
+    let source_input = brain_lib::uri::resolve_id(source);
+    let source_resolved = store
+        .resolve_task_id(&source_input)
+        .map_err(|e| RpcError::Unknown {
+            message: format!("Failed to resolve source_task_id: {e}"),
+        })?;
+    let source_compact = store.compact_id_or_raw(&source_resolved);
+
+    let mut succeeded: Vec<serde_json::Value> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for raw_id in dependents {
+        let dep_input = brain_lib::uri::resolve_id(raw_id);
+        let dep_id = match store.resolve_task_id(&dep_input) {
+            Ok(id) => id,
+            Err(e) => {
+                failed.push(serde_json::json!({
+                    "task_id": raw_id,
+                    "depends_on_task_id": source_compact,
+                    "error": format!("{e}"),
+                }));
+                continue;
+            }
+        };
+
+        let event = TaskEvent::new(
+            &dep_id,
+            "mcp",
+            EventType::DependencyAdded,
+            &DependencyPayload {
+                depends_on_task_id: source_resolved.clone(),
+            },
+        );
+
+        let short_dep = store.compact_id_or_raw(&dep_id);
+        match store.append(&event) {
+            Ok(()) => succeeded.push(serde_json::json!({
+                "task_id": short_dep,
+                "depends_on_task_id": source_compact,
+            })),
+            Err(e) => failed.push(serde_json::json!({
+                "task_id": short_dep,
+                "depends_on_task_id": source_compact,
+                "error": format!("{e}"),
+            })),
+        }
+    }
+
+    Ok(deps_batch_response_value(succeeded, failed, brain_name))
+}
+
+fn deps_clear_response(
+    store: &TaskStore,
+    task_id: Option<&str>,
+    brain_name: &str,
+) -> Result<serde_json::Value, RpcError> {
+    let task_id = task_id
+        .filter(|s| !s.is_empty())
+        .ok_or(RpcError::Protocol {
+            message: "Missing required parameter: task_id".into(),
+        })?;
+
+    let input = brain_lib::uri::resolve_id(task_id);
+    let resolved = store
+        .resolve_task_id(&input)
+        .map_err(|e| RpcError::Unknown {
+            message: format!("Failed to resolve task_id: {e}"),
+        })?;
+
+    let deps = store
+        .get_deps_for_task(&resolved)
+        .map_err(|e| RpcError::Unknown {
+            message: format!("Failed to query dependencies: {e}"),
+        })?;
+
+    if deps.is_empty() {
+        return Ok(deps_batch_response_value(
+            Vec::new(),
+            Vec::new(),
+            brain_name,
+        ));
+    }
+
+    let events: Vec<TaskEvent> = deps
+        .iter()
+        .map(|dep| {
+            TaskEvent::new(
+                &resolved,
+                "mcp",
+                EventType::DependencyRemoved,
+                &DependencyPayload {
+                    depends_on_task_id: dep.clone(),
+                },
+            )
+        })
+        .collect();
+
+    let results = store.append_batch(&events);
+    let mut succeeded: Vec<serde_json::Value> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for (i, result) in results.into_iter().enumerate() {
+        let short_resolved = store.compact_id_or_raw(&resolved);
+        let short_dep = store.compact_id_or_raw(&deps[i]);
+        match result {
+            Ok(()) => succeeded.push(serde_json::json!({
+                "task_id": short_resolved,
+                "depends_on_task_id": short_dep,
+            })),
+            Err(e) => failed.push(serde_json::json!({
+                "task_id": short_resolved,
+                "depends_on_task_id": short_dep,
+                "error": format!("{e}"),
+            })),
+        }
+    }
+
+    Ok(deps_batch_response_value(succeeded, failed, brain_name))
+}
+
+fn deps_batch_response_value(
+    mut succeeded: Vec<serde_json::Value>,
+    failed: Vec<serde_json::Value>,
+    brain_name: &str,
+) -> serde_json::Value {
+    // Inject URIs into every succeeded entry that carries a task_id.
+    // Mirrors the original tool's post-process behaviour exactly so
+    // the wire-shape stays byte-identical.
+    for item in &mut succeeded {
+        if let Some(obj) = item.as_object_mut()
+            && let Some(task_id) = obj
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        {
+            let uri = brain_lib::uri::SynapseUri::for_task(brain_name, &task_id).to_string();
+            obj.insert("uri".into(), serde_json::json!(uri));
+        }
+    }
     let succeeded_count = succeeded.len();
     let failed_count = failed.len();
     serde_json::json!({
