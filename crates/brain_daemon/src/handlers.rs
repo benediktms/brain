@@ -31,8 +31,8 @@ use brain_rpc::{
     SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
     SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
     TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
-    TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams,
-    TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams,
+    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
 };
 use brain_sagas::{
     BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
@@ -1998,6 +1998,274 @@ impl BrainStoresDispatcher {
         Ok(Response::BrainsList { brains, count })
     }
 
+    fn handle_tasks_apply_event(
+        &self,
+        params: TasksApplyEventParams,
+    ) -> Result<Response, RpcError> {
+        // Mirrors `brain_lib::mcp::tools::task_apply_event::{Params,
+        // parse_and_validate_event, execute_inner}` — the daemon owns
+        // every step now: pure validation, archive-gate, ID resolution,
+        // payload defaults, event append, response shaping.
+        #[derive(serde::Deserialize)]
+        struct Inner {
+            event_type: String,
+            #[serde(default)]
+            task_id: Option<String>,
+            #[serde(default = "default_actor")]
+            actor: String,
+            payload: serde_json::Map<String, serde_json::Value>,
+        }
+        fn default_actor() -> String {
+            "mcp".into()
+        }
+
+        let inner: Inner =
+            serde_json::from_value(params.event_json).map_err(|e| RpcError::Protocol {
+                message: format!("Invalid parameters: {e}"),
+            })?;
+
+        // Pure validation — no DB access.
+        let event_type: EventType = serde_json::from_value(serde_json::json!(inner.event_type))
+            .map_err(|_| RpcError::Protocol {
+                message: format!(
+                    "Invalid event_type: '{}'. Must be one of: task_created, \
+                     task_updated, status_changed, dependency_added, dependency_removed, \
+                     note_linked, note_unlinked, label_added, label_removed, comment_added, \
+                     comment_updated, parent_set, external_id_added, external_id_removed, \
+                     external_blocker_added, external_blocker_resolved",
+                    inner.event_type
+                ),
+            })?;
+
+        if let Some(ref id) = inner.task_id
+            && id.len() > 256
+        {
+            return Err(RpcError::Protocol {
+                message: "task_id exceeds maximum length of 256 characters".into(),
+            });
+        }
+        if inner.actor.len() > 256 {
+            return Err(RpcError::Protocol {
+                message: "actor exceeds maximum length of 256 characters".into(),
+            });
+        }
+
+        let mut payload = serde_json::Value::Object(inner.payload);
+        for field in &["defer_until", "due_ts", "resolved_at"] {
+            if let Some(val) = payload.get(*field).filter(|v| v.is_string()) {
+                match brain_lib::utils::parse_timestamp(val) {
+                    Some(ts) => payload[*field] = serde_json::json!(ts),
+                    None => {
+                        return Err(RpcError::Protocol {
+                            message: format!(
+                                "Invalid timestamp for '{field}': expected ISO 8601 string or integer"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(tt) = payload.get("task_type").and_then(|v| v.as_str())
+            && tt.parse::<TaskType>().is_err()
+        {
+            return Err(RpcError::Protocol {
+                message: format!(
+                    "Invalid task_type: '{tt}'. Must be one of: task, bug, feature, epic, spike"
+                ),
+            });
+        }
+
+        let mut warnings: Vec<serde_json::Value> = Vec::new();
+
+        // Reject task creation on archived brains (other event types pass through).
+        if event_type == EventType::TaskCreated {
+            let archived = self
+                .stores
+                .is_brain_archived(&self.stores.brain_id)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("Failed to check brain archived status: {e}"),
+                })?;
+            if archived {
+                return Err(RpcError::Unknown {
+                    message:
+                        "Cannot create tasks: brain is archived. Use `brain link` to add a root and unarchive."
+                            .into(),
+                });
+            }
+        }
+
+        // Resolve task_id: strip synapse:// URI; auto-generate for
+        // task_created or prefix-resolve for other events.
+        let task_id = match inner.task_id.as_deref() {
+            Some(raw_id) => {
+                let id = brain_lib::uri::resolve_id(raw_id);
+                if event_type == EventType::TaskCreated {
+                    id
+                } else {
+                    self.stores
+                        .tasks
+                        .resolve_task_id(&id)
+                        .map_err(|e| RpcError::Unknown {
+                            message: format!("Failed to resolve task_id: {e}"),
+                        })?
+                }
+            }
+            None => {
+                if event_type == EventType::TaskCreated {
+                    let prefix =
+                        self.stores
+                            .tasks
+                            .get_project_prefix()
+                            .map_err(|e| RpcError::Unknown {
+                                message: format!("Failed to get project prefix: {e}"),
+                            })?;
+                    brain_tasks::events::new_task_id(&prefix)
+                } else {
+                    return Err(RpcError::Protocol {
+                        message:
+                            "Missing required parameter: task_id (required for all event types except task_created)"
+                                .into(),
+                    });
+                }
+            }
+        };
+
+        // Resolve any depends_on_task_id / parent_task_id references in
+        // the payload so the persisted event holds canonical IDs.
+        if let Some(dep_id) = payload
+            .get("depends_on_task_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let dep_owned = dep_id.to_string();
+            let resolved =
+                self.stores
+                    .tasks
+                    .resolve_task_id(&dep_owned)
+                    .map_err(|e| RpcError::Unknown {
+                        message: format!("Failed to resolve depends_on_task_id: {e}"),
+                    })?;
+            payload["depends_on_task_id"] = serde_json::json!(resolved);
+        }
+        if let Some(parent_id) = payload
+            .get("parent_task_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let parent_owned = parent_id.to_string();
+            let resolved = self
+                .stores
+                .tasks
+                .resolve_task_id(&parent_owned)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("Failed to resolve parent_task_id: {e}"),
+                })?;
+            payload["parent_task_id"] = serde_json::json!(resolved);
+        }
+
+        // For task_created, round-trip through TaskCreatedPayload so
+        // serde applies the domain defaults (priority=4, status=Open, …).
+        let payload = if event_type == EventType::TaskCreated {
+            let typed: TaskCreatedPayload =
+                serde_json::from_value(payload).map_err(|e| RpcError::Protocol {
+                    message: format!("Invalid task_created payload: {e}"),
+                })?;
+            serde_json::to_value(typed).map_err(|e| RpcError::Unknown {
+                message: format!("Failed to serialize task_created payload: {e}"),
+            })?
+        } else {
+            payload
+        };
+
+        let event = TaskEvent::from_raw(task_id.clone(), inner.actor, event_type.clone(), payload);
+
+        self.stores
+            .tasks
+            .append(&event)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("Task event failed: {e}"),
+            })?;
+
+        // Fetch resulting task state; failures here become warnings on
+        // the response so the caller still sees the event was applied.
+        let task_json = match self.stores.tasks.get_task(&task_id) {
+            Ok(Some(row)) => {
+                let labels = match self.stores.tasks.get_task_labels(&task_id) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        warnings.push(serde_json::json!({
+                            "source": "get_task_labels",
+                            "error": format!("{e}"),
+                        }));
+                        Vec::new()
+                    }
+                };
+                brain_tasks::enrichment::task_row_to_compact_json(&self.stores.tasks, &row, labels)
+            }
+            Ok(None) => serde_json::json!(null),
+            Err(_) => serde_json::json!(null),
+        };
+
+        // newly-unblocked dependents fire only on a terminal status flip.
+        let is_terminal = event_type == EventType::StatusChanged && {
+            let new_status = event
+                .payload
+                .get("new_status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            new_status == TaskStatus::Done.as_ref() || new_status == TaskStatus::Cancelled.as_ref()
+        };
+
+        let unblocked_task_ids: Vec<String> = if is_terminal {
+            match self.stores.tasks.list_newly_unblocked(&task_id) {
+                Ok(ids) => ids
+                    .iter()
+                    .map(|id| {
+                        self.stores
+                            .tasks
+                            .compact_id(id)
+                            .unwrap_or_else(|_| id.clone())
+                    })
+                    .collect(),
+                Err(e) => {
+                    warnings.push(serde_json::json!({
+                        "source": "list_newly_unblocked",
+                        "error": format!("{e}"),
+                    }));
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
+        let short_id = self
+            .stores
+            .tasks
+            .compact_id(&task_id)
+            .unwrap_or_else(|_| task_id.clone());
+        let uri =
+            brain_lib::uri::SynapseUri::for_task(&self.stores.brain_name, &short_id).to_string();
+
+        let mut response = serde_json::json!({
+            "task_id": short_id,
+            "uri": uri,
+            "task": task_json,
+            "unblocked_task_ids": unblocked_task_ids,
+        });
+        if !warnings.is_empty()
+            && let serde_json::Value::Object(map) = &mut response
+        {
+            map.insert("warnings".into(), serde_json::Value::Array(warnings));
+        }
+
+        let result_json = serde_json::to_string(&response).map_err(|e| RpcError::Protocol {
+            message: format!("serialize apply_event response: {e}"),
+        })?;
+        Ok(Response::TasksApplyEvent { result_json })
+    }
+
     fn handle_tasks_deps_batch(&self, params: TasksDepsBatchParams) -> Result<Response, RpcError> {
         // Mirrors `brain_lib::mcp::tools::task_deps_batch::{Params, DepPair}`.
         // Action union: add / remove / chain / fan / clear.
@@ -2694,11 +2962,11 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::WatchRemove { path } => self.handle_watch_remove(path),
             Request::WatchList => self.handle_watch_list(),
 
-            // ── New wire variants — first wave ───────────────────────────
-            // Links / records-mutation / brains-list / labels-summary /
-            // memory.walk_thread are real handlers. The four heavier arms
-            // (TasksApplyEvent, TasksDepsBatch, TasksLabelsBatch,
-            // TagsRecluster) remain stubs pending dedicated commits.
+            // ── PR2 wire variants ────────────────────────────────────────
+            // All 14 wire variants added in saga-5df PR2 (links /
+            // records-mutation / brains-list / labels-summary /
+            // memory.walk_thread / four wave-2 arms) dispatch to real
+            // handlers below — no stubs remain.
             Request::LinksAdd { params } => self.handle_links_add(params),
             Request::LinksRemove { params } => self.handle_links_remove(params),
             Request::LinksForEntity { params } => self.handle_links_for_entity(params),
@@ -2711,9 +2979,7 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::RecordsTagRemove { record_id, tag } => {
                 self.handle_records_tag_remove(record_id, tag)
             }
-            Request::TasksApplyEvent { .. } => Err(RpcError::Unknown {
-                message: "TasksApplyEvent: handler pending wire-up".into(),
-            }),
+            Request::TasksApplyEvent { params } => self.handle_tasks_apply_event(params),
             Request::TasksDepsBatch { params } => self.handle_tasks_deps_batch(params),
             Request::TasksLabelsBatch { params } => self.handle_tasks_labels_batch(params),
             Request::TasksLabelsSummary => self.handle_tasks_labels_summary(),
