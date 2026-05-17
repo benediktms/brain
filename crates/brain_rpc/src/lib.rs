@@ -53,16 +53,18 @@ pub mod testing;
 
 pub use client::DaemonClient;
 pub use domain::{
-    AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
-    JobSummary, JobsStatusReport, MemoryConsolidateParams, MemoryReflectParams,
-    MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
-    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
-    ProviderSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request,
-    Response, RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult,
-    SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
-    SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
-    TagAliasesStatusReport, TagsAliasesListParams, TaskSummary, TasksCreateParams, TasksListParams,
-    TasksMutateParams, TasksTransferParams, TasksUpdateParams, WatchSummary,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, BrainsListParams,
+    DocumentSummary, JobSummary, JobsStatusReport, LinksAddParams, LinksForEntityParams,
+    LinksRemoveParams, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
+    MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
+    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
+    RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams, RecordsListParams,
+    RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary, SagaCascadeOutcome,
+    SagaCascadeResult, SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport,
+    SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary,
+    TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams, TaskSummary, TasksCreateParams,
+    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams, WatchSummary,
+    WireBrainSummary, WireEntityRef, WireLinkSummary, WireTaskLabelSummary,
 };
 pub use transport::Transport;
 

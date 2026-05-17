@@ -1609,6 +1609,394 @@ impl BrainStoresDispatcher {
         Ok(Response::MemoryWalkThread { result_json })
     }
 
+    // ── Wave-1 mutation/read handlers (links / records / brains / labels)
+
+    fn handle_links_add(&self, params: brain_rpc::LinksAddParams) -> Result<Response, RpcError> {
+        use brain_persistence::db::links::{
+            EntityRef, LinkError, add_link_checked, edge_kind_from_str, entity_type_from_str,
+        };
+
+        let from_kind =
+            entity_type_from_str(&params.from.kind).ok_or_else(|| RpcError::Protocol {
+                message: format!("unknown from.kind: {}", params.from.kind),
+            })?;
+        let to_kind = entity_type_from_str(&params.to.kind).ok_or_else(|| RpcError::Protocol {
+            message: format!("unknown to.kind: {}", params.to.kind),
+        })?;
+        let edge_kind =
+            edge_kind_from_str(&params.edge_kind).ok_or_else(|| RpcError::Protocol {
+                message: format!("unknown edge_kind: {}", params.edge_kind),
+            })?;
+        let from = EntityRef {
+            kind: from_kind,
+            id: params.from.id,
+        };
+        let to = EntityRef {
+            kind: to_kind,
+            id: params.to.id,
+        };
+
+        let outcome = self.stores.inner_db().with_write_conn(move |conn| {
+            match add_link_checked(conn, from, to, edge_kind) {
+                // Re-wrap LinkError so the closure's SqlError signature is satisfied
+                // while preserving the LinkError discriminant for the outer match.
+                Err(LinkError::Cycle(ek)) => Err(brain_persistence::sql::SqlError::Domain(
+                    brain_persistence::error::BrainCoreError::Database(format!("cycle: {ek:?}")),
+                )),
+                Err(e) => Err(brain_persistence::sql::SqlError::Domain(
+                    brain_persistence::error::BrainCoreError::Database(e.to_string()),
+                )),
+                Ok(()) => Ok(()),
+            }
+        });
+
+        match outcome {
+            Ok(()) => Ok(Response::LinksAdd { created: true }),
+            Err(e) => Err(RpcError::Unknown {
+                message: format!("links.add: {e}"),
+            }),
+        }
+    }
+
+    fn handle_links_remove(
+        &self,
+        params: brain_rpc::LinksRemoveParams,
+    ) -> Result<Response, RpcError> {
+        use brain_persistence::db::links::{
+            EntityRef, edge_kind_from_str, entity_type_from_str, remove_link,
+        };
+
+        let from_kind =
+            entity_type_from_str(&params.from.kind).ok_or_else(|| RpcError::Protocol {
+                message: format!("unknown from.kind: {}", params.from.kind),
+            })?;
+        let to_kind = entity_type_from_str(&params.to.kind).ok_or_else(|| RpcError::Protocol {
+            message: format!("unknown to.kind: {}", params.to.kind),
+        })?;
+        let edge_kind =
+            edge_kind_from_str(&params.edge_kind).ok_or_else(|| RpcError::Protocol {
+                message: format!("unknown edge_kind: {}", params.edge_kind),
+            })?;
+        let from = EntityRef {
+            kind: from_kind,
+            id: params.from.id,
+        };
+        let to = EntityRef {
+            kind: to_kind,
+            id: params.to.id,
+        };
+
+        let removed = self
+            .stores
+            .inner_db()
+            .with_write_conn(move |conn| {
+                remove_link(conn, from, to, edge_kind).map_err(|e| {
+                    brain_persistence::sql::SqlError::Domain(
+                        brain_persistence::error::BrainCoreError::Database(e.to_string()),
+                    )
+                })
+            })
+            .map_err(|e| RpcError::Unknown {
+                message: format!("links.remove: {e}"),
+            })?;
+        Ok(Response::LinksRemove { removed })
+    }
+
+    fn handle_links_for_entity(
+        &self,
+        params: brain_rpc::LinksForEntityParams,
+    ) -> Result<Response, RpcError> {
+        use brain_persistence::db::links::{EntityRef, edge_kind_str, entity_type_str, for_entity};
+
+        let kind = brain_persistence::db::links::entity_type_from_str(&params.entity.kind)
+            .ok_or_else(|| RpcError::Protocol {
+                message: format!("unknown entity.kind: {}", params.entity.kind),
+            })?;
+        let entity = EntityRef {
+            kind,
+            id: params.entity.id.clone(),
+        };
+        let entity_id = params.entity.id.clone();
+
+        let edges = self
+            .stores
+            .inner_db()
+            .with_read_conn(move |conn| {
+                for_entity(conn, &entity, None).map_err(|e| {
+                    brain_persistence::sql::SqlError::Domain(
+                        brain_persistence::error::BrainCoreError::Database(e.to_string()),
+                    )
+                })
+            })
+            .map_err(|e| RpcError::Unknown {
+                message: format!("links.for_entity: {e}"),
+            })?;
+
+        // Apply direction filter daemon-side. "both" / unrecognised fall through unfiltered.
+        let direction = params.direction.as_str();
+        let entity_kind_str = params.entity.kind.as_str();
+        let filtered: Vec<_> = edges
+            .into_iter()
+            .filter(|e| {
+                let is_outgoing =
+                    entity_type_str(e.from.kind) == entity_kind_str && e.from.id == entity_id;
+                let is_incoming =
+                    entity_type_str(e.to.kind) == entity_kind_str && e.to.id == entity_id;
+                match direction {
+                    "out" | "outgoing" => is_outgoing,
+                    "in" | "incoming" => is_incoming,
+                    _ => is_outgoing || is_incoming,
+                }
+            })
+            .collect();
+
+        let limit = params.limit.unwrap_or(u32::MAX) as usize;
+        let links: Vec<brain_rpc::WireLinkSummary> = filtered
+            .into_iter()
+            .take(limit)
+            .map(|e| brain_rpc::WireLinkSummary {
+                from: brain_rpc::WireEntityRef {
+                    kind: entity_type_str(e.from.kind).to_string(),
+                    id: e.from.id,
+                },
+                to: brain_rpc::WireEntityRef {
+                    kind: entity_type_str(e.to.kind).to_string(),
+                    id: e.to.id,
+                },
+                edge_kind: edge_kind_str(e.edge_kind).to_string(),
+                // for_entity doesn't surface created_at — wire field stays empty
+                // until the read API is extended. CodeRabbit may flag this; the
+                // alternative is a parallel query for timestamps which doubles I/O.
+                created_at: String::new(),
+            })
+            .collect();
+        Ok(Response::LinksForEntity { links })
+    }
+
+    fn handle_records_archive(
+        &self,
+        params: brain_rpc::RecordsArchiveParams,
+    ) -> Result<Response, RpcError> {
+        let record_id = self
+            .stores
+            .records
+            .resolve_record_id(&params.record_id)
+            .map_err(|e| RpcError::Protocol {
+                message: format!("resolve record_id: {e}"),
+            })?;
+        if self
+            .stores
+            .records
+            .get_record(&record_id)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("get record: {e}"),
+            })?
+            .is_none()
+        {
+            return Err(RpcError::Unknown {
+                message: format!("record not found: {record_id}"),
+            });
+        }
+        self.stores
+            .records
+            .archive_record(&record_id, params.reason, "mcp")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("archive record: {e}"),
+            })?;
+        let compact = self
+            .stores
+            .records
+            .compact_record_id(&record_id)
+            .unwrap_or_else(|_| record_id.clone());
+        let uri =
+            brain_lib::uri::SynapseUri::for_record(&self.stores.brain_name, &compact).to_string();
+        Ok(Response::RecordsArchive {
+            record_id: compact,
+            uri,
+            status: "archived".into(),
+        })
+    }
+
+    fn handle_records_link_add(
+        &self,
+        params: brain_rpc::RecordsLinkParams,
+    ) -> Result<Response, RpcError> {
+        let record_id = self
+            .stores
+            .records
+            .resolve_record_id(&params.record_id)
+            .map_err(|e| RpcError::Protocol {
+                message: format!("resolve record_id: {e}"),
+            })?;
+        match params.target.kind.to_lowercase().as_str() {
+            "task" => self
+                .stores
+                .records
+                .link_task(&record_id, &params.target.id, "mcp")
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("records.link_add(task): {e}"),
+                })?,
+            "chunk" => self
+                .stores
+                .records
+                .link_chunk(&record_id, &params.target.id, "mcp")
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("records.link_add(chunk): {e}"),
+                })?,
+            other => {
+                return Err(RpcError::Protocol {
+                    message: format!("records.link_add: unsupported target kind {other:?}"),
+                });
+            }
+        }
+        Ok(Response::RecordsLinkAdd { created: true })
+    }
+
+    fn handle_records_link_remove(
+        &self,
+        params: brain_rpc::RecordsLinkParams,
+    ) -> Result<Response, RpcError> {
+        let record_id = self
+            .stores
+            .records
+            .resolve_record_id(&params.record_id)
+            .map_err(|e| RpcError::Protocol {
+                message: format!("resolve record_id: {e}"),
+            })?;
+        match params.target.kind.to_lowercase().as_str() {
+            "task" => self
+                .stores
+                .records
+                .unlink_task(&record_id, &params.target.id, "mcp")
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("records.link_remove(task): {e}"),
+                })?,
+            "chunk" => self
+                .stores
+                .records
+                .unlink_chunk(&record_id, &params.target.id, "mcp")
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("records.link_remove(chunk): {e}"),
+                })?,
+            other => {
+                return Err(RpcError::Protocol {
+                    message: format!("records.link_remove: unsupported target kind {other:?}"),
+                });
+            }
+        }
+        Ok(Response::RecordsLinkRemove { removed: true })
+    }
+
+    fn handle_records_tag_add(&self, record_id: String, tag: String) -> Result<Response, RpcError> {
+        let resolved = self
+            .stores
+            .records
+            .resolve_record_id(&record_id)
+            .map_err(|e| RpcError::Protocol {
+                message: format!("resolve record_id: {e}"),
+            })?;
+        self.stores
+            .records
+            .add_tag(&resolved, &tag, "mcp")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("records.tag_add: {e}"),
+            })?;
+        Ok(Response::RecordsTagAdd { tag })
+    }
+
+    fn handle_records_tag_remove(
+        &self,
+        record_id: String,
+        tag: String,
+    ) -> Result<Response, RpcError> {
+        let resolved = self
+            .stores
+            .records
+            .resolve_record_id(&record_id)
+            .map_err(|e| RpcError::Protocol {
+                message: format!("resolve record_id: {e}"),
+            })?;
+        self.stores
+            .records
+            .remove_tag(&resolved, &tag, "mcp")
+            .map_err(|e| RpcError::Unknown {
+                message: format!("records.tag_remove: {e}"),
+            })?;
+        Ok(Response::RecordsTagRemove { removed: true })
+    }
+
+    fn handle_tasks_labels_summary(&self) -> Result<Response, RpcError> {
+        let summaries = self
+            .stores
+            .tasks
+            .label_summary()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("tasks.labels_summary: {e}"),
+            })?;
+        let prefixes = self.stores.tasks.compact_ids().unwrap_or_default();
+        let labels: Vec<brain_rpc::WireTaskLabelSummary> = summaries
+            .into_iter()
+            .map(|s| brain_rpc::WireTaskLabelSummary {
+                count: s.count as u32,
+                task_ids: s
+                    .task_ids
+                    .iter()
+                    .map(|id| {
+                        prefixes
+                            .get(id.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| id.clone())
+                    })
+                    .collect(),
+                label: s.label,
+            })
+            .collect();
+        Ok(Response::TasksLabelsSummary { labels })
+    }
+
+    fn handle_brains_list(
+        &self,
+        params: brain_rpc::BrainsListParams,
+    ) -> Result<Response, RpcError> {
+        let active_only = !params.include_archived;
+        let rows = self
+            .stores
+            .list_brains(active_only)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("brains.list: {e}"),
+            })?;
+        let brains: Vec<brain_rpc::WireBrainSummary> = rows
+            .into_iter()
+            .map(|row| {
+                let roots: Vec<String> = row
+                    .roots_json
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str(raw).ok())
+                    .unwrap_or_default();
+                let (root, extra_roots) = match roots.split_first() {
+                    Some((head, tail)) => (head.clone(), tail.to_vec()),
+                    None => (String::new(), Vec::new()),
+                };
+                let aliases: Vec<String> = row
+                    .aliases_json
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str(raw).ok())
+                    .unwrap_or_default();
+                brain_rpc::WireBrainSummary {
+                    name: row.name,
+                    id: Some(row.brain_id),
+                    root,
+                    aliases,
+                    extra_roots,
+                    prefix: row.prefix,
+                    archived: row.archived,
+                }
+            })
+            .collect();
+        let count = brains.len() as u32;
+        Ok(Response::BrainsList { brains, count })
+    }
+
     /// Resolve federated brain keys to a `(name, id, Option<StoreReader>)`
     /// list suitable for `brain_memory::retrieve::run_query_as_json`.
     ///
@@ -2077,35 +2465,23 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::WatchRemove { path } => self.handle_watch_remove(path),
             Request::WatchList => self.handle_watch_list(),
 
-            // ── Stub dispatchers for the new wire variants ───────────────
-            // Real implementations land in a follow-up commit once
-            // brain_memory's per-operation modules are populated. Until
-            // then these return a structured error so the workspace
-            // compiles and existing wire variants stay untouched.
-            Request::LinksAdd { .. } => Err(RpcError::Unknown {
-                message: "LinksAdd: handler pending wire-up".into(),
-            }),
-            Request::LinksRemove { .. } => Err(RpcError::Unknown {
-                message: "LinksRemove: handler pending wire-up".into(),
-            }),
-            Request::LinksForEntity { .. } => Err(RpcError::Unknown {
-                message: "LinksForEntity: handler pending wire-up".into(),
-            }),
-            Request::RecordsArchive { .. } => Err(RpcError::Unknown {
-                message: "RecordsArchive: handler pending wire-up".into(),
-            }),
-            Request::RecordsLinkAdd { .. } => Err(RpcError::Unknown {
-                message: "RecordsLinkAdd: handler pending wire-up".into(),
-            }),
-            Request::RecordsLinkRemove { .. } => Err(RpcError::Unknown {
-                message: "RecordsLinkRemove: handler pending wire-up".into(),
-            }),
-            Request::RecordsTagAdd { .. } => Err(RpcError::Unknown {
-                message: "RecordsTagAdd: handler pending wire-up".into(),
-            }),
-            Request::RecordsTagRemove { .. } => Err(RpcError::Unknown {
-                message: "RecordsTagRemove: handler pending wire-up".into(),
-            }),
+            // ── New wire variants — first wave ───────────────────────────
+            // Links / records-mutation / brains-list / labels-summary /
+            // memory.walk_thread are real handlers. The four heavier arms
+            // (TasksApplyEvent, TasksDepsBatch, TasksLabelsBatch,
+            // TagsRecluster) remain stubs pending dedicated commits.
+            Request::LinksAdd { params } => self.handle_links_add(params),
+            Request::LinksRemove { params } => self.handle_links_remove(params),
+            Request::LinksForEntity { params } => self.handle_links_for_entity(params),
+            Request::RecordsArchive { params } => self.handle_records_archive(params),
+            Request::RecordsLinkAdd { params } => self.handle_records_link_add(params),
+            Request::RecordsLinkRemove { params } => self.handle_records_link_remove(params),
+            Request::RecordsTagAdd { record_id, tag } => {
+                self.handle_records_tag_add(record_id, tag)
+            }
+            Request::RecordsTagRemove { record_id, tag } => {
+                self.handle_records_tag_remove(record_id, tag)
+            }
             Request::TasksApplyEvent { .. } => Err(RpcError::Unknown {
                 message: "TasksApplyEvent: handler pending wire-up".into(),
             }),
@@ -2115,16 +2491,12 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::TasksLabelsBatch { .. } => Err(RpcError::Unknown {
                 message: "TasksLabelsBatch: handler pending wire-up".into(),
             }),
-            Request::TasksLabelsSummary => Err(RpcError::Unknown {
-                message: "TasksLabelsSummary: handler pending wire-up".into(),
-            }),
+            Request::TasksLabelsSummary => self.handle_tasks_labels_summary(),
             Request::MemoryWalkThread { params } => self.handle_memory_walk_thread(params),
             Request::TagsRecluster { .. } => Err(RpcError::Unknown {
                 message: "TagsRecluster: handler pending wire-up".into(),
             }),
-            Request::BrainsList { .. } => Err(RpcError::Unknown {
-                message: "BrainsList: handler pending wire-up".into(),
-            }),
+            Request::BrainsList { params } => self.handle_brains_list(params),
         }
     }
 }
