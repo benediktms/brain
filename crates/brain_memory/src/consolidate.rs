@@ -60,9 +60,14 @@ pub struct ConsolidateResult {
 /// group them by temporal proximity, optionally enqueue async
 /// summarisation jobs, and emit the wire-format JSON envelope.
 pub fn run_as_json(db: &Db, default_brain_id: &str, params: ConsolidateParams) -> Result<Value> {
+    // The MCP contract treats `Some("")` as "current brain" — same as
+    // `None`. Filter empty strings before the unwrap so an empty
+    // brain_id parameter does not change episode-listing scope or
+    // queued summarization jobs.
     let effective_brain_id = params
         .brain_id
         .as_deref()
+        .filter(|s| !s.is_empty())
         .unwrap_or(default_brain_id)
         .to_string();
     let limit = params.limit.min(500);

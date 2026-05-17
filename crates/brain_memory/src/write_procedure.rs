@@ -73,7 +73,11 @@ pub fn run(
         uri,
         title: params.title,
         tags: params.tags,
-        importance: params.importance,
+        // Return the clamped value so the response reflects what was
+        // actually persisted, not what the caller sent. A caller that
+        // passed `importance: 1.5` sees `1.0` in the response rather
+        // than the un-clamped input.
+        importance,
     })
 }
 

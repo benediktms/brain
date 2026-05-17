@@ -1419,7 +1419,20 @@ impl<T: Transport> DaemonClient<T> {
         params: BrainsListParams,
     ) -> Result<(Vec<WireBrainSummary>, u32), RpcError> {
         match self.call(Request::BrainsList { params })? {
-            Response::BrainsList { brains, count } => Ok((brains, count)),
+            Response::BrainsList { brains, count } => {
+                // The wire contract documents `count == brains.len()`.
+                // Enforce at the client boundary so a buggy daemon
+                // cannot deliver contradictory values to callers.
+                let expected = brains.len() as u32;
+                if count != expected {
+                    return Err(RpcError::Protocol {
+                        message: format!(
+                            "BrainsList: count={count} does not match brains.len()={expected}"
+                        ),
+                    });
+                }
+                Ok((brains, count))
+            }
             other => Err(RpcError::Protocol {
                 message: format!("expected BrainsList in reply to BrainsList, got {other:?}"),
             }),
