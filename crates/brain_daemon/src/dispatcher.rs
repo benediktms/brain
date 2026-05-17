@@ -102,10 +102,16 @@ impl Dispatcher for DefaultDispatcher {
             | Request::SagasClose { .. }
             | Request::SagasCancel { .. }
             | Request::SagasReopen { .. }
-            | Request::SagasStats { .. } => Err(RpcError::Unknown {
-                message: "tasks_* / records_* / <kind>_* / sagas_* requests not handled by \
-                          DefaultDispatcher — start brain-daemon with --sqlite-db and \
-                          --lance-db to use the BrainStores-backed dispatcher"
+            | Request::SagasStats { .. }
+            | Request::MemoryWriteEpisode { .. }
+            | Request::MemoryWriteProcedure { .. }
+            | Request::MemoryRetrieve { .. }
+            | Request::MemoryConsolidate { .. }
+            | Request::MemorySummarizeScope { .. }
+            | Request::MemoryReflect { .. } => Err(RpcError::Unknown {
+                message: "tasks_* / records_* / <kind>_* / sagas_* / memory_* requests not \
+                          handled by DefaultDispatcher — start brain-daemon with --sqlite-db \
+                          and --lance-db to use the BrainStores-backed dispatcher"
                     .into(),
             }),
         }

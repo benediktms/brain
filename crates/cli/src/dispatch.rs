@@ -1110,16 +1110,33 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                 MemoryCtx, ReflectCommitParams, ReflectPrepareParams, RetrieveParams,
                 WriteEpisodeParams, WriteProcedureParams,
             };
-            let ctx = MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json).await?;
 
             match action {
                 MemoryAction::Consolidate {
                     limit,
                     gap_seconds,
                     auto_summarize,
+                    remote,
                 } => {
-                    commands::memory::run::consolidate(&ctx, limit, gap_seconds, auto_summarize)
+                    if remote {
+                        commands::memory::run::consolidate_remote(
+                            limit,
+                            gap_seconds,
+                            auto_summarize,
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::consolidate(
+                            &ctx,
+                            limit,
+                            gap_seconds,
+                            auto_summarize,
+                        )
                         .await?;
+                    }
                 }
                 MemoryAction::Retrieve {
                     query,
@@ -1136,27 +1153,53 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     tags_exclude,
                     kinds,
                     explain,
+                    remote,
                 } => {
-                    commands::memory::run::retrieve(
-                        &ctx,
-                        RetrieveParams {
-                            query,
-                            uri,
-                            lod,
-                            count,
-                            strategy,
-                            brains,
-                            time_scope,
-                            time_after,
-                            time_before,
-                            tags,
-                            tags_require,
-                            tags_exclude,
-                            kinds,
-                            explain,
-                        },
-                    )
-                    .await?;
+                    if remote {
+                        commands::memory::run::retrieve_remote(
+                            RetrieveParams {
+                                query,
+                                uri,
+                                lod,
+                                count,
+                                strategy,
+                                brains,
+                                time_scope,
+                                time_after,
+                                time_before,
+                                tags,
+                                tags_require,
+                                tags_exclude,
+                                kinds,
+                                explain,
+                            },
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::retrieve(
+                            &ctx,
+                            RetrieveParams {
+                                query,
+                                uri,
+                                lod,
+                                count,
+                                strategy,
+                                brains,
+                                time_scope,
+                                time_after,
+                                time_before,
+                                tags,
+                                tags_require,
+                                tags_exclude,
+                                kinds,
+                                explain,
+                            },
+                        )
+                        .await?;
+                    }
                 }
                 MemoryAction::WriteEpisode {
                     goal,
@@ -1164,52 +1207,101 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     outcome,
                     tags,
                     importance,
+                    remote,
                 } => {
-                    commands::memory::run::write_episode(
-                        &ctx,
-                        WriteEpisodeParams {
-                            goal,
-                            actions,
-                            outcome,
-                            tags,
-                            importance,
-                            lance_db: Some(cli.lance_db.clone()),
-                        },
-                    )
-                    .await?;
+                    if remote {
+                        commands::memory::run::write_episode_remote(
+                            WriteEpisodeParams {
+                                goal,
+                                actions,
+                                outcome,
+                                tags,
+                                importance,
+                                lance_db: None,
+                            },
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::write_episode(
+                            &ctx,
+                            WriteEpisodeParams {
+                                goal,
+                                actions,
+                                outcome,
+                                tags,
+                                importance,
+                                lance_db: Some(cli.lance_db.clone()),
+                            },
+                        )
+                        .await?;
+                    }
                 }
                 MemoryAction::WriteProcedure {
                     title,
                     steps,
                     tags,
                     importance,
+                    remote,
                 } => {
-                    commands::memory::run::write_procedure(
-                        &ctx,
-                        WriteProcedureParams {
-                            title,
-                            steps,
-                            tags,
-                            importance,
-                            lance_db: Some(cli.lance_db.clone()),
-                        },
-                    )
-                    .await?;
+                    if remote {
+                        commands::memory::run::write_procedure_remote(
+                            WriteProcedureParams {
+                                title,
+                                steps,
+                                tags,
+                                importance,
+                                lance_db: None,
+                            },
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::write_procedure(
+                            &ctx,
+                            WriteProcedureParams {
+                                title,
+                                steps,
+                                tags,
+                                importance,
+                                lance_db: Some(cli.lance_db.clone()),
+                            },
+                        )
+                        .await?;
+                    }
                 }
                 MemoryAction::SummarizeScope {
                     scope_type,
                     scope_value,
                     regenerate,
                     async_llm,
+                    remote,
                 } => {
-                    commands::memory::run::summarize_scope(
-                        &ctx,
-                        &scope_type,
-                        &scope_value,
-                        regenerate,
-                        async_llm,
-                    )
-                    .await?;
+                    if remote {
+                        commands::memory::run::summarize_scope_remote(
+                            &scope_type,
+                            &scope_value,
+                            regenerate,
+                            async_llm,
+                            json,
+                        )?;
+                    } else {
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        commands::memory::run::summarize_scope(
+                            &ctx,
+                            &scope_type,
+                            &scope_value,
+                            regenerate,
+                            async_llm,
+                        )
+                        .await?;
+                    }
                 }
                 MemoryAction::Reflect {
                     commit,
@@ -1221,33 +1313,46 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
                     source_ids,
                     tags,
                     importance,
+                    remote,
                 } => {
-                    if commit {
-                        commands::memory::run::reflect_commit(
-                            &ctx,
-                            ReflectCommitParams {
-                                title: title.unwrap_or_default(),
-                                content: content.unwrap_or_default(),
-                                source_ids,
-                                tags,
-                                importance: importance.unwrap_or(1.0),
-                                lance_db: Some(cli.lance_db.clone()),
-                            },
-                        )
-                        .await?;
+                    if remote {
+                        commands::memory::run::reflect_remote(
+                            commit, topic, budget, brains, title, content, source_ids, tags,
+                            importance, json,
+                        )?;
                     } else {
-                        let topic = topic.ok_or_else(|| {
-                            anyhow::anyhow!("--topic is required in prepare mode (omit --commit)")
-                        })?;
-                        commands::memory::run::reflect_prepare(
-                            &ctx,
-                            ReflectPrepareParams {
-                                topic,
-                                budget,
-                                brains,
-                            },
-                        )
-                        .await?;
+                        let ctx =
+                            MemoryCtx::new(&cli.sqlite_db, &cli.lance_db, &cli.model_dir, json)
+                                .await?;
+                        if commit {
+                            commands::memory::run::reflect_commit(
+                                &ctx,
+                                ReflectCommitParams {
+                                    title: title.unwrap_or_default(),
+                                    content: content.unwrap_or_default(),
+                                    source_ids,
+                                    tags,
+                                    importance: importance.unwrap_or(1.0),
+                                    lance_db: Some(cli.lance_db.clone()),
+                                },
+                            )
+                            .await?;
+                        } else {
+                            let topic = topic.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "--topic is required in prepare mode (omit --commit)"
+                                )
+                            })?;
+                            commands::memory::run::reflect_prepare(
+                                &ctx,
+                                ReflectPrepareParams {
+                                    topic,
+                                    budget,
+                                    brains,
+                                },
+                            )
+                            .await?;
+                        }
                     }
                 }
             }

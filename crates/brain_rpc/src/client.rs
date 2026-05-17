@@ -24,12 +24,14 @@
 //!   test that constructs a client.
 
 use crate::domain::{
-    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
-    PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
-    RpcError, SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount,
-    SagaStatsReport, SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams,
-    SnapshotSummary, TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams,
-    TasksTransferParams, TasksUpdateParams,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary,
+    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams,
+    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
+    RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response, RpcError,
+    SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount, SagaStatsReport,
+    SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary,
+    TaskSummary, TasksCreateParams, TasksListParams, TasksMutateParams, TasksTransferParams,
+    TasksUpdateParams,
 };
 use crate::transport::Transport;
 
@@ -868,6 +870,133 @@ impl<T: Transport> DaemonClient<T> {
             } => Ok((saga_id, stats, label_histogram, brains)),
             other => Err(RpcError::Protocol {
                 message: format!("expected SagasStats in reply to SagasStats, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Record an episode in the memory log. Returns `(summary_id, uri)`
+    /// — the URI follows the `synapse://<brain>/memory/<id>` convention.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::MemoryWriteEpisode`].
+    pub fn memory_write_episode(
+        &mut self,
+        params: MemoryWriteEpisodeParams,
+    ) -> Result<(String, String), RpcError> {
+        match self.call(Request::MemoryWriteEpisode { params })? {
+            Response::MemoryWriteEpisode { summary_id, uri } => Ok((summary_id, uri)),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected MemoryWriteEpisode in reply to MemoryWriteEpisode, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Store a procedure. Returns `(summary_id, uri)`.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::MemoryWriteProcedure`].
+    pub fn memory_write_procedure(
+        &mut self,
+        params: MemoryWriteProcedureParams,
+    ) -> Result<(String, String), RpcError> {
+        match self.call(Request::MemoryWriteProcedure { params })? {
+            Response::MemoryWriteProcedure { summary_id, uri } => Ok((summary_id, uri)),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected MemoryWriteProcedure in reply to MemoryWriteProcedure, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Retrieve memory chunks via the daemon. Returns the daemon's
+    /// serialized JSON result envelope — the caller deserializes it the
+    /// same way it would the local-path MCP tool output.
+    ///
+    /// The wire type is `String` (rather than a typed struct) by design
+    /// for now: the memory retrieve JSON shape is still evolving, so
+    /// freezing it into a wire-format struct would force a protocol
+    /// version bump on every minor change. Migrating to a typed
+    /// envelope is tracked separately.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::MemoryRetrieve`].
+    pub fn memory_retrieve(&mut self, params: MemoryRetrieveParams) -> Result<String, RpcError> {
+        match self.call(Request::MemoryRetrieve { params })? {
+            Response::MemoryRetrieve { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected MemoryRetrieve in reply to MemoryRetrieve, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Group recent episodes into consolidation clusters. Returns the
+    /// daemon's serialized JSON report — see [`Self::memory_retrieve`]
+    /// for the design rationale on the `String` wire type.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::MemoryConsolidate`].
+    pub fn memory_consolidate(
+        &mut self,
+        params: MemoryConsolidateParams,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::MemoryConsolidate { params })? {
+            Response::MemoryConsolidate { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected MemoryConsolidate in reply to MemoryConsolidate, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Generate or retrieve a scope summary. Returns the daemon's
+    /// serialized JSON report.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::MemorySummarizeScope`].
+    pub fn memory_summarize_scope(
+        &mut self,
+        params: MemorySummarizeScopeParams,
+    ) -> Result<String, RpcError> {
+        match self.call(Request::MemorySummarizeScope { params })? {
+            Response::MemorySummarizeScope { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected MemorySummarizeScope in reply to \
+                     MemorySummarizeScope, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Prepare a reflection (source-material fetch) or commit a
+    /// reflection — driven by [`MemoryReflectParams::commit`]. Returns
+    /// the daemon's serialized JSON envelope.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::MemoryReflect`].
+    pub fn memory_reflect(&mut self, params: MemoryReflectParams) -> Result<String, RpcError> {
+        match self.call(Request::MemoryReflect { params })? {
+            Response::MemoryReflect { result_json } => Ok(result_json),
+            other => Err(RpcError::Protocol {
+                message: format!("expected MemoryReflect in reply to MemoryReflect, got {other:?}"),
             }),
         }
     }
@@ -2268,5 +2397,232 @@ mod tests {
         assert_eq!(stats.total, 3);
         assert_eq!(labels.len(), 1);
         assert_eq!(brains.len(), 1);
+    }
+
+    // ── memory typed-method coverage ──────────────────────────
+
+    fn sample_episode_params() -> MemoryWriteEpisodeParams {
+        MemoryWriteEpisodeParams {
+            goal: "test goal".into(),
+            actions: "test actions".into(),
+            outcome: "test outcome".into(),
+            tags: vec!["unit-test".into()],
+            importance_millis: 500,
+        }
+    }
+
+    #[test]
+    fn memory_write_episode_returns_summary_and_uri() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::MemoryWriteEpisode { params } => {
+                assert_eq!(params.goal, "test goal");
+                assert_eq!(params.importance_millis, 500);
+                Ok(Response::MemoryWriteEpisode {
+                    summary_id: "sid-1".into(),
+                    uri: "synapse://b/memory/sid-1".into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let (summary_id, uri) = client
+            .memory_write_episode(sample_episode_params())
+            .expect("memory_write_episode");
+        assert_eq!(summary_id, "sid-1");
+        assert_eq!(uri, "synapse://b/memory/sid-1");
+    }
+
+    #[test]
+    fn memory_write_episode_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.memory_write_episode(sample_episode_params()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("MemoryWriteEpisode"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    fn sample_procedure_params() -> MemoryWriteProcedureParams {
+        MemoryWriteProcedureParams {
+            title: "doit".into(),
+            steps: "1. step".into(),
+            tags: vec![],
+            importance_millis: 750,
+        }
+    }
+
+    #[test]
+    fn memory_write_procedure_returns_summary_and_uri() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::MemoryWriteProcedure { .. } => Ok(Response::MemoryWriteProcedure {
+                summary_id: "p-1".into(),
+                uri: "synapse://b/procedure/p-1".into(),
+            }),
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let (summary_id, uri) = client
+            .memory_write_procedure(sample_procedure_params())
+            .expect("memory_write_procedure");
+        assert_eq!(summary_id, "p-1");
+        assert_eq!(uri, "synapse://b/procedure/p-1");
+    }
+
+    #[test]
+    fn memory_write_procedure_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.memory_write_procedure(sample_procedure_params()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("MemoryWriteProcedure"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_retrieve_returns_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::MemoryRetrieve { params } => {
+                assert_eq!(params.lod, "L2");
+                Ok(Response::MemoryRetrieve {
+                    result_json: r#"{"results":[]}"#.into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let params = MemoryRetrieveParams {
+            query: Some("hello".into()),
+            lod: "L2".into(),
+            count: 5,
+            strategy: "hybrid".into(),
+            ..Default::default()
+        };
+        let got = client.memory_retrieve(params).expect("memory_retrieve");
+        assert_eq!(got, r#"{"results":[]}"#);
+    }
+
+    #[test]
+    fn memory_retrieve_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.memory_retrieve(MemoryRetrieveParams::default()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("MemoryRetrieve"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_consolidate_returns_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::MemoryConsolidate { params } => {
+                assert_eq!(params.limit, 10);
+                Ok(Response::MemoryConsolidate {
+                    result_json: r#"{"cluster_count":0}"#.into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let got = client
+            .memory_consolidate(MemoryConsolidateParams {
+                limit: 10,
+                gap_seconds: 600,
+                auto_summarize: false,
+            })
+            .expect("memory_consolidate");
+        assert_eq!(got, r#"{"cluster_count":0}"#);
+    }
+
+    #[test]
+    fn memory_consolidate_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.memory_consolidate(MemoryConsolidateParams {
+            limit: 1,
+            gap_seconds: 60,
+            auto_summarize: false,
+        }) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("MemoryConsolidate"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_summarize_scope_returns_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::MemorySummarizeScope { params } => {
+                assert_eq!(params.scope_type, "tag");
+                assert_eq!(params.scope_value, "rust");
+                Ok(Response::MemorySummarizeScope {
+                    result_json: r#"{"content":"..."}"#.into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let got = client
+            .memory_summarize_scope(MemorySummarizeScopeParams {
+                scope_type: "tag".into(),
+                scope_value: "rust".into(),
+                regenerate: false,
+                async_llm: false,
+            })
+            .expect("memory_summarize_scope");
+        assert_eq!(got, r#"{"content":"..."}"#);
+    }
+
+    #[test]
+    fn memory_summarize_scope_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.memory_summarize_scope(MemorySummarizeScopeParams {
+            scope_type: "tag".into(),
+            scope_value: "x".into(),
+            regenerate: false,
+            async_llm: false,
+        }) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("MemorySummarizeScope"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn memory_reflect_returns_result_json() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::MemoryReflect { params } => {
+                assert!(params.commit);
+                Ok(Response::MemoryReflect {
+                    result_json: r#"{"mode":"commit"}"#.into(),
+                })
+            }
+            _ => panic!("unexpected request: {req:?}"),
+        }));
+        let params = MemoryReflectParams {
+            commit: true,
+            title: Some("t".into()),
+            content: Some("c".into()),
+            source_ids: vec!["s1".into()],
+            importance_millis: Some(800),
+            ..Default::default()
+        };
+        let got = client.memory_reflect(params).expect("memory_reflect");
+        assert_eq!(got, r#"{"mode":"commit"}"#);
+    }
+
+    #[test]
+    fn memory_reflect_returns_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        match client.memory_reflect(MemoryReflectParams::default()) {
+            Err(RpcError::Protocol { message }) => {
+                assert!(message.contains("MemoryReflect"));
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
     }
 }

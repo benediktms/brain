@@ -13,15 +13,20 @@
 //! a new field tomorrow, this file is where the decision is made
 //! about whether to expose it on the wire.
 
+use std::sync::{Arc, OnceLock};
+
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::sagas::compact_saga_id;
+use brain_persistence::db::summaries::Episode;
 use brain_records::{
     CreateRecordParams, Record, RecordKind, RecordQuery, RecordStatus, RecordStore, integrity,
 };
 use brain_rpc::{
-    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
-    PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
-    RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary,
+    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams,
+    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
+    RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response, RpcError,
+    SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
     SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
     SagasListParams, SagasUpdateParams, SnapshotSummary, TaskSummary, TasksCreateParams,
     TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
@@ -48,11 +53,80 @@ use crate::dispatcher::Dispatcher;
 /// [`crate::UnixSocketServer`] is satisfied.
 pub struct BrainStoresDispatcher {
     stores: BrainStores,
+    /// Tokio current-thread runtime for memory handlers that go through
+    /// `ToolRegistry::dispatch` (async LanceDB + embedder). Created
+    /// lazily on first use to keep daemon startup fast for callers that
+    /// never touch semantic memory.
+    runtime: OnceLock<tokio::runtime::Runtime>,
+    /// Shared MCP context (BrainStores + SearchService + Metrics) for
+    /// semantic memory tools. Built lazily on first retrieve / reflect
+    /// call from `self.stores.brain_home` so a daemon launched without
+    /// the embedder model on disk still answers everything else.
+    mcp_ctx: OnceLock<Arc<brain_lib::mcp::McpContext>>,
 }
 
 impl BrainStoresDispatcher {
     pub fn new(stores: BrainStores) -> Self {
-        Self { stores }
+        Self {
+            stores,
+            runtime: OnceLock::new(),
+            mcp_ctx: OnceLock::new(),
+        }
+    }
+
+    /// Lazily build (or return) a tokio current-thread runtime. Used by
+    /// memory handlers that need to `block_on` an async tool call.
+    fn runtime(&self) -> Result<&tokio::runtime::Runtime, RpcError> {
+        if let Some(rt) = self.runtime.get() {
+            return Ok(rt);
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| RpcError::Unknown {
+                message: format!("create tokio runtime: {e}"),
+            })?;
+        // OnceLock::set returns Err if another writer raced us — that's
+        // fine, we just discard our build and use the winner's runtime.
+        let _ = self.runtime.set(rt);
+        Ok(self
+            .runtime
+            .get()
+            .expect("runtime initialised above (or by racing writer)"))
+    }
+
+    /// Lazily build (or return) the shared `McpContext` for semantic
+    /// memory tools. Returns `RpcError::Unknown` if the embedder /
+    /// LanceDB cannot be loaded — callers (retrieve / reflect) surface
+    /// the error verbatim to the wire.
+    fn mcp_ctx(&self) -> Result<Arc<brain_lib::mcp::McpContext>, RpcError> {
+        if let Some(ctx) = self.mcp_ctx.get() {
+            return Ok(Arc::clone(ctx));
+        }
+        let brain_home = self.stores.brain_home.clone();
+        let model_dir = brain_home.join("models").join("bge-small-en-v1.5");
+        let lance_db = brain_home.join("lancedb");
+        let sqlite_db = brain_home.join("brain.db");
+        let ctx = self
+            .runtime()?
+            .block_on(async {
+                brain_lib::mcp::McpContext::bootstrap(
+                    &model_dir,
+                    &lance_db,
+                    &sqlite_db,
+                    Some(self.stores.brain_name.as_str()),
+                )
+                .await
+            })
+            .map_err(|e| RpcError::Unknown {
+                message: format!("bootstrap McpContext for memory tools: {e}"),
+            })?;
+        let _ = self.mcp_ctx.set(Arc::clone(&ctx));
+        Ok(self
+            .mcp_ctx
+            .get()
+            .map(Arc::clone)
+            .expect("mcp_ctx initialised above (or by racing writer)"))
     }
 
     fn handle_tasks_list(&self, params: TasksListParams) -> Result<Response, RpcError> {
@@ -1183,6 +1257,281 @@ impl BrainStoresDispatcher {
             },
         }
     }
+
+    // ── memory handlers ─────────────────────────────────────────────────────
+
+    fn handle_memory_write_episode(
+        &self,
+        params: MemoryWriteEpisodeParams,
+    ) -> Result<Response, RpcError> {
+        let importance = millis_to_unit(params.importance_millis);
+        let episode = Episode {
+            brain_id: self.stores.brain_id.clone(),
+            goal: params.goal,
+            actions: params.actions,
+            outcome: params.outcome,
+            tags: params.tags,
+            importance,
+        };
+        let summary_id = self
+            .stores
+            .store_episode(&episode)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("store episode: {e}"),
+            })?;
+        let uri = brain_lib::uri::SynapseUri::for_episode(&self.stores.brain_name, &summary_id)
+            .to_string();
+        Ok(Response::MemoryWriteEpisode { summary_id, uri })
+    }
+
+    fn handle_memory_write_procedure(
+        &self,
+        params: MemoryWriteProcedureParams,
+    ) -> Result<Response, RpcError> {
+        let importance = millis_to_unit(params.importance_millis);
+        let summary_id = self
+            .stores
+            .store_procedure(
+                &params.title,
+                &params.steps,
+                &params.tags,
+                importance,
+                &self.stores.brain_id,
+            )
+            .map_err(|e| RpcError::Unknown {
+                message: format!("store procedure: {e}"),
+            })?;
+        let uri = brain_lib::uri::SynapseUri::for_procedure(&self.stores.brain_name, &summary_id)
+            .to_string();
+        Ok(Response::MemoryWriteProcedure { summary_id, uri })
+    }
+
+    fn handle_memory_consolidate(
+        &self,
+        params: MemoryConsolidateParams,
+    ) -> Result<Response, RpcError> {
+        use brain_lib::consolidation::{consolidate_episodes, enqueue_cluster_summarization};
+
+        let episodes = self
+            .stores
+            .list_episodes(params.limit, &self.stores.brain_id)
+            .unwrap_or_default();
+
+        let result = consolidate_episodes(episodes, params.gap_seconds);
+        let jobs_enqueued = if params.auto_summarize {
+            enqueue_cluster_summarization(&self.stores, &result.clusters, &self.stores.brain_id)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("enqueue cluster summarization: {e}"),
+                })?
+        } else {
+            0
+        };
+
+        let clusters_json: Vec<serde_json::Value> = result
+            .clusters
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "episode_ids": c.episode_ids,
+                    "episode_count": c.episodes.len(),
+                    "suggested_title": c.suggested_title,
+                    "summary": c.summary,
+                    "oldest_ts": c.episodes.iter().map(|e| e.created_at).min(),
+                    "newest_ts": c.episodes.iter().map(|e| e.created_at).max(),
+                })
+            })
+            .collect();
+        let out = serde_json::json!({
+            "cluster_count": clusters_json.len(),
+            "jobs_enqueued": jobs_enqueued,
+            "clusters": clusters_json,
+        });
+        let result_json = serde_json::to_string(&out).map_err(|e| RpcError::Protocol {
+            message: format!("serialize consolidate report: {e}"),
+        })?;
+        Ok(Response::MemoryConsolidate { result_json })
+    }
+
+    fn handle_memory_summarize_scope(
+        &self,
+        params: MemorySummarizeScopeParams,
+    ) -> Result<Response, RpcError> {
+        use brain_lib::hierarchy::{
+            DerivedSummary, ScopeType, generate_scope_summary_with_options, get_scope_summary,
+        };
+
+        let st = match params.scope_type.as_str() {
+            "directory" => ScopeType::Directory,
+            "tag" => ScopeType::Tag,
+            other => {
+                return Err(RpcError::Protocol {
+                    message: format!(
+                        "invalid scope_type {other:?} (expected \"directory\" or \"tag\")"
+                    ),
+                });
+            }
+        };
+
+        let mut llm_pending = false;
+        let summary: DerivedSummary = if params.regenerate {
+            let generation = generate_scope_summary_with_options(
+                &self.stores,
+                &st,
+                &params.scope_value,
+                params.async_llm,
+            )
+            .map_err(|e| RpcError::Unknown {
+                message: format!("generate scope summary: {e}"),
+            })?;
+            llm_pending = generation.llm_pending;
+            get_scope_summary(&self.stores, &st, &params.scope_value)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("load scope summary: {e}"),
+                })?
+                .ok_or_else(|| RpcError::Unknown {
+                    message: format!("generated summary {} not found after insert", generation.id),
+                })?
+        } else {
+            match get_scope_summary(&self.stores, &st, &params.scope_value).map_err(|e| {
+                RpcError::Unknown {
+                    message: format!("load scope summary: {e}"),
+                }
+            })? {
+                Some(s) => s,
+                None => {
+                    let generation = generate_scope_summary_with_options(
+                        &self.stores,
+                        &st,
+                        &params.scope_value,
+                        params.async_llm,
+                    )
+                    .map_err(|e| RpcError::Unknown {
+                        message: format!("generate scope summary: {e}"),
+                    })?;
+                    llm_pending = generation.llm_pending;
+                    get_scope_summary(&self.stores, &st, &params.scope_value)
+                        .map_err(|e| RpcError::Unknown {
+                            message: format!("load scope summary: {e}"),
+                        })?
+                        .ok_or_else(|| RpcError::Unknown {
+                            message: format!(
+                                "generated summary {} not found after insert",
+                                generation.id
+                            ),
+                        })?
+                }
+            }
+        };
+
+        let out = serde_json::json!({
+            "scope_type": summary.scope_type,
+            "scope_value": summary.scope_value,
+            "content": summary.content,
+            "stale": summary.stale,
+            "llm_pending": llm_pending,
+            "generated_at": summary.generated_at,
+        });
+        let result_json = serde_json::to_string(&out).map_err(|e| RpcError::Protocol {
+            message: format!("serialize summarize report: {e}"),
+        })?;
+        Ok(Response::MemorySummarizeScope { result_json })
+    }
+
+    fn handle_memory_retrieve(&self, params: MemoryRetrieveParams) -> Result<Response, RpcError> {
+        // Mirror the wire params back into the JSON the MCP tool expects.
+        // Field-for-field translation keeps the brain_lib::mcp tool
+        // contract decoupled from `MemoryRetrieveParams`.
+        let json_params = serde_json::json!({
+            "query": params.query,
+            "uri": params.uri,
+            "lod": params.lod,
+            "count": params.count,
+            "strategy": params.strategy,
+            "brains": params.brains,
+            "time_scope": params.time_scope,
+            "time_after": params.time_after,
+            "time_before": params.time_before,
+            "tags": params.tags,
+            "tags_require": params.tags_require,
+            "tags_exclude": params.tags_exclude,
+            "kinds": params.kinds,
+            "explain": params.explain,
+        });
+        let result_json = self.dispatch_memory_tool("memory.retrieve", json_params)?;
+        Ok(Response::MemoryRetrieve { result_json })
+    }
+
+    fn handle_memory_reflect(&self, params: MemoryReflectParams) -> Result<Response, RpcError> {
+        // Map wire params back into the MCP tool's JSON shape. The tool
+        // dispatches on `mode` ("prepare" vs "commit"), driven from
+        // `commit: bool` on the wire.
+        let mut json_params = serde_json::json!({
+            "mode": if params.commit { "commit" } else { "prepare" },
+        });
+        if let Some(topic) = params.topic {
+            json_params["topic"] = serde_json::Value::String(topic);
+        }
+        json_params["budget"] = serde_json::Value::from(params.budget);
+        json_params["brains"] = serde_json::Value::from(params.brains);
+        if let Some(title) = params.title {
+            json_params["title"] = serde_json::Value::String(title);
+        }
+        if let Some(content) = params.content {
+            json_params["content"] = serde_json::Value::String(content);
+        }
+        json_params["source_ids"] = serde_json::Value::from(params.source_ids);
+        json_params["tags"] = serde_json::Value::from(params.tags);
+        if let Some(millis) = params.importance_millis {
+            json_params["importance"] = serde_json::Value::from(millis_to_unit(millis));
+        }
+        let result_json = self.dispatch_memory_tool("memory.reflect", json_params)?;
+        Ok(Response::MemoryReflect { result_json })
+    }
+
+    /// Run an MCP memory tool via the shared ToolRegistry on the
+    /// daemon's tokio runtime. Returns the tool's JSON content text
+    /// (or surfaces its error as `RpcError::Unknown`). All semantic
+    /// memory handlers share this dispatcher so a future protocol
+    /// change to the on-the-wire result envelope is a single edit.
+    fn dispatch_memory_tool(
+        &self,
+        tool_name: &str,
+        json_params: serde_json::Value,
+    ) -> Result<String, RpcError> {
+        use brain_lib::mcp::tools::ToolRegistry;
+
+        let ctx = self.mcp_ctx()?;
+        let runtime = self.runtime()?;
+        let call_result = runtime.block_on(async {
+            let registry = ToolRegistry::new();
+            registry.dispatch(tool_name, json_params, &ctx).await
+        });
+
+        if call_result.is_error == Some(true) {
+            let msg = call_result
+                .content
+                .first()
+                .map(|c| c.text.as_str())
+                .unwrap_or("tool dispatch failed");
+            return Err(RpcError::Unknown {
+                message: format!("{tool_name}: {msg}"),
+            });
+        }
+        let text = call_result
+            .content
+            .into_iter()
+            .next()
+            .map(|c| c.text)
+            .unwrap_or_else(|| "{}".to_string());
+        Ok(text)
+    }
+}
+
+/// Convert the wire-format `importance_millis` (0..=1000) into the
+/// internal 0.0..=1.0 float. Free function (not on `BrainStoresDispatcher`)
+/// because the conversion is pure and shared across memory handlers.
+fn millis_to_unit(millis: u32) -> f64 {
+    (millis.min(1000) as f64) / 1000.0
 }
 
 impl Dispatcher for BrainStoresDispatcher {
@@ -1248,6 +1597,12 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::SagasCancel { saga_id, cascade } => self.handle_sagas_cancel(saga_id, cascade),
             Request::SagasReopen { saga_id } => self.handle_sagas_reopen(saga_id),
             Request::SagasStats { saga_id } => self.handle_sagas_stats(saga_id),
+            Request::MemoryWriteEpisode { params } => self.handle_memory_write_episode(params),
+            Request::MemoryWriteProcedure { params } => self.handle_memory_write_procedure(params),
+            Request::MemoryRetrieve { params } => self.handle_memory_retrieve(params),
+            Request::MemoryConsolidate { params } => self.handle_memory_consolidate(params),
+            Request::MemorySummarizeScope { params } => self.handle_memory_summarize_scope(params),
+            Request::MemoryReflect { params } => self.handle_memory_reflect(params),
         }
     }
 }

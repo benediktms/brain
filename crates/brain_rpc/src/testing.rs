@@ -99,10 +99,16 @@ impl InMemoryTransport {
             | Request::SagasClose { .. }
             | Request::SagasCancel { .. }
             | Request::SagasReopen { .. }
-            | Request::SagasStats { .. } => Err(RpcError::Unknown {
+            | Request::SagasStats { .. }
+            | Request::MemoryWriteEpisode { .. }
+            | Request::MemoryWriteProcedure { .. }
+            | Request::MemoryRetrieve { .. }
+            | Request::MemoryConsolidate { .. }
+            | Request::MemorySummarizeScope { .. }
+            | Request::MemoryReflect { .. } => Err(RpcError::Unknown {
                 message: "InMemoryTransport::echo does not handle tasks_* / records_* / \
-                          sagas_* / <kind>_* requests — use InMemoryTransport::new with a \
-                          custom handler"
+                          sagas_* / memory_* / <kind>_* requests — use \
+                          InMemoryTransport::new with a custom handler"
                     .into(),
             }),
         })

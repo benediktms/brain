@@ -53,9 +53,11 @@ pub mod testing;
 
 pub use client::DaemonClient;
 pub use domain::{
-    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary, PROTOCOL_VERSION,
-    PlanSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response,
-    RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
+    AnalysisSummary, ArtifactSummary, ArtifactsListParams, DocumentSummary,
+    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams,
+    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
+    RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request, Response, RpcError,
+    SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate,
     SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
     SagasListParams, SagasUpdateParams, SnapshotSummary, TaskSummary, TasksCreateParams,
     TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,

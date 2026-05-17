@@ -170,6 +170,24 @@ pub enum Request {
     /// Return aggregated statistics for a saga's member tasks. Server
     /// returns [`Response::SagasStats`].
     SagasStats { saga_id: String },
+    /// Record a goal/actions/outcome episode. Server returns
+    /// [`Response::MemoryWriteEpisode`].
+    MemoryWriteEpisode { params: MemoryWriteEpisodeParams },
+    /// Store a step-by-step procedure. Server returns
+    /// [`Response::MemoryWriteProcedure`].
+    MemoryWriteProcedure { params: MemoryWriteProcedureParams },
+    /// Retrieve memory chunks at a requested level of detail. Server returns
+    /// [`Response::MemoryRetrieve`].
+    MemoryRetrieve { params: MemoryRetrieveParams },
+    /// Group recent episodes into consolidation clusters. Server returns
+    /// [`Response::MemoryConsolidate`].
+    MemoryConsolidate { params: MemoryConsolidateParams },
+    /// Generate or retrieve a scope summary. Server returns
+    /// [`Response::MemorySummarizeScope`].
+    MemorySummarizeScope { params: MemorySummarizeScopeParams },
+    /// Retrieve source material for reflection (prepare) or store a
+    /// reflection (commit). Server returns [`Response::MemoryReflect`].
+    MemoryReflect { params: MemoryReflectParams },
 }
 
 /// Optional filter and pagination params for [`Request::TasksList`].
@@ -507,6 +525,23 @@ pub enum Response {
         label_histogram: Vec<SagaLabelCount>,
         brains: Vec<SagaBrainSummary>,
     },
+    /// Reply to [`Request::MemoryWriteEpisode`].
+    MemoryWriteEpisode { summary_id: String, uri: String },
+    /// Reply to [`Request::MemoryWriteProcedure`].
+    MemoryWriteProcedure { summary_id: String, uri: String },
+    /// Reply to [`Request::MemoryRetrieve`]. `result_json` carries the
+    /// serialized retrieve response from the MCP tool dispatcher — the
+    /// CLI renders it using the same logic as the local path.
+    MemoryRetrieve { result_json: String },
+    /// Reply to [`Request::MemoryConsolidate`]. `result_json` carries the
+    /// serialized consolidation report.
+    MemoryConsolidate { result_json: String },
+    /// Reply to [`Request::MemorySummarizeScope`]. `result_json` carries
+    /// the serialized scope summary.
+    MemorySummarizeScope { result_json: String },
+    /// Reply to [`Request::MemoryReflect`]. `result_json` carries the
+    /// serialized reflect report.
+    MemoryReflect { result_json: String },
 }
 
 /// Wire-format summary of a single task.
@@ -734,6 +769,98 @@ impl Eq for SagaStatsReport {}
 pub struct SagaLabelCount {
     pub label: String,
     pub count: i64,
+}
+
+// ── Memory param types ───────────────────────────────────────────────────────
+
+/// Wire-format params for [`Request::MemoryWriteEpisode`].
+///
+/// `importance_millis` encodes the 0.0–1.0 importance as an integer in the
+/// range 0–1000 so the struct satisfies [`Eq`] (required by the [`Request`]
+/// enum derive). The CLI converts via `(importance * 1000.0) as u32`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct MemoryWriteEpisodeParams {
+    pub goal: String,
+    pub actions: String,
+    pub outcome: String,
+    pub tags: Vec<String>,
+    /// Importance scaled to 0–1000 (millis). Divide by 1000.0 to recover
+    /// the original float.
+    pub importance_millis: u32,
+}
+
+/// Wire-format params for [`Request::MemoryWriteProcedure`].
+///
+/// See [`MemoryWriteEpisodeParams`] for the `importance_millis` convention.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct MemoryWriteProcedureParams {
+    pub title: String,
+    pub steps: String,
+    pub tags: Vec<String>,
+    /// Importance scaled to 0–1000 (millis). Divide by 1000.0 to recover
+    /// the original float.
+    pub importance_millis: u32,
+}
+
+/// Wire-format params for [`Request::MemoryRetrieve`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct MemoryRetrieveParams {
+    pub query: Option<String>,
+    pub uri: Option<String>,
+    pub lod: String,
+    pub count: u64,
+    pub strategy: String,
+    pub brains: Vec<String>,
+    pub time_scope: Option<String>,
+    pub time_after: Option<i64>,
+    pub time_before: Option<i64>,
+    pub tags: Vec<String>,
+    pub tags_require: Vec<String>,
+    pub tags_exclude: Vec<String>,
+    pub kinds: Vec<String>,
+    pub explain: bool,
+}
+
+/// Wire-format params for [`Request::MemoryConsolidate`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct MemoryConsolidateParams {
+    pub limit: usize,
+    pub gap_seconds: i64,
+    pub auto_summarize: bool,
+}
+
+/// Wire-format params for [`Request::MemorySummarizeScope`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct MemorySummarizeScopeParams {
+    pub scope_type: String,
+    pub scope_value: String,
+    pub regenerate: bool,
+    pub async_llm: bool,
+}
+
+/// Wire-format params for [`Request::MemoryReflect`].
+///
+/// See [`MemoryWriteEpisodeParams`] for the `importance_millis` convention.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct MemoryReflectParams {
+    pub commit: bool,
+    // prepare fields
+    pub topic: Option<String>,
+    pub budget: usize,
+    pub brains: Vec<String>,
+    // commit fields
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub source_ids: Vec<String>,
+    pub tags: Vec<String>,
+    /// Importance scaled to 0–1000 (millis), or `None` to use the default.
+    pub importance_millis: Option<u32>,
 }
 
 /// Structured wire-format error.

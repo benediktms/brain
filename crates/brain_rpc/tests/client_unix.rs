@@ -105,10 +105,16 @@ fn echo_once(listener: UnixListener) {
             | Request::SagasClose { .. }
             | Request::SagasCancel { .. }
             | Request::SagasReopen { .. }
-            | Request::SagasStats { .. } => {
+            | Request::SagasStats { .. }
+            | Request::MemoryWriteEpisode { .. }
+            | Request::MemoryWriteProcedure { .. }
+            | Request::MemoryRetrieve { .. }
+            | Request::MemoryConsolidate { .. }
+            | Request::MemorySummarizeScope { .. }
+            | Request::MemoryReflect { .. } => {
                 unreachable!(
                     "echo_once test server is not configured to respond to tasks_* / records_* / \
-                     sagas_* / <kind>_* requests"
+                     sagas_* / memory_* / <kind>_* requests"
                 )
             }
         };
