@@ -268,7 +268,10 @@ mod tests {
             .await;
         assert_eq!(result.is_error, Some(true));
         let text = &result.content[0].text;
-        assert!(text.contains("predecessor episode not found"), "got: {text}");
+        assert!(
+            text.contains("predecessor episode not found"),
+            "got: {text}"
+        );
     }
 
     #[tokio::test]

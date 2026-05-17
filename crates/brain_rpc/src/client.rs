@@ -26,17 +26,16 @@
 use crate::domain::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, BrainsListParams,
     DocumentSummary, JobsStatusReport, LinksAddParams, LinksForEntityParams, LinksRemoveParams,
-    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
-    MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
-    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
-    RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams, RecordsListParams,
-    RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary, SagaCascadeResult,
-    SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
-    SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
-    TagsAliasesListParams, TagsReclusterParams, TaskSummary, TasksApplyEventParams,
-    TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams,
-    TasksMutateParams, TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary,
-    WireLinkSummary, WireTaskLabelSummary,
+    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams,
+    MemoryWalkThreadParams, MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION,
+    PlanSummary, ProviderSummary, RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams,
+    RecordsListParams, RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary,
+    SagaCascadeResult, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
+    SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
+    TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
+    TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams,
+    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams, WatchSummary,
+    WireBrainSummary, WireLinkSummary, WireTaskLabelSummary,
 };
 use crate::transport::Transport;
 
@@ -1263,17 +1262,11 @@ impl<T: Transport> DaemonClient<T> {
     ///
     /// - [`RpcError::Protocol`] — the daemon replied with anything other
     ///   than [`Response::RecordsTagAdd`].
-    pub fn records_tag_add(
-        &mut self,
-        record_id: String,
-        tag: String,
-    ) -> Result<String, RpcError> {
+    pub fn records_tag_add(&mut self, record_id: String, tag: String) -> Result<String, RpcError> {
         match self.call(Request::RecordsTagAdd { record_id, tag })? {
             Response::RecordsTagAdd { tag } => Ok(tag),
             other => Err(RpcError::Protocol {
-                message: format!(
-                    "expected RecordsTagAdd in reply to RecordsTagAdd, got {other:?}"
-                ),
+                message: format!("expected RecordsTagAdd in reply to RecordsTagAdd, got {other:?}"),
             }),
         }
     }
@@ -1285,11 +1278,7 @@ impl<T: Transport> DaemonClient<T> {
     ///
     /// - [`RpcError::Protocol`] — the daemon replied with anything other
     ///   than [`Response::RecordsTagRemove`].
-    pub fn records_tag_remove(
-        &mut self,
-        record_id: String,
-        tag: String,
-    ) -> Result<bool, RpcError> {
+    pub fn records_tag_remove(&mut self, record_id: String, tag: String) -> Result<bool, RpcError> {
         match self.call(Request::RecordsTagRemove { record_id, tag })? {
             Response::RecordsTagRemove { removed } => Ok(removed),
             other => Err(RpcError::Protocol {
@@ -1309,10 +1298,7 @@ impl<T: Transport> DaemonClient<T> {
     ///
     /// - [`RpcError::Protocol`] — the daemon replied with anything other
     ///   than [`Response::TasksApplyEvent`].
-    pub fn tasks_apply_event(
-        &mut self,
-        params: TasksApplyEventParams,
-    ) -> Result<String, RpcError> {
+    pub fn tasks_apply_event(&mut self, params: TasksApplyEventParams) -> Result<String, RpcError> {
         match self.call(Request::TasksApplyEvent { params })? {
             Response::TasksApplyEvent { result_json } => Ok(result_json),
             other => Err(RpcError::Protocol {
@@ -1330,10 +1316,7 @@ impl<T: Transport> DaemonClient<T> {
     ///
     /// - [`RpcError::Protocol`] — the daemon replied with anything other
     ///   than [`Response::TasksDepsBatch`].
-    pub fn tasks_deps_batch(
-        &mut self,
-        params: TasksDepsBatchParams,
-    ) -> Result<String, RpcError> {
+    pub fn tasks_deps_batch(&mut self, params: TasksDepsBatchParams) -> Result<String, RpcError> {
         match self.call(Request::TasksDepsBatch { params })? {
             Response::TasksDepsBatch { result_json } => Ok(result_json),
             other => Err(RpcError::Protocol {
@@ -1372,9 +1355,7 @@ impl<T: Transport> DaemonClient<T> {
     ///
     /// - [`RpcError::Protocol`] — the daemon replied with anything other
     ///   than [`Response::TasksLabelsSummary`].
-    pub fn tasks_labels_summary(
-        &mut self,
-    ) -> Result<Vec<WireTaskLabelSummary>, RpcError> {
+    pub fn tasks_labels_summary(&mut self) -> Result<Vec<WireTaskLabelSummary>, RpcError> {
         match self.call(Request::TasksLabelsSummary)? {
             Response::TasksLabelsSummary { labels } => Ok(labels),
             other => Err(RpcError::Protocol {
@@ -1415,16 +1396,11 @@ impl<T: Transport> DaemonClient<T> {
     ///
     /// - [`RpcError::Protocol`] — the daemon replied with anything other
     ///   than [`Response::TagsRecluster`].
-    pub fn tags_recluster(
-        &mut self,
-        params: TagsReclusterParams,
-    ) -> Result<String, RpcError> {
+    pub fn tags_recluster(&mut self, params: TagsReclusterParams) -> Result<String, RpcError> {
         match self.call(Request::TagsRecluster { params })? {
             Response::TagsRecluster { result_json } => Ok(result_json),
             other => Err(RpcError::Protocol {
-                message: format!(
-                    "expected TagsRecluster in reply to TagsRecluster, got {other:?}"
-                ),
+                message: format!("expected TagsRecluster in reply to TagsRecluster, got {other:?}"),
             }),
         }
     }
@@ -3312,9 +3288,7 @@ mod tests {
     #[test]
     fn records_link_remove_unwraps_removed_flag() {
         let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
-            Request::RecordsLinkRemove { .. } => {
-                Ok(Response::RecordsLinkRemove { removed: true })
-            }
+            Request::RecordsLinkRemove { .. } => Ok(Response::RecordsLinkRemove { removed: true }),
             other => Err(RpcError::Unknown {
                 message: format!("unexpected: {other:?}"),
             }),
@@ -3332,9 +3306,7 @@ mod tests {
     #[test]
     fn records_tag_add_unwraps_canonical_tag() {
         let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
-            Request::RecordsTagAdd { .. } => Ok(Response::RecordsTagAdd {
-                tag: "rust".into(),
-            }),
+            Request::RecordsTagAdd { .. } => Ok(Response::RecordsTagAdd { tag: "rust".into() }),
             other => Err(RpcError::Unknown {
                 message: format!("unexpected: {other:?}"),
             }),
@@ -3348,9 +3320,7 @@ mod tests {
     #[test]
     fn records_tag_remove_unwraps_removed_flag() {
         let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
-            Request::RecordsTagRemove { .. } => {
-                Ok(Response::RecordsTagRemove { removed: true })
-            }
+            Request::RecordsTagRemove { .. } => Ok(Response::RecordsTagRemove { removed: true }),
             other => Err(RpcError::Unknown {
                 message: format!("unexpected: {other:?}"),
             }),

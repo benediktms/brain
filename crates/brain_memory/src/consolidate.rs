@@ -59,11 +59,7 @@ pub struct ConsolidateResult {
 /// Run the consolidate operation end-to-end: load recent episodes,
 /// group them by temporal proximity, optionally enqueue async
 /// summarisation jobs, and emit the wire-format JSON envelope.
-pub fn run_as_json(
-    db: &Db,
-    default_brain_id: &str,
-    params: ConsolidateParams,
-) -> Result<Value> {
+pub fn run_as_json(db: &Db, default_brain_id: &str, params: ConsolidateParams) -> Result<Value> {
     let effective_brain_id = params
         .brain_id
         .as_deref()
@@ -109,10 +105,7 @@ pub fn run_as_json(
 
 /// Group `episodes` into temporal clusters by `gap_seconds`. Pure;
 /// no I/O. Reverse-chronological so newest cluster is first.
-pub fn consolidate_episodes(
-    episodes: Vec<SummaryRow>,
-    gap_seconds: i64,
-) -> ConsolidateResult {
+pub fn consolidate_episodes(episodes: Vec<SummaryRow>, gap_seconds: i64) -> ConsolidateResult {
     if episodes.is_empty() {
         return ConsolidateResult::default();
     }
@@ -139,15 +132,15 @@ pub fn consolidate_episodes(
     let mut clusters: Vec<ConsolidationCluster> = raw_clusters
         .into_iter()
         .map(|group| {
-            let episode_ids: Vec<String> =
-                group.iter().map(|e| e.summary_id.clone()).collect();
-            let suggested_title = group
-                .first()
-                .and_then(|e| e.title.clone())
-                .unwrap_or_else(|| {
-                    let ts = group.first().map(|e| e.created_at).unwrap_or(0);
-                    format!("Episodes from {}", format_date(ts))
-                });
+            let episode_ids: Vec<String> = group.iter().map(|e| e.summary_id.clone()).collect();
+            let suggested_title =
+                group
+                    .first()
+                    .and_then(|e| e.title.clone())
+                    .unwrap_or_else(|| {
+                        let ts = group.first().map(|e| e.created_at).unwrap_or(0);
+                        format!("Episodes from {}", format_date(ts))
+                    });
             let summary = group
                 .iter()
                 .map(|e| {
