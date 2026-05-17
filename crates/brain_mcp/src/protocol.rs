@@ -1,4 +1,11 @@
-/// MCP JSON-RPC protocol types.
+//! MCP JSON-RPC protocol types.
+//!
+//! Wire shapes for JSON-RPC 2.0 + the MCP-specific envelopes (initialize,
+//! tools/list, tools/call). Framework-free: only depends on `serde`. The MCP
+//! server (`brain_mcp`) and any future client testing harness share these
+//! types so request and response framing stays byte-identical across the
+//! pipeline.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

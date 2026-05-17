@@ -13,10 +13,10 @@
 //!
 //! ## Status
 //!
-//! Scaffold-only: this is the foundation for the brain_mcp extraction
-//! (PR2 of brn-2fe.32 / brn-2fe.10). Module bodies land in subsequent
-//! commits as the 51 MCP tool bodies migrate from `brain_lib::mcp::tools`
-//! to a `DaemonClient`-backed implementation here.
+//! Foundation move in progress. The framework-free modules — protocol
+//! and saga_validation — have landed; the 51 MCP tool bodies and the
+//! McpContext reshape follow in later commits as the migration
+//! progresses.
 
-// Empty for now — module declarations land alongside their content as
-// the migration progresses.
+pub mod protocol;
+pub mod saga_validation;

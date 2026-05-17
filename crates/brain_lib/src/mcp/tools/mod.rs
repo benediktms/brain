@@ -35,7 +35,12 @@ mod saga_reopen;
 mod saga_start;
 mod saga_stats;
 mod saga_update;
-mod saga_validation;
+// Transition shim: `saga_validation` now lives in `brain_mcp`. `pub(crate)`
+// makes `super::saga_validation::*` from sibling `saga_*.rs` files still
+// resolve — bare `use` would be file-private and break the siblings. Both
+// the shim and the surrounding `mcp::tools` module are deleted when Phase G
+// of the saga lands.
+pub(crate) use brain_mcp::saga_validation;
 mod scope;
 mod status;
 mod tags_aliases_list;

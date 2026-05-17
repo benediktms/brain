@@ -42,8 +42,8 @@ pub fn validate_actor(s: &str) -> Result<&str, String> {
 /// - The user-facing `saga-<lowercase hex>` short form (length ≥ 3 hex chars
 ///   after the prefix).
 ///
-/// Syntactic gate only — existence is checked downstream by
-/// `brain_persistence::db::sagas::resolve_saga_id` when the store is touched.
+/// Syntactic gate only — existence is checked downstream by the saga
+/// resolver when the store is touched.
 pub fn validate_saga_id(s: &str) -> Result<&str, String> {
     // Bare ULID form.
     if s.len() == 26 && s.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -92,21 +92,6 @@ pub fn validate_title(s: &str) -> Result<&str, String> {
     Ok(s)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validate_task_id_truncates_long_multibyte_input_without_panic() {
-        // 200 Japanese characters (each 3 bytes in UTF-8 -> 600 bytes total).
-        let s: String = "あ".repeat(200);
-        let result = validate_task_id(&s);
-        assert!(result.is_err(), "should error on overlong input, not panic");
-        let msg = result.unwrap_err();
-        assert!(msg.contains("exceeds maximum length"));
-    }
-}
-
 /// Validate an optional description: `None` is allowed; if `Some`, at most `MAX_DESCRIPTION_LEN` bytes.
 pub fn validate_description(s: Option<&str>) -> Result<Option<&str>, String> {
     match s {
@@ -119,5 +104,20 @@ pub fn validate_description(s: Option<&str>) -> Result<Option<&str>, String> {
             }
             Ok(Some(v))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_task_id_truncates_long_multibyte_input_without_panic() {
+        // 200 Japanese characters (each 3 bytes in UTF-8 -> 600 bytes total).
+        let s: String = "あ".repeat(200);
+        let result = validate_task_id(&s);
+        assert!(result.is_err(), "should error on overlong input, not panic");
+        let msg = result.unwrap_err();
+        assert!(msg.contains("exceeds maximum length"));
     }
 }

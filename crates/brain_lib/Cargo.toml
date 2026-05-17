@@ -26,6 +26,7 @@ test-utils = ["brain-persistence/test-utils", "brain-core/test-utils", "brain-me
 [dependencies]
 brain-core = { path = "../brain_core" }
 brain-embedder = { path = "../brain_embedder", optional = true }
+brain-mcp = { path = "../brain_mcp" }
 brain-memory = { path = "../brain_memory" }
 brain-persistence = { path = "../brain_persistence" }
 brain-records = { path = "../brain_records" }

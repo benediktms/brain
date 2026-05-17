@@ -2,7 +2,11 @@
 ///
 /// Implements the Model Context Protocol over newline-delimited JSON-RPC
 /// on stdin/stdout. All tracing goes to stderr.
-pub mod protocol;
+// Transition shim: `protocol` now lives in `brain_mcp`. The re-export keeps
+// `crate::mcp::protocol::*` paths in the 41 tool bodies resolving while the
+// extraction proceeds; both the shim and the surrounding `mcp` module are
+// deleted when Phase G of the saga lands.
+pub use brain_mcp::protocol;
 pub mod tools;
 
 use std::path::Path;
