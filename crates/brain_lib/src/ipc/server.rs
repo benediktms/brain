@@ -244,13 +244,6 @@ pub fn remove_socket_if_owned(socket_path: &Path, expected_inode: u64) -> bool {
     std::fs::remove_file(socket_path).is_ok()
 }
 
-fn serialize_error(err: &JsonRpcError) -> String {
-    serde_json::to_string(err).unwrap_or_else(|e| {
-        error!(error = %e, "IPC error serialization failed");
-        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal: error serialization failed"}}"#.to_string()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;

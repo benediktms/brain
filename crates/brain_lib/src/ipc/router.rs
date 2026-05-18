@@ -196,7 +196,6 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
                 search: params
                     .get("search")
                     .and_then(|v| v.as_str().map(|s| s.to_string())),
-                ..Default::default()
             },
         },
         "tasks.get" => Request::TasksShow {
@@ -282,6 +281,9 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
                 query: params
                     .get("query")
                     .and_then(|v| v.as_str().map(|s| s.to_string())),
+                uri: params
+                    .get("uri")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
                 lod: params
                     .get("lod")
                     .and_then(|v| v.as_str())
@@ -294,7 +296,32 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
                     .unwrap_or("auto")
                     .to_string(),
                 brains: brains_list,
-                ..Default::default()
+                time_scope: params
+                    .get("time_scope")
+                    .and_then(|v| v.as_str().map(|s| s.to_string())),
+                time_after: params.get("time_after").and_then(|v| v.as_i64()),
+                time_before: params.get("time_before").and_then(|v| v.as_i64()),
+                tags: params
+                    .get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                tags_require: params
+                    .get("tags_require")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                tags_exclude: params
+                    .get("tags_exclude")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                kinds: params
+                    .get("kinds")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                explain: params.get("explain").and_then(|v| v.as_bool()).unwrap_or(false),
             },
         },
         "memory.walk_thread" => Request::MemoryWalkThread {
@@ -357,7 +384,6 @@ fn build_rpc_request(tool_name: &str, brain: &str, params: Value) -> Result<Requ
                     .get("importance")
                     .and_then(|v| v.as_f64())
                     .map(|f| (f * 1000.0) as u32),
-                ..Default::default()
             },
         },
         // ── links ─────────────────────────────────────────────────────
