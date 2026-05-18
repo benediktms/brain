@@ -15,6 +15,7 @@
 //! Notifications (`notifications/initialized`) produce no response per
 //! the JSON-RPC contract.
 
+use serde::Serialize;
 use serde_json::Value;
 use tracing::{error, info, warn};
 
@@ -39,17 +40,7 @@ pub async fn handle_request(req: JsonRpcRequest, ctx: &McpContext) -> String {
         }
         "tools/list" => {
             // Empty until the 51-tool migration lands in Phase D.
-            let result = ToolsListResult { tools: Vec::new() };
-            match serde_json::to_value(result) {
-                Ok(value) => serialize_response(&JsonRpcResponse::new(id, value)),
-                Err(e) => {
-                    error!(error = %e, "failed to serialize tools/list result");
-                    serialize_error(&JsonRpcError::internal_error(
-                        id,
-                        "Internal: tools/list result serialization failed",
-                    ))
-                }
-            }
+            serialize_typed_response(id, ToolsListResult { tools: Vec::new() }, "tools/list")
         }
         "tools/call" => {
             // Placeholder: per-tool dispatch wires up in Phase D when
@@ -63,16 +54,7 @@ pub async fn handle_request(req: JsonRpcRequest, ctx: &McpContext) -> String {
             let result = ToolCallResult::error(format!(
                 "tool '{tool_name}' is not yet migrated to brain_mcp (Phase D pending)"
             ));
-            match serde_json::to_value(result) {
-                Ok(value) => serialize_response(&JsonRpcResponse::new(id, value)),
-                Err(e) => {
-                    error!(error = %e, tool = tool_name, "failed to serialize tools/call result");
-                    serialize_error(&JsonRpcError::internal_error(
-                        id,
-                        "Internal: tools/call result serialization failed",
-                    ))
-                }
-            }
+            serialize_typed_response(id, result, "tools/call")
         }
         _ => serialize_error(&JsonRpcError::method_not_found(id, &req.method)),
     }
@@ -101,13 +83,22 @@ async fn initialize(req: JsonRpcRequest, id: Option<Value>, ctx: &McpContext) ->
         },
     };
 
+    serialize_typed_response(id, result, "initialize")
+}
+
+/// Serialize `result` as a JSON-RPC success response, falling back to
+/// a `-32603` internal-error envelope (labelled with `context`) if the
+/// `serde_json::to_value` step fails. The `context` label appears in
+/// both the tracing log and the user-visible error message so failure
+/// triage points straight at the failing method.
+fn serialize_typed_response<T: Serialize>(id: Option<Value>, result: T, context: &str) -> String {
     match serde_json::to_value(result) {
         Ok(value) => serialize_response(&JsonRpcResponse::new(id, value)),
         Err(e) => {
-            error!(error = %e, "failed to serialize initialize result");
+            error!(error = %e, context = context, "failed to serialize result");
             serialize_error(&JsonRpcError::internal_error(
                 id,
-                "Internal: initialize result serialization failed",
+                format!("Internal: {context} result serialization failed"),
             ))
         }
     }
@@ -155,7 +146,9 @@ async fn resolve_brain_from_roots(
         for brain_root_str in brain_roots {
             let brain_root = std::path::PathBuf::from(brain_root_str);
             for client_root in &root_paths {
-                if client_root == &brain_root || client_root.starts_with(&brain_root) {
+                // `Path::starts_with` returns true on full equality,
+                // so a separate `==` arm would be dead.
+                if client_root.starts_with(&brain_root) {
                     return Ok(Some(brain.name.clone()));
                 }
             }

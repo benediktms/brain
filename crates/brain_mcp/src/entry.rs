@@ -141,15 +141,12 @@ pub fn run_cli() -> ExitCode {
 
     // Best-effort startup brain name: pick the first non-archived
     // brain the daemon reports. Falls back to "brain" so an empty
-    // registry still produces a usable session.
-    let startup_brain = match client.brains_list(BrainsListParams::default()) {
-        Ok((brains, _)) => brains
-            .into_iter()
-            .find(|b| !b.archived)
-            .map(|b| b.name)
-            .unwrap_or_else(|| "brain".to_string()),
-        Err(_) => "brain".to_string(),
-    };
+    // registry (or a wire error) still produces a usable session.
+    let startup_brain = client
+        .brains_list(BrainsListParams::default())
+        .ok()
+        .and_then(|(brains, _)| brains.into_iter().find(|b| !b.archived).map(|b| b.name))
+        .unwrap_or_else(|| "brain".to_string());
 
     let ctx = Arc::new(McpContext::new(client, startup_brain));
 
