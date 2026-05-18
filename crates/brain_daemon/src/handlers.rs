@@ -2796,9 +2796,11 @@ impl BrainStoresDispatcher {
     /// Resolve federated brain keys to a `(name, id, Option<StoreReader>)`
     /// list suitable for `brain_memory::retrieve::run_query_as_json`.
     ///
-    /// Mirrors the brain_lib `build_federated_brains` helper but lives
-    /// here so the daemon doesn't reach into the about-to-be-deleted
-    /// `brain_lib::mcp::tools` module.
+    /// Validates each identifier up-front: resolves to canonical IDs,
+    /// fails with [`RpcError::InvalidParams`] on unknown entries, and
+    /// dedupes results. The local brain is always included (and skipped
+    /// if re-requested by name) to ensure the search corpus is
+    /// deterministic rather than best-effort.
     fn build_federated_brain_list(
         &self,
         mcp_ctx: &brain_lib::mcp::McpContext,
@@ -2813,11 +2815,14 @@ impl BrainStoresDispatcher {
         RpcError,
     > {
         let store = mcp_ctx.store().ok_or_else(|| RpcError::Unknown {
-            message: "memory.retrieve: search layer unavailable".into(),
+            message: "build_federated_brain_list: search layer unavailable".into(),
         })?;
         let embedder = mcp_ctx.embedder().ok_or_else(|| RpcError::Unknown {
-            message: "memory.retrieve: embedder unavailable".into(),
+            message: "build_federated_brain_list: embedder unavailable".into(),
         })?;
+
+        let current_brain_name = mcp_ctx.brain_name();
+        let current_brain_id = mcp_ctx.brain_id();
 
         let brain_keys: Vec<String> = if brain_keys_input.iter().any(|b| b == "all") {
             self.stores
@@ -2832,19 +2837,24 @@ impl BrainStoresDispatcher {
             brain_keys_input.to_vec()
         };
 
+        let mut seen_ids = std::collections::HashSet::new();
         let mut brains: Vec<(
             String,
             String,
             Option<brain_persistence::store::StoreReader>,
         )> = Vec::new();
+
+        // Always include the local brain first.
+        seen_ids.insert(current_brain_id.to_string());
         brains.push((
-            mcp_ctx.brain_name().to_string(),
-            mcp_ctx.brain_id().to_string(),
+            current_brain_name.to_string(),
+            current_brain_id.to_string(),
             Some(store.clone()),
         ));
 
         for key in &brain_keys {
-            if key == mcp_ctx.brain_name() {
+            // Skip if this is the current brain (already added above).
+            if key == current_brain_name {
                 continue;
             }
             let remote_result = runtime.block_on(brain_lib::config::open_remote_search_context(
@@ -2855,10 +2865,25 @@ impl BrainStoresDispatcher {
             ));
             match remote_result {
                 Ok(Some(remote)) => {
+                    // Dedupe by brain ID — silently skip if already present.
+                    if seen_ids.contains(&remote.brain_id) {
+                        continue;
+                    }
+                    seen_ids.insert(remote.brain_id.clone());
                     brains.push((remote.brain_name, remote.brain_id, remote.store));
                 }
-                Ok(None) => {}
-                Err(_) => {}
+                Ok(None) => {
+                    // Unknown brain identifier — fail fast rather than silently
+                    // broadening to local-only search.
+                    return Err(RpcError::NotFound {
+                        id: format!("brain: {key}"),
+                    });
+                }
+                Err(e) => {
+                    return Err(RpcError::NotFound {
+                        id: format!("brain: {key} ({e})"),
+                    });
+                }
             }
         }
 

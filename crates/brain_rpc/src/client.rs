@@ -1340,7 +1340,17 @@ impl<T: Transport> DaemonClient<T> {
         params: RecordsFetchContentParams,
     ) -> Result<RecordContent, RpcError> {
         match self.call(Request::RecordsFetchContent { params })? {
-            Response::RecordsFetchContent { content } => Ok(content),
+            Response::RecordsFetchContent { content } => {
+                let has_text = content.text.is_some();
+                let has_data = content.data_base64.is_some();
+                if has_text == has_data {
+                    return Err(RpcError::Protocol {
+                        message: "expected exactly one of RecordContent.text or RecordContent.data_base64"
+                            .into(),
+                    });
+                }
+                Ok(content)
+            }
             other => Err(RpcError::Protocol {
                 message: format!(
                     "expected RecordsFetchContent in reply to RecordsFetchContent, got {other:?}"
@@ -3519,6 +3529,120 @@ mod tests {
             RpcError::Protocol { message } => {
                 assert!(
                     message.contains("expected RecordsFetchContent"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn records_fetch_content_unwraps_binary_payload() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsFetchContent { params } => {
+                assert_eq!(params.record_id, "rec_binary");
+                Ok(Response::RecordsFetchContent {
+                    content: RecordContent {
+                        record_id: "rec_binary".into(),
+                        title: "Binary notes".into(),
+                        kind: "analysis".into(),
+                        content_hash: "sha256:babe".into(),
+                        size: 4,
+                        media_type: Some("application/octet-stream".into()),
+                        encoding: "base64".into(),
+                        text: None,
+                        data_base64: Some("aGVsbG8=".into()),
+                        uri: "synapse://brain/record/rec_binary".into(),
+                        brain: None,
+                    },
+                })
+            }
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let content = client
+            .records_fetch_content(RecordsFetchContentParams {
+                record_id: "rec_binary".into(),
+                brain: None,
+            })
+            .expect("records_fetch_content");
+        assert_eq!(content.encoding, "base64");
+        assert!(content.text.is_none());
+        assert_eq!(content.data_base64.as_deref(), Some("aGVsbG8="));
+    }
+
+    #[test]
+    fn records_fetch_content_rejects_invalid_shape() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsFetchContent { .. } => Ok(Response::RecordsFetchContent {
+                content: RecordContent {
+                    record_id: "rec_invalid".into(),
+                    title: "Both set".into(),
+                    kind: "document".into(),
+                    content_hash: "sha256:0000".into(),
+                    size: 9,
+                    media_type: None,
+                    encoding: "?".into(),
+                    text: Some("hello".into()),
+                    data_base64: Some("aGVsbG8=".into()),
+                    uri: "synapse://brain/record/rec_invalid".into(),
+                    brain: None,
+                },
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let err = client
+            .records_fetch_content(RecordsFetchContentParams {
+                record_id: "rec_invalid".into(),
+                brain: None,
+            })
+            .expect_err("expected Protocol error");
+        match err {
+            RpcError::Protocol { message } => {
+                assert!(
+                    message.contains("expected exactly one of"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn records_fetch_content_rejects_empty_shape() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsFetchContent { .. } => Ok(Response::RecordsFetchContent {
+                content: RecordContent {
+                    record_id: "rec_empty".into(),
+                    title: "Neither set".into(),
+                    kind: "snapshot".into(),
+                    content_hash: "sha256:0001".into(),
+                    size: 0,
+                    media_type: None,
+                    encoding: "?".into(),
+                    text: None,
+                    data_base64: None,
+                    uri: "synapse://brain/record/rec_empty".into(),
+                    brain: None,
+                },
+            }),
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let err = client
+            .records_fetch_content(RecordsFetchContentParams {
+                record_id: "rec_empty".into(),
+                brain: None,
+            })
+            .expect_err("expected Protocol error");
+        match err {
+            RpcError::Protocol { message } => {
+                assert!(
+                    message.contains("expected exactly one of"),
                     "unexpected message: {message}"
                 );
             }
