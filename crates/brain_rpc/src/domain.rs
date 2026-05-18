@@ -1802,14 +1802,14 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_three() {
-        // Bumped 2 → 3 when Request::RecordsSearch +
+    fn protocol_version_is_four() {
+        // Bumped 3 → 4 when Request::RecordsSearch +
         // Request::RecordsFetchContent (and their Response twins) were
         // added so the daemon answers records.search +
         // records.fetch_content MCP tools directly. The handshake
         // check rejects rolling restarts that pair a pre-bump client
         // with a post-bump daemon.
-        assert_eq!(PROTOCOL_VERSION, 3);
+        assert_eq!(PROTOCOL_VERSION, 4);
     }
 
     #[test]

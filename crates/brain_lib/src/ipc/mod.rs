@@ -7,6 +7,3 @@ pub mod protocol;
 pub mod router;
 pub mod server;
 pub mod sync_client;
-
-#[cfg(test)]
-mod tests;

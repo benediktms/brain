@@ -96,7 +96,7 @@ fn handshake_negotiates_protocol_version() {
     let _client = DaemonClient::connect(transport).expect("connect client");
 
     // Both sides on PROTOCOL_VERSION → connect returns Ok.
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 4);
 }
 
 #[test]

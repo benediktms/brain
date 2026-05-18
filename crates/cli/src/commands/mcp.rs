@@ -70,13 +70,12 @@ fn resolve_brain_mcp_binary() -> Result<PathBuf> {
     }
 
     // Try sibling of current executable.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("brain-mcp");
-            if sibling.exists() {
-                return Ok(sibling);
-            }
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+        && let Some(sibling) = dir.join("brain-mcp").into()
+        && sibling.exists()
+    {
+        return Ok(sibling);
     }
 
     // Fall back to PATH lookup via shell command.
