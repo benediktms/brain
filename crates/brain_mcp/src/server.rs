@@ -33,14 +33,32 @@ pub async fn run_server(ctx: Arc<McpContext>) -> Result<()> {
             continue;
         }
 
-        debug!(line = %line, "received request");
-
-        let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
-            Ok(req) => handle::handle_request(req, &ctx, &registry).await,
+        // Two-step parse so we can split JSON-RPC error codes correctly:
+        //   - JSON not parseable → Parse error (-32700)
+        //   - JSON valid but doesn't fit JsonRpcRequest → Invalid Request (-32600)
+        // We also log only safe metadata (size + method + id) — never the
+        // raw payload, which may contain user content.
+        let response = match serde_json::from_str::<serde_json::Value>(&line) {
             Err(e) => {
-                error!(error = %e, "invalid JSON-RPC request");
+                error!(error = %e, size = line.len(), "JSON-RPC parse error");
                 r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#
                     .to_string()
+            }
+            Ok(value) => {
+                let method = value
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let id = value.get("id").cloned();
+                debug!(size = line.len(), method = ?method, id = ?id, "received request");
+                match serde_json::from_value::<JsonRpcRequest>(value) {
+                    Ok(req) => handle::handle_request(req, &ctx, &registry).await,
+                    Err(e) => {
+                        error!(error = %e, size = line.len(), method = ?method, "invalid JSON-RPC request");
+                        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid Request"}}"#
+                            .to_string()
+                    }
+                }
             }
         };
 

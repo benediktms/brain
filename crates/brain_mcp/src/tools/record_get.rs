@@ -33,9 +33,10 @@ pub(super) struct RecordGet;
 #[derive(Deserialize)]
 struct Params {
     record_id: String,
-    /// Accepted for schema compatibility; cross-brain routing is not yet
-    /// wired in the daemon's show methods.
-    #[allow(dead_code)]
+    /// Cross-brain routing is not yet wired in the daemon's show
+    /// methods; passing `Some(_)` is rejected up front so callers
+    /// aren't silently misled into thinking the record came from the
+    /// target brain.
     brain: Option<String>,
 }
 
@@ -76,50 +77,73 @@ impl McpTool for RecordGet {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
+            if parsed.brain.is_some() {
+                return ToolCallResult::error(
+                    "cross-brain routing is not yet wired for records.get; \
+                     omit the `brain` parameter to fetch from the current brain",
+                );
+            }
+
             let id = parsed.record_id.clone();
 
-            // Try analyses first, then documents, then plans, then snapshots.
-            // The daemon returns None for each kind when the record is not found
-            // under that kind — we iterate until we get Some.
-
-            if let Ok(Some(r)) = ctx.with_client(|c| c.analyses_show(id.clone())).await {
-                return json_response(&json!({
-                    "record_id": r.record_id,
-                    "kind": "analysis",
-                    "title": r.title,
-                    "brain_id": r.brain_id,
-                    "created_at": r.created_at,
-                }));
+            // Try analyses → documents → plans → snapshots, returning early
+            // on the first hit. Distinguish Err (transport/daemon failure —
+            // surface immediately) from Ok(None) (this kind doesn't have
+            // it — try the next kind).
+            match ctx.with_client(|c| c.analyses_show(id.clone())).await {
+                Ok(Some(r)) => {
+                    return json_response(&json!({
+                        "record_id": r.record_id,
+                        "kind": "analysis",
+                        "title": r.title,
+                        "brain_id": r.brain_id,
+                        "created_at": r.created_at,
+                    }));
+                }
+                Ok(None) => {}
+                Err(e) => return ToolCallResult::error(format!("analyses_show: {e}")),
             }
 
-            if let Ok(Some(r)) = ctx.with_client(|c| c.documents_show(id.clone())).await {
-                return json_response(&json!({
-                    "record_id": r.record_id,
-                    "kind": "document",
-                    "title": r.title,
-                    "brain_id": r.brain_id,
-                    "created_at": r.created_at,
-                }));
+            match ctx.with_client(|c| c.documents_show(id.clone())).await {
+                Ok(Some(r)) => {
+                    return json_response(&json!({
+                        "record_id": r.record_id,
+                        "kind": "document",
+                        "title": r.title,
+                        "brain_id": r.brain_id,
+                        "created_at": r.created_at,
+                    }));
+                }
+                Ok(None) => {}
+                Err(e) => return ToolCallResult::error(format!("documents_show: {e}")),
             }
 
-            if let Ok(Some(r)) = ctx.with_client(|c| c.plans_show(id.clone())).await {
-                return json_response(&json!({
-                    "record_id": r.record_id,
-                    "kind": "plan",
-                    "title": r.title,
-                    "brain_id": r.brain_id,
-                    "created_at": r.created_at,
-                }));
+            match ctx.with_client(|c| c.plans_show(id.clone())).await {
+                Ok(Some(r)) => {
+                    return json_response(&json!({
+                        "record_id": r.record_id,
+                        "kind": "plan",
+                        "title": r.title,
+                        "brain_id": r.brain_id,
+                        "created_at": r.created_at,
+                    }));
+                }
+                Ok(None) => {}
+                Err(e) => return ToolCallResult::error(format!("plans_show: {e}")),
             }
 
-            if let Ok(Some(r)) = ctx.with_client(|c| c.snapshots_show(id.clone())).await {
-                return json_response(&json!({
-                    "record_id": r.record_id,
-                    "kind": "snapshot",
-                    "title": r.title,
-                    "brain_id": r.brain_id,
-                    "created_at": r.created_at,
-                }));
+            match ctx.with_client(|c| c.snapshots_show(id.clone())).await {
+                Ok(Some(r)) => {
+                    return json_response(&json!({
+                        "record_id": r.record_id,
+                        "kind": "snapshot",
+                        "title": r.title,
+                        "brain_id": r.brain_id,
+                        "created_at": r.created_at,
+                    }));
+                }
+                Ok(None) => {}
+                Err(e) => return ToolCallResult::error(format!("snapshots_show: {e}")),
             }
 
             ToolCallResult::error(format!("Record not found: {id}"))

@@ -251,15 +251,30 @@ mod tests {
 
     #[test]
     fn registry_registers_expected_tools() {
+        use std::collections::HashSet;
+
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        for expected in EXPECTED_TOOL_NAMES {
-            assert!(
-                names.contains(expected),
-                "registry missing tool {expected}; have {names:?}"
-            );
-        }
+
+        // Duplicates would shadow each other in dispatch — fail loudly
+        // rather than silently overriding.
+        let name_set: HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(
+            names.len(),
+            name_set.len(),
+            "registry has duplicate tool names; have {names:?}"
+        );
+
+        // Expected and actual sets must match exactly — extras flag a
+        // forgotten EXPECTED_TOOL_NAMES update, missing tools flag a
+        // missing registration.
+        let expected_set: HashSet<&str> = EXPECTED_TOOL_NAMES.iter().copied().collect();
+        assert_eq!(
+            name_set, expected_set,
+            "registered tools do not match EXPECTED_TOOL_NAMES; \
+             registered={name_set:?} expected={expected_set:?}"
+        );
     }
 
     #[test]

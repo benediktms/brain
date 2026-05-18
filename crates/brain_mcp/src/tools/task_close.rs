@@ -61,7 +61,7 @@ impl McpTool for TaskClose {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Close one or more tasks (set status to done). Returns closed tasks and any newly unblocked task IDs. Partial failures (e.g. invalid IDs) return a success response with separate 'closed' and 'failed' arrays. Convenience shortcut for tasks.apply_event with status_changed.".into(),
+            description: "Close one or more tasks (set status to done). Partial failures (e.g. invalid IDs) return a success response with separate 'closed' and 'failed' arrays. Convenience shortcut for tasks.apply_event with status_changed.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

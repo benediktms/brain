@@ -46,6 +46,7 @@ impl McpTool for TagsRecluster {
                     "threshold": {
                         "type": "number",
                         "description": "Cosine similarity threshold for cluster edges. Default: 0.85.",
+                        "default": 0.85,
                         "minimum": 0.0,
                         "maximum": 1.0
                     }

@@ -18,11 +18,29 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
+
+#[derive(Deserialize, Default)]
+struct Params {
+    /// Sorting policy. Only the daemon default (`priority`) is currently
+    /// honoured on this wire path; `due_date` is rejected up front so
+    /// callers don't silently get priority-sorted results.
+    #[serde(default)]
+    policy: Option<String>,
+    /// Number of tasks to return. The wire `tasks_next()` always returns
+    /// at most one, so anything other than `1` (or unset) is rejected.
+    #[serde(default)]
+    k: Option<u32>,
+    /// Federated-brain query is not yet wired; rejected when set so
+    /// callers don't silently get current-brain-only results.
+    #[serde(default)]
+    brains: Option<Vec<String>>,
+}
 
 pub(super) struct TaskNext;
 
@@ -61,10 +79,37 @@ impl McpTool for TaskNext {
 
     fn call<'a>(
         &'a self,
-        _params: Value,
+        params: Value,
         ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
+            let parsed: Params = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            };
+            if let Some(policy) = parsed.policy.as_deref()
+                && policy != "priority"
+            {
+                return ToolCallResult::error(format!(
+                    "policy='{policy}' is not yet supported on this wire path; \
+                     only the default 'priority' policy is honoured"
+                ));
+            }
+            if let Some(k) = parsed.k
+                && k != 1
+            {
+                return ToolCallResult::error(format!(
+                    "k={k} is not yet supported; the wire returns at most one task per call. \
+                     Omit `k` or set it to 1."
+                ));
+            }
+            if parsed.brains.as_ref().is_some_and(|b| !b.is_empty()) {
+                return ToolCallResult::error(
+                    "Federated `brains` query is not yet wired for tasks.next; \
+                     omit the parameter to query the current brain",
+                );
+            }
+
             match ctx.with_client(|c| c.tasks_next()).await {
                 Ok(Some(task)) => {
                     let task_json = json!({

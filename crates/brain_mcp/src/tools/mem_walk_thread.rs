@@ -63,7 +63,7 @@ impl McpTool for MemoryWalkThread {
                 Ok(p) => p,
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
-            if parsed.seed_summary_id.is_empty() {
+            if parsed.seed_summary_id.trim().is_empty() {
                 return ToolCallResult::error("seed_summary_id must not be empty");
             }
 

@@ -44,11 +44,11 @@ struct Params {
     task_id: Option<String>,
     #[serde(default = "default_limit")]
     limit: u32,
-    /// Accepted for schema compatibility; cross-brain routing not yet wired.
-    #[allow(dead_code)]
+    /// Cross-brain routing is not yet wired at the wire layer; passing
+    /// `Some(_)` is rejected up front so callers aren't silently
+    /// misled into thinking results came from the named brain.
     brain: Option<String>,
-    /// Accepted for schema compatibility; cross-brain routing not yet wired.
-    #[allow(dead_code)]
+    /// As above for the multi-brain variant.
     brains: Option<Vec<String>>,
 }
 
@@ -119,6 +119,26 @@ impl McpTool for RecordList {
                 Ok(p) => p,
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
+
+            if parsed.brain.is_some() || parsed.brains.is_some() {
+                return ToolCallResult::error(
+                    "cross-brain routing is not yet wired for records.list; \
+                     omit the `brain`/`brains` parameters to query the current brain",
+                );
+            }
+
+            // The cross-kind fallback path (no `kind`) routes through
+            // `artifacts_list`, whose params don't carry `task_id`. Rather
+            // than silently drop the filter and return unrelated records,
+            // reject the unsupported combination up front. Per-kind queries
+            // (kind set) honour task_id correctly via RecordsListParams.
+            if parsed.kind.is_none() && parsed.task_id.is_some() {
+                return ToolCallResult::error(
+                    "filtering by task_id requires a specific `kind` \
+                     (analysis/document/plan/snapshot); the cross-kind fallback \
+                     cannot honour task_id",
+                );
+            }
 
             let list_params = RecordsListParams {
                 tag: parsed.tag,

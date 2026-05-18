@@ -123,6 +123,7 @@ impl McpTool for TaskList {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
+            let requested_limit = parsed.limit;
             let wire_params = TasksListParams {
                 status: parsed.status,
                 priority: parsed.priority,
@@ -132,12 +133,18 @@ impl McpTool for TaskList {
 
             match ctx.with_client(|c| c.tasks_list(wire_params)).await {
                 Ok(tasks) => {
-                    let total = tasks.len();
-                    // Wire does not return has_more; reflect false conservatively.
+                    // `total` is the returned-count, not a wire-side total
+                    // (the wire doesn't surface a separate total — see the
+                    // wire-extension follow-up). `has_more` is heuristic:
+                    // when the page matches the requested limit, more rows
+                    // probably exist; without a requested limit we can't
+                    // know, so report false.
+                    let returned = tasks.len();
+                    let has_more = requested_limit.is_some_and(|lim| returned as u32 == lim);
                     let response = json!({
                         "tasks": tasks,
-                        "total": total,
-                        "has_more": false,
+                        "total": returned,
+                        "has_more": has_more,
                     });
                     json_response(&response)
                 }

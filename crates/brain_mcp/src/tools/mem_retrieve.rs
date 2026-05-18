@@ -89,8 +89,7 @@ impl McpTool for MemoryRetrieve {
                     "time_before": { "type": "integer", "description": "Only results modified/created before this Unix timestamp (seconds)" },
                     "tags_require": { "type": "array", "items": { "type": "string" }, "description": "Require ALL of these tags (AND logic, case-insensitive)" },
                     "tags_exclude": { "type": "array", "items": { "type": "string" }, "description": "Exclude results matching ANY of these tags (NOR logic, case-insensitive)" },
-                    "explain": { "type": "boolean", "description": "When true, include per-signal score breakdowns in the response. Default: false", "default": false },
-                    "vector_search_mode": { "type": "string", "enum": ["exact", "ann_refined", "ann_fast"], "description": "Vector search strategy. Default: ann_refined" }
+                    "explain": { "type": "boolean", "description": "When true, include per-signal score breakdowns in the response. Default: false", "default": false }
                 }
             }),
         }
@@ -108,7 +107,7 @@ impl McpTool for MemoryRetrieve {
             };
 
             let has_query = parsed.query.as_ref().is_some_and(|q| !q.trim().is_empty());
-            let has_uri = parsed.uri.is_some();
+            let has_uri = parsed.uri.as_ref().is_some_and(|u| !u.trim().is_empty());
             if has_query && has_uri {
                 return ToolCallResult::error("Provide 'query' or 'uri', not both");
             }

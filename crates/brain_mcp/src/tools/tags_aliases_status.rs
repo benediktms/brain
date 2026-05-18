@@ -60,7 +60,7 @@ impl McpTool for TagsAliasesStatus {
                 report.last_run_started_at.as_ref(),
                 report.last_run_embedder_version.as_ref(),
             ) {
-                (Some(run_id), started_at, embedder_version) => json!({
+                (Some(run_id), Some(started_at), Some(embedder_version)) => json!({
                     "run_id": run_id,
                     "started_at": started_at,
                     "embedder_version": embedder_version,

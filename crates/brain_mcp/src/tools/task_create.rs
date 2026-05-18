@@ -104,6 +104,14 @@ struct Params {
     assignee: Option<String>,
     parent: Option<String>,
     brain: Option<String>,
+    /// Cross-brain creation+link is not on this wire path; capturing
+    /// the field so it gets explicitly rejected rather than silently
+    /// dropped.
+    #[serde(default)]
+    link_from: Option<String>,
+    /// As above for the link kind that pairs with `link_from`.
+    #[serde(default)]
+    link_type: Option<String>,
 }
 
 fn default_priority() -> u8 {
@@ -139,6 +147,13 @@ impl McpTool for TaskCreate {
                 return ToolCallResult::error(
                     "Cross-brain creation via 'brain' param is not yet available on the wire path. \
                      Use tasks.apply_event with event_type: task_created instead.",
+                );
+            }
+            if parsed.link_from.is_some() || parsed.link_type.is_some() {
+                return ToolCallResult::error(
+                    "link_from / link_type params require cross-brain creation, \
+                     which is not yet available on the wire path. \
+                     Omit these params for same-brain creation.",
                 );
             }
 

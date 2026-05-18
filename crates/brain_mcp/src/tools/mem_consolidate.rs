@@ -50,7 +50,6 @@ impl McpTool for MemoryConsolidate {
                 "type": "object",
                 "properties": {
                     "limit": { "type": "integer", "description": "Maximum number of recent episodes to consider. Default: 50", "default": 50 },
-                    "brain_id": { "type": "string", "description": "Brain ID to scope episodes to. Empty or omitted = current brain." },
                     "gap_seconds": { "type": "integer", "description": "Gap in seconds that separates two clusters. Default: 3600 (1 hour)", "default": 3600 },
                     "auto_summarize": { "type": "boolean", "description": "Enqueue async LLM synthesis jobs for each cluster. Default: false", "default": false }
                 },

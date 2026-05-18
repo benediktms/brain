@@ -36,7 +36,7 @@ impl McpTool for TaskTransfer {
             name: self.name().into(),
             description: "Transfer a task from the current brain to a target brain. \
                 Preserves the task_id. Updates brain_id and recomputes display_id \
-                (collision-safe). Returns from/to brain_id and display_id. \
+                (collision-safe). Returns the resulting task summary. \
                 No-op if source and target brain are the same."
                 .into(),
             input_schema: json!({

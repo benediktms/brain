@@ -3639,16 +3639,16 @@ fn deps_clear_response(
     let mut succeeded: Vec<serde_json::Value> = Vec::new();
     let mut failed: Vec<serde_json::Value> = Vec::new();
 
+    let short_resolved = store.compact_id_or_raw(&resolved);
     for (i, result) in results.into_iter().enumerate() {
-        let short_resolved = store.compact_id_or_raw(&resolved);
         let short_dep = store.compact_id_or_raw(&deps[i]);
         match result {
             Ok(()) => succeeded.push(serde_json::json!({
-                "task_id": short_resolved,
+                "task_id": &short_resolved,
                 "depends_on_task_id": short_dep,
             })),
             Err(e) => failed.push(serde_json::json!({
-                "task_id": short_resolved,
+                "task_id": &short_resolved,
                 "depends_on_task_id": short_dep,
                 "error": format!("{e}"),
             })),
