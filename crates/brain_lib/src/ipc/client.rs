@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-use crate::mcp::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+use super::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 
 /// Error type for IPC client operations.
 #[derive(Debug, thiserror::Error)]

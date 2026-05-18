@@ -759,6 +759,7 @@ dependencies = [
  "brain-persistence",
  "brain-records",
  "brain-retrieval",
+ "brain-rpc",
  "brain-sagas",
  "brain-tags",
  "brain-tasks",

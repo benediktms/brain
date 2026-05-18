@@ -148,7 +148,7 @@ impl Supervisor {
             let projections: Vec<BrainProjection> = brains
                 .iter()
                 .filter_map(|(name, inst)| {
-                    let bid = inst.mcp_context.brain_id().to_string();
+                    let bid = inst.brain_id.clone();
                     global_cfg.brains.get(name).map(|entry| {
                         let prefix = existing_prefixes
                             .get(&bid)
@@ -179,17 +179,17 @@ impl Supervisor {
         }
 
         // ── 3c. Start IPC server ─────────────────────────────────────────
-        let shared_ctx = brains
+        let default_brain_id = brains
             .values()
             .next()
-            .map(|inst| Arc::clone(&inst.mcp_context))
+            .map(|inst| inst.brain_id.clone())
             .expect("at least one brain is initialised");
-        let default_brain_id = shared_ctx.brain_id().to_string();
-        let router = BrainRouter::new(shared_ctx, default_brain_id);
 
         let sock_path = brain_home()
             .map(|h| h.join("brain.sock"))
             .unwrap_or_else(|_| PathBuf::from("/tmp/brain.sock"));
+
+        let router = BrainRouter::new(&sock_path, default_brain_id);
 
         let (ipc_cancel, ipc_inode) = match IpcServer::bind(&sock_path, Arc::clone(&router)) {
             Ok(server) => {
@@ -509,7 +509,7 @@ impl Supervisor {
                 _ = summarize_poll_interval.tick() => {
                     for instance in self.brains.values() {
                         let brain_infos = vec![recurring_jobs::BrainInfo {
-                            brain_id: instance.mcp_context.brain_id().to_string(),
+                            brain_id: instance.brain_id.clone(),
                         }];
                         if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.job_queue(), &brain_infos) {
                             tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
@@ -685,7 +685,7 @@ impl Supervisor {
         self.brains
             .values()
             .flat_map(|inst| {
-                let brain_id = inst.mcp_context.brain_id().to_string();
+                let brain_id = inst.brain_id.clone();
                 let name = inst.name.clone();
                 inst.note_dirs.iter().map(move |dir| WatchEntry {
                     brain_name: name.clone(),

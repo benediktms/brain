@@ -11,7 +11,7 @@ use tokio::net::UnixListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::mcp::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+use super::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 
 use super::router::BrainRouter;
 
@@ -183,13 +183,13 @@ async fn dispatch_request(req: JsonRpcRequest, router: &BrainRouter) -> String {
     let id = req.id.clone();
 
     if req.method != "tools/call" {
-        return serialize_error(&JsonRpcError::method_not_found(id, &req.method));
+        return JsonRpcError::method_not_found(id, &req.method);
     }
 
     let tool_name = match req.params.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => {
-            return serialize_error(&JsonRpcError::invalid_params(id, "missing tool name"));
+            return JsonRpcError::invalid_params(id, "missing tool name");
         }
     };
 

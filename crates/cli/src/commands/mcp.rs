@@ -1,109 +1,94 @@
 use std::path::PathBuf;
+use std::process;
 
 use anyhow::Result;
 use tracing::info;
 
-/// Start the MCP stdio server.
+/// Start the MCP stdio server by spawning the `brain-mcp` binary.
 ///
-/// Uses layered bootstrap: always opens SQLite and creates a TaskStore first,
-/// then optionally loads LanceDB and the embedder. If the embedding model is
-/// missing or LanceDB fails to open, the server still starts in tasks-only mode
-/// — task tools work, but memory/search tools return an error asking the user
-/// to set up the model.
-pub async fn run(
-    mut model_dir: PathBuf,
-    mut lance_db: PathBuf,
-    mut sqlite_db: PathBuf,
-) -> Result<()> {
-    info!("starting MCP server");
+/// The binary is located via the same resolution that `rpc_client.rs` uses:
+/// - `$BRAIN_DAEMON_BIN` env var
+/// - sibling of the current executable
+/// - `$PATH`
+///
+/// Socket path resolution (in order):
+/// 1. `$BRAIN_SOCKET_PATH` env var
+/// 2. `$BRAIN_HOME/brain-rpc.sock`
+/// 3. `$HOME/.brain/brain-rpc.sock`
+pub async fn run() -> Result<()> {
+    let socket_path = resolve_socket_path()?;
+    let brain_mcp = resolve_brain_mcp_binary()?;
 
-    // Resolve the brain name — either from cwd (brain.toml) or global registry.
-    let mut brain_name: Option<String> = None;
+    info!(path = %brain_mcp.display(), socket = %socket_path.display(), "spawning brain-mcp");
 
-    if !sqlite_db.is_absolute() {
-        // Paths are still at relative defaults — resolve_defaults didn't find
-        // a brain from cwd. Fall back to the global config registry.
-        if let Some((name, resolved)) = resolve_from_registry() {
-            info!(brain = %name, "resolved brain from global config (cwd fallback)");
-            brain_name = Some(name);
-            model_dir = resolved.model_dir;
-            lance_db = resolved.lance_db;
-            sqlite_db = resolved.sqlite_db;
-        } else if let Ok(home) = brain_lib::config::brain_home() {
-            // No brain found in cwd or registry — resolve to absolute
-            // ~/.brain paths so the model/DB can still be found regardless
-            // of which directory the MCP server was started from.
-            info!("no brain resolved; falling back to BRAIN_HOME defaults");
-            model_dir = home.join("models").join("bge-small-en-v1.5");
-            lance_db = home.join("lancedb");
-            sqlite_db = home.join("brain.db");
-        }
-    } else {
-        // resolve_defaults found a brain from cwd — extract its name from brain.toml.
-        brain_name = resolve_brain_name_from_cwd();
+    let mut child = process::Command::new(&brain_mcp)
+        .arg("--socket-path")
+        .arg(&socket_path)
+        .stdin(process::Stdio::inherit())
+        .stdout(process::Stdio::inherit())
+        .stderr(process::Stdio::inherit())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("failed to spawn brain-mcp {}: {e}", brain_mcp.display()))?;
+
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("brain-mcp exited with status {status}"));
     }
-
-    let ctx = brain_lib::mcp::McpContext::bootstrap(
-        &model_dir,
-        &lance_db,
-        &sqlite_db,
-        brain_name.as_deref(),
-    )
-    .await?;
-    brain_lib::mcp::run_server(ctx).await?;
 
     Ok(())
 }
 
-/// Try to extract the brain name from .brain/brain.toml in cwd or ancestors.
-fn resolve_brain_name_from_cwd() -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
-    let home = brain_lib::config::brain_home().ok()?;
-    let db = brain_persistence::db::Db::open(&home.join("brain.db")).ok()?;
-    let brain_rows = db.list_brains(true).ok()?;
-
-    // Match cwd against registered brain roots.
-    for row in &brain_rows {
-        let roots: Vec<std::path::PathBuf> = row
-            .roots_json
-            .as_deref()
-            .and_then(|j| serde_json::from_str(j).ok())
-            .unwrap_or_default();
-        if roots.iter().any(|r| cwd.starts_with(r)) {
-            return Some(row.name.clone());
-        }
+/// Resolve the Unix socket path for brain-daemon.
+///
+/// Mirrors [`crate::commands::rpc_client::default_socket_path`] — socket
+/// resolution is duplicated here so this command has no internal RPC
+/// dependency and can run even when the daemon is unavailable.
+fn resolve_socket_path() -> Result<PathBuf> {
+    if let Ok(p) = std::env::var("BRAIN_SOCKET_PATH") {
+        return Ok(PathBuf::from(p));
     }
-    None
+    let home = std::env::var("BRAIN_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".brain")))
+        .map_err(|_| anyhow::anyhow!("neither BRAIN_HOME nor HOME is set"))?;
+    Ok(home.join("brain-rpc.sock"))
 }
 
-/// Try to resolve brain paths from the DB (source of truth).
+/// Locate the `brain-mcp` binary.
 ///
-/// First checks if cwd falls under any registered brain's roots.
-/// Falls back to the first brain alphabetically if no root matches.
-fn resolve_from_registry() -> Option<(String, brain_lib::config::ResolvedPaths)> {
-    let home = brain_lib::config::brain_home().ok()?;
-    let db = brain_persistence::db::Db::open(&home.join("brain.db")).ok()?;
-    let brain_rows = db.list_brains(true).ok()?;
-    let cwd = std::env::current_dir().ok();
+/// Resolution order:
+/// 1. `$BRAIN_DAEMON_BIN` env var (intentionally shared with daemon binary)
+/// 2. Sibling of the current `brain` executable
+/// 3. `$PATH`
+fn resolve_brain_mcp_binary() -> Result<PathBuf> {
+    // Check BRAIN_DAEMON_BIN first (shared env var with daemon binary lookup).
+    if let Ok(p) = std::env::var("BRAIN_DAEMON_BIN") {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
 
-    // Try to find a brain whose root contains the cwd.
-    if let Some(ref cwd) = cwd {
-        for row in &brain_rows {
-            let roots: Vec<std::path::PathBuf> = row
-                .roots_json
-                .as_deref()
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default();
-            if roots.iter().any(|r| cwd.starts_with(r))
-                && let Ok(resolved) = brain_lib::config::resolve_paths_for_brain(&row.name)
-            {
-                return Some((row.name.clone(), resolved));
+    // Try sibling of current executable.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join("brain-mcp");
+            if sibling.exists() {
+                return Ok(sibling);
             }
         }
     }
 
-    // Fall back to first brain alphabetically.
-    let name = &brain_rows.first()?.name;
-    let resolved = brain_lib::config::resolve_paths_for_brain(name).ok()?;
-    Some((name.clone(), resolved))
+    // Fall back to PATH lookup via shell command.
+    let output = std::process::Command::new("sh")
+        .args(["-c", "command -v brain-mcp"])
+        .output()
+        .map_err(|e| anyhow::anyhow!("failed to run command -v: {e}"))?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
+        }
+    }
+    anyhow::bail!("brain-mcp not found in $PATH")
 }

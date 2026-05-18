@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use serde_json::Value;
 
 use super::client::IpcClientError;
-use crate::mcp::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+use super::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 
 /// Issue a single blocking `tools/call` to the daemon and return the result.
 ///

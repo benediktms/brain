@@ -154,7 +154,7 @@ pub(crate) async fn async_main(cli: Cli) -> Result<()> {
         }
         Command::Mcp { action } => match action {
             None => {
-                commands::mcp::run(cli.model_dir, cli.lance_db, cli.sqlite_db).await?;
+                commands::mcp::run().await?;
             }
             Some(McpAction::Setup { target, dry_run }) => {
                 commands::mcp_setup::run(target, dry_run)?;

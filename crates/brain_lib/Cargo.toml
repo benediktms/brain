@@ -31,6 +31,7 @@ brain-memory = { path = "../brain_memory" }
 brain-persistence = { path = "../brain_persistence" }
 brain-records = { path = "../brain_records" }
 brain-retrieval = { path = "../brain_retrieval" }
+brain-rpc = { path = "../brain_rpc" }
 brain-sagas = { path = "../brain_sagas" }
 brain-tags = { path = "../brain_tags" }
 brain-tasks = { path = "../brain_tasks" }

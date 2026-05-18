@@ -411,39 +411,18 @@ pub struct RetrieveParams {
 }
 
 pub async fn retrieve(ctx: &MemoryCtx, params: RetrieveParams) -> Result<()> {
-    use brain_lib::mcp::McpContext;
-    use brain_lib::stores::BrainStores;
+    use brain_lib::ipc::sync_client::sync_tools_call;
 
     let has_query = params.query.as_ref().is_some_and(|q| !q.trim().is_empty());
     let has_uri = params.uri.is_some();
     if has_query && has_uri {
-        bail!("Provide QUERY or --uri, not both");
+        bail!("Provide --query or --uri, not both");
     }
     if !has_query && !has_uri {
         bail!("Either a QUERY positional argument or --uri is required");
     }
 
-    // BrainStores and SearchService don't implement Clone, so we reopen stores
-    // from the registry while reusing the already-loaded embedder + StoreReader.
-    let stores = BrainStores::from_brain(&ctx.stores.brain_name)?;
-    let search = SearchService {
-        store: ctx.search.store.clone(),
-        embedder: ctx.search.embedder.clone(),
-    };
-    let mcp_ctx = McpContext::from_stores(stores, Some(search), None, ctx.metrics.clone());
-
-    retrieve_with_mcp_ctx(&mcp_ctx, ctx.json, params).await
-}
-
-/// Inner helper: dispatch + render. Accepts a pre-built McpContext so tests
-/// can bypass the global registry lookup in `retrieve()`.
-pub(crate) async fn retrieve_with_mcp_ctx(
-    mcp_ctx: &brain_lib::mcp::McpContext,
-    json: bool,
-    params: RetrieveParams,
-) -> Result<()> {
-    use brain_lib::mcp::tools::ToolRegistry;
-
+    // Route through the daemon via sync RPC — the daemon owns all stores/search.
     let json_params = serde_json::json!({
         "query": params.query,
         "uri": params.uri,
@@ -461,28 +440,25 @@ pub(crate) async fn retrieve_with_mcp_ctx(
         "explain": params.explain,
     });
 
-    let registry = ToolRegistry::new();
-    let call_result = registry
-        .dispatch("memory.retrieve", json_params, mcp_ctx)
-        .await;
+    let result = sync_tools_call("memory.retrieve", &ctx.stores.brain_name, json_params)
+        .map_err(|e| anyhow::anyhow!("memory.retrieve failed: {e}"))?;
 
-    if call_result.is_error == Some(true) {
-        let msg = call_result
-            .content
-            .first()
-            .map(|c| c.text.as_str())
+    retrieve_render(ctx.json, params, result)
+}
+
+/// Render a memory.retrieve result from the daemon RPC response.
+pub(crate) fn retrieve_render(json: bool, params: RetrieveParams, result: serde_json::Value) -> Result<()> {
+    // The sync_tools_call result is the raw JSON value from the daemon.
+    // If it has an `isError` field at top level, propagate it.
+    if result.get("isError").and_then(|v| v.as_bool()) == Some(true) {
+        let msg = result
+            .pointer("/content/0/text")
+            .and_then(|v| v.as_str())
             .unwrap_or("retrieve failed");
         bail!("{msg}");
     }
 
-    let text = call_result
-        .content
-        .first()
-        .map(|c| c.text.as_str())
-        .unwrap_or("{}");
-
-    let response: serde_json::Value =
-        serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({"raw": text}));
+    let response = result;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&response)?);

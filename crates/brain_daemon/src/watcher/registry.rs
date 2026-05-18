@@ -78,7 +78,7 @@ pub async fn reload_and_project(
     let projections: Vec<BrainProjection> = brains
         .iter()
         .filter_map(|(name, inst)| {
-            let bid = inst.mcp_context.brain_id().to_string();
+            let bid = inst.brain_id.clone();
             cfg.brains.get(name).map(|entry| {
                 let prefix = existing_prefixes
                     .get(&bid)
@@ -419,7 +419,7 @@ pub fn sync_prefixes_to_config(db: &Db, brains: &HashMap<String, BrainInstance>)
     };
     let mut changed = false;
     for (name, inst) in brains {
-        let brain_id = inst.mcp_context.brain_id().to_string();
+        let brain_id = inst.brain_id.clone();
         if let Ok(Some(db_prefix)) = db.get_brain_prefix(&brain_id)
             && let Some(entry) = cfg.brains.get_mut(name)
             && entry.prefix.as_deref() != Some(&db_prefix)
