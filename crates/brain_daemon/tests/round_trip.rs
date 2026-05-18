@@ -13,7 +13,6 @@
 
 mod common;
 
-use std::net::TcpStream;
 use std::os::unix::net::UnixStream;
 use std::sync::Mutex;
 use std::thread;
@@ -58,7 +57,6 @@ fn wait_for_socket_ready(sock_path: &std::path::Path, timeout: Duration) -> anyh
         }
     }
 }
-
 /// Spawn the server on a fresh temp-dir socket with `DefaultDispatcher`.
 fn spawn_default_server() -> (TempDir, std::path::PathBuf, common::ServerGuard) {
     let tmp = TempDir::new().expect("tempdir");

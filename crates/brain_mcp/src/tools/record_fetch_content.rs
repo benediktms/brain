@@ -21,10 +21,8 @@ use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
 
-#[allow(dead_code)]
 pub(super) struct RecordFetchContent;
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct Params {
     record_id: String,

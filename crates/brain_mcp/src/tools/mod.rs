@@ -296,11 +296,15 @@ mod tests {
     fn all_definitions_have_valid_schema() {
         let registry = ToolRegistry::new();
         for def in registry.definitions() {
-            assert!(def.input_schema.is_object());
-            assert_eq!(
-                def.input_schema.get("type").and_then(|v| v.as_str()),
-                Some("object"),
-                "tool '{}' input_schema.type must be 'object'",
+            assert!(
+                def.input_schema.is_object(),
+                "schema for '{}' is not an object",
+                def.name
+            );
+            let typ = def.input_schema.get("type");
+            assert!(
+                typ.is_some_and(|v| v.as_str() == Some("object")),
+                "schema for '{}' has type {typ:?}, expected \"object\"",
                 def.name
             );
         }
