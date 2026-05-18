@@ -87,7 +87,6 @@ pub mod handlers;
 pub mod server;
 
 #[cfg(feature = "embed")]
-#[cfg(feature = "embed")]
 pub mod watcher;
 
 pub use config::DaemonConfig;
