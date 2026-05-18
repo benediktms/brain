@@ -13,9 +13,11 @@
 
 mod common;
 
+use std::net::TcpStream;
+use std::os::unix::net::UnixStream;
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use brain_daemon::{BrainStoresDispatcher, DaemonConfig, DefaultDispatcher, UnixSocketServer};
 use brain_lib::stores::BrainStores;
@@ -31,6 +33,32 @@ use tempfile::TempDir;
 /// single binary the multi-threaded tokio runtime runs tests concurrently.
 static BRAIN_HOME_LOCK: Mutex<()> = Mutex::new(());
 
+/// Wait for Unix socket to become ready by polling connection attempts.
+///
+/// Retries with exponential backoff up to `timeout`. Returns `Ok(())` on
+/// success or `Err` with a diagnostic message if the timeout elapses.
+fn wait_for_socket_ready(sock_path: &std::path::Path, timeout: Duration) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut backoff_ms = 5;
+
+    loop {
+        match UnixStream::connect(sock_path) {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                if Instant::now() >= deadline {
+                    return Err(anyhow::anyhow!(
+                        "server socket {} not ready within {:?}",
+                        sock_path.display(),
+                        timeout
+                    ));
+                }
+                thread::sleep(Duration::from_millis(backoff_ms));
+                backoff_ms = (backoff_ms * 2).min(20);
+            }
+        }
+    }
+}
+
 /// Spawn the server on a fresh temp-dir socket with `DefaultDispatcher`.
 fn spawn_default_server() -> (TempDir, std::path::PathBuf, common::ServerGuard) {
     let tmp = TempDir::new().expect("tempdir");
@@ -39,7 +67,8 @@ fn spawn_default_server() -> (TempDir, std::path::PathBuf, common::ServerGuard) 
     let server = UnixSocketServer::bind(&config, DefaultDispatcher).expect("bind");
     let shutdown = server.shutdown_handle();
     let handle = thread::spawn(move || server.run());
-    thread::sleep(Duration::from_millis(20));
+    wait_for_socket_ready(&sock_path, Duration::from_millis(200))
+        .expect("server socket not ready within 200ms");
     (
         tmp,
         sock_path,
@@ -145,10 +174,11 @@ fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGu
     // `guard` is moved into the thread so it stays alive as long as the
     // server thread runs (brain_home() is called at dispatch time, not startup).
     let handle = thread::spawn(move || server.run());
-    // Give the accept loop time to start before clients attempt to connect.
-    // BrainStores init can take longer than DefaultDispatcher, so match
-    // the 500ms grace period used in brain_mcp's spawn_daemon.
-    thread::sleep(Duration::from_millis(500));
+    // Poll the socket for readiness. BrainStores init can take longer than
+    // DefaultDispatcher, so allow up to 500ms (matching brain_mcp's spawn_daemon
+    // previous grace period, but now actively probing instead of fixed sleep).
+    wait_for_socket_ready(&sock_path, Duration::from_millis(500))
+        .expect("server socket not ready within 500ms");
 
     (
         tmp,

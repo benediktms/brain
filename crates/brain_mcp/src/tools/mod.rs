@@ -297,7 +297,12 @@ mod tests {
         let registry = ToolRegistry::new();
         for def in registry.definitions() {
             assert!(def.input_schema.is_object());
-            assert!(def.input_schema.get("type").is_some());
+            assert_eq!(
+                def.input_schema.get("type").and_then(|v| v.as_str()),
+                Some("object"),
+                "tool '{}' input_schema.type must be 'object'",
+                def.name
+            );
         }
     }
 }
