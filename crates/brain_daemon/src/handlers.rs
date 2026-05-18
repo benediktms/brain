@@ -17,7 +17,6 @@ use std::sync::{Arc, OnceLock};
 
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::sagas::compact_saga_id;
-use brain_persistence::db::summaries::Episode;
 use brain_records::{
     CreateRecordParams, Record, RecordKind, RecordQuery, RecordStatus, RecordStore, integrity,
 };
@@ -1295,24 +1294,38 @@ impl BrainStoresDispatcher {
         &self,
         params: MemoryWriteEpisodeParams,
     ) -> Result<Response, RpcError> {
+        // Delegate to brain_memory so the `continues` predecessor is
+        // validated pre-write (exists / same brain / kind=episode)
+        // with legacy-byte-identical error messages. Validation
+        // failures map to Protocol so the client sees -32602; other
+        // errors stay Unknown.
         let importance = millis_to_unit(params.importance_millis);
-        let episode = Episode {
-            brain_id: self.stores.brain_id.clone(),
+        let core_params = brain_memory::write_episode::WriteEpisodeParams {
             goal: params.goal,
             actions: params.actions,
             outcome: params.outcome,
             tags: params.tags,
             importance,
+            continues: params.continues,
         };
-        let summary_id = self
-            .stores
-            .store_episode(&episode)
-            .map_err(|e| RpcError::Unknown {
-                message: format!("store episode: {e}"),
-            })?;
-        let uri = brain_lib::uri::SynapseUri::for_episode(&self.stores.brain_name, &summary_id)
-            .to_string();
-        Ok(Response::MemoryWriteEpisode { summary_id, uri })
+        let result = brain_memory::write_episode::run(
+            self.stores.inner_db(),
+            &self.stores.brain_id,
+            &self.stores.brain_name,
+            core_params,
+        )
+        .map_err(|e| match e {
+            brain_persistence::error::BrainCoreError::Parse(msg) => {
+                RpcError::Protocol { message: msg }
+            }
+            other => RpcError::Unknown {
+                message: format!("store episode: {other}"),
+            },
+        })?;
+        Ok(Response::MemoryWriteEpisode {
+            summary_id: result.summary_id,
+            uri: result.uri,
+        })
     }
 
     fn handle_memory_write_procedure(
@@ -2106,8 +2119,8 @@ impl BrainStoresDispatcher {
                     self.stores
                         .tasks
                         .resolve_task_id(&id)
-                        .map_err(|e| RpcError::Unknown {
-                            message: format!("Failed to resolve task_id: {e}"),
+                        .map_err(|e| RpcError::NotFound {
+                            id: format!("task_id '{id}': {e}"),
                         })?
                 }
             }
@@ -2143,8 +2156,8 @@ impl BrainStoresDispatcher {
                 self.stores
                     .tasks
                     .resolve_task_id(&dep_owned)
-                    .map_err(|e| RpcError::Unknown {
-                        message: format!("Failed to resolve depends_on_task_id: {e}"),
+                    .map_err(|e| RpcError::NotFound {
+                        id: format!("depends_on_task_id '{dep_owned}': {e}"),
                     })?;
             payload["depends_on_task_id"] = serde_json::json!(resolved);
         }
@@ -2158,8 +2171,8 @@ impl BrainStoresDispatcher {
                 .stores
                 .tasks
                 .resolve_task_id(&parent_owned)
-                .map_err(|e| RpcError::Unknown {
-                    message: format!("Failed to resolve parent_task_id: {e}"),
+                .map_err(|e| RpcError::NotFound {
+                    id: format!("parent_task_id '{parent_owned}': {e}"),
                 })?;
             payload["parent_task_id"] = serde_json::json!(resolved);
         }
@@ -2622,8 +2635,10 @@ impl BrainStoresDispatcher {
         use brain_persistence::db::job::JobStatus;
 
         // Resolve status filter (default → Failed, matching legacy MCP).
+        // Invalid input is caller error — surface as Protocol so the
+        // client sees -32602 rather than a generic Unknown.
         let listing_status = match params.status.as_deref() {
-            Some(s) => JobStatus::from_str(s).map_err(|e| RpcError::Unknown {
+            Some(s) => JobStatus::from_str(s).map_err(|e| RpcError::Protocol {
                 message: format!("invalid status filter: {e}"),
             })?,
             None => JobStatus::Failed,
@@ -2756,29 +2771,35 @@ impl BrainStoresDispatcher {
                     message: format!("stale_hashes_prevented failed: {e}"),
                 })?;
 
-        // Populate runtime metrics from the daemon's Arc<Metrics>. The
-        // snapshot is cheap (atomic loads + percentile sweeps) so we
-        // always include it; consumers that don't care simply ignore
-        // the field.
-        let mcp_ctx = self.mcp_ctx()?;
-        let internal = mcp_ctx.metrics.snapshot();
-        let metrics = MetricsSnapshot {
-            uptime_seconds: internal.uptime_seconds,
-            indexing_latency: LatencyHistogram {
-                p50_us: internal.indexing_latency.p50_us,
-                p95_us: internal.indexing_latency.p95_us,
-                total_samples: internal.indexing_latency.total_samples,
-            },
-            query_latency: LatencyHistogram {
-                p50_us: internal.query_latency.p50_us,
-                p95_us: internal.query_latency.p95_us,
-                total_samples: internal.query_latency.total_samples,
-            },
-            queue_depth: internal.queue_depth,
-            lancedb_unoptimized_rows: internal.lancedb_unoptimized_rows,
-            lancedb_optimize_failures: internal.lancedb_optimize_failures,
-            indexing_errors: internal.indexing_errors,
-            query_errors: internal.query_errors,
+        // Populate runtime metrics from the daemon's Arc<Metrics>. When
+        // the MCP context is unavailable (semantic-memory bootstrap
+        // failure, LanceDB not yet provisioned, etc.) we still want to
+        // surface the task/job counts that callers depend on — fall
+        // back to a zeroed MetricsSnapshot rather than failing the
+        // whole brain.status call.
+        let metrics = match self.mcp_ctx() {
+            Ok(mcp_ctx) => {
+                let internal = mcp_ctx.metrics.snapshot();
+                MetricsSnapshot {
+                    uptime_seconds: internal.uptime_seconds,
+                    indexing_latency: LatencyHistogram {
+                        p50_us: internal.indexing_latency.p50_us,
+                        p95_us: internal.indexing_latency.p95_us,
+                        total_samples: internal.indexing_latency.total_samples,
+                    },
+                    query_latency: LatencyHistogram {
+                        p50_us: internal.query_latency.p50_us,
+                        p95_us: internal.query_latency.p95_us,
+                        total_samples: internal.query_latency.total_samples,
+                    },
+                    queue_depth: internal.queue_depth,
+                    lancedb_unoptimized_rows: internal.lancedb_unoptimized_rows,
+                    lancedb_optimize_failures: internal.lancedb_optimize_failures,
+                    indexing_errors: internal.indexing_errors,
+                    query_errors: internal.query_errors,
+                }
+            }
+            Err(_) => MetricsSnapshot::default(),
         };
 
         let report = BrainStatusReport {
@@ -3319,6 +3340,12 @@ fn label_rename_response(
     let results = store.append_batch(&events);
     let mut succeeded: Vec<serde_json::Value> = Vec::new();
     let mut failed: Vec<serde_json::Value> = Vec::new();
+    // Per-task compensating events for half-applied renames. We
+    // append these in a second batch so the task either fully
+    // renames or stays at its prior state — never lingers with both
+    // labels (Err on remove, Ok on add) or neither (Ok on remove,
+    // Err on add).
+    let mut compensations: Vec<TaskEvent> = Vec::new();
 
     // Results come in (remove, add) pairs per task — mirror the
     // original tool's pair-failure-reporting semantics.
@@ -3340,11 +3367,41 @@ fn label_rename_response(
             if let Err(e) = &results[add_idx] {
                 errors.push(format!("add: {e}"));
             }
+            // Half-applied detection: if exactly one side succeeded,
+            // schedule its inverse so the task returns to its
+            // pre-rename state.
+            if remove_ok && !add_ok {
+                compensations.push(TaskEvent::new(
+                    tid,
+                    "mcp",
+                    EventType::LabelAdded,
+                    &LabelPayload {
+                        label: old_label.to_string(),
+                    },
+                ));
+            } else if !remove_ok && add_ok {
+                compensations.push(TaskEvent::new(
+                    tid,
+                    "mcp",
+                    EventType::LabelRemoved,
+                    &LabelPayload {
+                        label: new_label.to_string(),
+                    },
+                ));
+            }
             failed.push(serde_json::json!({
                 "task_id": short_id,
                 "error": errors.join("; "),
             }));
         }
+    }
+
+    if !compensations.is_empty() {
+        // Compensating events run best-effort: if any fail the task
+        // is left half-applied, but we've already reported the
+        // rename failure to the caller so this is a degradation of
+        // an already-failed write, not a new lie.
+        let _ = store.append_batch(&compensations);
     }
 
     Ok(batch_response_value(succeeded, failed))

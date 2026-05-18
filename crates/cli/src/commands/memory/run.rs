@@ -811,6 +811,9 @@ pub fn write_episode_remote(params: WriteEpisodeParams, json: bool) -> anyhow::R
                 outcome: params.outcome.clone(),
                 tags: params.tags.clone(),
                 importance_millis: importance_to_millis(params.importance),
+                // CLI doesn't yet expose thread-extension; episodes
+                // created via `brain memory write-episode` stand alone.
+                continues: None,
             },
         })
         .map_err(|e| anyhow::anyhow!("MemoryWriteEpisode rpc failed: {e}"))?;

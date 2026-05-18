@@ -48,7 +48,7 @@ impl McpTool for RecordGet {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Get a record by ID with full details including tags and links. Supports prefix resolution. Use the brain parameter to fetch from a remote brain instead of locally.".into(),
+            description: "Get a record by ID with full details including tags and links. Supports prefix resolution. Cross-brain fetch is not yet supported on the wire path — requests including `brain` are rejected; omit it to fetch from the current brain.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

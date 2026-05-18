@@ -52,7 +52,7 @@ impl McpTool for TaskNext {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Get the next highest-priority ready task(s). Returns tasks with no unresolved dependencies, sorted by configurable policy. Includes dependency summary and linked notes for each task. Supports cross-brain queries via the `brains` parameter.".into(),
+            description: "Get the next highest-priority ready task using the daemon's built-in priority policy. Federated/cross-brain queries (via `brains`) and configurable policy/k are not yet supported on the wire path — non-default `policy`, `k`, and non-empty `brains` are rejected.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

@@ -1,18 +1,17 @@
 //! `memory.write_episode` MCP tool — thin wrapper over `DaemonClient::memory_write_episode`.
 //!
-//! The wire variant carries only the core episode fields; inline `links`
-//! and the `continues` shortcut are MCP-layer framing. Migration applies
-//! them via per-link `links_add` round-trips after the episode lands.
-//! The episode is persisted before any link attempt, mirroring the
-//! legacy partial-failure tolerance.
+//! The wire variant carries the core episode fields plus the optional
+//! `continues` predecessor pointer. The daemon validates the
+//! predecessor (exists / same brain / kind=episode) pre-write, so a
+//! missing predecessor rejects the episode write entirely — the same
+//! semantics as the legacy MCP surface.
 //!
-//! **Known deviation from legacy:** Legacy validated `continues` pre-
-//! write (predecessor must exist) so a missing predecessor rejected
-//! the episode write entirely. The wire variant doesn't accept
-//! `continues`, so this tool writes the episode unconditionally and
-//! surfaces predecessor errors via the `links.failed` block. A
-//! follow-up wire extension (Phase A) should re-enable pre-write
-//! validation.
+//! Inline `links` remain MCP-layer framing: they apply post-write via
+//! per-link `links_add` round-trips. The episode is persisted before
+//! any link attempt, mirroring the legacy partial-failure tolerance.
+//! When `continues` was set, the synthesized `{to: EPISODE/<prev>,
+//! edge_kind: continues}` entry is prepended to the inline-link batch
+//! so it appears first in the response's `links` block.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -84,20 +83,20 @@ impl McpTool for MemoryWriteEpisode {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            if let Some(ref prev) = parsed.continues
-                && prev.is_empty()
-            {
-                return ToolCallResult::error("continues: must not be empty");
-            }
-
             let importance_millis = (parsed.importance.clamp(0.0, 1.0) * 1000.0) as u32;
 
+            // Pass `continues` to the wire so the daemon validates the
+            // predecessor (exists / same brain / kind=episode) pre-
+            // write and rejects with a Protocol error if validation
+            // fails — preserving the legacy MCP semantics that a
+            // missing predecessor aborts the episode write.
             let wire_params = MemoryWriteEpisodeParams {
                 goal: parsed.goal.clone(),
                 actions: parsed.actions,
                 outcome: parsed.outcome,
                 tags: parsed.tags.clone(),
                 importance_millis,
+                continues: parsed.continues.clone(),
             };
 
             let (summary_id, uri) = match ctx

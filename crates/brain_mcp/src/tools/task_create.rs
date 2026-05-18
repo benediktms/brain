@@ -126,7 +126,7 @@ impl McpTool for TaskCreate {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "Create a task in the current brain's event store (or a remote brain via the 'brain' parameter) and returns the resulting task state. Same as tasks.apply_event with event_type: task_created, but with a simpler flat schema. Defaults: priority=4 (backlog), status=open, actor=mcp. When 'brain' is provided, creates the task in the target brain and returns remote_task_id, remote_brain_name, remote_brain_id, and task. Optionally links a local task to the remote task via 'link_from'.".into(),
+            description: "Create a task in the current brain's event store and return the resulting task state. Same as tasks.apply_event with event_type: task_created, but with a simpler flat schema. Defaults: priority=4 (backlog), status=open, actor=mcp. Cross-brain creation (`brain` / `link_from` / `link_type`) is not yet supported on the wire path — requests with those parameters are rejected; use tasks.apply_event for cross-brain flows in the meantime.".into(),
             input_schema: create_schema(),
         }
     }

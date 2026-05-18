@@ -68,7 +68,7 @@ impl McpTool for RecordList {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().into(),
-            description: "List records with optional filters. Returns compact IDs. Supports cross-brain queries via the `brains` parameter.".into(),
+            description: "List records with optional filters. Returns compact IDs. Cross-brain queries are not yet supported on the wire path — requests including `brain` or `brains` are rejected with a clear error; omit those parameters to query the current brain.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

@@ -958,6 +958,14 @@ pub struct MemoryWriteEpisodeParams {
     /// Importance scaled to 0–1000 (millis). Divide by 1000.0 to recover
     /// the original float.
     pub importance_millis: u32,
+    /// Optional `summary_id` of a prior episode this one continues.
+    /// Daemon validates predecessor existence pre-write and rejects
+    /// the write if the predecessor cannot be resolved — preserves
+    /// the legacy MCP semantics that a missing predecessor aborts
+    /// the episode write rather than persisting the episode then
+    /// reporting a broken link.
+    #[serde(default)]
+    pub continues: Option<String>,
 }
 
 /// Wire-format params for [`Request::MemoryWriteProcedure`].
@@ -1157,7 +1165,7 @@ impl Default for JobsStatusParams {
 /// Field names are byte-stable with the legacy `status` MCP envelope
 /// (`p50_us` / `p95_us` / `total_samples`) — clients depend on this
 /// shape.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct LatencyHistogram {
     pub p50_us: u64,
     pub p95_us: u64,
@@ -1176,7 +1184,7 @@ pub struct LatencyHistogram {
 /// carried here; they already live on [`BrainStatusReport`] (since
 /// they predate the metrics extension) and the MCP `status` tool
 /// reads them off the report directly to assemble the legacy envelope.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct MetricsSnapshot {
     pub uptime_seconds: u64,
     pub indexing_latency: LatencyHistogram,

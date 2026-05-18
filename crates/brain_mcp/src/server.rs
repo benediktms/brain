@@ -55,8 +55,20 @@ pub async fn run_server(ctx: Arc<McpContext>) -> Result<()> {
                     Ok(req) => handle::handle_request(req, &ctx, &registry).await,
                     Err(e) => {
                         error!(error = %e, size = line.len(), method = ?method, "invalid JSON-RPC request");
-                        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid Request"}}"#
-                            .to_string()
+                        // Echo the parsed id so clients can correlate
+                        // the Invalid Request response with their
+                        // outgoing call. Fall back to null only when
+                        // the request omitted id entirely.
+                        let id_for_response = id.unwrap_or(serde_json::Value::Null);
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id_for_response,
+                            "error": {
+                                "code": -32600,
+                                "message": "Invalid Request",
+                            },
+                        })
+                        .to_string()
                     }
                 }
             }

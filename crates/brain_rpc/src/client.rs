@@ -2859,6 +2859,7 @@ mod tests {
             outcome: "test outcome".into(),
             tags: vec!["unit-test".into()],
             importance_millis: 500,
+            continues: None,
         }
     }
 
