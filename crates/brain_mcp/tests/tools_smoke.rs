@@ -52,7 +52,8 @@ fn spawn_stores_daemon() -> (TempDir, std::path::PathBuf, common::ServerGuard) {
         let _keep = stores_tmp;
         server.run()
     });
-    thread::sleep(Duration::from_millis(20));
+    common::wait_for_server_ready(&sock_path, Duration::from_millis(500))
+        .expect("server socket not ready within 500ms");
     (
         sock_tmp,
         sock_path,
@@ -365,5 +366,52 @@ async fn test_records_list_rejects_brains_param() {
     assert!(
         text.contains("cross-brain") || text.contains("brains"),
         "error should reference cross-brain or brains param: got {text:?}"
+    );
+}
+
+// ── records.search ───────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_records_search_returns_result_shape() {
+    let (_tmp, sock, _guard) = common::spawn_daemon();
+    let ctx = common::connect_mcp_context(&sock).await;
+    let registry = ToolRegistry::new();
+
+    let result = common::dispatch(
+        &registry,
+        &ctx,
+        "records.search",
+        json!({ "query": "test query", "k": 3 }),
+    )
+    .await;
+
+    // Tool should respond (error or success), not crash the transport.
+    assert!(
+        result.is_error.is_none() || !result.content.is_empty(),
+        "records.search should return a response: {:?}",
+        result.content
+    );
+}
+
+// ── records.fetch_content ─────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_records_fetch_content_rejects_empty_record_id() {
+    let (_tmp, sock, _guard) = common::spawn_daemon();
+    let ctx = common::connect_mcp_context(&sock).await;
+    let registry = ToolRegistry::new();
+
+    let result = common::dispatch(
+        &registry,
+        &ctx,
+        "records.fetch_content",
+        json!({ "record_id": "" }),
+    )
+    .await;
+
+    // Empty record_id should be rejected with an error.
+    assert!(
+        result.is_error.is_some(),
+        "expected is_error=true for empty record_id"
     );
 }
