@@ -4,13 +4,14 @@ use anyhow::Result;
 use brain_lib::ports::JobQueue;
 use brain_lib::stores::BrainStores;
 use brain_persistence::db::job::JobStatus;
+use brain_rpc::JobsStatusParams;
 
 use crate::commands::rpc_client;
 
 fn run_status_remote(json: bool) -> Result<()> {
     let mut client = rpc_client::connect_daemon()?;
     let report = client
-        .jobs_status()
+        .jobs_status(JobsStatusParams::default())
         .map_err(|e| anyhow::anyhow!("JobsStatus rpc failed: {e}"))?;
 
     if json {

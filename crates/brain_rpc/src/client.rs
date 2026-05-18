@@ -25,17 +25,18 @@
 
 use crate::domain::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, BrainsListParams,
-    DocumentSummary, JobsStatusReport, LinksAddParams, LinksForEntityParams, LinksRemoveParams,
-    MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams,
-    MemoryWalkThreadParams, MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION,
-    PlanSummary, ProviderSummary, RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams,
-    RecordsListParams, RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary,
-    SagaCascadeResult, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
-    SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
-    TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
-    TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams,
-    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams, WatchSummary,
-    WireBrainSummary, WireLinkSummary, WireTaskLabelSummary,
+    DocumentSummary, JobsStatusParams, JobsStatusReport, LinksAddParams, LinksForEntityParams,
+    LinksRemoveParams, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
+    MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
+    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
+    RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams, RecordsListParams,
+    RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary, SagaCascadeResult,
+    SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
+    SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
+    TagsAliasesListParams, TagsReclusterParams, TaskSummary, TasksApplyEventParams,
+    TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams,
+    TasksMutateParams, TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary,
+    WireLinkSummary, WireTaskLabelSummary,
 };
 use crate::transport::Transport;
 
@@ -1044,12 +1045,17 @@ impl<T: Transport> DaemonClient<T> {
 
     /// Get job queue health summary via [`Request::JobsStatus`].
     ///
+    /// `params` carries server-side filters: the daemon owns the
+    /// list/filter/limit loop, so MCP and CLI callers become thin
+    /// wire-echo bodies. Pass [`JobsStatusParams::default`] for the
+    /// legacy MCP defaults (status=failed, limit=10, no kind filter).
+    ///
     /// # Errors
     ///
     /// - [`RpcError::Protocol`] — the daemon replied with anything other
     ///   than [`Response::JobsStatus`].
-    pub fn jobs_status(&mut self) -> Result<JobsStatusReport, RpcError> {
-        match self.call(Request::JobsStatus)? {
+    pub fn jobs_status(&mut self, params: JobsStatusParams) -> Result<JobsStatusReport, RpcError> {
+        match self.call(Request::JobsStatus { params })? {
             Response::JobsStatus { report } => Ok(report),
             other => Err(RpcError::Protocol {
                 message: format!("expected JobsStatus in reply to JobsStatus, got {other:?}"),
@@ -1058,6 +1064,13 @@ impl<T: Transport> DaemonClient<T> {
     }
 
     /// Get brain health status via [`Request::BrainStatus`].
+    ///
+    /// The returned [`BrainStatusReport`] carries task counts,
+    /// stuck-file / stale-hash counters, and a
+    /// [`MetricsSnapshot`](crate::MetricsSnapshot) populated from the
+    /// daemon's `Arc<Metrics>`. Consumers that only want task counts
+    /// can ignore the `metrics` field; the snapshot is cheap to compute
+    /// (atomic loads + percentile sweeps).
     ///
     /// # Errors
     ///

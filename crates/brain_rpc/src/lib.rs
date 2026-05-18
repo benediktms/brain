@@ -54,19 +54,19 @@ pub mod testing;
 pub use client::DaemonClient;
 pub use domain::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, BrainsListParams,
-    DocumentSummary, JobSummary, JobsStatusReport, LinksAddParams, LinksForEntityParams,
-    LinksRemoveParams, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
-    MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
-    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
-    RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams, RecordsListParams,
-    RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary, SagaCascadeOutcome,
-    SagaCascadeResult, SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport,
-    SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary,
-    TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams,
-    TaskSummary, TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams,
-    TasksLabelsBatchParams, TasksListParams, TasksMutateParams, TasksTransferParams,
-    TasksUpdateParams, WatchSummary, WireBrainSummary, WireEntityRef, WireLinkSummary,
-    WireTaskLabelSummary,
+    DocumentSummary, JobSummary, JobsStatusParams, JobsStatusReport, LatencyHistogram,
+    LinksAddParams, LinksForEntityParams, LinksRemoveParams, MemoryConsolidateParams,
+    MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
+    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, MetricsSnapshot, PROTOCOL_VERSION,
+    PlanSummary, ProviderSummary, RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams,
+    RecordsListParams, RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary,
+    SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount,
+    SagaStatsReport, SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams,
+    SnapshotSummary, TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams,
+    TagsReclusterParams, TaskSummary, TasksApplyEventParams, TasksCreateParams,
+    TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary, WireEntityRef,
+    WireLinkSummary, WireTaskLabelSummary,
 };
 pub use transport::Transport;
 
