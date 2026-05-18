@@ -99,10 +99,18 @@ impl Drop for ServerGuard {
             // Surface thread panics or RPC errors: tests should fail if the server died.
             match h.join() {
                 Err(panic_payload) => {
-                    panic!("Server thread panicked: {panic_payload:?}");
+                    if std::thread::panicking() {
+                        eprintln!("Server thread panicked: {panic_payload:?}");
+                    } else {
+                        panic!("Server thread panicked: {panic_payload:?}");
+                    }
                 }
                 Ok(Err(rpc_err)) => {
-                    panic!("Server thread returned RPC error: {rpc_err:?}");
+                    if std::thread::panicking() {
+                        eprintln!("Server thread returned RPC error: {rpc_err:?}");
+                    } else {
+                        panic!("Server thread returned RPC error: {rpc_err:?}");
+                    }
                 }
                 Ok(Ok(())) => {}
             }

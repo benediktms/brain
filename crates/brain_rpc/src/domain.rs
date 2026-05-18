@@ -26,7 +26,7 @@ use thiserror::Error;
 /// shape. Client and daemon exchange this on connect; a mismatch returns
 /// [`RpcError::VersionMismatch`] with both versions so the operator can be
 /// told which side to restart.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// A client-originated message sent over the wire.
 ///
@@ -1627,37 +1627,37 @@ impl<'de> serde::Deserialize<'de> for RecordContent {
                             if media_type.is_some() {
                                 return Err(de::Error::duplicate_field("media_type"));
                             }
-                            media_type = Some(map.next_value()?);
+                            media_type = map.next_value::<Option<String>>()?;
                         }
                         Field::Encoding => {
                             if encoding.is_some() {
                                 return Err(de::Error::duplicate_field("encoding"));
                             }
-                            encoding = Some(map.next_value()?);
+                            encoding = Some(map.next_value::<String>()?);
                         }
                         Field::Text => {
                             if text.is_some() {
                                 return Err(de::Error::duplicate_field("text"));
                             }
-                            text = Some(map.next_value()?);
+                            text = map.next_value::<Option<String>>()?;
                         }
                         Field::Data => {
                             if data_base64.is_some() {
                                 return Err(de::Error::duplicate_field("data"));
                             }
-                            data_base64 = Some(map.next_value()?);
+                            data_base64 = map.next_value::<Option<String>>()?;
                         }
                         Field::Uri => {
                             if uri.is_some() {
                                 return Err(de::Error::duplicate_field("uri"));
                             }
-                            uri = Some(map.next_value()?);
+                            uri = map.next_value::<Option<String>>()?;
                         }
                         Field::Brain => {
                             if brain.is_some() {
                                 return Err(de::Error::duplicate_field("brain"));
                             }
-                            brain = Some(map.next_value()?);
+                            brain = map.next_value::<Option<String>>()?;
                         }
                     }
                 }
@@ -1671,18 +1671,41 @@ impl<'de> serde::Deserialize<'de> for RecordContent {
                 let uri = uri.ok_or_else(|| de::Error::missing_field("uri"))?;
 
                 // Enforce XOR invariant: exactly one of text or data_base64 must be Some
-                match (&text, &data_base64) {
-                    (None, None) => {
+                // and must match the declared encoding
+                match (encoding.as_str(), &text, &data_base64) {
+                    ("utf-8", None, _) => {
                         return Err(de::Error::custom(
-                            "RecordContent must have exactly one of 'text' or 'data' (neither provided)"
+                            "encoding 'utf-8' requires 'text' payload"
                         ));
                     }
-                    (Some(_), Some(_)) => {
+                    ("utf-8", Some(_), Some(_)) => {
                         return Err(de::Error::custom(
                             "RecordContent must have exactly one of 'text' or 'data' (both provided)"
                         ));
                     }
-                    _ => {}
+                    ("base64", _, None) => {
+                        return Err(de::Error::custom(
+                            "encoding 'base64' requires 'data' payload"
+                        ));
+                    }
+                    ("base64", Some(_), Some(_)) => {
+                        return Err(de::Error::custom(
+                            "RecordContent must have exactly one of 'text' or 'data' (both provided)"
+                        ));
+                    }
+                    ("utf-8", Some(_), None) | ("base64", None, Some(_)) => {
+                        // Valid combinations
+                    }
+                    (enc, None, None) => {
+                        return Err(de::Error::custom(
+                            format!("RecordContent with encoding '{}' must have exactly one of 'text' or 'data' (neither provided)", enc)
+                        ));
+                    }
+                    (enc, _, _) => {
+                        return Err(de::Error::custom(
+                            format!("unknown encoding '{}' (expected 'utf-8' or 'base64')", enc)
+                        ));
+                    }
                 }
 
                 Ok(RecordContent {
