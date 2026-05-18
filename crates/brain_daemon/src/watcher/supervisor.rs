@@ -512,12 +512,10 @@ impl Supervisor {
                             brain_id: instance.mcp_context.brain_id().to_string(),
                         }];
                         if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.job_queue(), &brain_infos) {
-                            #[cfg(feature = "embed")]
                             tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
                         }
 
                         if let Err(e) = job_worker::reap_stuck_jobs_filtered(instance.pipeline.job_queue(), &active_jobs) {
-                            #[cfg(feature = "embed")]
                             tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
                         }
                         let pipeline_db = instance.pipeline.clone_db_for_spawn();
@@ -533,7 +531,6 @@ impl Supervisor {
                         }
                         let protected = recurring_jobs::protected_kinds();
                         if let Err(e) = instance.pipeline.gc_completed_jobs(7 * 86400, &protected) {
-                            #[cfg(feature = "embed")]
                             tracing::warn!(brain = %instance.name, error = %e, "gc_completed_jobs failed");
                         }
                     }

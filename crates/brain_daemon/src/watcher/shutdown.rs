@@ -49,7 +49,6 @@ pub async fn drain_with_timeout(
 
         for (from, to) in &renames {
             if let Err(e) = pipeline.rename_file(from, to).await {
-                #[cfg(feature = "embed")]
                 tracing::warn!(error = %e, "error handling rename during drain");
             }
             processed += 1;
@@ -58,7 +57,6 @@ pub async fn drain_with_timeout(
 
         for p in &delete_paths {
             if let Err(e) = pipeline.delete_file(p).await {
-                #[cfg(feature = "embed")]
                 tracing::warn!(error = %e, "error handling delete during drain");
             }
             processed += 1;
@@ -67,7 +65,6 @@ pub async fn drain_with_timeout(
 
         if !index_paths.is_empty() {
             if let Err(e) = pipeline.index_files_batch(&index_paths).await {
-                #[cfg(feature = "embed")]
                 tracing::warn!(error = %e, "error in batch index during drain");
             }
             processed += index_paths.len();
