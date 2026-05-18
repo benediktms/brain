@@ -171,7 +171,10 @@ fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGu
     let shutdown = server.shutdown_handle();
     // `guard` is moved into the thread so it stays alive as long as the
     // server thread runs (brain_home() is called at dispatch time, not startup).
-    let handle = thread::spawn(move || server.run());
+    let handle = thread::spawn(move || {
+        let _guard = guard;
+        server.run()
+    });
     // Poll the socket for readiness. BrainStores init can take longer than
     // DefaultDispatcher, so allow up to 500ms (matching brain_mcp's spawn_daemon
     // previous grace period, but now actively probing instead of fixed sleep).

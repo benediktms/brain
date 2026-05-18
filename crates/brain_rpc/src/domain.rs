@@ -26,7 +26,7 @@ use thiserror::Error;
 /// shape. Client and daemon exchange this on connect; a mismatch returns
 /// [`RpcError::VersionMismatch`] with both versions so the operator can be
 /// told which side to restart.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// A client-originated message sent over the wire.
 ///
@@ -1353,7 +1353,7 @@ pub struct WireLinkSummary {
     /// doesn't surface a timestamp for this edge — preferred over
     /// emitting an empty-string `created_at` that would violate the
     /// RFC 3339 contract per `feedback_iso_timestamps_on_wire`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
 }
 
@@ -1517,7 +1517,7 @@ pub struct RecordsFetchContentParams {
 /// (binary case) is populated — the daemon decodes text-like
 /// `media_type` values up-front so clients do not duplicate the
 /// detection rule.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct RecordContent {
     pub record_id: String,
     pub title: String,
@@ -1539,6 +1539,206 @@ pub struct RecordContent {
     /// non-`None` `brain`; `None` for local fetches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brain: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for RecordContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            RecordId,
+            Title,
+            Kind,
+            ContentHash,
+            Size,
+            MediaType,
+            Encoding,
+            Text,
+            #[serde(rename = "data")]
+            Data,
+            Uri,
+            Brain,
+        }
+
+        struct RecordContentVisitor;
+
+        impl<'de> Visitor<'de> for RecordContentVisitor {
+            type Value = RecordContent;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct RecordContent")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<RecordContent, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut record_id = None;
+                let mut title = None;
+                let mut kind = None;
+                let mut content_hash = None;
+                let mut size = None;
+                let mut media_type = None;
+                let mut encoding = None;
+                let mut text = None;
+                let mut data_base64 = None;
+                let mut uri = None;
+                let mut brain = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::RecordId => {
+                            if record_id.is_some() {
+                                return Err(de::Error::duplicate_field("record_id"));
+                            }
+                            record_id = Some(map.next_value()?);
+                        }
+                        Field::Title => {
+                            if title.is_some() {
+                                return Err(de::Error::duplicate_field("title"));
+                            }
+                            title = Some(map.next_value()?);
+                        }
+                        Field::Kind => {
+                            if kind.is_some() {
+                                return Err(de::Error::duplicate_field("kind"));
+                            }
+                            kind = Some(map.next_value()?);
+                        }
+                        Field::ContentHash => {
+                            if content_hash.is_some() {
+                                return Err(de::Error::duplicate_field("content_hash"));
+                            }
+                            content_hash = Some(map.next_value()?);
+                        }
+                        Field::Size => {
+                            if size.is_some() {
+                                return Err(de::Error::duplicate_field("size"));
+                            }
+                            size = Some(map.next_value()?);
+                        }
+                        Field::MediaType => {
+                            if media_type.is_some() {
+                                return Err(de::Error::duplicate_field("media_type"));
+                            }
+                            media_type = map.next_value::<Option<String>>()?;
+                        }
+                        Field::Encoding => {
+                            if encoding.is_some() {
+                                return Err(de::Error::duplicate_field("encoding"));
+                            }
+                            encoding = Some(map.next_value::<String>()?);
+                        }
+                        Field::Text => {
+                            if text.is_some() {
+                                return Err(de::Error::duplicate_field("text"));
+                            }
+                            text = map.next_value::<Option<String>>()?;
+                        }
+                        Field::Data => {
+                            if data_base64.is_some() {
+                                return Err(de::Error::duplicate_field("data"));
+                            }
+                            data_base64 = map.next_value::<Option<String>>()?;
+                        }
+                        Field::Uri => {
+                            if uri.is_some() {
+                                return Err(de::Error::duplicate_field("uri"));
+                            }
+                            uri = map.next_value::<Option<String>>()?;
+                        }
+                        Field::Brain => {
+                            if brain.is_some() {
+                                return Err(de::Error::duplicate_field("brain"));
+                            }
+                            brain = map.next_value::<Option<String>>()?;
+                        }
+                    }
+                }
+
+                let record_id = record_id.ok_or_else(|| de::Error::missing_field("record_id"))?;
+                let title = title.ok_or_else(|| de::Error::missing_field("title"))?;
+                let kind = kind.ok_or_else(|| de::Error::missing_field("kind"))?;
+                let content_hash = content_hash.ok_or_else(|| de::Error::missing_field("content_hash"))?;
+                let size = size.ok_or_else(|| de::Error::missing_field("size"))?;
+                let encoding = encoding.ok_or_else(|| de::Error::missing_field("encoding"))?;
+                let uri = uri.ok_or_else(|| de::Error::missing_field("uri"))?;
+
+                // Enforce XOR invariant: exactly one of text or data_base64 must be Some
+                // and must match the declared encoding
+                match (encoding.as_str(), &text, &data_base64) {
+                    ("utf-8", None, _) => {
+                        return Err(de::Error::custom(
+                            "encoding 'utf-8' requires 'text' payload"
+                        ));
+                    }
+                    ("utf-8", Some(_), Some(_)) => {
+                        return Err(de::Error::custom(
+                            "RecordContent must have exactly one of 'text' or 'data' (both provided)"
+                        ));
+                    }
+                    ("base64", _, None) => {
+                        return Err(de::Error::custom(
+                            "encoding 'base64' requires 'data' payload"
+                        ));
+                    }
+                    ("base64", Some(_), Some(_)) => {
+                        return Err(de::Error::custom(
+                            "RecordContent must have exactly one of 'text' or 'data' (both provided)"
+                        ));
+                    }
+                    ("utf-8", Some(_), None) | ("base64", None, Some(_)) => {
+                        // Valid combinations
+                    }
+                    (enc, None, None) => {
+                        return Err(de::Error::custom(
+                            format!("RecordContent with encoding '{}' must have exactly one of 'text' or 'data' (neither provided)", enc)
+                        ));
+                    }
+                    (enc, _, _) => {
+                        return Err(de::Error::custom(
+                            format!("unknown encoding '{}' (expected 'utf-8' or 'base64')", enc)
+                        ));
+                    }
+                }
+
+                Ok(RecordContent {
+                    record_id,
+                    title,
+                    kind,
+                    content_hash,
+                    size,
+                    media_type,
+                    encoding,
+                    text,
+                    data_base64,
+                    uri,
+                    brain,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &[
+            "record_id",
+            "title",
+            "kind",
+            "content_hash",
+            "size",
+            "media_type",
+            "encoding",
+            "text",
+            "data",
+            "uri",
+            "brain",
+        ];
+        deserializer.deserialize_struct("RecordContent", FIELDS, RecordContentVisitor)
+    }
 }
 
 /// Wire-format params for [`Request::TasksApplyEvent`]. The body is
