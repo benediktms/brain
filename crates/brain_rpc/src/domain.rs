@@ -2781,7 +2781,7 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(
             json,
-            r#"{"saga_id":"saga-deadbeef","title":"Q4 migration","description":"desc","status":"open","created_at":"2026-05-17T00:00:00Z","updated_at":"2026-05-17T00:00:00Z","closed_at":null}"#
+            r#"{"saga_id":"saga-deadbeef","title":"Q4 migration","description":"desc","status":"open","created_at":"2026-05-17T00:00:00Z","updated_at":"2026-05-17T00:00:00Z","closed_at":null,"members":[],"brains":[]}"#
         );
     }
 

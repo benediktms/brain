@@ -258,15 +258,19 @@ fn handle_connection<D: Dispatcher + ?Sized>(
                 }
             }
             Err(err) => {
-                // The MVP wire protocol has no error envelope yet —
-                // dispatcher errors aren't expected for the only two
-                // current Request variants (Ping, Handshake), and a
-                // future Response::Error variant or wire-level error
-                // envelope is in scope for a follow-up ticket. For
-                // now, log and close the connection so the client
-                // sees an EOF instead of a wedged read.
-                eprintln!("brain-daemon: dispatcher error (closing connection): {err}");
-                return;
+                // RpcError is serializable — send it back as a frame so the
+                // client receives the error rather than a transport close.
+                let payload = match serde_json::to_vec(&err) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("brain-daemon: serialize error response: {e}");
+                        return;
+                    }
+                };
+                if let Err(e) = write_frame(&mut writer, &payload) {
+                    eprintln!("brain-daemon: write_frame error: {e}");
+                    return;
+                }
             }
         }
     }
