@@ -1650,12 +1650,17 @@ impl BrainStoresDispatcher {
             id: params.to.id,
         };
 
+        // Prefix cycle errors with a sentinel so the outer match can
+        // recognise them after the closure's SqlError-typed channel has
+        // collapsed LinkError into a string. The sentinel never appears
+        // in non-cycle error messages so the round-trip is unambiguous.
+        const CYCLE_SENTINEL: &str = "__links_add_cycle__:";
         let outcome = self.stores.inner_db().with_write_conn(move |conn| {
             match add_link_checked(conn, from, to, edge_kind) {
-                // Re-wrap LinkError so the closure's SqlError signature is satisfied
-                // while preserving the LinkError discriminant for the outer match.
                 Err(LinkError::Cycle(ek)) => Err(brain_persistence::sql::SqlError::Domain(
-                    brain_persistence::error::BrainCoreError::Database(format!("cycle: {ek:?}")),
+                    brain_persistence::error::BrainCoreError::Database(format!(
+                        "{CYCLE_SENTINEL}{ek:?}"
+                    )),
                 )),
                 Err(e) => Err(brain_persistence::sql::SqlError::Domain(
                     brain_persistence::error::BrainCoreError::Database(e.to_string()),
@@ -1666,9 +1671,21 @@ impl BrainStoresDispatcher {
 
         match outcome {
             Ok(()) => Ok(Response::LinksAdd { created: true }),
-            Err(e) => Err(RpcError::Unknown {
-                message: format!("links.add: {e}"),
-            }),
+            Err(e) => {
+                let msg = e.to_string();
+                if let Some(detail) = msg.split_once(CYCLE_SENTINEL).map(|(_, rest)| rest) {
+                    // Cycle is caller-error semantics (the request describes
+                    // an edge that would close a DAG); surface as Protocol so
+                    // clients see -32602 rather than a generic Unknown.
+                    Err(RpcError::Protocol {
+                        message: format!("links.add: cycle: {detail}"),
+                    })
+                } else {
+                    Err(RpcError::Unknown {
+                        message: format!("links.add: {msg}"),
+                    })
+                }
+            }
         }
     }
 
@@ -1746,8 +1763,19 @@ impl BrainStoresDispatcher {
                 message: format!("links.for_entity: {e}"),
             })?;
 
-        // Apply direction filter daemon-side. "both" / unrecognised fall through unfiltered.
+        // Validate direction up front rather than letting unknown
+        // values silently broaden to "both" — surface caller mistakes
+        // as Protocol errors so they're noticed.
         let direction = params.direction.as_str();
+        if !matches!(direction, "out" | "outgoing" | "in" | "incoming" | "both") {
+            return Err(RpcError::Protocol {
+                message: format!(
+                    "links.for_entity: invalid direction '{direction}'; \
+                     must be one of 'out', 'outgoing', 'in', 'incoming', 'both'"
+                ),
+            });
+        }
+
         let entity_kind_str = params.entity.kind.as_str();
         let filtered: Vec<_> = edges
             .into_iter()
@@ -1778,10 +1806,10 @@ impl BrainStoresDispatcher {
                     id: e.to.id,
                 },
                 edge_kind: edge_kind_str(e.edge_kind).to_string(),
-                // for_entity doesn't surface created_at — wire field stays empty
-                // until the read API is extended. CodeRabbit may flag this; the
-                // alternative is a parallel query for timestamps which doubles I/O.
-                created_at: String::new(),
+                // for_entity doesn't surface created_at — emit None
+                // rather than an empty-string RFC 3339 violation. A
+                // follow-up read-API extension can populate this.
+                created_at: None,
             })
             .collect();
         Ok(Response::LinksForEntity { links })
@@ -1807,8 +1835,8 @@ impl BrainStoresDispatcher {
             })?
             .is_none()
         {
-            return Err(RpcError::Unknown {
-                message: format!("record not found: {record_id}"),
+            return Err(RpcError::NotFound {
+                id: format!("record_id '{record_id}'"),
             });
         }
         self.stores
@@ -1835,6 +1863,18 @@ impl BrainStoresDispatcher {
         &self,
         params: brain_rpc::RecordsLinkParams,
     ) -> Result<Response, RpcError> {
+        // The record-store only models one semantic link kind today
+        // (`covers`): link_task and link_chunk are TYPE-distinguished
+        // methods rather than kind-distinguished ones. Validate the
+        // wire `link_kind` instead of silently dropping it.
+        if params.link_kind != "covers" {
+            return Err(RpcError::Protocol {
+                message: format!(
+                    "records.link_add: link_kind '{}' is not yet supported (only 'covers')",
+                    params.link_kind
+                ),
+            });
+        }
         let record_id = self
             .stores
             .records
@@ -1870,6 +1910,15 @@ impl BrainStoresDispatcher {
         &self,
         params: brain_rpc::RecordsLinkParams,
     ) -> Result<Response, RpcError> {
+        // Symmetry with link_add — only `covers` is modelled today.
+        if params.link_kind != "covers" {
+            return Err(RpcError::Protocol {
+                message: format!(
+                    "records.link_remove: link_kind '{}' is not yet supported (only 'covers')",
+                    params.link_kind
+                ),
+            });
+        }
         let record_id = self
             .stores
             .records
@@ -2145,13 +2194,15 @@ impl BrainStoresDispatcher {
         };
 
         // Resolve any depends_on_task_id / parent_task_id references in
-        // the payload so the persisted event holds canonical IDs.
+        // the payload so the persisted event holds canonical IDs. Strip
+        // any `synapse://…` URI prefix first so URI-style references
+        // resolve identically to bare task_ids.
         if let Some(dep_id) = payload
             .get("depends_on_task_id")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
         {
-            let dep_owned = dep_id.to_string();
+            let dep_owned = brain_lib::uri::resolve_id(dep_id);
             let resolved =
                 self.stores
                     .tasks
@@ -2166,7 +2217,7 @@ impl BrainStoresDispatcher {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
         {
-            let parent_owned = parent_id.to_string();
+            let parent_owned = brain_lib::uri::resolve_id(parent_id);
             let resolved = self
                 .stores
                 .tasks
@@ -2217,7 +2268,17 @@ impl BrainStoresDispatcher {
                 brain_tasks::enrichment::task_row_to_compact_json(&self.stores.tasks, &row, labels)
             }
             Ok(None) => serde_json::json!(null),
-            Err(_) => serde_json::json!(null),
+            Err(e) => {
+                // Surface as a warning rather than silently emitting
+                // null — the caller still sees the event was applied,
+                // but they're told the post-write read failed so they
+                // can decide whether to retry the refetch.
+                warnings.push(serde_json::json!({
+                    "source": "get_task",
+                    "error": format!("{e}"),
+                }));
+                serde_json::json!(null)
+            }
         };
 
         // newly-unblocked dependents fire only on a terminal status flip.
@@ -2454,7 +2515,7 @@ impl BrainStoresDispatcher {
         let mut cluster_params = brain_lib::ClusterParams::default();
         if let Some(threshold) = parsed.threshold {
             if !(0.0..=1.0).contains(&threshold) {
-                return Err(RpcError::Unknown {
+                return Err(RpcError::Protocol {
                     message: format!(
                         "threshold must be between 0.0 and 1.0 (got {threshold}); \
                          values outside this range produce all-singleton clusters \
@@ -2643,6 +2704,16 @@ impl BrainStoresDispatcher {
             })?,
             None => JobStatus::Failed,
         };
+
+        // Narrow the u64 wire field to the i32 the underlying store
+        // accepts. Clamping is preferable to silent overflow — a
+        // caller asking for u64::MAX rows gets the maximum the store
+        // can honour rather than a sign-bit-flipped negative count.
+        let limit_i32: i32 = if params.limit > i32::MAX as u64 {
+            i32::MAX
+        } else {
+            params.limit as i32
+        };
         let kind_filter = params.kind.as_deref();
 
         let pending = self
@@ -2678,7 +2749,7 @@ impl BrainStoresDispatcher {
 
         let mut recent_jobs = self
             .stores
-            .list_jobs_by_status(&listing_status, params.limit as i32)
+            .list_jobs_by_status(&listing_status, limit_i32)
             .map_err(|e| RpcError::Unknown {
                 message: format!("list_jobs_by_status failed: {e}"),
             })?;

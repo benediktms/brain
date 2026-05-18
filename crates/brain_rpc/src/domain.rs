@@ -1138,14 +1138,21 @@ pub struct JobSummary {
 pub struct JobsStatusParams {
     /// Filter recent-failures + stuck-jobs lists to a single job kind
     /// (e.g. `"summarize_scope"`). `None` keeps both lists unfiltered.
+    #[serde(default)]
     pub kind: Option<String>,
     /// Job status whose list of recent rows is returned (lowercase form
     /// of [`brain_persistence::db::job::JobStatus`]). When `None` the
     /// daemon defaults to `failed` — preserving the legacy MCP default.
+    #[serde(default)]
     pub status: Option<String>,
-    /// Cap on the number of recent rows returned. Defaults to 10 via
-    /// [`JobsStatusParams::default`].
+    /// Cap on the number of recent rows returned. Defaults to 10 when
+    /// the wire omits the field.
+    #[serde(default = "jobs_status_default_limit")]
     pub limit: u64,
+}
+
+fn jobs_status_default_limit() -> u64 {
+    10
 }
 
 impl Default for JobsStatusParams {
@@ -1304,8 +1311,12 @@ pub struct WireLinkSummary {
     pub from: WireEntityRef,
     pub to: WireEntityRef,
     pub edge_kind: String,
-    /// RFC 3339 UTC timestamp.
-    pub created_at: String,
+    /// RFC 3339 UTC timestamp. `None` when the underlying read API
+    /// doesn't surface a timestamp for this edge — preferred over
+    /// emitting an empty-string `created_at` that would violate the
+    /// RFC 3339 contract per `feedback_iso_timestamps_on_wire`.
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 /// Wire-format brain summary returned from [`Response::BrainsList`].

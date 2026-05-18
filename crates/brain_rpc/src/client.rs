@@ -3253,7 +3253,7 @@ mod tests {
                     from: wire_entity("task", "t1"),
                     to: wire_entity("record", "r1"),
                     edge_kind: "covers".into(),
-                    created_at: "2026-05-17T12:00:00Z".into(),
+                    created_at: Some("2026-05-17T12:00:00Z".into()),
                 }],
             }),
             other => Err(RpcError::Unknown {

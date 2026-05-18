@@ -127,15 +127,26 @@ impl McpTool for RecordList {
                 );
             }
 
-            // The cross-kind fallback path (no `kind`) routes through
-            // `artifacts_list`, whose params don't carry `task_id`. Rather
-            // than silently drop the filter and return unrelated records,
-            // reject the unsupported combination up front. Per-kind queries
-            // (kind set) honour task_id correctly via RecordsListParams.
-            if parsed.kind.is_none() && parsed.task_id.is_some() {
+            // The cross-kind path (no `kind` or an unrecognised `kind`)
+            // routes through `artifacts_list`, whose params don't carry
+            // `task_id`. Rather than silently drop the filter and return
+            // unrelated records, reject the unsupported combination up
+            // front whenever the kind isn't one of the per-kind routes.
+            let kind_supports_task_id = matches!(
+                parsed.kind.as_deref(),
+                Some("analysis")
+                    | Some("analyses")
+                    | Some("document")
+                    | Some("documents")
+                    | Some("plan")
+                    | Some("plans")
+                    | Some("snapshot")
+                    | Some("snapshots")
+            );
+            if parsed.task_id.is_some() && !kind_supports_task_id {
                 return ToolCallResult::error(
                     "filtering by task_id requires a specific `kind` \
-                     (analysis/document/plan/snapshot); the cross-kind fallback \
+                     (analysis/document/plan/snapshot); the cross-kind path \
                      cannot honour task_id",
                 );
             }

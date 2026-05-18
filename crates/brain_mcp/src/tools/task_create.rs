@@ -1,23 +1,24 @@
 //! `tasks.create` MCP tool — thin wrapper over `DaemonClient::tasks_create`.
 //!
-//! Creates a task in the current (or a remote) brain. The wire surface
-//! `TasksCreateParams` covers the core fields (title, description, priority,
-//! task_type, assignee, parent). Cross-brain creation (`brain` param) and
-//! the `link_from`/`link_type` params are NOT supported on this wire path —
-//! those remain server-side concerns for now. The schema preserves all
-//! legacy fields verbatim; callers using `brain`/`link_from`/`link_type`
-//! will receive a graceful error indicating the limitation.
+//! Creates a task in the current brain. The wire surface
+//! `TasksCreateParams` covers the core fields (title, description,
+//! priority, task_type, assignee, parent). Cross-brain creation
+//! (`brain` param) and the `link_from`/`link_type` params are NOT
+//! supported on this wire path — requests including those fields are
+//! rejected up front rather than silently dropped.
 //!
 //! ## Deviations from legacy
 //!
 //! - `brain`, `link_from`, `link_type` fields are accepted in the schema
-//!   (preserved verbatim) but not wired — if provided, an error is returned.
-//! - `due_ts` and `defer_until` are accepted in the schema but the wire
-//!   `TasksCreateParams` does not carry them; they are dropped silently.
-//!   Callers needing full field coverage should use `tasks.apply_event`.
-//! - Response shape: local path returns `{task_id, uri, task, unblocked_task_ids}`.
-//!   The `uri` field is absent (daemon does not return it). `task` is the
-//!   minimal `TaskSummary` wire shape, not the enriched compact JSON.
+//!   but explicitly rejected when set.
+//! - `due_ts`, `defer_until`, and `actor` are accepted in the schema but
+//!   the wire `TasksCreateParams` does not carry them; rejected when set
+//!   so callers don't silently lose data. Use `tasks.apply_event` for
+//!   full field coverage.
+//! - Response shape: returns `{task_id, task, unblocked_task_ids}`. The
+//!   `uri` field from the legacy response is absent (daemon does not
+//!   surface it on the wire). `task` is the minimal `TaskSummary` wire
+//!   shape, not the enriched compact JSON.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -112,6 +113,18 @@ struct Params {
     /// As above for the link kind that pairs with `link_from`.
     #[serde(default)]
     link_type: Option<String>,
+    /// Wire `TasksCreateParams` doesn't carry a due timestamp; reject
+    /// when set so callers don't silently lose data.
+    #[serde(default)]
+    due_ts: Option<String>,
+    /// As above for `defer_until`.
+    #[serde(default)]
+    defer_until: Option<String>,
+    /// Wire doesn't accept a per-call actor override; the daemon uses
+    /// its own audit identity. Reject when set so caller intent is
+    /// preserved rather than silently overridden.
+    #[serde(default)]
+    actor: Option<String>,
 }
 
 fn default_priority() -> u8 {
@@ -154,6 +167,19 @@ impl McpTool for TaskCreate {
                     "link_from / link_type params require cross-brain creation, \
                      which is not yet available on the wire path. \
                      Omit these params for same-brain creation.",
+                );
+            }
+            if parsed.due_ts.is_some() || parsed.defer_until.is_some() {
+                return ToolCallResult::error(
+                    "due_ts / defer_until params are not yet wired through \
+                     tasks.create. Use tasks.apply_event with the appropriate \
+                     event_type for full date field coverage.",
+                );
+            }
+            if parsed.actor.is_some() {
+                return ToolCallResult::error(
+                    "Custom `actor` is not honoured on tasks.create — the \
+                     daemon uses its own audit identity. Omit the parameter.",
                 );
             }
 
