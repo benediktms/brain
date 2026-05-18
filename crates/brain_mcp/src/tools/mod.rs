@@ -5,14 +5,6 @@
 //! RPC call via [`crate::context::McpContext::with_client`], and
 //! shape the response into a JSON envelope. No store access; no
 //! storage- or search-owning resources.
-//!
-//! ## Migration status
-//!
-//! [`ToolRegistry::new`] registers only the tools that have
-//! been migrated; anything else falls through [`ToolRegistry::dispatch`]
-//! to an "Unknown tool" response. The daemon's legacy `brain mcp` clap
-//! path continues to serve unmigrated tools until the migration
-//! completes.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -25,6 +17,7 @@ use crate::protocol::{ToolCallResult, ToolDefinition};
 pub mod helpers;
 
 mod brains_list;
+mod jobs_status;
 mod links_add;
 mod links_for_entity;
 mod links_remove;
@@ -58,6 +51,7 @@ mod saga_reopen;
 mod saga_start;
 mod saga_stats;
 mod saga_update;
+mod status;
 mod tags_aliases_list;
 mod tags_aliases_status;
 mod tags_recluster;
@@ -119,6 +113,7 @@ impl ToolRegistry {
         Self {
             tools: vec![
                 Box::new(brains_list::BrainsList),
+                Box::new(jobs_status::JobsStatus),
                 Box::new(links_add::LinksAdd),
                 Box::new(links_for_entity::LinksForEntity),
                 Box::new(links_remove::LinksRemove),
@@ -154,6 +149,7 @@ impl ToolRegistry {
                 Box::new(saga_start::SagaStart),
                 Box::new(saga_stats::SagaStats),
                 Box::new(saga_update::SagaUpdate),
+                Box::new(status::Status),
                 Box::new(tags_aliases_list::TagsAliasesList),
                 Box::new(tags_aliases_status::TagsAliasesStatus),
                 Box::new(tags_recluster::TagsRecluster),
@@ -199,6 +195,7 @@ mod tests {
 
     const EXPECTED_TOOL_NAMES: &[&str] = &[
         "brains.list",
+        "jobs.status",
         "links.add",
         "links.for_entity",
         "links.remove",
@@ -234,6 +231,7 @@ mod tests {
         "sagas.start",
         "sagas.stats",
         "sagas.update",
+        "status",
         "tags.aliases_list",
         "tags.aliases_status",
         "tags.recluster",

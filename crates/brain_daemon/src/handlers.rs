@@ -23,11 +23,11 @@ use brain_records::{
 };
 use brain_rpc::{
     AnalysisSummary, ArtifactSummary, ArtifactsListParams, BrainStatusReport, DocumentSummary,
-    JobSummary, JobsStatusReport, MemoryConsolidateParams, MemoryReflectParams,
-    MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
-    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary,
-    ProviderSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport, Request,
-    Response, RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult,
+    JobSummary, JobsStatusParams, JobsStatusReport, LatencyHistogram, MemoryConsolidateParams,
+    MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
+    MemoryWriteEpisodeParams, MemoryWriteProcedureParams, MetricsSnapshot, PROTOCOL_VERSION,
+    PlanSummary, ProviderSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport,
+    Request, Response, RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult,
     SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
     SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
     TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
@@ -2616,8 +2616,19 @@ impl BrainStoresDispatcher {
 
     // ── jobs handlers ────────────────────────────────────────────────────────
 
-    fn handle_jobs_status(&self) -> Result<Response, RpcError> {
+    fn handle_jobs_status(&self, params: &JobsStatusParams) -> Result<Response, RpcError> {
+        use std::str::FromStr;
+
         use brain_persistence::db::job::JobStatus;
+
+        // Resolve status filter (default → Failed, matching legacy MCP).
+        let listing_status = match params.status.as_deref() {
+            Some(s) => JobStatus::from_str(s).map_err(|e| RpcError::Unknown {
+                message: format!("invalid status filter: {e}"),
+            })?,
+            None => JobStatus::Failed,
+        };
+        let kind_filter = params.kind.as_deref();
 
         let pending = self
             .stores
@@ -2650,18 +2661,25 @@ impl BrainStoresDispatcher {
                 message: format!("count_jobs_by_status(Ready) failed: {e}"),
             })?;
 
-        let recent_jobs = self
+        let mut recent_jobs = self
             .stores
-            .list_jobs_by_status(&JobStatus::Failed, 10)
+            .list_jobs_by_status(&listing_status, params.limit as i32)
             .map_err(|e| RpcError::Unknown {
-                message: format!("list_jobs_by_status(Failed) failed: {e}"),
+                message: format!("list_jobs_by_status failed: {e}"),
             })?;
-        let stuck_jobs = self
+        if let Some(kind) = kind_filter {
+            recent_jobs.retain(|j| j.kind() == kind);
+        }
+
+        let mut stuck_jobs = self
             .stores
             .list_stuck_jobs()
             .map_err(|e| RpcError::Unknown {
                 message: format!("list_stuck_jobs failed: {e}"),
             })?;
+        if let Some(kind) = kind_filter {
+            stuck_jobs.retain(|j| j.kind() == kind);
+        }
 
         let to_wire = |j: &brain_persistence::db::job::Job| JobSummary {
             job_id: j.job_id.clone(),
@@ -2669,6 +2687,8 @@ impl BrainStoresDispatcher {
             ref_id: j.payload.ref_id().to_string(),
             attempts: j.attempts,
             last_error: j.last_error.clone(),
+            status: j.status.as_ref().to_string(),
+            started_at: j.started_at.map(epoch_seconds_to_iso),
             updated_at: epoch_seconds_to_iso(j.updated_at),
         };
 
@@ -2678,6 +2698,9 @@ impl BrainStoresDispatcher {
             ready: ready as u64,
             done: done as u64,
             failed: failed as u64,
+            // Echo the canonical resolved form (post-`JobStatus::from_str`)
+            // so MCP/CLI tools don't reproduce the parser locally.
+            listing_status: listing_status.as_ref().to_string(),
             recent_failures: recent_jobs.iter().map(to_wire).collect(),
             stuck_jobs: stuck_jobs.iter().map(to_wire).collect(),
         };
@@ -2733,6 +2756,31 @@ impl BrainStoresDispatcher {
                     message: format!("stale_hashes_prevented failed: {e}"),
                 })?;
 
+        // Populate runtime metrics from the daemon's Arc<Metrics>. The
+        // snapshot is cheap (atomic loads + percentile sweeps) so we
+        // always include it; consumers that don't care simply ignore
+        // the field.
+        let mcp_ctx = self.mcp_ctx()?;
+        let internal = mcp_ctx.metrics.snapshot();
+        let metrics = MetricsSnapshot {
+            uptime_seconds: internal.uptime_seconds,
+            indexing_latency: LatencyHistogram {
+                p50_us: internal.indexing_latency.p50_us,
+                p95_us: internal.indexing_latency.p95_us,
+                total_samples: internal.indexing_latency.total_samples,
+            },
+            query_latency: LatencyHistogram {
+                p50_us: internal.query_latency.p50_us,
+                p95_us: internal.query_latency.p95_us,
+                total_samples: internal.query_latency.total_samples,
+            },
+            queue_depth: internal.queue_depth,
+            lancedb_unoptimized_rows: internal.lancedb_unoptimized_rows,
+            lancedb_optimize_failures: internal.lancedb_optimize_failures,
+            indexing_errors: internal.indexing_errors,
+            query_errors: internal.query_errors,
+        };
+
         let report = BrainStatusReport {
             brain_name: self.stores.brain_name.clone(),
             brain_id: self.stores.brain_id.clone(),
@@ -2742,6 +2790,7 @@ impl BrainStoresDispatcher {
             tasks_done: done,
             stuck_files,
             stale_hashes_prevented,
+            metrics,
         };
 
         Ok(Response::BrainStatus { report })
@@ -2946,7 +2995,7 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::MemoryReflect { params } => self.handle_memory_reflect(params),
             Request::TagsAliasesList { params } => self.handle_tags_aliases_list(params),
             Request::TagsAliasesStatus => self.handle_tags_aliases_status(),
-            Request::JobsStatus => self.handle_jobs_status(),
+            Request::JobsStatus { params } => self.handle_jobs_status(&params),
             Request::BrainStatus => self.handle_brain_status(),
             Request::ProviderList => self.handle_provider_list(),
             Request::WatchAdd { path } => self.handle_watch_add(path),

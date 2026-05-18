@@ -111,7 +111,7 @@ impl Dispatcher for DefaultDispatcher {
             | Request::MemoryReflect { .. }
             | Request::TagsAliasesList { .. }
             | Request::TagsAliasesStatus
-            | Request::JobsStatus
+            | Request::JobsStatus { .. }
             | Request::BrainStatus
             | Request::ProviderList
             | Request::LinksAdd { .. }

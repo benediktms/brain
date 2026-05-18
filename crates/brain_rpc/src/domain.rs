@@ -26,7 +26,7 @@ use thiserror::Error;
 /// shape. Client and daemon exchange this on connect; a mismatch returns
 /// [`RpcError::VersionMismatch`] with both versions so the operator can be
 /// told which side to restart.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A client-originated message sent over the wire.
 ///
@@ -199,8 +199,10 @@ pub enum Request {
 
     // ── jobs ────────────────────────────────────────────────────────────
     /// Show job queue health summary. Server returns
-    /// [`Response::JobsStatus`].
-    JobsStatus,
+    /// [`Response::JobsStatus`]. `params` carries server-side filters
+    /// (kind / status / limit) so the daemon — not the MCP tool — owns
+    /// the filtering loop.
+    JobsStatus { params: JobsStatusParams },
 
     // ── status ──────────────────────────────────────────────────────────
     /// Show brain health status. Server returns [`Response::BrainStatus`].
@@ -1083,6 +1085,14 @@ pub struct JobsStatusReport {
     pub ready: u64,
     pub done: u64,
     pub failed: u64,
+    /// Resolved listing-status used when populating `recent_failures`.
+    /// Always the canonical lowercase form (`pending` / `ready` /
+    /// `in_progress` / `done` / `failed`) — the daemon parses the
+    /// caller's filter through [`brain_persistence::db::job::JobStatus`]
+    /// and echoes the canonical name so MCP/CLI clients can render
+    /// `filters.status` without reproducing the parser. Defaults to
+    /// `"failed"` when the caller omits the filter.
+    pub listing_status: String,
     /// Up to 10 most recently failed jobs.
     pub recent_failures: Vec<JobSummary>,
     /// Jobs that appear stuck (InProgress beyond timeout).
@@ -1090,6 +1100,14 @@ pub struct JobsStatusReport {
 }
 
 /// Wire summary of a single job row.
+///
+/// `status` is the lowercase string form of [`brain_persistence::db::job::JobStatus`]
+/// (`pending` / `ready` / `in_progress` / `done` / `failed`); the daemon
+/// converts via `as_ref()` at the wire boundary.
+///
+/// `started_at` is an RFC 3339 / ISO 8601 string (never a raw epoch
+/// integer) and is `None` when the job has not yet been picked up by a
+/// worker.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct JobSummary {
     pub job_id: String,
@@ -1097,12 +1115,85 @@ pub struct JobSummary {
     pub ref_id: String,
     pub attempts: u32,
     pub last_error: Option<String>,
+    pub status: String,
+    pub started_at: Option<String>,
     pub updated_at: String,
+}
+
+/// Filter parameters for [`Request::JobsStatus`].
+///
+/// All three fields are server-side filters: the daemon owns the
+/// `list_jobs_by_status` + post-fetch `kind` retain loop so MCP and
+/// CLI clients become thin wire-echo bodies. `limit` defaults to 10
+/// when constructed via [`JobsStatusParams::default`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct JobsStatusParams {
+    /// Filter recent-failures + stuck-jobs lists to a single job kind
+    /// (e.g. `"summarize_scope"`). `None` keeps both lists unfiltered.
+    pub kind: Option<String>,
+    /// Job status whose list of recent rows is returned (lowercase form
+    /// of [`brain_persistence::db::job::JobStatus`]). When `None` the
+    /// daemon defaults to `failed` — preserving the legacy MCP default.
+    pub status: Option<String>,
+    /// Cap on the number of recent rows returned. Defaults to 10 via
+    /// [`JobsStatusParams::default`].
+    pub limit: u64,
+}
+
+impl Default for JobsStatusParams {
+    fn default() -> Self {
+        Self {
+            kind: None,
+            status: None,
+            limit: 10,
+        }
+    }
 }
 
 // ── status wire types ─────────────────────────────────────────────────────────
 
+/// Latency histogram snapshot returned inside [`MetricsSnapshot`].
+///
+/// Field names are byte-stable with the legacy `status` MCP envelope
+/// (`p50_us` / `p95_us` / `total_samples`) — clients depend on this
+/// shape.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LatencyHistogram {
+    pub p50_us: u64,
+    pub p95_us: u64,
+    pub total_samples: u64,
+}
+
+/// Runtime metrics snapshot carried inside [`BrainStatusReport`].
+///
+/// Mirrors but does NOT re-use `brain_core::metrics::MetricsSnapshot`
+/// — see module rustdoc for the anti-corruption-layer rationale. The
+/// daemon maps internal → wire field-by-field at the dispatcher
+/// boundary so a future field on the internal snapshot doesn't
+/// silently appear on the wire.
+///
+/// `dual_store_stuck_files` and `stale_hashes_prevented` are NOT
+/// carried here; they already live on [`BrainStatusReport`] (since
+/// they predate the metrics extension) and the MCP `status` tool
+/// reads them off the report directly to assemble the legacy envelope.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MetricsSnapshot {
+    pub uptime_seconds: u64,
+    pub indexing_latency: LatencyHistogram,
+    pub query_latency: LatencyHistogram,
+    pub queue_depth: u64,
+    pub lancedb_unoptimized_rows: u64,
+    pub lancedb_optimize_failures: u64,
+    pub indexing_errors: u64,
+    pub query_errors: u64,
+}
+
 /// Brain health status returned by [`Response::BrainStatus`].
+///
+/// `metrics` was added when the legacy `status` MCP tool moved into
+/// `brain_mcp`; the field is populated unconditionally because the
+/// snapshot is cheap (8 atomic loads + 2 percentile sweeps). Older
+/// CLI consumers that destructure named fields ignore it.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BrainStatusReport {
     pub brain_name: String,
@@ -1113,6 +1204,7 @@ pub struct BrainStatusReport {
     pub tasks_done: u64,
     pub stuck_files: u64,
     pub stale_hashes_prevented: u64,
+    pub metrics: MetricsSnapshot,
 }
 
 // ── provider wire types ───────────────────────────────────────────────────────
@@ -1333,8 +1425,12 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_one() {
-        assert_eq!(PROTOCOL_VERSION, 1);
+    fn protocol_version_is_two() {
+        // Bumped from 1 → 2 when Request::JobsStatus changed from a
+        // unit variant to a struct variant carrying JobsStatusParams.
+        // The handshake check rejects rolling restarts that pair a
+        // pre-bump client with a post-bump daemon.
+        assert_eq!(PROTOCOL_VERSION, 2);
     }
 
     #[test]
@@ -3048,5 +3144,165 @@ mod tests {
             watches: vec![sample_watch_summary()],
         };
         assert_eq!(roundtrip(&res), res);
+    }
+
+    // ── status / jobs extension round-trip tests ───────────────────
+
+    fn sample_latency_histogram() -> LatencyHistogram {
+        LatencyHistogram {
+            p50_us: 1_500,
+            p95_us: 9_800,
+            total_samples: 42,
+        }
+    }
+
+    fn sample_metrics_snapshot() -> MetricsSnapshot {
+        MetricsSnapshot {
+            uptime_seconds: 3_600,
+            indexing_latency: sample_latency_histogram(),
+            query_latency: LatencyHistogram {
+                p50_us: 200,
+                p95_us: 1_100,
+                total_samples: 17,
+            },
+            queue_depth: 3,
+            lancedb_unoptimized_rows: 12_000,
+            lancedb_optimize_failures: 1,
+            indexing_errors: 0,
+            query_errors: 2,
+        }
+    }
+
+    #[test]
+    fn latency_histogram_roundtrips() {
+        let h = sample_latency_histogram();
+        assert_eq!(roundtrip(&h), h);
+    }
+
+    #[test]
+    fn metrics_snapshot_roundtrips() {
+        let m = sample_metrics_snapshot();
+        assert_eq!(roundtrip(&m), m);
+    }
+
+    #[test]
+    fn metrics_snapshot_field_names_are_stable() {
+        // Byte-shape contract with legacy `status` MCP envelope.
+        let m = sample_metrics_snapshot();
+        let json = serde_json::to_value(&m).unwrap();
+        assert!(json.get("uptime_seconds").is_some());
+        assert!(json.get("indexing_latency").is_some());
+        assert!(json.get("query_latency").is_some());
+        assert!(json.get("queue_depth").is_some());
+        assert!(json.get("lancedb_unoptimized_rows").is_some());
+        assert!(json.get("lancedb_optimize_failures").is_some());
+        assert!(json.get("indexing_errors").is_some());
+        assert!(json.get("query_errors").is_some());
+        assert!(json["indexing_latency"]["p50_us"].is_u64());
+        assert!(json["indexing_latency"]["p95_us"].is_u64());
+        assert!(json["indexing_latency"]["total_samples"].is_u64());
+    }
+
+    #[test]
+    fn brain_status_report_roundtrips_with_metrics() {
+        let report = BrainStatusReport {
+            brain_name: "brain".into(),
+            brain_id: "eAx_dEFA".into(),
+            tasks_open: 5,
+            tasks_in_progress: 1,
+            tasks_blocked: 0,
+            tasks_done: 12,
+            stuck_files: 2,
+            stale_hashes_prevented: 7,
+            metrics: sample_metrics_snapshot(),
+        };
+        assert_eq!(roundtrip(&report), report);
+    }
+
+    #[test]
+    fn job_summary_roundtrips_with_status_and_started_at() {
+        let job = JobSummary {
+            job_id: "job-abc".into(),
+            kind: "summarize_scope".into(),
+            ref_id: "sum-123".into(),
+            attempts: 2,
+            last_error: Some("connection refused".into()),
+            status: "failed".into(),
+            started_at: Some("2026-05-18T12:00:00Z".into()),
+            updated_at: "2026-05-18T12:01:00Z".into(),
+        };
+        assert_eq!(roundtrip(&job), job);
+    }
+
+    #[test]
+    fn job_summary_roundtrips_with_no_started_at() {
+        let job = JobSummary {
+            job_id: "job-def".into(),
+            kind: "consolidate_cluster".into(),
+            ref_id: "cluster-9".into(),
+            attempts: 0,
+            last_error: None,
+            status: "pending".into(),
+            started_at: None,
+            updated_at: "2026-05-18T12:01:00Z".into(),
+        };
+        assert_eq!(roundtrip(&job), job);
+    }
+
+    #[test]
+    fn jobs_status_params_default_matches_legacy_mcp_defaults() {
+        let p = JobsStatusParams::default();
+        assert_eq!(p.kind, None);
+        assert_eq!(p.status, None);
+        assert_eq!(p.limit, 10);
+    }
+
+    #[test]
+    fn jobs_status_params_roundtrips() {
+        let p = JobsStatusParams {
+            kind: Some("summarize_scope".into()),
+            status: Some("failed".into()),
+            limit: 25,
+        };
+        assert_eq!(roundtrip(&p), p);
+    }
+
+    #[test]
+    fn request_jobs_status_roundtrips_with_params() {
+        let req = Request::JobsStatus {
+            params: JobsStatusParams {
+                kind: Some("consolidate_cluster".into()),
+                status: Some("ready".into()),
+                limit: 5,
+            },
+        };
+        assert_eq!(roundtrip(&req), req);
+    }
+
+    #[test]
+    fn request_jobs_status_wire_format_is_stable() {
+        let req = Request::JobsStatus {
+            params: JobsStatusParams::default(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"jobs_status","params":{"kind":null,"status":null,"limit":10}}"#
+        );
+    }
+
+    #[test]
+    fn jobs_status_report_roundtrips_with_listing_status() {
+        let report = JobsStatusReport {
+            pending: 1,
+            running: 2,
+            ready: 3,
+            done: 4,
+            failed: 5,
+            listing_status: "failed".into(),
+            recent_failures: vec![],
+            stuck_jobs: vec![],
+        };
+        assert_eq!(roundtrip(&report), report);
     }
 }

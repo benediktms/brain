@@ -108,7 +108,7 @@ impl InMemoryTransport {
             | Request::MemoryReflect { .. }
             | Request::TagsAliasesList { .. }
             | Request::TagsAliasesStatus
-            | Request::JobsStatus
+            | Request::JobsStatus { .. }
             | Request::BrainStatus
             | Request::ProviderList
             | Request::WatchAdd { .. }
