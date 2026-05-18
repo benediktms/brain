@@ -2436,7 +2436,7 @@ impl BrainStoresDispatcher {
                         self.stores
                             .tasks
                             .get_project_prefix()
-                            .map_err(|e| RpcError::Unknown {
+                            .map_err(|e| RpcError::Protocol {
                                 message: format!("Failed to get project prefix: {e}"),
                             })?;
                     brain_tasks::events::new_task_id(&prefix)
@@ -2699,7 +2699,7 @@ impl BrainStoresDispatcher {
             let (bid, bname) = self
                 .stores
                 .resolve_brain(b)
-                .map_err(|e| RpcError::Unknown {
+                .map_err(|e| RpcError::Protocol {
                     message: format!("Failed to resolve brain: {e}"),
                 })?;
             let tasks = self
