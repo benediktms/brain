@@ -95,10 +95,17 @@ impl Drop for ServerGuard {
             s.request();
         }
         if let Some(h) = self.handle.take() {
-            // 200 ms is generous — the accept loop polls every 50 ms.
-            // Cleanup failure is not surfaced as a test failure: the
-            // test body's assertions are the authoritative verdict.
-            let _ = h.join();
+            // The accept loop polls every 50ms, so join completes quickly after shutdown.
+            // Surface thread panics or RPC errors: tests should fail if the server died.
+            match h.join() {
+                Err(panic_payload) => {
+                    panic!("Server thread panicked: {panic_payload:?}");
+                }
+                Ok(Err(rpc_err)) => {
+                    panic!("Server thread returned RPC error: {rpc_err:?}");
+                }
+                Ok(Ok(())) => {}
+            }
         }
     }
 }

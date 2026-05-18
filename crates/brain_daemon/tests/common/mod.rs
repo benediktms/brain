@@ -53,7 +53,7 @@ impl Drop for ServerGuard {
             s.request();
         }
         if let Some(h) = self.handle.take() {
-            // 200ms is generous — the accept loop polls every 50ms.
+            // The accept loop polls every 50ms, so join completes quickly after shutdown.
             let _ = std::thread::JoinHandle::join(h);
         }
     }
