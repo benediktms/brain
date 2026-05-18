@@ -178,7 +178,10 @@ impl BrainStoresDispatcher {
         }
         let m = Arc::new(brain_lib::metrics::Metrics::new());
         let _ = self.metrics.set(Arc::clone(&m));
-        Ok(m)
+        // Return the canonical instance from storage (winner of any race).
+        Ok(Arc::clone(
+            self.metrics.get().expect("just set metrics"),
+        ))
     }
 
     fn handle_tasks_list(&self, params: TasksListParams) -> Result<Response, RpcError> {
@@ -1544,16 +1547,7 @@ impl BrainStoresDispatcher {
     }
 
     fn handle_memory_retrieve(&self, params: MemoryRetrieveParams) -> Result<Response, RpcError> {
-        let search_layer = self.search_layer()?;
         let metrics = self.metrics()?;
-        let semantic_ctx = brain_memory::context::SemanticContext {
-            db: self.stores.inner_db(),
-            brain_id: self.stores.brain_id.as_str(),
-            brain_name: self.stores.brain_name.as_str(),
-            store: Some(&search_layer.store),
-            embedder: Some(&search_layer.embedder),
-            metrics: &metrics,
-        };
 
         let kinds: Vec<brain_lib::retrieval::MemoryKind> = params
             .kinds
@@ -1591,6 +1585,14 @@ impl BrainStoresDispatcher {
 
         // URI mode is sync and skips the search layer entirely.
         if let Some(uri_str) = retrieve_params.uri.as_deref() {
+            let semantic_ctx = brain_memory::context::SemanticContext {
+                db: self.stores.inner_db(),
+                brain_id: self.stores.brain_id.as_str(),
+                brain_name: self.stores.brain_name.as_str(),
+                store: None,
+                embedder: None,
+                metrics: &metrics,
+            };
             let value = brain_memory::retrieve::run_uri_mode_as_json(
                 &semantic_ctx,
                 uri_str,
@@ -1604,6 +1606,15 @@ impl BrainStoresDispatcher {
         }
 
         // Query mode runs the async pipeline on the daemon's runtime.
+        let search_layer = self.search_layer()?;
+        let semantic_ctx = brain_memory::context::SemanticContext {
+            db: self.stores.inner_db(),
+            brain_id: self.stores.brain_id.as_str(),
+            brain_name: self.stores.brain_name.as_str(),
+            store: Some(&search_layer.store),
+            embedder: Some(&search_layer.embedder),
+            metrics: &metrics,
+        };
         let runtime = self.runtime()?;
         let brains_pre = if retrieve_params.brains.is_empty() {
             Vec::new()

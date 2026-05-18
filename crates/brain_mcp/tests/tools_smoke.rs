@@ -410,8 +410,9 @@ async fn test_records_fetch_content_rejects_empty_record_id() {
     .await;
 
     // Empty record_id should be rejected with an error.
-    assert!(
-        result.is_error == Some(true),
+    assert_eq!(
+        result.is_error,
+        Some(true),
         "expected is_error=true for empty record_id"
     );
 }
