@@ -21,6 +21,13 @@ path = "src/main.rs"
 name = "brain-daemon"
 path = "src/bin/brain-daemon.rs"
 
+# Same arrangement for `brain-mcp` — forwarder so a single Homebrew
+# formula delivers all three binaries. See the matching dist = false
+# opt-out in crates/brain_mcp/Cargo.toml.
+[[bin]]
+name = "brain-mcp"
+path = "src/bin/brain-mcp.rs"
+
 [features]
 default = ["embed"]
 # Surfaces the embed-dependent subcommands (`watch`, `backfill-tasks`,
@@ -38,6 +45,7 @@ accelerate = ["embed", "brain-lib/accelerate"]
 [dependencies]
 brain-daemon = { path = "../brain_daemon" }
 brain-lib = { path = "../brain_lib", default-features = false }
+brain-mcp = { path = "../brain_mcp" }
 brain-persistence = { path = "../brain_persistence" }
 brain-records = { path = "../brain_records" }
 brain-rpc = { path = "../brain_rpc" }

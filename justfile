@@ -26,11 +26,12 @@ install:
     @mkdir -p ~/bin
     @ln -sf "{{justfile_directory()}}/target/release/brain" ~/bin/brain
     @ln -sf "{{justfile_directory()}}/target/release/brain-daemon" ~/bin/brain-daemon
+    @ln -sf "{{justfile_directory()}}/target/release/brain-mcp" ~/bin/brain-mcp
     # BRAIN_COMPARATOR=1 arms the polymorphic-link-graph soak comparator on
     # the local daemon — your own brain is production for the soak window.
     # See docs/OPERATIONS.md § Polymorphic Link Graph Soak Comparator.
     BRAIN_COMPARATOR=1 {{bin}} daemon start
-    @echo "==> Started brain daemon and symlinked binaries to ~/bin/{brain,brain-daemon}"
+    @echo "==> Started brain daemon and symlinked binaries to ~/bin/{brain,brain-daemon,brain-mcp}"
 
 # Download all ML models (embedder + summarizer)
 [group('setup')]
@@ -41,7 +42,7 @@ setup-models:
 [group('setup')]
 uninstall:
     {{bin}} daemon uninstall || true
-    @rm -f ~/bin/brain ~/bin/brain-daemon
+    @rm -f ~/bin/brain ~/bin/brain-daemon ~/bin/brain-mcp
     cargo clean
     @echo "==> Uninstalled brain"
 

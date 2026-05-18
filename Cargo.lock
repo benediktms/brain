@@ -670,6 +670,7 @@ dependencies = [
  "blake3",
  "brain-daemon",
  "brain-lib",
+ "brain-mcp",
  "brain-persistence",
  "brain-records",
  "brain-rpc",

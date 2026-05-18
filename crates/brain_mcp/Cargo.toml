@@ -13,8 +13,19 @@ edition.workspace = true
 # behind the wire in `brain_daemon`. Adding rusqlite or any brain_<domain>
 # dep here is the anti-pattern the architecture test gates against.
 
+# cargo-dist opt-out: the production `brain-mcp` binary ships from the
+# `brain` cli crate via a forwarder (see crates/cli/Cargo.toml). One
+# Homebrew formula, three binaries (brain, brain-daemon, brain-mcp),
+# guaranteed-coherent versions. Mirrors the brain-daemon arrangement.
+[package.metadata.dist]
+dist = false
+
 [features]
 default = []
+
+[[bin]]
+name = "brain-mcp"
+path = "src/main.rs"
 
 [dependencies]
 brain-rpc = { path = "../brain_rpc" }
