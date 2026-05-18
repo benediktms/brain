@@ -150,7 +150,7 @@ impl BrainStoresDispatcher {
 
         let db = self.stores.inner_db();
         let mut store = Store::open_or_create(lance_db).await?;
-        brain_lib::pipeline::ensure_schema_version(&db, &mut store).await?;
+        brain_lib::pipeline::ensure_schema_version(db, &mut store).await?;
         store.set_db(Arc::new(db.clone()));
         let embedder: Arc<dyn Embed> = Arc::new(Embedder::load(model_dir)?);
         let store_reader = brain_persistence::store::StoreReader::from_store(&store);
