@@ -5,8 +5,7 @@
 //! object is forwarded as opaque JSON to the daemon which owns the action
 //! dispatch logic. The daemon's result JSON is echoed verbatim.
 //!
-//! Schema is preserved VERBATIM from the legacy
-//! `brain_lib::mcp::tools::task_labels_batch` definition.
+//! Schema is part of the public MCP wire contract — preserve verbatim.
 
 use std::future::Future;
 use std::pin::Pin;

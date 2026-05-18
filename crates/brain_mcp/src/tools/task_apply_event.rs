@@ -7,8 +7,7 @@
 //! be deserialized, wraps the raw input as opaque JSON, and echoes the
 //! daemon's result JSON verbatim.
 //!
-//! Schema is preserved VERBATIM from the legacy
-//! `brain_lib::mcp::tools::task_apply_event` definition — same event_type
+//! Schema is part of the public MCP wire contract — same event_type
 //! enum (16 variants), same payload structure with additionalProperties:true.
 
 use std::future::Future;

@@ -8,8 +8,7 @@
 //!
 //! ## Migration status
 //!
-//! Tool bodies migrate from `brain_lib::mcp::tools` in domain-clustered
-//! batches. [`ToolRegistry::new`] registers only the tools that have
+//! [`ToolRegistry::new`] registers only the tools that have
 //! been migrated; anything else falls through [`ToolRegistry::dispatch`]
 //! to an "Unknown tool" response. The daemon's legacy `brain mcp` clap
 //! path continues to serve unmigrated tools until the migration

@@ -1,10 +1,8 @@
 //! Framework-free helpers shared by tool handlers.
 //!
-//! Ported from `brain_lib::mcp::tools::helpers` minus `build_federated_brains`.
-//! The federated-search helper is server-side now — the daemon handles
-//! cross-brain resolution; MCP tool bodies pass brain names through
-//! the wire and let the daemon expand `["all"]` and open remote
-//! stores.
+//! Federated-brain resolution is server-side: tool bodies pass brain names
+//! through the wire and the daemon expands `["all"]` and opens remote
+//! stores. There is no client-side `build_federated_brains` helper here.
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -138,8 +136,8 @@ pub async fn apply_inline_links(
 /// Shared JSON Schema fragment for a polymorphic `{type, id}` entity
 /// reference. Used by every tool whose input includes an entity ref
 /// (links.add, links.remove, links.for_entity, and record/saga tools).
-/// Byte-identical to the legacy `entity_ref_schema()` in
-/// `brain_lib::mcp::tools::links_add` — preserve verbatim.
+/// The entity-type enum is part of the public MCP wire contract — any
+/// edit here is a breaking schema change.
 pub fn entity_ref_schema() -> Value {
     json!({
         "type": "object",

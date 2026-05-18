@@ -5,8 +5,7 @@
 //! returns `bool` indicating whether a row was actually deleted
 //! (idempotent: `{removed: false}` when no matching edge existed).
 //!
-//! Input schema is preserved byte-identical to the legacy
-//! `brain_lib::mcp::tools::links_remove` definition — same entity-type
+//! Input schema is part of the public MCP wire contract — same entity-type
 //! enum (TASK/RECORD/EPISODE/PROCEDURE/CHUNK/NOTE), same 7-kind edge
 //! enum (parent_of/blocks/covers/relates_to/see_also/supersedes/
 //! contradicts), same `from`/`to`/`edge_kind` required fields.
