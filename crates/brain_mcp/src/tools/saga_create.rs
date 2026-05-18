@@ -11,7 +11,7 @@ use brain_rpc::SagasCreateParams;
 use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
-use crate::saga_validation::{validate_actor, validate_description, validate_title};
+use crate::saga_validation::{validate_description, validate_title};
 
 pub(super) struct SagaCreate;
 
@@ -19,12 +19,6 @@ pub(super) struct SagaCreate;
 struct Params {
     title: String,
     description: Option<String>,
-    #[serde(default = "default_actor")]
-    actor: String,
-}
-
-fn default_actor() -> String {
-    "mcp".into()
 }
 
 impl McpTool for SagaCreate {
@@ -52,13 +46,6 @@ impl McpTool for SagaCreate {
                         "type": "string",
                         "description": "Optional description",
                         "maxLength": 65536
-                    },
-                    "actor": {
-                        "type": "string",
-                        "description": "Who is creating the saga. Default: mcp",
-                        "default": "mcp",
-                        "maxLength": 64,
-                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["title"]
@@ -77,9 +64,6 @@ impl McpTool for SagaCreate {
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            if let Err(msg) = validate_actor(&parsed.actor) {
-                return ToolCallResult::error(format!("Invalid actor: {msg}"));
-            }
             if let Err(msg) = validate_title(&parsed.title) {
                 return ToolCallResult::error(format!("Invalid title: {msg}"));
             }

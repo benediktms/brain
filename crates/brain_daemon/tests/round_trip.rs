@@ -13,15 +13,23 @@
 
 mod common;
 
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use brain_daemon::{BrainStoresDispatcher, DaemonConfig, DefaultDispatcher, UnixSocketServer};
 use brain_lib::stores::BrainStores;
 use brain_rpc::{
-    DaemonClient, PROTOCOL_VERSION, Request, Response, TasksListParams, UnixSocketTransport,
+    DaemonClient, PROTOCOL_VERSION, Request, Response, RpcError, TasksListParams,
+    UnixSocketTransport,
 };
 use tempfile::TempDir;
+
+/// Process-wide lock serializing BRAIN_HOME mutations across concurrent tests.
+///
+/// cargo-nextest isolates test binaries into separate processes, but within a
+/// single binary the multi-threaded tokio runtime runs tests concurrently.
+static BRAIN_HOME_LOCK: Mutex<()> = Mutex::new(());
 
 /// Spawn the server on a fresh temp-dir socket with `DefaultDispatcher`.
 fn spawn_default_server() -> (TempDir, std::path::PathBuf, common::ServerGuard) {
@@ -109,17 +117,19 @@ fn spawn_brain_stores_server(tmp: &TempDir) -> (std::path::PathBuf, common::Serv
         .prefix(".brain_home_")
         .tempdir_in(tmp.path())
         .expect("BRAIN_HOME tempdir");
-    // SAFETY: single-threaded test context — no concurrent env reads.
-    // cargo-nextest isolates each test binary in its own process.
+    // Lock serializes BRAIN_HOME mutations across concurrent tokio threads.
+    let _lock = BRAIN_HOME_LOCK.lock().unwrap();
     unsafe { std::env::set_var("BRAIN_HOME", guard.path()) };
     let stores = match BrainStores::from_path(&sqlite_path, Some(&lance_path)) {
         Ok(s) => s,
         Err(e) => {
             unsafe { std::env::remove_var("BRAIN_HOME") };
+            drop(_lock);
             panic!("open BrainStores from temp paths: {e}");
         }
     };
     unsafe { std::env::remove_var("BRAIN_HOME") };
+    drop(_lock);
     drop(guard);
 
     #[cfg(not(feature = "embed"))]
@@ -184,8 +194,13 @@ fn tasks_list_rejects_unknown_status_filter_via_real_stores() {
     });
 
     // BrainStoresDispatcher returns RpcError::Protocol for unknown status.
-    assert!(
-        result.is_err(),
-        "expected an error for bogus status filter; got {result:?}"
-    );
+    match result {
+        Err(RpcError::Protocol { message }) => {
+            assert!(
+                message.contains("bogus"),
+                "expected 'bogus' in Protocol error message"
+            );
+        }
+        other => panic!("expected Protocol error for bogus status filter, got {other:?}"),
+    }
 }

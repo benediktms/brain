@@ -1031,8 +1031,31 @@ impl BrainStoresDispatcher {
             .map_err(|e| RpcError::Unknown {
                 message: format!("get saga: {e}"),
             })?;
+
+        let saga = match saga {
+            None => return Ok(Response::SagasGet { saga: None }),
+            Some(s) => s,
+        };
+
+        let (members, brains) =
+            {
+                let member_stubs = self.stores.sagas.list_member_stubs(&saga_id).map_err(|e| {
+                    RpcError::Unknown {
+                        message: format!("list saga members: {e}"),
+                    }
+                })?;
+                let saga_stats =
+                    self.stores
+                        .sagas
+                        .stats(&saga_id)
+                        .map_err(|e| RpcError::Unknown {
+                            message: format!("get saga stats: {e}"),
+                        })?;
+                (member_stubs, saga_stats.brains)
+            };
+
         Ok(Response::SagasGet {
-            saga: saga.as_ref().map(saga_to_summary),
+            saga: Some(saga_to_summary_with_members(&saga, members, brains)),
         })
     }
 
@@ -2880,8 +2903,9 @@ impl BrainStoresDispatcher {
                     });
                 }
                 Err(e) => {
-                    return Err(RpcError::NotFound {
-                        id: format!("brain: {key} ({e})"),
+                    // Remote-open failure — not a "not found" case.
+                    return Err(RpcError::Unknown {
+                        message: format!("open remote brain search context '{key}': {e}"),
                     });
                 }
             }
@@ -3523,6 +3547,50 @@ fn saga_to_summary(saga: &Saga) -> SagaSummary {
         closed_at: saga
             .closed_at
             .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        members: vec![],
+        brains: vec![],
+    }
+}
+
+/// Map a [`Saga`] with live membership into the wire-format [`SagaSummary`].
+/// Used by `handle_sagas_get` where members/brains are eagerly loaded.
+fn saga_to_summary_with_members(
+    saga: &Saga,
+    members: Vec<brain_sagas::SagaMember>,
+    brains: Vec<brain_sagas::BrainSummary>,
+) -> SagaSummary {
+    SagaSummary {
+        saga_id: compact_saga_id(&saga.display_id),
+        title: saga.title.clone(),
+        description: saga.description.clone(),
+        status: saga.status.to_string(),
+        created_at: saga
+            .created_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        updated_at: saga
+            .updated_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        closed_at: saga
+            .closed_at
+            .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        members: members
+            .into_iter()
+            .map(|m| brain_rpc::SagaMember {
+                task_id: m.task_id.to_string(),
+                brain_id: m.brain_id,
+                title: m.title,
+                status: m.status.to_string(),
+                task_type: m.task_type.to_string(),
+            })
+            .collect(),
+        brains: brains
+            .into_iter()
+            .map(|b| SagaBrainSummary {
+                brain_id: b.brain_id,
+                name: b.name,
+                prefix: b.prefix,
+            })
+            .collect(),
     }
 }
 

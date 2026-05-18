@@ -852,6 +852,27 @@ pub struct SnapshotSummary {
     pub brain_id: String,
 }
 
+/// Wire-format summary of a brain referenced by a saga.
+///
+/// Mirrors `brain_sagas::BrainSummary` field-for-field.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaBrainSummary {
+    pub brain_id: String,
+    pub name: String,
+    pub prefix: Option<String>,
+}
+
+/// Wire-format member task stub for [`SagaSummary::members`].
+/// Mirrors `brain_sagas::SagaMember` field-for-field.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SagaMember {
+    pub task_id: String,
+    pub brain_id: String,
+    pub title: String,
+    pub status: String,
+    pub task_type: String,
+}
+
 /// Wire-format summary of a saga.
 ///
 /// Mirrors but does not re-use `brain_sagas::Saga` — see module
@@ -875,16 +896,12 @@ pub struct SagaSummary {
     /// RFC 3339 / ISO 8601 timestamp, or `None` when the saga has
     /// never been closed/cancelled (or was subsequently reopened).
     pub closed_at: Option<String>,
-}
-
-/// Wire-format summary of a brain referenced by a saga.
-///
-/// Mirrors `brain_sagas::BrainSummary` field-for-field.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct SagaBrainSummary {
-    pub brain_id: String,
-    pub name: String,
-    pub prefix: Option<String>,
+    /// Current member task stubs (task_id, brain_id, title, status, task_type)
+    /// in `added_at` order. Empty for planning/closed/cancelled sagas.
+    pub members: Vec<SagaMember>,
+    /// Brains that have at least one live member task in this saga.
+    /// Empty for planning/closed/cancelled sagas.
+    pub brains: Vec<SagaBrainSummary>,
 }
 
 /// Wire-format member of [`Response::SagasFrontier`] — one ready
@@ -2709,6 +2726,8 @@ mod tests {
             created_at: "2026-05-17T00:00:00Z".into(),
             updated_at: "2026-05-17T00:00:00Z".into(),
             closed_at: None,
+            members: vec![],
+            brains: vec![],
         }
     }
 

@@ -9,19 +9,13 @@ use serde_json::{Value, json};
 use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
-use crate::saga_validation::{validate_actor, validate_saga_id};
+use crate::saga_validation::validate_saga_id;
 
 pub(super) struct SagaStart;
 
 #[derive(Deserialize)]
 struct Params {
     saga_id: String,
-    #[serde(default = "default_actor")]
-    actor: String,
-}
-
-fn default_actor() -> String {
-    "mcp".into()
 }
 
 impl McpTool for SagaStart {
@@ -41,13 +35,6 @@ impl McpTool for SagaStart {
                     "saga_id": {
                         "type": "string",
                         "description": crate::saga_validation::SAGA_ID_PARAM_DESCRIPTION,
-                    },
-                    "actor": {
-                        "type": "string",
-                        "description": "Who is starting the saga. Default: mcp",
-                        "default": "mcp",
-                        "maxLength": 64,
-                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id"]
@@ -68,9 +55,6 @@ impl McpTool for SagaStart {
 
             if let Err(msg) = validate_saga_id(&parsed.saga_id) {
                 return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
-            }
-            if let Err(msg) = validate_actor(&parsed.actor) {
-                return ToolCallResult::error(format!("Invalid actor: {msg}"));
             }
 
             let saga = match ctx

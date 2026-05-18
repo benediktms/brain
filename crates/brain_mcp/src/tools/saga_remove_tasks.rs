@@ -9,9 +9,7 @@ use serde_json::{Value, json};
 use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
-use crate::saga_validation::{
-    MAX_TASKS_PER_BATCH, validate_actor, validate_saga_id, validate_task_id,
-};
+use crate::saga_validation::{MAX_TASKS_PER_BATCH, validate_saga_id, validate_task_id};
 
 pub(super) struct SagaRemoveTasks;
 
@@ -21,12 +19,6 @@ struct Params {
     task_ids: Vec<String>,
     #[serde(default)]
     cascade: bool,
-    #[serde(default = "default_actor")]
-    actor: String,
-}
-
-fn default_actor() -> String {
-    "mcp".into()
 }
 
 impl McpTool for SagaRemoveTasks {
@@ -62,13 +54,6 @@ impl McpTool for SagaRemoveTasks {
                         "type": "boolean",
                         "description": "When true, also remove every transitive descendant of each input task currently in the saga. Default: false.",
                         "default": false
-                    },
-                    "actor": {
-                        "type": "string",
-                        "description": "Who is performing the removal. Default: mcp",
-                        "default": "mcp",
-                        "maxLength": 64,
-                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id", "task_ids"]
@@ -89,9 +74,6 @@ impl McpTool for SagaRemoveTasks {
 
             if let Err(msg) = validate_saga_id(&parsed.saga_id) {
                 return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
-            }
-            if let Err(msg) = validate_actor(&parsed.actor) {
-                return ToolCallResult::error(format!("Invalid actor: {msg}"));
             }
             // Empty task_ids is intentionally a no-op per idempotent remove semantics.
             if parsed.task_ids.len() > MAX_TASKS_PER_BATCH {

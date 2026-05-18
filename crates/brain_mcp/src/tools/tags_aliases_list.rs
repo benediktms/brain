@@ -49,7 +49,7 @@ impl McpTool for TagsAliasesList {
             description: "List tag_aliases rows for the current brain with optional filtering. \
                 Filter by `canonical` (exact match on canonical_tag) and/or `cluster_id`; \
                 paginate via `limit` and `offset`. Returns one row per raw_tag with its \
-                canonical_tag, cluster_id, last_run_id, embedder_version, and updated_at."
+                canonical_tag, cluster_id, and updated_at."
                 .into(),
             input_schema: json!({
                 "type": "object",

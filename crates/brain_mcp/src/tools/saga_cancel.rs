@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::{McpTool, cascade_results_to_json, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
-use crate::saga_validation::{validate_actor, validate_saga_id};
+use crate::saga_validation::validate_saga_id;
 
 pub(super) struct SagaCancel;
 
@@ -18,12 +18,6 @@ struct Params {
     saga_id: String,
     #[serde(default)]
     cascade: bool,
-    #[serde(default = "default_actor")]
-    actor: String,
-}
-
-fn default_actor() -> String {
-    "mcp".into()
 }
 
 impl McpTool for SagaCancel {
@@ -50,13 +44,6 @@ impl McpTool for SagaCancel {
                         "type": "boolean",
                         "description": "If true, cancel non-terminal member tasks. Default: false",
                         "default": false
-                    },
-                    "actor": {
-                        "type": "string",
-                        "description": "Who is cancelling the saga. Default: mcp",
-                        "default": "mcp",
-                        "maxLength": 64,
-                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id"]
@@ -77,9 +64,6 @@ impl McpTool for SagaCancel {
 
             if let Err(msg) = validate_saga_id(&parsed.saga_id) {
                 return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
-            }
-            if let Err(msg) = validate_actor(&parsed.actor) {
-                return ToolCallResult::error(format!("Invalid actor: {msg}"));
             }
 
             let (saga, cascade_results) = match ctx

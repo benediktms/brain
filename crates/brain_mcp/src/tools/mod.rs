@@ -128,7 +128,7 @@ impl ToolRegistry {
                 Box::new(record_create_analysis::RecordCreateAnalysis),
                 Box::new(record_create_document::RecordCreateDocument),
                 Box::new(record_create_plan::RecordCreatePlan),
-                Box::new(record_fetch_content::RecordFetchContent),
+                // Box::new(record_fetch_content::RecordFetchContent), // TODO(brain_mcp): re-add once records_fetch_content RPC is wired in daemon
                 Box::new(record_get::RecordGet),
                 Box::new(record_link::RecordsLinkAdd),
                 Box::new(record_link::RecordsLinkRemove),
@@ -210,7 +210,6 @@ mod tests {
         "records.create_analysis",
         "records.create_document",
         "records.create_plan",
-        "records.fetch_content",
         "records.get",
         "records.link_add",
         "records.link_remove",
