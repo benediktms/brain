@@ -179,9 +179,7 @@ impl BrainStoresDispatcher {
         let m = Arc::new(brain_lib::metrics::Metrics::new());
         let _ = self.metrics.set(Arc::clone(&m));
         // Return the canonical instance from storage (winner of any race).
-        Ok(Arc::clone(
-            self.metrics.get().expect("just set metrics"),
-        ))
+        Ok(Arc::clone(self.metrics.get().expect("just set metrics")))
     }
 
     fn handle_tasks_list(&self, params: TasksListParams) -> Result<Response, RpcError> {
