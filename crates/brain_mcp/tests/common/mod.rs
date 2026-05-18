@@ -21,7 +21,10 @@ use brain_mcp::{McpContext, ToolRegistry};
 
 /// Wait for the server socket to be ready by polling with exponential backoff.
 /// Gives the accept loop time to start before clients attempt to connect.
-pub(crate) fn wait_for_server_ready(sock_path: &std::path::Path, budget: Duration) -> std::io::Result<()> {
+pub(crate) fn wait_for_server_ready(
+    sock_path: &std::path::Path,
+    budget: Duration,
+) -> std::io::Result<()> {
     let start = std::time::Instant::now();
     let mut last_err = None;
     while start.elapsed() < budget {
