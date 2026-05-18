@@ -65,7 +65,7 @@ fn spawn_default_server() -> (TempDir, std::path::PathBuf, common::ServerGuard) 
     let server = UnixSocketServer::bind(&config, DefaultDispatcher).expect("bind");
     let shutdown = server.shutdown_handle();
     let handle = thread::spawn(move || server.run());
-wait_for_socket_ready(&sock_path, Duration::from_millis(200))
+    wait_for_socket_ready(&sock_path, Duration::from_millis(200))
         .expect("server socket not ready within 200ms");
     (
         tmp,
@@ -172,7 +172,7 @@ fn spawn_brain_stores_server() -> (TempDir, std::path::PathBuf, common::ServerGu
     // `guard` is moved into the thread so it stays alive as long as the
     // server thread runs (brain_home() is called at dispatch time, not startup).
     let handle = thread::spawn(move || server.run());
-// Poll the socket for readiness. BrainStores init can take longer than
+    // Poll the socket for readiness. BrainStores init can take longer than
     // DefaultDispatcher, so allow up to 500ms (matching brain_mcp's spawn_daemon
     // previous grace period, but now actively probing instead of fixed sleep).
     wait_for_socket_ready(&sock_path, Duration::from_millis(500))

@@ -15,9 +15,9 @@
 
 use std::sync::{Arc, OnceLock};
 
-use brain_lib::stores::BrainStores;
-use brain_lib::search_service::SearchService;
 use brain_lib::prelude::Embed;
+use brain_lib::search_service::SearchService;
+use brain_lib::stores::BrainStores;
 use brain_persistence::db::sagas::compact_saga_id;
 use brain_records::{
     CreateRecordParams, Record, RecordKind, RecordQuery, RecordStatus, RecordStore, integrity,
@@ -2090,9 +2090,7 @@ impl BrainStoresDispatcher {
         let search_result = if brains.is_empty() {
             // Single-brain path. Borrowed pipeline so the embedder /
             // metrics references stay alive for the await below.
-            let pipeline = self
-                .stores
-                .query_pipeline(store, embedder, &metrics);
+            let pipeline = self.stores.query_pipeline(store, embedder, &metrics);
             runtime
                 .block_on(pipeline.search(&search_params))
                 .map_err(|e| RpcError::Unknown {
@@ -2102,7 +2100,8 @@ impl BrainStoresDispatcher {
             // Federated path. `include_scores=false` keeps the per-signal
             // breakdown off the wire — the legacy envelope doesn't carry
             // it either.
-            let federated_brains = self.build_federated_brain_list(search_layer, &brains, runtime)?;
+            let federated_brains =
+                self.build_federated_brain_list(search_layer, &brains, runtime)?;
             let federated = self
                 .stores
                 .federated_pipeline(federated_brains, embedder, &metrics);
