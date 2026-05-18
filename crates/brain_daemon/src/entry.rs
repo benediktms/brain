@@ -358,6 +358,9 @@ pub(crate) fn resolve_brain_home() -> Option<std::path::PathBuf> {
 mod tests {
     use super::resolve_brain_home;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Helper: run a closure with specific env vars set, restoring
     /// originals afterwards. Uses a mutex guard from `std::sync` to
@@ -367,6 +370,7 @@ mod tests {
     where
         F: FnOnce(),
     {
+        let _guard = ENV_LOCK.lock().unwrap();
         // Save and set.
         let saved: Vec<(&str, Option<String>)> = vars
             .iter()
