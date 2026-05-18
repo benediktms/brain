@@ -247,7 +247,7 @@ impl Supervisor {
         let (config_tx, config_rx) = tokio::sync::mpsc::channel::<()>(4);
 
         #[cfg(feature = "embed")]
-        {
+        let _config_watcher = {
             let projection_path = brain_home()?.join(brain_lib::config::PROJECTION_FILENAME);
             let projection_dir = projection_path
                 .parent()
@@ -255,7 +255,7 @@ impl Supervisor {
                 .to_path_buf();
             let projection_file = projection_path.file_name().unwrap().to_owned();
 
-            let _config_watcher = {
+            {
                 let config_tx = config_tx.clone();
                 notify_debouncer_full::new_debouncer(
                     Duration::from_millis(500),
@@ -281,8 +281,8 @@ impl Supervisor {
                 })
                 .map_err(|e| warn!(error = %e, "failed to watch state_projection.toml; changes won't auto-reload"))
                 .ok()
-            };
-        }
+            }
+        };
 
         // ── 6. Signal handlers ───────────────────────────────────────────
         let sigterm = tokio::signal::unix::signal(SignalKind::terminate())
