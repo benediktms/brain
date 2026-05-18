@@ -241,41 +241,48 @@ impl Supervisor {
         }
 
         // ── 5b. Separate notify watcher for state_projection.toml ─────────
-        let projection_path = brain_home()?.join(brain_lib::config::PROJECTION_FILENAME);
-        let projection_dir = projection_path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("projection path has no parent directory"))?
-            .to_path_buf();
+        // `config_rx` is always bound so it's in scope for `run_loop`, but
+        // under `no-default-features` the sender is never used (the watcher
+        // block below is cfg-gated and `config_rx` will never receive).
         let (config_tx, config_rx) = tokio::sync::mpsc::channel::<()>(4);
 
-        let _config_watcher = {
-            let config_tx = config_tx.clone();
+        #[cfg(feature = "embed")]
+        {
+            let projection_path = brain_home()?.join(brain_lib::config::PROJECTION_FILENAME);
+            let projection_dir = projection_path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("projection path has no parent directory"))?
+                .to_path_buf();
             let projection_file = projection_path.file_name().unwrap().to_owned();
-            notify_debouncer_full::new_debouncer(
-                Duration::from_millis(500),
-                None,
-                move |result: notify_debouncer_full::DebounceEventResult| {
-                    if let Ok(events) = result {
-                        let is_projection = events
-                            .iter()
-                            .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&projection_file)));
-                        if is_projection {
-                            let _ = config_tx.blocking_send(());
+
+            let _config_watcher = {
+                let config_tx = config_tx.clone();
+                notify_debouncer_full::new_debouncer(
+                    Duration::from_millis(500),
+                    None,
+                    move |result: notify_debouncer_full::DebounceEventResult| {
+                        if let Ok(events) = result {
+                            let is_projection = events
+                                .iter()
+                                .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&projection_file)));
+                            if is_projection {
+                                let _ = config_tx.blocking_send(());
+                            }
                         }
-                    }
-                },
-            )
-            .and_then(|mut w| {
-                w.watch(
-                    &projection_dir,
-                    notify_debouncer_full::notify::RecursiveMode::NonRecursive,
-                )?;
-                info!(path = %projection_dir.display(), "watching state_projection.toml for changes");
-                Ok(w)
-            })
-            .map_err(|e| warn!(error = %e, "failed to watch state_projection.toml; changes won't auto-reload"))
-            .ok()
-        };
+                    },
+                )
+                .and_then(|mut w| {
+                    w.watch(
+                        &projection_dir,
+                        notify_debouncer_full::notify::RecursiveMode::NonRecursive,
+                    )?;
+                    info!(path = %projection_dir.display(), "watching state_projection.toml for changes");
+                    Ok(w)
+                })
+                .map_err(|e| warn!(error = %e, "failed to watch state_projection.toml; changes won't auto-reload"))
+                .ok()
+            };
+        }
 
         // ── 6. Signal handlers ───────────────────────────────────────────
         let sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -505,10 +512,12 @@ impl Supervisor {
                             brain_id: instance.mcp_context.brain_id().to_string(),
                         }];
                         if let Err(e) = recurring_jobs::reconcile_recurring_jobs(instance.pipeline.job_queue(), &brain_infos) {
+                            #[cfg(feature = "embed")]
                             tracing::warn!(brain = %instance.name, error = %e, "reconcile_recurring_jobs failed");
                         }
 
                         if let Err(e) = job_worker::reap_stuck_jobs_filtered(instance.pipeline.job_queue(), &active_jobs) {
+                            #[cfg(feature = "embed")]
                             tracing::warn!(brain = %instance.name, error = %e, "reap_stuck_jobs failed");
                         }
                         let pipeline_db = instance.pipeline.clone_db_for_spawn();
@@ -524,6 +533,7 @@ impl Supervisor {
                         }
                         let protected = recurring_jobs::protected_kinds();
                         if let Err(e) = instance.pipeline.gc_completed_jobs(7 * 86400, &protected) {
+                            #[cfg(feature = "embed")]
                             tracing::warn!(brain = %instance.name, error = %e, "gc_completed_jobs failed");
                         }
                     }
