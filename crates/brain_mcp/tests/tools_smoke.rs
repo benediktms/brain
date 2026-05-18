@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use brain_daemon::{BrainStoresDispatcher, DaemonConfig, UnixSocketServer};
 use brain_lib::stores::BrainStores;
-use brain_rpc::{DaemonClient, UnixSocketTransport};
 use brain_mcp::{McpContext, ToolRegistry};
+use brain_rpc::{DaemonClient, UnixSocketTransport};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -96,7 +96,11 @@ async fn test_tasks_list_returns_empty_list_on_fresh_daemon() {
 
     let body: serde_json::Value =
         serde_json::from_str(&result.content[0].text).expect("valid JSON");
-    assert_eq!(body["tasks"], json!([]), "expected empty tasks array: {body}");
+    assert_eq!(
+        body["tasks"],
+        json!([]),
+        "expected empty tasks array: {body}"
+    );
     assert_eq!(body["total"], json!(0), "expected total: 0: {body}");
     assert_eq!(
         body["has_more"],
@@ -134,8 +138,13 @@ async fn test_write_episode_returns_summary_id_and_uri() {
     let body: serde_json::Value =
         serde_json::from_str(&result.content[0].text).expect("valid JSON");
 
-    let summary_id = body["summary_id"].as_str().expect("summary_id must be a string");
-    assert!(!summary_id.is_empty(), "summary_id must not be empty: {body}");
+    let summary_id = body["summary_id"]
+        .as_str()
+        .expect("summary_id must be a string");
+    assert!(
+        !summary_id.is_empty(),
+        "summary_id must not be empty: {body}"
+    );
 
     let uri = body["uri"].as_str().expect("uri must be a string");
     assert!(
@@ -221,7 +230,9 @@ async fn test_links_add_then_query_roundtrip() {
     let body: serde_json::Value =
         serde_json::from_str(&query_result.content[0].text).expect("valid JSON");
 
-    let outgoing = body["outgoing"].as_array().expect("outgoing must be an array");
+    let outgoing = body["outgoing"]
+        .as_array()
+        .expect("outgoing must be an array");
     assert!(
         outgoing
             .iter()
@@ -261,13 +272,8 @@ async fn test_saga_create_then_get_lifecycle() {
     assert!(!saga_id.is_empty(), "saga_id must not be empty");
 
     // Fetch the saga back.
-    let get_result = common::dispatch(
-        &registry,
-        &ctx,
-        "sagas.get",
-        json!({ "saga_id": saga_id }),
-    )
-    .await;
+    let get_result =
+        common::dispatch(&registry, &ctx, "sagas.get", json!({ "saga_id": saga_id })).await;
 
     assert!(
         get_result.is_error.is_none(),
