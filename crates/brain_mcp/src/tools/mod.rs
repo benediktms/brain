@@ -8,19 +8,12 @@
 //!
 //! ## Migration status
 //!
-//! Phase D batch 1 lands two tools:
-//! - `brains.list`
-//! - `links.remove`
-//!
-//! `jobs.status` was attempted in this batch but deferred: the legacy
-//! response shape includes `status` and `started_at` per-job fields
-//! that the current `brain_rpc::JobSummary` wire type does not carry.
-//! Migrating it requires first extending the wire (Phase A-style
-//! addition) — a follow-up batch lands both together.
-//!
-//! The remaining 49 tools migrate in follow-up batches: memory (7),
-//! tasks (10), records (11), sagas (12), tags (3), `status`,
-//! `links.add`, `links.for_entity`, `jobs.status`.
+//! Tool bodies migrate from `brain_lib::mcp::tools` in domain-clustered
+//! batches. [`ToolRegistry::new`] registers only the tools that have
+//! been migrated; anything else falls through [`ToolRegistry::dispatch`]
+//! to an "Unknown tool" response. The daemon's legacy `brain mcp` clap
+//! path continues to serve unmigrated tools until the migration
+//! completes.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -103,7 +96,7 @@ impl ToolRegistry {
             }
         }
         ToolCallResult::error(format!(
-            "Unknown tool '{name}' (not yet migrated to brain_mcp; the remaining 49 tools land in follow-up batches)"
+            "Unknown tool '{name}' (not yet migrated to brain_mcp)"
         ))
     }
 }

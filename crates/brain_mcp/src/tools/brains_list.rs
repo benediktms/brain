@@ -8,7 +8,6 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use serde::Serialize;
 use serde_json::{Value, json};
 
 use brain_rpc::BrainsListParams;
@@ -18,23 +17,6 @@ use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
 
 pub(super) struct BrainsList;
-
-#[derive(Serialize)]
-struct BrainInfo {
-    name: String,
-    id: Option<String>,
-    root: String,
-    aliases: Vec<String>,
-    extra_roots: Vec<String>,
-    prefix: Option<String>,
-    archived: bool,
-}
-
-#[derive(Serialize)]
-struct BrainsListResponse {
-    brains: Vec<BrainInfo>,
-    count: usize,
-}
 
 impl McpTool for BrainsList {
     fn name(&self) -> &'static str {
@@ -68,30 +50,21 @@ impl McpTool for BrainsList {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let wire = match ctx
+            let brains = match ctx
                 .with_client(|c| c.brains_list(BrainsListParams { include_archived }))
                 .await
             {
-                Ok((brains, _count)) => brains,
+                Ok((b, _count)) => b,
                 Err(err) => {
                     return ToolCallResult::error(format!("Failed to list brains: {err}"));
                 }
             };
 
-            let brains: Vec<BrainInfo> = wire
-                .into_iter()
-                .map(|b| BrainInfo {
-                    name: b.name,
-                    id: b.id,
-                    root: b.root,
-                    aliases: b.aliases,
-                    extra_roots: b.extra_roots,
-                    prefix: b.prefix,
-                    archived: b.archived,
-                })
-                .collect();
+            // WireBrainSummary's serde shape (name/id/root/aliases/
+            // extra_roots/prefix/archived) is byte-identical to the
+            // legacy BrainInfo, so we emit the wire type directly.
             let count = brains.len();
-            json_response(&BrainsListResponse { brains, count })
+            json_response(&json!({ "brains": brains, "count": count }))
         })
     }
 }
