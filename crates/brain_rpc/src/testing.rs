@@ -122,6 +122,8 @@ impl InMemoryTransport {
             | Request::RecordsLinkRemove { .. }
             | Request::RecordsTagAdd { .. }
             | Request::RecordsTagRemove { .. }
+            | Request::RecordsSearch { .. }
+            | Request::RecordsFetchContent { .. }
             | Request::TasksApplyEvent { .. }
             | Request::TasksDepsBatch { .. }
             | Request::TasksLabelsBatch { .. }

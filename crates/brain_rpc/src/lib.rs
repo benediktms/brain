@@ -58,15 +58,16 @@ pub use domain::{
     LinksAddParams, LinksForEntityParams, LinksRemoveParams, MemoryConsolidateParams,
     MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
     MemoryWriteEpisodeParams, MemoryWriteProcedureParams, MetricsSnapshot, PROTOCOL_VERSION,
-    PlanSummary, ProviderSummary, RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams,
-    RecordsListParams, RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary,
+    PlanSummary, ProviderSummary, RecordContent, RecordsArchiveParams, RecordsCreateParams,
+    RecordsFetchContentParams, RecordsLinkParams, RecordsListParams, RecordsSearchParams,
+    RecordsSearchReport, RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary,
     SagaCascadeOutcome, SagaCascadeResult, SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount,
     SagaStatsReport, SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams,
     SnapshotSummary, TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams,
     TagsReclusterParams, TaskSummary, TasksApplyEventParams, TasksCreateParams,
     TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams, TasksMutateParams,
     TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary, WireEntityRef,
-    WireLinkSummary, WireTaskLabelSummary,
+    WireLinkSummary, WireRecordHit, WireTaskLabelSummary,
 };
 pub use transport::Transport;
 

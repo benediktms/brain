@@ -28,15 +28,16 @@ use crate::domain::{
     DocumentSummary, JobsStatusParams, JobsStatusReport, LinksAddParams, LinksForEntityParams,
     LinksRemoveParams, MemoryConsolidateParams, MemoryReflectParams, MemoryRetrieveParams,
     MemorySummarizeScopeParams, MemoryWalkThreadParams, MemoryWriteEpisodeParams,
-    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary,
-    RecordsArchiveParams, RecordsCreateParams, RecordsLinkParams, RecordsListParams,
-    RecordsVerifyReport, Request, Response, RpcError, SagaBrainSummary, SagaCascadeResult,
-    SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary, SagasCreateParams,
-    SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary, TagAliasesStatusReport,
-    TagsAliasesListParams, TagsReclusterParams, TaskSummary, TasksApplyEventParams,
-    TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams,
-    TasksMutateParams, TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary,
-    WireLinkSummary, WireTaskLabelSummary,
+    MemoryWriteProcedureParams, PROTOCOL_VERSION, PlanSummary, ProviderSummary, RecordContent,
+    RecordsArchiveParams, RecordsCreateParams, RecordsFetchContentParams, RecordsLinkParams,
+    RecordsListParams, RecordsSearchParams, RecordsSearchReport, RecordsVerifyReport, Request,
+    Response, RpcError, SagaBrainSummary, SagaCascadeResult, SagaFrontierTask, SagaLabelCount,
+    SagaStatsReport, SagaSummary, SagasCreateParams, SagasListParams, SagasUpdateParams,
+    SnapshotSummary, TagAliasSummary, TagAliasesStatusReport, TagsAliasesListParams,
+    TagsReclusterParams, TaskSummary, TasksApplyEventParams, TasksCreateParams,
+    TasksDepsBatchParams, TasksLabelsBatchParams, TasksListParams, TasksMutateParams,
+    TasksTransferParams, TasksUpdateParams, WatchSummary, WireBrainSummary, WireLinkSummary,
+    WireTaskLabelSummary,
 };
 use crate::transport::Transport;
 
@@ -1297,6 +1298,52 @@ impl<T: Transport> DaemonClient<T> {
             other => Err(RpcError::Protocol {
                 message: format!(
                     "expected RecordsTagRemove in reply to RecordsTagRemove, got {other:?}"
+                ),
+            }),
+        }
+    }
+
+    /// Run a hybrid semantic + FTS search filtered to record-kind
+    /// results via [`Request::RecordsSearch`]. The daemon owns the
+    /// over-request / filter / pack loop so MCP and CLI callers
+    /// become thin wire-echo bodies.
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::RecordsSearch`].
+    pub fn records_search(
+        &mut self,
+        params: RecordsSearchParams,
+    ) -> Result<RecordsSearchReport, RpcError> {
+        match self.call(Request::RecordsSearch { params })? {
+            Response::RecordsSearch { report } => Ok(report),
+            other => Err(RpcError::Protocol {
+                message: format!("expected RecordsSearch in reply to RecordsSearch, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Fetch the raw content (text or base64-encoded bytes) for a record
+    /// via [`Request::RecordsFetchContent`]. The daemon decides the
+    /// encoding based on the record's `media_type` and emits exactly one
+    /// of [`RecordContent::text`] or [`RecordContent::data_base64`].
+    ///
+    /// # Errors
+    ///
+    /// - [`RpcError::Protocol`] — the daemon replied with anything other
+    ///   than [`Response::RecordsFetchContent`].
+    /// - [`RpcError::NotFound`] — the record id (or remote brain key)
+    ///   did not resolve.
+    pub fn records_fetch_content(
+        &mut self,
+        params: RecordsFetchContentParams,
+    ) -> Result<RecordContent, RpcError> {
+        match self.call(Request::RecordsFetchContent { params })? {
+            Response::RecordsFetchContent { content } => Ok(content),
+            other => Err(RpcError::Protocol {
+                message: format!(
+                    "expected RecordsFetchContent in reply to RecordsFetchContent, got {other:?}"
                 ),
             }),
         }
@@ -3356,6 +3403,127 @@ mod tests {
             .records_tag_remove("rec_abc".into(), "rust".into())
             .expect("records_tag_remove");
         assert!(removed);
+    }
+
+    #[test]
+    fn records_search_unwraps_report() {
+        use crate::domain::WireRecordHit;
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsSearch { params } => {
+                assert_eq!(params.query, "rust");
+                assert_eq!(params.k, 5);
+                Ok(Response::RecordsSearch {
+                    report: RecordsSearchReport {
+                        budget_tokens: 800,
+                        used_tokens_est: 42,
+                        result_count: 1,
+                        total_available: 1,
+                        results: vec![WireRecordHit {
+                            record_id: "rec_abc".into(),
+                            memory_id: "record:rec_abc:0".into(),
+                            title: "Rust notes".into(),
+                            summary: "Notes about Rust.".into(),
+                            score: 0.92,
+                            kind: "record".into(),
+                            uri: "synapse://brain/record/rec_abc".into(),
+                            brain_name: None,
+                        }],
+                    },
+                })
+            }
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let report = client
+            .records_search(RecordsSearchParams {
+                query: "rust".into(),
+                k: 5,
+                budget_tokens: 800,
+                tags: vec![],
+                brains: vec![],
+            })
+            .expect("records_search");
+        assert_eq!(report.result_count, 1);
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].record_id, "rec_abc");
+        // f64 score round-trips through serde; PartialEq is sufficient.
+        assert!((report.results[0].score - 0.92).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn records_search_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        let err = client
+            .records_search(RecordsSearchParams::default())
+            .expect_err("expected Protocol error");
+        match err {
+            RpcError::Protocol { message } => {
+                assert!(
+                    message.contains("expected RecordsSearch"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn records_fetch_content_unwraps_text_payload() {
+        let mut client = DaemonClient::from_transport(InMemoryTransport::new(|req| match req {
+            Request::RecordsFetchContent { params } => {
+                assert_eq!(params.record_id, "rec_abc");
+                Ok(Response::RecordsFetchContent {
+                    content: RecordContent {
+                        record_id: "rec_abc".into(),
+                        title: "Notes".into(),
+                        kind: "document".into(),
+                        content_hash: "sha256:cafe".into(),
+                        size: 5,
+                        media_type: Some("text/plain".into()),
+                        encoding: "utf-8".into(),
+                        text: Some("hello".into()),
+                        data_base64: None,
+                        uri: "synapse://brain/record/rec_abc".into(),
+                        brain: None,
+                    },
+                })
+            }
+            other => Err(RpcError::Unknown {
+                message: format!("unexpected: {other:?}"),
+            }),
+        }));
+        let content = client
+            .records_fetch_content(RecordsFetchContentParams {
+                record_id: "rec_abc".into(),
+                brain: None,
+            })
+            .expect("records_fetch_content");
+        assert_eq!(content.encoding, "utf-8");
+        assert_eq!(content.text.as_deref(), Some("hello"));
+        assert!(content.data_base64.is_none());
+    }
+
+    #[test]
+    fn records_fetch_content_protocol_error_on_wrong_response_shape() {
+        let mut client =
+            DaemonClient::from_transport(InMemoryTransport::new(|_| Ok(Response::Pong)));
+        let err = client
+            .records_fetch_content(RecordsFetchContentParams {
+                record_id: "rec_abc".into(),
+                brain: None,
+            })
+            .expect_err("expected Protocol error");
+        match err {
+            RpcError::Protocol { message } => {
+                assert!(
+                    message.contains("expected RecordsFetchContent"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected Protocol, got {other:?}"),
+        }
     }
 
     #[test]

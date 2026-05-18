@@ -1,19 +1,15 @@
-//! `records.search` MCP tool.
+//! `records.search` MCP tool — thin wrapper over
+//! [`brain_rpc::DaemonClient::records_search`].
 //!
-//! # Wire gap
-//!
-//! There is no typed `records_search` / semantic-search wire method on
-//! `DaemonClient`. The legacy tool routed through the in-process
-//! `query_pipeline` (FTS + embedding) which is owned by `brain_lib` and
-//! requires direct store access — neither of which is available in
-//! `brain_mcp` by architectural ratchet.
-//!
-//! This stub preserves the byte-identical JSON Schema so clients do not need
-//! a schema update, and returns a structured error until a `RecordsSearch`
-//! wire variant is added to `brain_rpc`.
-//!
-//! When the wire method lands, replace the `call` body with:
-//! `ctx.with_client(|c| c.records_search(wire_params))`.
+//! The daemon owns the hybrid retrieval pipeline (FTS + embedding +
+//! optional federation), filters results to `kind == "record"`, packs
+//! within the token budget, and returns a typed
+//! [`brain_rpc::RecordsSearchReport`]. Serialising that report directly
+//! yields the legacy MCP envelope byte-for-byte
+//! (`{budget_tokens, used_tokens_est, result_count, total_available,
+//! results: [{record_id, memory_id, title, summary, score, kind, uri,
+//! brain_name?}]}`), so this tool body has no JSON-shape logic of its
+//! own.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -21,7 +17,9 @@ use std::pin::Pin;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::McpTool;
+use brain_rpc::RecordsSearchParams;
+
+use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
 
@@ -29,19 +27,14 @@ pub(super) struct RecordSearch;
 
 #[derive(Deserialize)]
 struct Params {
-    #[allow(dead_code)]
     query: String,
     #[serde(default = "default_k")]
-    #[allow(dead_code)]
     k: u64,
     #[serde(default = "default_budget")]
-    #[allow(dead_code)]
     budget_tokens: u64,
     #[serde(default)]
-    #[allow(dead_code)]
     tags: Vec<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     brains: Vec<String>,
 }
 
@@ -102,24 +95,30 @@ impl McpTool for RecordSearch {
     fn call<'a>(
         &'a self,
         params: Value,
-        _ctx: &'a McpContext,
+        ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            // Validate params eagerly so missing `query` returns the expected
-            // "Invalid parameters" error (matching legacy behaviour).
-            let _parsed: Params = match serde_json::from_value(params) {
+            let parsed: Params = match serde_json::from_value(params) {
                 Ok(p) => p,
                 Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
             };
 
-            ToolCallResult::error(
-                "records.search is not yet wired in brain_mcp: \
-                 no DaemonClient::records_search wire method exists. \
-                 The semantic/FTS query pipeline is server-side in brain_lib \
-                 and requires a dedicated RPC variant to cross the daemon boundary. \
-                 Use memory.retrieve with kind filter as an interim alternative."
-                    .to_string(),
-            )
+            let wire_params = RecordsSearchParams {
+                query: parsed.query,
+                k: parsed.k,
+                budget_tokens: parsed.budget_tokens,
+                tags: parsed.tags,
+                brains: parsed.brains,
+            };
+
+            let report = match ctx.with_client(|c| c.records_search(wire_params)).await {
+                Ok(r) => r,
+                Err(err) => {
+                    return ToolCallResult::error(format!("Failed to search records: {err}"));
+                }
+            };
+
+            json_response(&report)
         })
     }
 }

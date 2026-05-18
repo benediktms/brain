@@ -32,22 +32,13 @@ mod record_archive;
 mod record_create_analysis;
 mod record_create_document;
 mod record_create_plan;
+mod record_fetch_content;
 mod record_get;
 mod record_link;
 mod record_list;
 mod record_save_snapshot;
-mod record_tag;
-// `record_fetch_content` and `record_search` are kept in the source
-// tree (out-of-tree for now) but NOT registered. Their wire RPCs do
-// not exist yet; registering them in the meantime would advertise
-// tools that always return an error in `tools/list`, which agents
-// would (rightly) treat as a regression. Re-enable when the daemon
-// implements `records_fetch_content` and `records_search` typed
-// methods.
-#[allow(dead_code)]
-mod record_fetch_content;
-#[allow(dead_code)]
 mod record_search;
+mod record_tag;
 mod saga_add_tasks;
 mod saga_cancel;
 mod saga_close;
@@ -137,11 +128,13 @@ impl ToolRegistry {
                 Box::new(record_create_analysis::RecordCreateAnalysis),
                 Box::new(record_create_document::RecordCreateDocument),
                 Box::new(record_create_plan::RecordCreatePlan),
+                Box::new(record_fetch_content::RecordFetchContent),
                 Box::new(record_get::RecordGet),
                 Box::new(record_link::RecordsLinkAdd),
                 Box::new(record_link::RecordsLinkRemove),
                 Box::new(record_list::RecordList),
                 Box::new(record_save_snapshot::RecordSaveSnapshot),
+                Box::new(record_search::RecordSearch),
                 Box::new(record_tag::RecordTagAdd),
                 Box::new(record_tag::RecordTagRemove),
                 Box::new(saga_add_tasks::SagaAddTasks),
@@ -217,11 +210,13 @@ mod tests {
         "records.create_analysis",
         "records.create_document",
         "records.create_plan",
+        "records.fetch_content",
         "records.get",
         "records.link_add",
         "records.link_remove",
         "records.list",
         "records.save_snapshot",
+        "records.search",
         "records.tag_add",
         "records.tag_remove",
         "sagas.add_tasks",

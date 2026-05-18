@@ -61,6 +61,10 @@ brain-persistence = { path = "../brain_persistence" }
 brain-tasks = { path = "../brain_tasks" }
 brain-records = { path = "../brain_records" }
 brain-sagas = { path = "../brain_sagas" }
+# Used by handle_records_fetch_content to encode binary record bodies
+# as base64 on the wire (text-like media types are emitted as utf-8).
+# Same version that brain_lib + brain_mcp already pin.
+base64 = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

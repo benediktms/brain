@@ -707,6 +707,7 @@ name = "brain-daemon"
 version = "0.4.1"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "brain-daemon",
  "brain-lib",
  "brain-memory",

@@ -86,7 +86,7 @@ fn handshake_negotiates_protocol_version() {
     // Explicit cross-check: PROTOCOL_VERSION matched on both sides.
     // (No public API exposes the negotiated version after connect;
     // the type-level guarantee that connect returned Ok IS the proof.)
-    assert_eq!(PROTOCOL_VERSION, 2);
+    assert_eq!(PROTOCOL_VERSION, 3);
 }
 
 #[test]
