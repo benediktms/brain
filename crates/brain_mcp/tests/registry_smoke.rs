@@ -35,10 +35,12 @@ const EXPECTED_TOOL_NAMES: &[&str] = &[
     "records.create_document",
     "records.create_plan",
     "records.get",
+    "records.fetch_content",
     "records.link_add",
     "records.link_remove",
     "records.list",
     "records.save_snapshot",
+    "records.search",
     "records.tag_add",
     "records.tag_remove",
     "sagas.add_tasks",
@@ -85,6 +87,10 @@ async fn test_registry_resolves_all_expected_tools() {
         let result = common::dispatch(&registry, &ctx, name, json!({})).await;
         // A legitimate tool call (even one that fails due to bad params)
         // returns content that does NOT start with "Unknown tool".
+        assert!(
+            !result.content.is_empty(),
+            "tool '{name}' dispatch returned empty content"
+        );
         let first_text = result
             .content
             .first()
