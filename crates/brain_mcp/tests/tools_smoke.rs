@@ -33,8 +33,17 @@ fn spawn_stores_daemon() -> (TempDir, std::path::PathBuf, common::ServerGuard) {
     let sock_tmp = TempDir::new().expect("tempdir for socket");
     let sock_path = sock_tmp.path().join("brain.sock");
     let config = DaemonConfig::new(&sock_path);
-    // brain_daemon's default features are empty (`default = []`), so
-    // tests see the embed-off constructor signature `new(stores)`.
+    // `BrainStoresDispatcher::new` takes a second
+    // `Option<Arc<WatcherHandle>>` arg only when `brain-daemon/embed`
+    // is active. The cli's `default = ["embed"]` activates it for
+    // workspace-default builds (so `cargo check --workspace --tests`
+    // sees the 2-arg form), while `--no-default-features` deactivates
+    // it. brain_mcp's mirror `embed` feature (default-on) tracks
+    // brain-daemon's state so this cfg correctly picks the right
+    // signature in both CI lanes.
+    #[cfg(feature = "embed")]
+    let dispatcher = BrainStoresDispatcher::new(stores, None);
+    #[cfg(not(feature = "embed"))]
     let dispatcher = BrainStoresDispatcher::new(stores);
     let server = UnixSocketServer::bind(&config, dispatcher).expect("bind UnixSocketServer");
     let shutdown = server.shutdown_handle();

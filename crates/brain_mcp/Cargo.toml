@@ -21,7 +21,16 @@ edition.workspace = true
 dist = false
 
 [features]
-default = []
+# `embed` mirrors brain-daemon's `embed` feature so the integration
+# tests in `crates/brain_mcp/tests/` can cfg-gate the
+# `BrainStoresDispatcher::new` call site — the constructor takes a
+# second `Option<Arc<WatcherHandle>>` arg only under
+# `brain-daemon/embed`. Default-on so `cargo check --workspace --tests`
+# matches the `cli`-driven workspace default (cli's default activates
+# `brain-daemon/embed` already via feature unification). The
+# `--no-default-features` CI job deactivates both in lockstep.
+default = ["embed"]
+embed = ["brain-daemon/embed"]
 
 [[bin]]
 name = "brain-mcp"
