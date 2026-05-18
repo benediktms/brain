@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use brain_daemon::{BrainStoresDispatcher, DaemonConfig, DefaultDispatcher, UnixSocketServer};
 use brain_lib::stores::BrainStores;
-use brain_rpc::{DaemonClient, PROTOCOL_VERSION, Request, Response, TasksListParams, UnixSocketTransport};
+use brain_rpc::{
+    DaemonClient, PROTOCOL_VERSION, Request, Response, TasksListParams, UnixSocketTransport,
+};
 use tempfile::TempDir;
 
 /// Spawn the server on a fresh temp-dir socket with `DefaultDispatcher`.
@@ -95,12 +97,7 @@ fn shutdown_handle_stops_run_loop() {
 /// Spawn a server backed by `BrainStoresDispatcher` with real temp stores.
 /// The `stores` are moved into the dispatcher (owned by the server thread),
 /// so we return nothing from this function — the caller just holds the guard.
-fn spawn_brain_stores_server(
-    tmp: &TempDir,
-) -> (
-    std::path::PathBuf,
-    common::ServerGuard,
-) {
+fn spawn_brain_stores_server(tmp: &TempDir) -> (std::path::PathBuf, common::ServerGuard) {
     let sqlite_path = tmp.path().join("brain.db");
     let lance_path = tmp.path().join("lance");
     let sock_path = tmp.path().join("brain.sock");
