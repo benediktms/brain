@@ -3,7 +3,13 @@
 //! Mutation: removes a typed edge between two entities. The wire
 //! `LinksRemoveParams` carries `(from, to, edge_kind)`. The daemon
 //! returns `bool` indicating whether a row was actually deleted
-//! (false = no such edge existed).
+//! (idempotent: `{removed: false}` when no matching edge existed).
+//!
+//! Input schema is preserved byte-identical to the legacy
+//! `brain_lib::mcp::tools::links_remove` definition — same entity-type
+//! enum (TASK/RECORD/EPISODE/PROCEDURE/CHUNK/NOTE), same 7-kind edge
+//! enum (parent_of/blocks/covers/relates_to/see_also/supersedes/
+//! contradicts), same `from`/`to`/`edge_kind` required fields.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -33,37 +39,50 @@ struct Params {
     edge_kind: String,
 }
 
+/// Shared JSON Schema fragment for a polymorphic entity reference.
+///
+/// Byte-identical to the legacy `entity_ref_schema()` in
+/// `brain_lib::mcp::tools::links_add`. Migrates here so brain_mcp's
+/// link tools no longer reach back into brain_lib. Once `links.add`
+/// and `links.for_entity` migrate, this can be reused from
+/// `super::helpers` instead of being duplicated.
+fn entity_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["TASK", "RECORD", "EPISODE", "PROCEDURE", "CHUNK", "NOTE"],
+                "description": "The entity type. TASK/RECORD/EPISODE/PROCEDURE are agent-writable; CHUNK and NOTE are read-only entities created by the file-watcher pipeline — only link to them when you have a specific chunk_id or note_id from prior retrieval."
+            },
+            "id": {
+                "type": "string",
+                "description": "The entity ID"
+            }
+        },
+        "required": ["type", "id"]
+    })
+}
+
 impl McpTool for LinksRemove {
     fn name(&self) -> &'static str {
         "links.remove"
     }
 
     fn definition(&self) -> ToolDefinition {
+        let entity_ref = entity_ref_schema();
         ToolDefinition {
             name: self.name().into(),
-            description: "Remove a typed edge between two entities. Returns `{removed: bool}` — false when no matching edge existed.".into(),
+            description: "Remove a directed polymorphic edge between two entities. Returns { removed: true } when the edge existed and was deleted, { removed: false } when no matching edge was found (idempotent).".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "from": {
-                        "type": "object",
-                        "properties": {
-                            "type": {"type": "string", "description": "Entity type (TASK, EPISODE, PROCEDURE, RECORD, SAGA, BRAIN)"},
-                            "id": {"type": "string", "description": "Entity ID"}
-                        },
-                        "required": ["type", "id"]
-                    },
-                    "to": {
-                        "type": "object",
-                        "properties": {
-                            "type": {"type": "string"},
-                            "id": {"type": "string"}
-                        },
-                        "required": ["type", "id"]
-                    },
+                    "from": entity_ref.clone(),
+                    "to": entity_ref,
                     "edge_kind": {
                         "type": "string",
-                        "description": "One of parent_of, blocks, covers, relates_to, see_also, supersedes, contradicts, continues"
+                        "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts"],
+                        "description": "Edge kind to remove"
                     }
                 },
                 "required": ["from", "to", "edge_kind"]

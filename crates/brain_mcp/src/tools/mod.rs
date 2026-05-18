@@ -8,14 +8,19 @@
 //!
 //! ## Migration status
 //!
-//! Phase D batch 1 lands the misc-cluster proof of concept:
+//! Phase D batch 1 lands two tools:
 //! - `brains.list`
-//! - `jobs.status`
 //! - `links.remove`
 //!
-//! The remaining 48 tools migrate in follow-up batches: memory (7),
+//! `jobs.status` was attempted in this batch but deferred: the legacy
+//! response shape includes `status` and `started_at` per-job fields
+//! that the current `brain_rpc::JobSummary` wire type does not carry.
+//! Migrating it requires first extending the wire (Phase A-style
+//! addition) — a follow-up batch lands both together.
+//!
+//! The remaining 49 tools migrate in follow-up batches: memory (7),
 //! tasks (10), records (11), sagas (12), tags (3), `status`,
-//! `links.add`, `links.for_entity`.
+//! `links.add`, `links.for_entity`, `jobs.status`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -28,10 +33,11 @@ use crate::protocol::{ToolCallResult, ToolDefinition};
 pub mod helpers;
 
 mod brains_list;
-mod jobs_status;
 mod links_remove;
 
-pub use helpers::{Warning, cascade_results_to_json, inject_warnings, json_response, store_or_warn};
+pub use helpers::{
+    Warning, cascade_results_to_json, inject_warnings, json_response, store_or_warn,
+};
 
 /// Trait for MCP tool handlers. Each tool provides its name, JSON Schema
 /// definition, and an async `call` method that executes the tool logic.
@@ -75,7 +81,6 @@ impl ToolRegistry {
         Self {
             tools: vec![
                 Box::new(brains_list::BrainsList),
-                Box::new(jobs_status::JobsStatus),
                 Box::new(links_remove::LinksRemove),
             ],
         }
@@ -98,7 +103,7 @@ impl ToolRegistry {
             }
         }
         ToolCallResult::error(format!(
-            "Unknown tool '{name}' (not yet migrated to brain_mcp; the remaining 48 tools land in follow-up batches)"
+            "Unknown tool '{name}' (not yet migrated to brain_mcp; the remaining 49 tools land in follow-up batches)"
         ))
     }
 }
@@ -108,13 +113,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_has_three_tools() {
+    fn registry_has_two_tools() {
         let registry = ToolRegistry::new();
         let defs = registry.definitions();
-        assert_eq!(defs.len(), 3);
+        assert_eq!(defs.len(), 2);
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"brains.list"));
-        assert!(names.contains(&"jobs.status"));
         assert!(names.contains(&"links.remove"));
     }
 
@@ -127,7 +131,6 @@ mod tests {
             .map(|t| t.underscore_alias())
             .collect();
         assert!(aliases.iter().any(|a| a == "brains_list"));
-        assert!(aliases.iter().any(|a| a == "jobs_status"));
         assert!(aliases.iter().any(|a| a == "links_remove"));
     }
 
