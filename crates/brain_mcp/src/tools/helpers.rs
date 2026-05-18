@@ -9,9 +9,154 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use brain_rpc::{SagaCascadeOutcome, SagaCascadeResult};
+use brain_rpc::{LinksAddParams, SagaCascadeOutcome, SagaCascadeResult, WireEntityRef};
 
+use crate::context::McpContext;
 use crate::protocol::ToolCallResult;
+
+/// One inline-link request: target entity plus optional `edge_kind`.
+///
+/// The `from` entity is implicit (the just-written episode/procedure).
+/// Defaults to `relates_to` when `edge_kind` is omitted.
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct InlineLinkInput {
+    pub to: InlineEntityInput,
+    #[serde(default)]
+    pub edge_kind: Option<String>,
+}
+
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct InlineEntityInput {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub id: String,
+}
+
+/// Shared JSON Schema fragment for inline `links` arrays accepted by
+/// `memory.write_episode` and `memory.write_procedure`. Description is
+/// passed in so each call site can preserve its own wording.
+pub fn inline_links_schema(description: &str) -> Value {
+    json!({
+        "type": "array",
+        "description": description,
+        "items": {
+            "type": "object",
+            "properties": {
+                "to": entity_ref_schema(),
+                "edge_kind": {
+                    "type": "string",
+                    "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts", "continues"],
+                    "description": "Default: relates_to. Semantics: parent_of (DAG-validated; hierarchical containment), blocks (DAG-validated; dependency), supersedes (DAG-validated; replacement), covers (this entity documents/explains the target), relates_to (default; generic association), see_also (cross-reference), contradicts (conflicts with target), continues (DAG-validated; episode-thread continuation — new episode continues the named predecessor). DAG-validated kinds reject cycles per-link without aborting the batch."
+                }
+            },
+            "required": ["to"]
+        }
+    })
+}
+
+/// Cap on inline-link batch size; oversized requests are rejected before
+/// any wire call.
+pub const MAX_INLINE_LINKS: usize = 256;
+
+/// Apply a batch of inline links via `links_add` wire calls, mirroring
+/// the legacy `{succeeded, failed, summary}` envelope.
+///
+/// Each link becomes one `DaemonClient::links_add` round-trip; failures
+/// are accumulated without aborting the batch. Edge_kind defaults to
+/// `relates_to`. The episode/procedure is already persisted server-side
+/// before this runs — partial failures don't roll the write back.
+pub async fn apply_inline_links(
+    from_kind: &str,
+    from_id: &str,
+    links: Vec<InlineLinkInput>,
+    ctx: &McpContext,
+) -> Value {
+    if links.len() > MAX_INLINE_LINKS {
+        return json!({
+            "succeeded": [],
+            "failed": [{ "error": format!("links batch too large: {} > {MAX_INLINE_LINKS}", links.len()) }],
+            "summary": { "succeeded": 0, "failed": 1 }
+        });
+    }
+
+    let mut succeeded: Vec<Value> = Vec::new();
+    let mut failed: Vec<Value> = Vec::new();
+
+    for link in links {
+        let edge_kind_wire = link
+            .edge_kind
+            .clone()
+            .unwrap_or_else(|| "relates_to".to_string());
+
+        let to_entity = json!({ "type": link.to.kind, "id": link.to.id });
+
+        let wire_params = LinksAddParams {
+            from: WireEntityRef {
+                kind: from_kind.to_string(),
+                id: from_id.to_string(),
+            },
+            to: WireEntityRef {
+                kind: link.to.kind.clone(),
+                id: link.to.id.clone(),
+            },
+            edge_kind: edge_kind_wire.clone(),
+        };
+
+        match ctx.with_client(|c| c.links_add(wire_params)).await {
+            Ok(_) => succeeded.push(json!({
+                "to": to_entity,
+                "edge_kind": edge_kind_wire,
+            })),
+            Err(err) => {
+                let msg = err.to_string();
+                let mapped = if msg.contains("cycle") {
+                    format!("would create a cycle in {edge_kind_wire} graph")
+                } else {
+                    msg
+                };
+                failed.push(json!({
+                    "to": to_entity,
+                    "edge_kind": edge_kind_wire,
+                    "error": mapped,
+                }));
+            }
+        }
+    }
+
+    let succeeded_len = succeeded.len();
+    let failed_len = failed.len();
+    json!({
+        "succeeded": succeeded,
+        "failed": failed,
+        "summary": {
+            "succeeded": succeeded_len,
+            "failed": failed_len,
+        }
+    })
+}
+
+/// Shared JSON Schema fragment for a polymorphic `{type, id}` entity
+/// reference. Used by every tool whose input includes an entity ref
+/// (links.add, links.remove, links.for_entity, and record/saga tools).
+/// Byte-identical to the legacy `entity_ref_schema()` in
+/// `brain_lib::mcp::tools::links_add` — preserve verbatim.
+pub fn entity_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["TASK", "RECORD", "EPISODE", "PROCEDURE", "CHUNK", "NOTE"],
+                "description": "The entity type. TASK/RECORD/EPISODE/PROCEDURE are agent-writable; CHUNK and NOTE are read-only entities created by the file-watcher pipeline — only link to them when you have a specific chunk_id or note_id from prior retrieval."
+            },
+            "id": {
+                "type": "string",
+                "description": "The entity ID"
+            }
+        },
+        "required": ["type", "id"]
+    })
+}
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Warning {

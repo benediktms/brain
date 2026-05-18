@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use brain_rpc::{LinksRemoveParams, WireEntityRef};
 
+use super::helpers::entity_ref_schema;
 use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
@@ -37,31 +38,6 @@ struct Params {
     from: InputEntity,
     to: InputEntity,
     edge_kind: String,
-}
-
-/// Shared JSON Schema fragment for a polymorphic entity reference.
-///
-/// Byte-identical to the legacy `entity_ref_schema()` in
-/// `brain_lib::mcp::tools::links_add`. Migrates here so brain_mcp's
-/// link tools no longer reach back into brain_lib. Once `links.add`
-/// and `links.for_entity` migrate, this can be reused from
-/// `super::helpers` instead of being duplicated.
-fn entity_ref_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "type": {
-                "type": "string",
-                "enum": ["TASK", "RECORD", "EPISODE", "PROCEDURE", "CHUNK", "NOTE"],
-                "description": "The entity type. TASK/RECORD/EPISODE/PROCEDURE are agent-writable; CHUNK and NOTE are read-only entities created by the file-watcher pipeline — only link to them when you have a specific chunk_id or note_id from prior retrieval."
-            },
-            "id": {
-                "type": "string",
-                "description": "The entity ID"
-            }
-        },
-        "required": ["type", "id"]
-    })
 }
 
 impl McpTool for LinksRemove {
