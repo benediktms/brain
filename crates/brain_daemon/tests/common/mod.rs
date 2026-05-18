@@ -39,3 +39,22 @@ impl Drop for ChildGuard {
         let _ = self.0.wait();
     }
 }
+
+/// Drop-guard that signals server shutdown and joins the server thread.
+/// Used by tests that run `UnixSocketServer` in-process.
+pub struct ServerGuard {
+    pub shutdown: Option<brain_daemon::ShutdownHandle>,
+    pub handle: Option<std::thread::JoinHandle<Result<(), brain_rpc::RpcError>>>,
+}
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        if let Some(s) = self.shutdown.take() {
+            s.request();
+        }
+        if let Some(h) = self.handle.take() {
+            // 200ms is generous — the accept loop polls every 50ms.
+            let _ = std::thread::JoinHandle::join(h);
+        }
+    }
+}
