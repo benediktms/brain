@@ -34,6 +34,7 @@ const EXPECTED_TOOL_NAMES: &[&str] = &[
     "records.create_analysis",
     "records.create_document",
     "records.create_plan",
+    "records.fetch_content",
     "records.get",
     "records.link_add",
     "records.link_remove",
