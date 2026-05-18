@@ -2557,6 +2557,8 @@ mod tests {
             created_at: "2026-05-17T00:00:00Z".into(),
             updated_at: "2026-05-17T00:00:00Z".into(),
             closed_at: None,
+            members: vec![],
+            brains: vec![],
         }
     }
 
