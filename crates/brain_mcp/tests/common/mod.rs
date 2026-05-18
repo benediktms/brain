@@ -19,6 +19,23 @@ use brain_mcp::{McpContext, ToolRegistry};
 
 // ── server spawning ──────────────────────────────────────────────────────────
 
+/// Wait for the server socket to be ready by polling with exponential backoff.
+/// Gives the accept loop time to start before clients attempt to connect.
+pub(crate) fn wait_for_server_ready(sock_path: &std::path::Path, budget: Duration) -> std::io::Result<()> {
+    let start = std::time::Instant::now();
+    let mut last_err = None;
+    while start.elapsed() < budget {
+        match std::os::unix::net::UnixStream::connect(sock_path) {
+            Ok(_) => return Ok(()),
+            Err(e) => last_err = Some(e),
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout waiting for server")
+    }))
+}
+
 /// Spawn `brain_daemon::UnixSocketServer` with `DefaultDispatcher` on a
 /// fresh temp-dir socket. Returns:
 ///
@@ -33,7 +50,8 @@ pub fn spawn_daemon() -> (TempDir, std::path::PathBuf, ServerGuard) {
     let shutdown = server.shutdown_handle();
     let handle = thread::spawn(move || server.run());
     // Give the accept loop time to start before clients attempt to connect.
-    thread::sleep(Duration::from_millis(20));
+    wait_for_server_ready(&sock_path, Duration::from_millis(500))
+        .expect("server socket not ready within 500ms");
     (
         tmp,
         sock_path,
