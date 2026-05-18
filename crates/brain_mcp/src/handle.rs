@@ -145,6 +145,13 @@ async fn resolve_brain_from_roots(
         .await
         .map_err(|e| anyhow::anyhow!("brains_list failed: {e}"))?;
 
+    // Pick the longest matching brain root rather than the first hit.
+    // With nested roots (e.g. `/repos` and `/repos/myproject` both
+    // registered as separate brains), the first-match strategy returns
+    // whichever happened to come first in the brains_list iteration,
+    // silently dispatching to the wrong brain.
+    let mut best_match: Option<(String, usize)> = None;
+
     for brain in &brains {
         if brain.archived {
             continue;
@@ -153,17 +160,20 @@ async fn resolve_brain_from_roots(
             .chain(brain.extra_roots.iter().map(std::string::String::as_str));
         for brain_root_str in brain_roots {
             let brain_root = std::path::PathBuf::from(brain_root_str);
+            let specificity = brain_root.components().count();
             for client_root in &root_paths {
                 // `Path::starts_with` returns true on full equality,
                 // so a separate `==` arm would be dead.
-                if client_root.starts_with(&brain_root) {
-                    return Ok(Some(brain.name.clone()));
+                if client_root.starts_with(&brain_root)
+                    && best_match.as_ref().is_none_or(|(_, s)| specificity > *s)
+                {
+                    best_match = Some((brain.name.clone(), specificity));
                 }
             }
         }
     }
 
-    Ok(None)
+    Ok(best_match.map(|(name, _)| name))
 }
 
 fn serialize_response(resp: &JsonRpcResponse) -> String {
