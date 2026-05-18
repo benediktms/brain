@@ -11,9 +11,7 @@ use brain_rpc::{SagaDescriptionUpdate, SagasUpdateParams};
 use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
-use crate::saga_validation::{
-    validate_actor, validate_description, validate_saga_id, validate_title,
-};
+use crate::saga_validation::{validate_description, validate_saga_id, validate_title};
 
 pub(super) struct SagaUpdate;
 
@@ -23,12 +21,6 @@ struct Params {
     title: Option<String>,
     /// Outer None = don't touch; inner None = clear; inner Some = set.
     description: Option<Option<String>>,
-    #[serde(default = "default_actor")]
-    actor: String,
-}
-
-fn default_actor() -> String {
-    "mcp".into()
 }
 
 impl McpTool for SagaUpdate {
@@ -60,13 +52,6 @@ impl McpTool for SagaUpdate {
                             { "type": "string", "maxLength": 65536 },
                             { "type": "null" }
                         ]
-                    },
-                    "actor": {
-                        "type": "string",
-                        "description": "Who is updating the saga. Default: mcp",
-                        "default": "mcp",
-                        "maxLength": 64,
-                        "pattern": "^[A-Za-z0-9_:-]+$"
                     }
                 },
                 "required": ["saga_id"]
@@ -87,9 +72,6 @@ impl McpTool for SagaUpdate {
 
             if let Err(msg) = validate_saga_id(&parsed.saga_id) {
                 return ToolCallResult::error(format!("Invalid saga_id: {msg}"));
-            }
-            if let Err(msg) = validate_actor(&parsed.actor) {
-                return ToolCallResult::error(format!("Invalid actor: {msg}"));
             }
             if let Some(t) = parsed.title.as_deref()
                 && let Err(msg) = validate_title(t)

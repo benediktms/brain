@@ -56,7 +56,7 @@ impl McpTool for LinksRemove {
                     "to": entity_ref,
                     "edge_kind": {
                         "type": "string",
-                        "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts"],
+                        "enum": ["parent_of", "blocks", "covers", "relates_to", "see_also", "supersedes", "contradicts", "continues"],
                         "description": "Edge kind to remove"
                     }
                 },

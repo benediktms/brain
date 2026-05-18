@@ -1,27 +1,36 @@
-//! `records.fetch_content` MCP tool.
+//! `records.fetch_content` MCP tool — thin wrapper over
+//! [`brain_rpc::DaemonClient::records_fetch_content`].
 //!
-//! # Wire gap
-//!
-//! There is no typed `records_fetch_content` method on `DaemonClient` —
-//! the daemon does not yet expose a content-fetch RPC variant. This tool
-//! returns a structured error directing the caller to use the daemon-side
-//! `brain records fetch` CLI command until the wire method is added.
-//!
-//! When the wire method lands (tracked separately), this file should be
-//! updated to route through `ctx.with_client(|c| c.records_fetch_content(...))`.
-//! The schema below is preserved byte-identical to the legacy tool so that
-//! clients do not need a schema update when the implementation is wired.
+//! The daemon resolves the record id (and the optional remote-brain
+//! target), reads the content blob from the object store, applies the
+//! text-vs-binary heuristic, and returns a typed
+//! [`brain_rpc::RecordContent`]. The wire type serialises to the legacy
+//! envelope byte-for-byte (the base64 payload travels under the `data`
+//! key via `#[serde(rename)]`), so this tool body has no JSON-shape
+//! logic of its own.
 
 use std::future::Future;
 use std::pin::Pin;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::McpTool;
+use brain_rpc::RecordsFetchContentParams;
+
+use super::{McpTool, json_response};
 use crate::context::McpContext;
 use crate::protocol::{ToolCallResult, ToolDefinition};
 
+#[allow(dead_code)]
 pub(super) struct RecordFetchContent;
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+struct Params {
+    record_id: String,
+    #[serde(default)]
+    brain: Option<String>,
+}
 
 impl McpTool for RecordFetchContent {
     fn name(&self) -> &'static str {
@@ -51,17 +60,31 @@ impl McpTool for RecordFetchContent {
 
     fn call<'a>(
         &'a self,
-        _params: Value,
-        _ctx: &'a McpContext,
+        params: Value,
+        ctx: &'a McpContext,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            ToolCallResult::error(
-                "records.fetch_content is not yet wired in brain_mcp: \
-                 no DaemonClient::records_fetch_content wire method exists. \
-                 Use the brain CLI (`brain records fetch <id>`) directly until \
-                 the RPC variant is added."
-                    .to_string(),
-            )
+            let parsed: Params = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return ToolCallResult::error(format!("Invalid parameters: {e}")),
+            };
+
+            let wire_params = RecordsFetchContentParams {
+                record_id: parsed.record_id,
+                brain: parsed.brain,
+            };
+
+            let content = match ctx
+                .with_client(|c| c.records_fetch_content(wire_params))
+                .await
+            {
+                Ok(c) => c,
+                Err(err) => {
+                    return ToolCallResult::error(format!("Failed to fetch record content: {err}"));
+                }
+            };
+
+            json_response(&content)
         })
     }
 }

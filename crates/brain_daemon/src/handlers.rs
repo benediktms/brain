@@ -25,13 +25,14 @@ use brain_rpc::{
     JobSummary, JobsStatusParams, JobsStatusReport, LatencyHistogram, MemoryConsolidateParams,
     MemoryReflectParams, MemoryRetrieveParams, MemorySummarizeScopeParams, MemoryWalkThreadParams,
     MemoryWriteEpisodeParams, MemoryWriteProcedureParams, MetricsSnapshot, PROTOCOL_VERSION,
-    PlanSummary, ProviderSummary, RecordsCreateParams, RecordsListParams, RecordsVerifyReport,
-    Request, Response, RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult,
+    PlanSummary, ProviderSummary, RecordContent, RecordsCreateParams, RecordsFetchContentParams,
+    RecordsListParams, RecordsSearchParams, RecordsSearchReport, RecordsVerifyReport, Request,
+    Response, RpcError, SagaBrainSummary, SagaCascadeOutcome, SagaCascadeResult,
     SagaDescriptionUpdate, SagaFrontierTask, SagaLabelCount, SagaStatsReport, SagaSummary,
     SagasCreateParams, SagasListParams, SagasUpdateParams, SnapshotSummary, TagAliasSummary,
     TagAliasesStatusReport, TagsAliasesListParams, TagsReclusterParams, TaskSummary,
     TasksApplyEventParams, TasksCreateParams, TasksDepsBatchParams, TasksLabelsBatchParams,
-    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams,
+    TasksListParams, TasksMutateParams, TasksTransferParams, TasksUpdateParams, WireRecordHit,
 };
 use brain_sagas::{
     BrainSummary as SagaBrainDomain, CascadeOutcome, CascadeResult, LabelCount, Saga,
@@ -1030,8 +1031,31 @@ impl BrainStoresDispatcher {
             .map_err(|e| RpcError::Unknown {
                 message: format!("get saga: {e}"),
             })?;
+
+        let saga = match saga {
+            None => return Ok(Response::SagasGet { saga: None }),
+            Some(s) => s,
+        };
+
+        let (members, brains) =
+            {
+                let member_stubs = self.stores.sagas.list_member_stubs(&saga_id).map_err(|e| {
+                    RpcError::Unknown {
+                        message: format!("list saga members: {e}"),
+                    }
+                })?;
+                let saga_stats =
+                    self.stores
+                        .sagas
+                        .stats(&saga_id)
+                        .map_err(|e| RpcError::Unknown {
+                            message: format!("get saga stats: {e}"),
+                        })?;
+                (member_stubs, saga_stats.brains)
+            };
+
         Ok(Response::SagasGet {
-            saga: saga.as_ref().map(saga_to_summary),
+            saga: Some(saga_to_summary_with_members(&saga, members, brains)),
         })
     }
 
@@ -1988,6 +2012,239 @@ impl BrainStoresDispatcher {
         Ok(Response::RecordsTagRemove { removed: true })
     }
 
+    // ── records (search + fetch_content) ────────────────────────────────
+
+    fn handle_records_search(&self, params: RecordsSearchParams) -> Result<Response, RpcError> {
+        use brain_lib::query_pipeline::SearchParams;
+        use brain_lib::retrieval::MemoryStub;
+        use brain_lib::uri::SynapseUri;
+
+        let mcp_ctx = self.mcp_ctx()?;
+        let store = mcp_ctx.store().ok_or_else(|| RpcError::Unknown {
+            message: "records.search: search store unavailable".into(),
+        })?;
+        let embedder = mcp_ctx.embedder().ok_or_else(|| RpcError::Unknown {
+            message: "records.search: embedder unavailable".into(),
+        })?;
+
+        // Match the legacy MCP tool: cap k at 100 then over-request 3×
+        // because the hybrid pipeline returns mixed kinds and we filter
+        // down to `kind == "record"` post-pack. Cast through usize for
+        // the SearchParams shape; saturating_mul keeps a degenerate
+        // u64::MAX caller from wrapping to zero.
+        let k_capped: usize = (params.k as usize).min(100);
+        let over_k: usize = k_capped.saturating_mul(3);
+        let budget_tokens_usize: usize = params.budget_tokens as usize;
+
+        let RecordsSearchParams {
+            query,
+            budget_tokens,
+            tags,
+            brains,
+            ..
+        } = params;
+
+        let brain_id = mcp_ctx.brain_id().to_string();
+        let brain_name = mcp_ctx.brain_name().to_string();
+
+        let runtime = self.runtime()?;
+
+        let search_params = SearchParams::new(&query, "lookup", budget_tokens_usize, over_k, &tags)
+            .with_brain_id(Some(brain_id.as_str()));
+
+        let search_result = if brains.is_empty() {
+            // Single-brain path. Borrowed pipeline so the embedder /
+            // metrics references stay alive for the await below.
+            let pipeline = mcp_ctx
+                .stores
+                .query_pipeline(store, embedder, &mcp_ctx.metrics);
+            runtime
+                .block_on(pipeline.search(&search_params))
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("records.search: {e}"),
+                })?
+        } else {
+            // Federated path. `include_scores=false` keeps the per-signal
+            // breakdown off the wire — the legacy envelope doesn't carry
+            // it either.
+            let federated_brains = self.build_federated_brain_list(&mcp_ctx, &brains, runtime)?;
+            let federated =
+                mcp_ctx
+                    .stores
+                    .federated_pipeline(federated_brains, embedder, &mcp_ctx.metrics);
+            runtime
+                .block_on(federated.search(&search_params, false))
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("records.search (federated): {e}"),
+                })?
+        };
+
+        // Filter to record-kind stubs, then truncate to the (uncapped)
+        // caller-requested k via the capped k. Doing it as a chained
+        // iterator keeps the borrow on `search_result.results` alive for
+        // the URI / score conversion pass below.
+        let record_stubs: Vec<&MemoryStub> = search_result
+            .results
+            .iter()
+            .filter(|stub| stub.kind == "record")
+            .take(k_capped)
+            .collect();
+
+        let used_tokens_est: u64 = record_stubs.iter().map(|s| s.token_estimate as u64).sum();
+        let result_count = record_stubs.len() as u64;
+
+        let results: Vec<WireRecordHit> = record_stubs
+            .iter()
+            .map(|stub| {
+                // memory_id shape: `record:<record_id>:<chunk_index>`.
+                // Drop the leading prefix + trailing chunk index to
+                // recover the record id the caller will pass to
+                // records.fetch_content. If the shape ever changes
+                // (e.g. composite IDs) we fall through to memory_id —
+                // not lossless, but never wrong.
+                let record_id = stub
+                    .memory_id
+                    .strip_prefix("record:")
+                    .and_then(|s| s.rsplit_once(':').map(|(id, _)| id))
+                    .unwrap_or(&stub.memory_id)
+                    .to_string();
+                let uri_brain = stub.brain_name.as_deref().unwrap_or(brain_name.as_str());
+                let uri = SynapseUri::for_record(uri_brain, &record_id).to_string();
+                WireRecordHit {
+                    record_id,
+                    memory_id: stub.memory_id.clone(),
+                    title: stub.title.clone(),
+                    summary: stub.summary_2sent.clone(),
+                    score: stub.hybrid_score,
+                    kind: stub.kind.clone(),
+                    uri,
+                    brain_name: stub.brain_name.clone(),
+                }
+            })
+            .collect();
+
+        Ok(Response::RecordsSearch {
+            report: RecordsSearchReport {
+                budget_tokens,
+                used_tokens_est,
+                result_count,
+                total_available: search_result.total_available as u64,
+                results,
+            },
+        })
+    }
+
+    fn handle_records_fetch_content(
+        &self,
+        params: RecordsFetchContentParams,
+    ) -> Result<Response, RpcError> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        use brain_lib::uri::{SynapseUri, resolve_id};
+
+        let RecordsFetchContentParams { record_id, brain } = params;
+
+        // Open a remote BrainStores when the caller targets another
+        // brain. The Option wrapper owns the remote stores for the
+        // duration of the call so the borrow below stays valid.
+        let remote = match brain.as_deref() {
+            Some(input) => {
+                let (bid, name) =
+                    self.stores
+                        .resolve_brain(input)
+                        .map_err(|e| RpcError::NotFound {
+                            id: format!("resolve brain '{input}': {e}"),
+                        })?;
+                let remote_stores =
+                    self.stores
+                        .with_brain_id(&bid, &name)
+                        .map_err(|e| RpcError::Unknown {
+                            message: format!(
+                                "records.fetch_content: open remote brain {name}: {e}"
+                            ),
+                        })?;
+                Some((name, remote_stores))
+            }
+            None => None,
+        };
+
+        let (records, fetch_brain_name): (&brain_records::RecordStore, &str) = match &remote {
+            Some((name, stores)) => (&stores.records, name.as_str()),
+            None => (&self.stores.records, self.stores.brain_name.as_str()),
+        };
+        let objects = &self.stores.objects;
+
+        let record_id_input = resolve_id(&record_id);
+        let canonical_id =
+            records
+                .resolve_record_id(&record_id_input)
+                .map_err(|e| RpcError::NotFound {
+                    id: format!("resolve record_id '{record_id}': {e}"),
+                })?;
+        let record = records
+            .get_record(&canonical_id)
+            .map_err(|e| RpcError::Unknown {
+                message: format!("records.fetch_content: get_record: {e}"),
+            })?
+            .ok_or_else(|| RpcError::NotFound {
+                id: canonical_id.clone(),
+            })?;
+
+        let raw_bytes =
+            objects
+                .read_auto(&record.content_ref.hash)
+                .map_err(|e| RpcError::Unknown {
+                    message: format!("records.fetch_content: read_auto: {e}"),
+                })?;
+
+        let compact_id = records
+            .compact_record_id(&canonical_id)
+            .unwrap_or_else(|_| canonical_id.clone());
+
+        // Same text-vs-binary heuristic as the legacy MCP tool. A
+        // text-typed media_type that does not decode as UTF-8 still
+        // returns base64 — better to be lossless than to crash on bad
+        // content-type metadata.
+        let is_text = record
+            .content_ref
+            .media_type
+            .as_deref()
+            .map(|mt| {
+                mt.starts_with("text/")
+                    || mt == "application/json"
+                    || mt == "application/toml"
+                    || mt == "application/yaml"
+            })
+            .unwrap_or(false);
+
+        let (encoding, text, data_base64) = if is_text {
+            match std::str::from_utf8(&raw_bytes) {
+                Ok(t) => ("utf-8".to_string(), Some(t.to_string()), None),
+                Err(_) => ("base64".to_string(), None, Some(BASE64.encode(&raw_bytes))),
+            }
+        } else {
+            ("base64".to_string(), None, Some(BASE64.encode(&raw_bytes)))
+        };
+
+        let uri = SynapseUri::for_record(fetch_brain_name, &compact_id).to_string();
+
+        let content = RecordContent {
+            record_id: compact_id,
+            title: record.title,
+            kind: record.kind.as_str().to_string(),
+            content_hash: record.content_ref.hash,
+            size: record.content_ref.size,
+            media_type: record.content_ref.media_type,
+            encoding,
+            text,
+            data_base64,
+            uri,
+            brain: remote.map(|(name, _)| name),
+        };
+
+        Ok(Response::RecordsFetchContent { content })
+    }
+
     fn handle_tasks_labels_summary(&self) -> Result<Response, RpcError> {
         let summaries = self
             .stores
@@ -2562,9 +2819,11 @@ impl BrainStoresDispatcher {
     /// Resolve federated brain keys to a `(name, id, Option<StoreReader>)`
     /// list suitable for `brain_memory::retrieve::run_query_as_json`.
     ///
-    /// Mirrors the brain_lib `build_federated_brains` helper but lives
-    /// here so the daemon doesn't reach into the about-to-be-deleted
-    /// `brain_lib::mcp::tools` module.
+    /// Validates each identifier up-front: resolves to canonical IDs,
+    /// fails with [`RpcError::InvalidParams`] on unknown entries, and
+    /// dedupes results. The local brain is always included (and skipped
+    /// if re-requested by name) to ensure the search corpus is
+    /// deterministic rather than best-effort.
     fn build_federated_brain_list(
         &self,
         mcp_ctx: &brain_lib::mcp::McpContext,
@@ -2579,11 +2838,14 @@ impl BrainStoresDispatcher {
         RpcError,
     > {
         let store = mcp_ctx.store().ok_or_else(|| RpcError::Unknown {
-            message: "memory.retrieve: search layer unavailable".into(),
+            message: "build_federated_brain_list: search layer unavailable".into(),
         })?;
         let embedder = mcp_ctx.embedder().ok_or_else(|| RpcError::Unknown {
-            message: "memory.retrieve: embedder unavailable".into(),
+            message: "build_federated_brain_list: embedder unavailable".into(),
         })?;
+
+        let current_brain_name = mcp_ctx.brain_name();
+        let current_brain_id = mcp_ctx.brain_id();
 
         let brain_keys: Vec<String> = if brain_keys_input.iter().any(|b| b == "all") {
             self.stores
@@ -2598,19 +2860,24 @@ impl BrainStoresDispatcher {
             brain_keys_input.to_vec()
         };
 
+        let mut seen_ids = std::collections::HashSet::new();
         let mut brains: Vec<(
             String,
             String,
             Option<brain_persistence::store::StoreReader>,
         )> = Vec::new();
+
+        // Always include the local brain first.
+        seen_ids.insert(current_brain_id.to_string());
         brains.push((
-            mcp_ctx.brain_name().to_string(),
-            mcp_ctx.brain_id().to_string(),
+            current_brain_name.to_string(),
+            current_brain_id.to_string(),
             Some(store.clone()),
         ));
 
         for key in &brain_keys {
-            if key == mcp_ctx.brain_name() {
+            // Skip if this is the current brain (already added above).
+            if key == current_brain_name {
                 continue;
             }
             let remote_result = runtime.block_on(brain_lib::config::open_remote_search_context(
@@ -2621,10 +2888,26 @@ impl BrainStoresDispatcher {
             ));
             match remote_result {
                 Ok(Some(remote)) => {
+                    // Dedupe by brain ID — silently skip if already present.
+                    if seen_ids.contains(&remote.brain_id) {
+                        continue;
+                    }
+                    seen_ids.insert(remote.brain_id.clone());
                     brains.push((remote.brain_name, remote.brain_id, remote.store));
                 }
-                Ok(None) => {}
-                Err(_) => {}
+                Ok(None) => {
+                    // Unknown brain identifier — fail fast rather than silently
+                    // broadening to local-only search.
+                    return Err(RpcError::NotFound {
+                        id: format!("brain: {key}"),
+                    });
+                }
+                Err(e) => {
+                    // Remote-open failure — not a "not found" case.
+                    return Err(RpcError::Unknown {
+                        message: format!("open remote brain search context '{key}': {e}"),
+                    });
+                }
             }
         }
 
@@ -3118,6 +3401,8 @@ impl Dispatcher for BrainStoresDispatcher {
             Request::MemoryWalkThread { params } => self.handle_memory_walk_thread(params),
             Request::TagsRecluster { params } => self.handle_tags_recluster(params),
             Request::BrainsList { params } => self.handle_brains_list(params),
+            Request::RecordsSearch { params } => self.handle_records_search(params),
+            Request::RecordsFetchContent { params } => self.handle_records_fetch_content(params),
         }
     }
 }
@@ -3262,6 +3547,50 @@ fn saga_to_summary(saga: &Saga) -> SagaSummary {
         closed_at: saga
             .closed_at
             .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        members: vec![],
+        brains: vec![],
+    }
+}
+
+/// Map a [`Saga`] with live membership into the wire-format [`SagaSummary`].
+/// Used by `handle_sagas_get` where members/brains are eagerly loaded.
+fn saga_to_summary_with_members(
+    saga: &Saga,
+    members: Vec<brain_sagas::SagaMember>,
+    brains: Vec<brain_sagas::BrainSummary>,
+) -> SagaSummary {
+    SagaSummary {
+        saga_id: compact_saga_id(&saga.display_id),
+        title: saga.title.clone(),
+        description: saga.description.clone(),
+        status: saga.status.to_string(),
+        created_at: saga
+            .created_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        updated_at: saga
+            .updated_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        closed_at: saga
+            .closed_at
+            .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        members: members
+            .into_iter()
+            .map(|m| brain_rpc::SagaMember {
+                task_id: m.task_id.to_string(),
+                brain_id: m.brain_id,
+                title: m.title,
+                status: m.status.to_string(),
+                task_type: m.task_type.to_string(),
+            })
+            .collect(),
+        brains: brains
+            .into_iter()
+            .map(|b| SagaBrainSummary {
+                brain_id: b.brain_id,
+                name: b.name,
+                prefix: b.prefix,
+            })
+            .collect(),
     }
 }
 

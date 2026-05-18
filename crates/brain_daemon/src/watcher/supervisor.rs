@@ -241,40 +241,47 @@ impl Supervisor {
         }
 
         // ── 5b. Separate notify watcher for state_projection.toml ─────────
-        let projection_path = brain_home()?.join(brain_lib::config::PROJECTION_FILENAME);
-        let projection_dir = projection_path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("projection path has no parent directory"))?
-            .to_path_buf();
+        // `config_rx` is always bound so it's in scope for `run_loop`, but
+        // under `no-default-features` the sender is never used (the watcher
+        // block below is cfg-gated and `config_rx` will never receive).
         let (config_tx, config_rx) = tokio::sync::mpsc::channel::<()>(4);
 
+        #[cfg(feature = "embed")]
         let _config_watcher = {
-            let config_tx = config_tx.clone();
+            let projection_path = brain_home()?.join(brain_lib::config::PROJECTION_FILENAME);
+            let projection_dir = projection_path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("projection path has no parent directory"))?
+                .to_path_buf();
             let projection_file = projection_path.file_name().unwrap().to_owned();
-            notify_debouncer_full::new_debouncer(
-                Duration::from_millis(500),
-                None,
-                move |result: notify_debouncer_full::DebounceEventResult| {
-                    if let Ok(events) = result {
-                        let is_projection = events
-                            .iter()
-                            .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&projection_file)));
-                        if is_projection {
-                            let _ = config_tx.blocking_send(());
+
+            {
+                let config_tx = config_tx.clone();
+                notify_debouncer_full::new_debouncer(
+                    Duration::from_millis(500),
+                    None,
+                    move |result: notify_debouncer_full::DebounceEventResult| {
+                        if let Ok(events) = result {
+                            let is_projection = events
+                                .iter()
+                                .any(|e| e.paths.iter().any(|p| p.file_name() == Some(&projection_file)));
+                            if is_projection {
+                                let _ = config_tx.blocking_send(());
+                            }
                         }
-                    }
-                },
-            )
-            .and_then(|mut w| {
-                w.watch(
-                    &projection_dir,
-                    notify_debouncer_full::notify::RecursiveMode::NonRecursive,
-                )?;
-                info!(path = %projection_dir.display(), "watching state_projection.toml for changes");
-                Ok(w)
-            })
-            .map_err(|e| warn!(error = %e, "failed to watch state_projection.toml; changes won't auto-reload"))
-            .ok()
+                    },
+                )
+                .and_then(|mut w| {
+                    w.watch(
+                        &projection_dir,
+                        notify_debouncer_full::notify::RecursiveMode::NonRecursive,
+                    )?;
+                    info!(path = %projection_dir.display(), "watching state_projection.toml for changes");
+                    Ok(w)
+                })
+                .map_err(|e| warn!(error = %e, "failed to watch state_projection.toml; changes won't auto-reload"))
+                .ok()
+            }
         };
 
         // ── 6. Signal handlers ───────────────────────────────────────────

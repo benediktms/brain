@@ -22,9 +22,6 @@ test-utils = []
 # (e.g. for hosts that don't need file watching).
 embed = [
     "brain-lib/embed",
-    "dep:notify-debouncer-full",
-    "dep:tokio-util",
-    "dep:tracing",
 ]
 
 [[bin]]
@@ -61,6 +58,10 @@ brain-persistence = { path = "../brain_persistence" }
 brain-tasks = { path = "../brain_tasks" }
 brain-records = { path = "../brain_records" }
 brain-sagas = { path = "../brain_sagas" }
+# Used by handle_records_fetch_content to encode binary record bodies
+# as base64 on the wire (text-like media types are emitted as utf-8).
+# Same version that brain_lib + brain_mcp already pin.
+base64 = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -70,9 +71,9 @@ tokio = { workspace = true, features = ["rt"] }
 # Optional deps activated by the `embed` feature. Both are only used by
 # the `watcher` supervisor module (file-watching + debounce, cancellation
 # token plumbing for shutdown).
-notify-debouncer-full = { version = "0.7", optional = true }
-tokio-util = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
+notify-debouncer-full = { version = "0.7" }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
