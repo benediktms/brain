@@ -37,8 +37,10 @@ pub mod handle;
 pub mod protocol;
 pub mod saga_validation;
 pub mod server;
+pub mod tools;
 
 pub use context::McpContext;
 pub use dispatch::DispatchMode;
 pub use entry::run_cli;
 pub use server::run_server;
+pub use tools::ToolRegistry;

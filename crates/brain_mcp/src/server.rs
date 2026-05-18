@@ -15,6 +15,7 @@ use tracing::{debug, error, info};
 use crate::context::McpContext;
 use crate::handle;
 use crate::protocol::JsonRpcRequest;
+use crate::tools::ToolRegistry;
 
 /// Run the stdio MCP server loop until stdin closes.
 pub async fn run_server(ctx: Arc<McpContext>) -> Result<()> {
@@ -22,6 +23,7 @@ pub async fn run_server(ctx: Arc<McpContext>) -> Result<()> {
     let mut stdout = tokio::io::stdout();
     let reader = BufReader::new(stdin);
     let mut lines = reader.lines();
+    let registry = ToolRegistry::new();
 
     info!("brain_mcp server starting");
 
@@ -34,7 +36,7 @@ pub async fn run_server(ctx: Arc<McpContext>) -> Result<()> {
         debug!(line = %line, "received request");
 
         let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
-            Ok(req) => handle::handle_request(req, &ctx).await,
+            Ok(req) => handle::handle_request(req, &ctx, &registry).await,
             Err(e) => {
                 error!(error = %e, "invalid JSON-RPC request");
                 r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#

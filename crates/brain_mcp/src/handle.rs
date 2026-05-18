@@ -1,16 +1,16 @@
 //! Per-request JSON-RPC dispatcher.
 //!
-//! Owns the three MCP method paths the server understands at scaffold
-//! time:
+//! Owns the three MCP method paths the server understands:
 //!
 //! - `initialize` — resolves the session brain from the client's
 //!   `roots` array by querying the daemon's brain registry via
 //!   [`brain_rpc::DaemonClient::brains_list`].
-//! - `tools/list` — returns an empty list at scaffold time; the 51
-//!   tool definitions migrate from `brain_lib::mcp::tools::ToolRegistry`
-//!   in Phase D.
-//! - `tools/call` — returns a placeholder error envelope until tool
-//!   bodies migrate in Phase D.
+//! - `tools/list` — enumerates definitions from the [`ToolRegistry`].
+//!   Tools migrate cluster-by-cluster from `brain_lib::mcp::tools`;
+//!   anything not yet migrated falls through `tools/call` with an
+//!   "Unknown tool" envelope.
+//! - `tools/call` — dispatches to the matching tool via
+//!   [`ToolRegistry::dispatch`].
 //!
 //! Notifications (`notifications/initialized`) produce no response per
 //! the JSON-RPC contract.
@@ -24,12 +24,17 @@ use brain_rpc::BrainsListParams;
 use crate::context::McpContext;
 use crate::protocol::{
     InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ServerCapabilities,
-    ServerInfo, ToolCallResult, ToolsCapability, ToolsListResult,
+    ServerInfo, ToolsCapability, ToolsListResult,
 };
+use crate::tools::ToolRegistry;
 
 /// Handle one JSON-RPC request, returning the serialised response (or
 /// the empty string for notifications).
-pub async fn handle_request(req: JsonRpcRequest, ctx: &McpContext) -> String {
+pub async fn handle_request(
+    req: JsonRpcRequest,
+    ctx: &McpContext,
+    registry: &ToolRegistry,
+) -> String {
     let id = req.id.clone();
 
     match req.method.as_str() {
@@ -38,22 +43,25 @@ pub async fn handle_request(req: JsonRpcRequest, ctx: &McpContext) -> String {
             info!("MCP client initialized");
             String::new()
         }
-        "tools/list" => {
-            // Empty until the 51-tool migration lands in Phase D.
-            serialize_typed_response(id, ToolsListResult { tools: Vec::new() }, "tools/list")
-        }
+        "tools/list" => serialize_typed_response(
+            id,
+            ToolsListResult {
+                tools: registry.definitions(),
+            },
+            "tools/list",
+        ),
         "tools/call" => {
-            // Placeholder: per-tool dispatch wires up in Phase D when
-            // each tool body migrates from `ctx.stores.X.Y(...)` to
-            // `ctx.with_client(|c| c.<typed>(...))`.
             let tool_name = req
                 .params
                 .get("name")
                 .and_then(|v| v.as_str())
-                .unwrap_or("<unnamed>");
-            let result = ToolCallResult::error(format!(
-                "tool '{tool_name}' is not yet migrated to brain_mcp (Phase D pending)"
-            ));
+                .unwrap_or("");
+            let arguments = req
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(Value::Object(serde_json::Map::new()));
+            let result = registry.dispatch(tool_name, arguments, ctx).await;
             serialize_typed_response(id, result, "tools/call")
         }
         _ => serialize_error(&JsonRpcError::method_not_found(id, &req.method)),
