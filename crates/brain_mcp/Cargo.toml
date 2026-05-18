@@ -39,4 +39,16 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+# Integration tests spawn a real `brain-daemon` over a temp-dir Unix
+# socket and drive it through the same `brain_mcp::McpContext` that
+# the production stdio loop uses. The dev-dep on `brain-daemon`
+# applies only to `crates/brain_mcp/tests/` — the architectural
+# ratchet (no daemon deps in `src/`) is unaffected.
+brain-daemon = { path = "../brain_daemon" }
+# `brain-lib` is needed by `tools_smoke` to construct a real
+# `BrainStores::in_memory()` for the `BrainStoresDispatcher` — the
+# `DefaultDispatcher` only handles ping/handshake and cannot serve
+# storage-backed tool calls.
+brain-lib = { path = "../brain_lib" }
 tempfile = "3"
+tokio = { workspace = true, features = ["rt", "io-std", "io-util", "macros", "sync", "rt-multi-thread"] }

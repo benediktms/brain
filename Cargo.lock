@@ -800,6 +800,8 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "brain-core",
+ "brain-daemon",
+ "brain-lib",
  "brain-rpc",
  "serde",
  "serde_json",
